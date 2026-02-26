@@ -64,7 +64,8 @@ See our [getting started guide](https://clickhouse.com/docs/use-cases/observabil
 All ClickStack components are distributed separately as individual Docker images. These images can be combined and deployed locally using Docker Compose.
 
 ```bash
-git clone git@github.com:ClickHouse/clickstack.git
+git clone https://github.com/hyperdxio/hyperdx.git
+cd hyperdx
 docker compose up
 ```
 See our [Docker Compose guide](https://clickhouse.com/docs/use-cases/observability/clickstack/deployment/docker-compose) for further details.
