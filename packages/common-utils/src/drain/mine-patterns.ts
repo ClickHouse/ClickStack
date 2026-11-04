@@ -79,6 +79,8 @@ export interface MinePatternResult<TRow = Record<string, unknown>> {
    * `endDate`.
    */
   trendBucketStarts: number[];
+  /** The Drain cluster id of each input row, in input order. */
+  rowClusterIds: number[];
 }
 
 export interface MinePatternOptions<TRow extends Record<string, unknown>> {
@@ -102,6 +104,11 @@ export interface MinePatternOptions<TRow extends Record<string, unknown>> {
    * Falls back to startDate if the extractor returns null/undefined.
    */
   getTimestamp: (row: TRow) => number | null | undefined;
+  /**
+   * Drain miner to add the rows to. Default: a new one. Pass the same miner
+   * to several calls to get cluster ids that are comparable across them.
+   */
+  miner?: TemplateMiner;
 }
 
 // ─── Core mining function ────────────────────────────────────────────────────
@@ -126,6 +133,7 @@ export function minePatterns<TRow extends Record<string, unknown>>(
     maxSamples = 5,
     getBody,
     getTimestamp,
+    miner = new TemplateMiner(new TemplateMinerConfig()),
   } = options;
 
   const granularity =
@@ -144,12 +152,9 @@ export function minePatterns<TRow extends Record<string, unknown>>(
       sampleMultiplier: 1,
       trendGranularity: granularity,
       trendBucketStarts: allBuckets,
+      rowClusterIds: [],
     };
   }
-
-  // ── Set up Drain miner ──
-  const drainConfig = new TemplateMinerConfig();
-  const miner = new TemplateMiner(drainConfig);
 
   // ── Process each row through Drain ──
   const clustered: Array<{
@@ -239,5 +244,6 @@ export function minePatterns<TRow extends Record<string, unknown>>(
     sampleMultiplier,
     trendGranularity: granularity,
     trendBucketStarts: allBuckets,
+    rowClusterIds: clustered.map(c => c.clusterId),
   };
 }
