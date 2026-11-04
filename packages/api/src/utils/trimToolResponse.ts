@@ -293,7 +293,11 @@ function trimObject(
   path: string,
   stats: FallbackStats,
 ): any {
-  const entries = Object.entries(obj);
+  // JSON.stringify drops undefined fields and returns undefined for them, which
+  // would break the size math below, so drop them here too.
+  const entries = Object.entries(obj).filter(
+    ([, value]) => value !== undefined,
+  );
   if (entries.length === 0) return obj;
 
   // Values within an equal share stay whole; the large ones split what is left,
