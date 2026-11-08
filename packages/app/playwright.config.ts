@@ -75,6 +75,10 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     /* Record video on failure */
     video: 'retain-on-failure',
+    // Without this, Chromium derives navigator.language from the host locale.
+    // On LANG=C.UTF-8 hosts that is 'en-US@posix', which Intl rejects, and
+    // uPlot calls Intl.NumberFormat(navigator.language) at import time.
+    locale: 'en-US',
   },
 
   /* Global test timeout - CI needs more time than local */
