@@ -44,7 +44,7 @@ describe('buildRRWebStreamChartConfig', () => {
   it('orders by timestamp with numeric offset and chunk tiebreaks', () => {
     // Chunks of one rrweb event share a single timestamp, so without the
     // tiebreaks ClickHouse can return them in arbitrary order and the replay
-    // reassembly gets scrambled (hyperdxio/hyperdx#2569). The casts matter
+    // reassembly gets scrambled (ClickHouse/ClickStack#2569). The casts matter
     // too: the attributes are strings, and lexicographically '10' < '2'.
     expect(config.orderBy).toBe(
       "TimestampTime ASC, toUInt64OrZero(LogAttributes['rr-web.offset']) ASC, toUInt64OrZero(LogAttributes['rr-web.chunk']) ASC",
@@ -70,6 +70,23 @@ describe('buildRRWebStreamChartConfig', () => {
     );
     expect(config.dateRange).toEqual([new Date(1000), new Date(2000)]);
     expect(config.limit).toEqual({ limit: 1000000, offset: 0 });
+  });
+
+  it('looks up OTel sessions by session.id', () => {
+    const otelConfig = buildRRWebStreamChartConfig({
+      source: config,
+      serviceName: 'my-service',
+      sessionId: 'session-1',
+      sessionIdKey: 'session.id',
+      startDate: new Date(1000),
+      endDate: new Date(2000),
+      limit: 1000000,
+      offset: 0,
+      getSessionSourceFieldExpression,
+    });
+    expect(otelConfig.where).toBe(
+      'ServiceName:"my-service" AND LogAttributes.session.id:"session-1"',
+    );
   });
 });
 
