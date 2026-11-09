@@ -22,6 +22,9 @@ describe('metric series from different scopes (integration)', () => {
   const SUM_TABLE = 'scope_name_sum_int_test';
   const HIST_TABLE = 'scope_name_histogram_int_test';
   const EXP_HIST_TABLE = 'scope_name_exp_histogram_int_test';
+  // Custom tables: a Nullable ScopeName, and a histogram without ScopeName.
+  const NULLABLE_GAUGE_TABLE = 'scope_name_nullable_gauge_int_test';
+  const NO_SCOPE_HIST_TABLE = 'scope_name_no_scope_histogram_int_test';
 
   const SCOPE_A = 'scope.a';
   const SCOPE_B = 'scope.b';
@@ -83,13 +86,16 @@ describe('metric series from different scopes (integration)', () => {
     metricType: MetricsDataType,
     metricName: string,
     select: { aggFn: string; level?: number },
-    groupBy?: string,
+    {
+      groupBy,
+      tables = metricTables,
+    }: { groupBy?: string; tables?: typeof metricTables } = {},
   ) => {
     const result = await hdxClient.queryChartConfig({
       config: {
         displayType: DisplayType.Line,
         connection: 'test-connection',
-        metricTables,
+        metricTables: tables,
         from: { databaseName: DATABASE, tableName: '' },
         select: [
           {
@@ -121,9 +127,10 @@ describe('metric series from different scopes (integration)', () => {
     metricType: MetricsDataType,
     metricName: string,
     select: { aggFn: string; level?: number },
+    tables = metricTables,
   ) =>
     new Map(
-      (await queryRows(metricType, metricName, select)).map(row => [
+      (await queryRows(metricType, metricName, select, { tables })).map(row => [
         row.__hdx_time_bucket,
         Number(row.Value),
       ]),
@@ -268,6 +275,53 @@ describe('metric series from different scopes (integration)', () => {
       ]),
       format: 'JSONEachRow',
     });
+
+    // Two hosts with a NULL ScopeName: their attributes keep them apart.
+    await client.command({
+      query: `CREATE OR REPLACE TABLE ${DATABASE}.${NULLABLE_GAUGE_TABLE} (
+        ${COMMON_COLUMNS.replace('ScopeName String', 'ScopeName Nullable(String)')},
+        Value Float64
+      ) ${ENGINE}`,
+    });
+    await client.insert({
+      table: `${DATABASE}.${NULLABLE_GAUGE_TABLE}`,
+      values: MINUTES.flatMap(m =>
+        [
+          ['a', 10],
+          ['b', 20],
+        ].map(([host, value]) => ({
+          ...commonFields('gauge.cpu', m, SCOPE_A),
+          ScopeName: null,
+          Attributes: { host },
+          Value: value,
+        })),
+      ),
+      format: 'JSONEachRow',
+    });
+
+    // A histogram table without ScopeName, with one series that gets 5 new
+    // observations a minute.
+    await client.command({
+      query: `CREATE OR REPLACE TABLE ${DATABASE}.${NO_SCOPE_HIST_TABLE} (
+        ${COMMON_COLUMNS.replace('ScopeName String,', '')},
+        Count UInt64,
+        Sum Float64,
+        BucketCounts Array(UInt64),
+        ExplicitBounds Array(Float64),
+        Min Float64,
+        Max Float64,
+        AggregationTemporality Int32
+      ) ${ENGINE}`,
+    });
+    await client.insert({
+      table: `${DATABASE}.${NO_SCOPE_HIST_TABLE}`,
+      values: MINUTES.map(m => {
+        const row: Record<string, unknown> = histRow(m, SCOPE_B, [0, 5 * m, 0]);
+        delete row.ScopeName;
+        return row;
+      }),
+      format: 'JSONEachRow',
+    });
   });
 
   beforeEach(() => {
@@ -275,7 +329,14 @@ describe('metric series from different scopes (integration)', () => {
   });
 
   afterAll(async () => {
-    for (const table of [GAUGE_TABLE, SUM_TABLE, HIST_TABLE, EXP_HIST_TABLE]) {
+    for (const table of [
+      GAUGE_TABLE,
+      SUM_TABLE,
+      HIST_TABLE,
+      EXP_HIST_TABLE,
+      NULLABLE_GAUGE_TABLE,
+      NO_SCOPE_HIST_TABLE,
+    ]) {
       await client.command({
         query: `DROP TABLE IF EXISTS ${DATABASE}.${table}`,
       });
@@ -301,7 +362,7 @@ describe('metric series from different scopes (integration)', () => {
       MetricsDataType.Gauge,
       'gauge.cpu',
       { aggFn: 'sum' },
-      'ScopeName',
+      { groupBy: 'ScopeName' },
     );
     const byScope = Object.fromEntries(
       rows
@@ -362,5 +423,34 @@ describe('metric series from different scopes (integration)', () => {
     );
     expect(p50.get(bucket(1))).toBeGreaterThan(4);
     expect(p50.get(bucket(1))).toBeLessThanOrEqual(2 ** (17 / 8));
+  });
+
+  it.each([
+    ['sum', 30],
+    ['count', 2],
+  ])(
+    'keeps series with a NULL ScopeName apart (%s)',
+    async (aggFn, expected) => {
+      const values = await runConfig(
+        MetricsDataType.Gauge,
+        'gauge.cpu',
+        { aggFn },
+        { ...metricTables, gauge: NULLABLE_GAUGE_TABLE },
+      );
+      for (const m of MINUTES) {
+        expect(values.get(bucket(m))).toBe(expected);
+      }
+    },
+  );
+
+  it('reads a histogram table without ScopeName', async () => {
+    const counts = await runConfig(
+      MetricsDataType.Histogram,
+      'hist.latency',
+      { aggFn: 'count' },
+      { ...metricTables, histogram: NO_SCOPE_HIST_TABLE },
+    );
+    expect(counts.get(bucket(1))).toBe(5);
+    expect(counts.get(bucket(2))).toBe(5);
   });
 });

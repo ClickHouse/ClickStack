@@ -124,7 +124,7 @@ describe('renderChartConfig', () => {
     );
     const sql = rendered.sql.replace(/\s+/g, ' ');
     expect(sql).toContain(
-      'cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash, `host.name`, `region` FROM',
+      'cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash, `host.name`, `region` FROM',
     );
     expect(sql).toContain(
       'any(`host.name`) AS `host.name`, any(`region`) AS `region`',
@@ -1041,16 +1041,26 @@ describe('renderChartConfig', () => {
 
   // Two scopes can report the same metric with the same attributes. They are
   // two OTel streams, so ScopeName must be part of the series key.
-  it.each([
-    [MetricsDataType.Gauge, { aggFn: 'avg' }],
-    [MetricsDataType.Sum, { aggFn: 'avg' }],
-    [MetricsDataType.Histogram, { aggFn: 'quantile', level: 0.5 }],
-    [MetricsDataType.Histogram, { aggFn: 'count' }],
-    [MetricsDataType.ExponentialHistogram, { aggFn: 'quantile', level: 0.5 }],
-    [MetricsDataType.ExponentialHistogram, { aggFn: 'count' }],
-  ] as const)(
-    'keys each %s series on its ScopeName (%o)',
-    async (metricType, select) => {
+  describe('metric series key', () => {
+    const KEY_WITH_SCOPE =
+      'cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes)';
+    const KEY_WITH_NULLABLE_SCOPE =
+      "cityHash64(ifNull(ScopeName, ''), ScopeAttributes, ResourceAttributes, Attributes)";
+    const KEY_WITHOUT_SCOPE =
+      'cityHash64(ScopeAttributes, ResourceAttributes, Attributes)';
+
+    const mockScopeName = (type: string) => {
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockImplementation(async ({ column }) =>
+          column === 'ScopeName' ? { name: 'ScopeName', type } : undefined,
+        );
+    };
+
+    const renderMetricSql = async (
+      metricType: MetricsDataType,
+      select: { aggFn: 'avg' | 'count' | 'quantile'; level?: number },
+    ) => {
       const rendered = await renderChartConfig(
         {
           ...gaugeConfiguration,
@@ -1068,15 +1078,70 @@ describe('renderChartConfig', () => {
         mockMetadata,
         querySettings,
       );
-      const sql = parameterizedQueryToSql(rendered);
-      expect(sql).toContain(
-        'cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes)',
-      );
-      expect(sql).not.toContain(
-        'cityHash64(ScopeAttributes, ResourceAttributes, Attributes)',
-      );
-    },
-  );
+      return parameterizedQueryToSql(rendered);
+    };
+
+    const cases = [
+      [MetricsDataType.Gauge, { aggFn: 'avg' }],
+      [MetricsDataType.Sum, { aggFn: 'avg' }],
+      [MetricsDataType.Histogram, { aggFn: 'quantile', level: 0.5 }],
+      [MetricsDataType.Histogram, { aggFn: 'count' }],
+      [MetricsDataType.ExponentialHistogram, { aggFn: 'quantile', level: 0.5 }],
+      [MetricsDataType.ExponentialHistogram, { aggFn: 'count' }],
+    ] as const;
+
+    it.each(cases)(
+      'keys each %s series on its ScopeName (%o)',
+      async (metricType, select) => {
+        mockScopeName('String');
+        const sql = await renderMetricSql(metricType, select);
+        expect(sql).toContain(KEY_WITH_SCOPE);
+        expect(sql).not.toContain(KEY_WITHOUT_SCOPE);
+      },
+    );
+
+    // Gauge and sum queries already read ScopeName, so only histogram tables
+    // can lack it.
+    it.each(
+      cases.filter(
+        ([metricType]) =>
+          metricType === MetricsDataType.Histogram ||
+          metricType === MetricsDataType.ExponentialHistogram,
+      ),
+    )(
+      'reads a table without a ScopeName column as before (%s, %o)',
+      async (metricType, select) => {
+        const sql = await renderMetricSql(metricType, select);
+        expect(sql).toContain(KEY_WITHOUT_SCOPE);
+        expect(sql).not.toContain('ScopeName');
+      },
+    );
+
+    it('reads the table as before when the ScopeName lookup fails', async () => {
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockImplementation(async ({ column }) => {
+          if (column === 'ScopeName') throw new Error('DESCRIBE failed');
+          return undefined;
+        });
+      const sql = await renderMetricSql(MetricsDataType.Histogram, {
+        aggFn: 'count',
+      });
+      expect(sql).toContain(KEY_WITHOUT_SCOPE);
+    });
+
+    it.each([
+      ['LowCardinality(String)', KEY_WITH_SCOPE],
+      ['Nullable(String)', KEY_WITH_NULLABLE_SCOPE],
+      ['LowCardinality(Nullable(String))', KEY_WITH_NULLABLE_SCOPE],
+    ])('keys on a ScopeName of type %s', async (scopeNameType, expected) => {
+      mockScopeName(scopeNameType);
+      const sql = await renderMetricSql(MetricsDataType.Gauge, {
+        aggFn: 'avg',
+      });
+      expect(sql).toContain(expected);
+    });
+  });
 
   describe('histogram metric queries', () => {
     describe('quantile', () => {
@@ -4702,7 +4767,7 @@ describe('renderChartConfig', () => {
 
   // The Map-schema vs JSON-schema attrHashExpr distinction was collapsed in
   // HDX-4466. Both schemas now render the same variadic
-  // cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes) expression,
+  // cityHash64 key (see renderMetricSeriesKey),
   // which works for both Map(LowCardinality(String), String) and JSON
   // attribute columns. Coverage of the variadic form lives in the regenerated
   // gauge / sum / histogram snapshots earlier in this file plus the

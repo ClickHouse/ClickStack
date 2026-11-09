@@ -341,12 +341,7 @@ exports[`renderBuilderConfigAsSqlTemplate metric charts generates a macro-based 
   Source AS (
     SELECT
       *,
-      cityHash64(
-        ScopeName,
-        ScopeAttributes,
-        ResourceAttributes,
-        Attributes
-      ) AS AttributesHash
+      cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash
     FROM
       $__sourceTable(gauge)
     WHERE
@@ -442,12 +437,7 @@ exports[`renderBuilderConfigAsSqlTemplate metric charts generates a macro-based 
               ExplicitBounds,
               ResourceAttributes,
               Attributes,
-              cityHash64(
-                ScopeName,
-                ScopeAttributes,
-                ResourceAttributes,
-                Attributes
-              ) AS attr_hash,
+              cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS attr_hash,
               cityHash64(ExplicitBounds) AS bounds_hash,
               CAST(BucketCounts AS Array(Int64)) counts
             FROM
@@ -534,12 +524,7 @@ exports[`renderBuilderConfigAsSqlTemplate metric charts generates a macro-based 
   Source AS (
     SELECT
       *,
-      cityHash64(
-        ScopeName,
-        ScopeAttributes,
-        ResourceAttributes,
-        Attributes
-      ) AS AttributesHash,
+      cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash,
       IF(
         AggregationTemporality = 1,
         Value, -- DELTA: Value is already the per-interval increase
@@ -686,12 +671,7 @@ FROM
           Source AS (
             SELECT
               *,
-              cityHash64(
-                ScopeName,
-                ScopeAttributes,
-                ResourceAttributes,
-                Attributes
-              ) AS AttributesHash
+              cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash
             FROM
               $__sourceTable(gauge)
             WHERE
@@ -754,12 +734,7 @@ FROM
           Source AS (
             SELECT
               *,
-              cityHash64(
-                ScopeName,
-                ScopeAttributes,
-                ResourceAttributes,
-                Attributes
-              ) AS AttributesHash
+              cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash
             FROM
               $__sourceTable(gauge)
             WHERE
@@ -837,12 +812,7 @@ FROM
           Source AS (
             SELECT
               *,
-              cityHash64(
-                ScopeName,
-                ScopeAttributes,
-                ResourceAttributes,
-                Attributes
-              ) AS AttributesHash
+              cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash
             FROM
               $__sourceTable(gauge)
             WHERE
@@ -905,12 +875,7 @@ FROM
           Source AS (
             SELECT
               *,
-              cityHash64(
-                ScopeName,
-                ScopeAttributes,
-                ResourceAttributes,
-                Attributes
-              ) AS AttributesHash
+              cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash
             FROM
               $__sourceTable(gauge)
             WHERE
