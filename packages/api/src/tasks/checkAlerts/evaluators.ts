@@ -85,7 +85,9 @@ export interface AlertEvaluator {
    */
   evaluationNow?: (alert: IAlert, wallClockNow: Date) => Date;
   /** Evaluates the window and persists state through `ctx`. Throwing records
-   * the error on the alert, as for the threshold path. */
+   * the error on the alert, as for the threshold path. Returning without
+   * calling `persistHistories` leaves state and history unchanged, but still
+   * writes `executionErrors` to the alert. */
   evaluate: (ctx: AlertEvaluationContext) => Promise<void>;
 }
 
@@ -103,8 +105,6 @@ export const registerAlertEvaluator = (evaluator: AlertEvaluator) => {
   evaluators.push(evaluator);
 };
 
-/** The registered evaluator for this alert, or undefined for the threshold
- * path. */
 /**
  * Runs registerExtensions once. A failed registration is rolled back and
  * rethrown, and retried on the next lookup: routing alerts to the threshold
@@ -125,6 +125,8 @@ const ensureExtensionsRegistered = () => {
   extensionsRegistered = true;
 };
 
+/** The registered evaluator for this alert, or undefined for the threshold
+ * path. */
 export const findAlertEvaluator = (
   alert: IAlert,
 ): AlertEvaluator | undefined => {

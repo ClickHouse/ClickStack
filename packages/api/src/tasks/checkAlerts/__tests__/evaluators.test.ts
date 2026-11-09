@@ -1,8 +1,13 @@
-import { DisplayType } from '@hyperdx/common-utils/dist/types';
+import { AlertErrorType, DisplayType } from '@hyperdx/common-utils/dist/types';
 import { Types } from 'mongoose';
 
-import { AlertState } from '@/models/alert';
-import { getAlertWindowStart, processAlert } from '@/tasks/checkAlerts';
+import { AlertState, IAlertError } from '@/models/alert';
+import AlertHistory from '@/models/alertHistory';
+import {
+  getAlertWindowStart,
+  getConsecutiveWindowHistories,
+  processAlert,
+} from '@/tasks/checkAlerts';
 import {
   AlertEvaluationContext,
   AlertEvaluator,
@@ -33,6 +38,13 @@ const makeDetails = (alert: any): any => ({
     sqlTemplate: 'SELECT 1',
     displayType: DisplayType.Line,
   },
+});
+
+const makeFiredHistory = (): any => ({
+  _id: new Types.ObjectId(),
+  createdAt: new Date(),
+  state: AlertState.ALERT,
+  fired: true,
 });
 
 const makeProvider = (): any => ({
@@ -221,11 +233,7 @@ describe('alert evaluators', () => {
     const { ctx } = await evaluateWith(async c => {
       const history = c.getOrCreateHistory('');
       history.state = AlertState.OK;
-      await c.sendNotificationIfResolved(
-        { state: AlertState.ALERT, fired: true } as any,
-        history,
-        '',
-      );
+      await c.sendNotificationIfResolved(makeFiredHistory(), history, '');
     });
 
     // One dispatch attempt, failing on the missing team.
@@ -233,9 +241,17 @@ describe('alert evaluators', () => {
   });
 
   it('persists extra errors with the collected ones', async () => {
-    const extra = { type: 'INVALID_ALERT', message: 'extra' } as any;
+    const extra: IAlertError = {
+      timestamp: new Date(),
+      type: AlertErrorType.INVALID_ALERT,
+      message: 'extra',
+    };
     const { provider } = await evaluateWith(async c => {
-      c.executionErrors.push({ type: 'WEBHOOK_ERROR', message: 'a' } as any);
+      c.executionErrors.push({
+        timestamp: new Date(),
+        type: AlertErrorType.WEBHOOK_ERROR,
+        message: 'a',
+      });
       await c.persistHistories([c.getOrCreateHistory('')], [extra]);
     });
 
@@ -285,6 +301,58 @@ describe('alert evaluators', () => {
     expect(
       getAlertWindowStart(makeAlert(), new Date('2025-01-01T00:06:00Z')),
     ).toEqual(new Date('2025-01-01T00:05:00Z'));
+  });
+
+  it('isolates a failing evaluator lookup during the history prefetch', async () => {
+    registerAlertEvaluator({
+      name: 'broken',
+      appliesTo: alert => {
+        if (alert.threshold === 42) {
+          throw new Error('lookup failed');
+        }
+        return false;
+      },
+      evaluate: jest.fn(),
+    });
+    const healthy = makeAlert({ numConsecutiveWindows: 2 });
+    const broken = makeAlert({ numConsecutiveWindows: 2, threshold: 42 });
+    const aggregate = jest
+      .spyOn(AlertHistory, 'aggregate')
+      .mockResolvedValue([
+        { createdAt: new Date(), state: AlertState.ALERT, group: '' },
+      ]);
+
+    try {
+      const map = await getConsecutiveWindowHistories(
+        [broken, healthy],
+        new Date('2025-01-01T00:07:00Z'),
+      );
+
+      expect(aggregate).toHaveBeenCalledTimes(1);
+      expect(map.has(healthy.id)).toBe(true);
+      expect(map.has(broken.id)).toBe(false);
+    } finally {
+      aggregate.mockRestore();
+    }
+  });
+
+  it('writes collected errors when the evaluator does not persist', async () => {
+    const { provider } = await evaluateWith(async c => {
+      await c.trySendNotification({
+        state: AlertState.ALERT,
+        group: '',
+        totalCount: 5,
+      });
+    });
+
+    expect(provider.updateAlertState).not.toHaveBeenCalled();
+    expect(provider.recordAlertErrors).toHaveBeenCalledTimes(1);
+    const [, errors, windowStart] = provider.recordAlertErrors.mock.calls[0];
+    expect(errors).toEqual([
+      expect.objectContaining({ type: AlertErrorType.WEBHOOK_ERROR }),
+    ]);
+    // No history row: the evaluator decided not to record this window.
+    expect(windowStart).toBeUndefined();
   });
 
   it('records a failing evaluator lookup on the alert', async () => {

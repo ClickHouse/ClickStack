@@ -1443,10 +1443,12 @@ export const processAlert = async (
       }
     };
 
+    let persisted = false;
     const persistHistories = async (
       records: IAlertHistory[],
       extraErrors: IAlertError[] = [],
     ) => {
+      persisted = true;
       flushNotificationTimings();
       // An evaluation that measured nothing persists no analytics object.
       if (Object.keys(evaluationAnalytics).length > 0) {
@@ -1484,6 +1486,12 @@ export const processAlert = async (
         persistHistories,
       };
       await evaluator.evaluate(ctx);
+      if (!persisted) {
+        // Every completed evaluation overwrites the alert's execution errors,
+        // as the threshold path does through persistHistories. Without this,
+        // failed notifications would be dropped and stale errors would stay.
+        await alertProvider.recordAlertErrors(alert.id, executionErrors);
+      }
       return;
     }
 
@@ -2031,7 +2039,20 @@ export const getConsecutiveWindowHistories = async (
       queue.add(async () => {
         const numWindowsToLookBack = alert.numConsecutiveWindows ?? 1;
         const windowSizeInMins = ms(alert.interval) / 60000;
-        const windowStart = getAlertWindowStart(alert, now);
+        let windowStart: Date;
+        try {
+          windowStart = getAlertWindowStart(alert, now);
+        } catch (e) {
+          // The evaluator lookup runs extension code. A failure must not
+          // reject this batch, which would stop every alert loading this
+          // tick. processAlert repeats the lookup and records the error on
+          // this alert.
+          logger.error(
+            { alertId: alert.id, error: serializeError(e) },
+            'Failed to compute alert window start for history prefetch',
+          );
+          return undefined;
+        }
         const earliestAllowedTime = new Date(
           windowStart.getTime() -
             (numWindowsToLookBack - 1) * windowSizeInMins * 60_000,
