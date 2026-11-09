@@ -495,7 +495,9 @@ describe('getServiceMetricValue', () => {
     overrides: Partial<ServiceAggregation['incomingRequests']> = {},
     outgoingRequests = 0,
   ): ServiceAggregation => ({
+    key: 'svc',
     serviceName: 'svc',
+    dimensions: [],
     incomingRequests: {
       totalRequests: 100,
       errorCount: 5,

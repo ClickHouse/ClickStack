@@ -96,6 +96,8 @@ interface ServiceMapPresentationProps {
   dateRange: [Date, Date];
   source: TTraceSource;
   isSingleTrace?: boolean;
+  // Extra group-by SQL expressions the nodes are split by (beyond ServiceName).
+  groupBy: string[];
   // The single service the map is currently scoped to (via a node's focus
   // action), or undefined when showing all/multiple services.
   focusedService?: string;
@@ -109,6 +111,7 @@ function ServiceMapPresentation({
   dateRange,
   source,
   isSingleTrace,
+  groupBy,
   focusedService,
   onFocusService,
 }: ServiceMapPresentationProps) {
@@ -168,13 +171,14 @@ function ServiceMapPresentation({
   useEffect(() => {
     const nodes: Node<ServiceMapNodeData>[] =
       Array.from(services?.values() ?? []).map((service, index) => ({
-        id: service.serviceName,
+        id: service.key,
         data: {
           ...service,
           dateRange,
           source,
           maxThroughput: metricMax.throughput,
           isSingleTrace,
+          groupBy,
           focusedService,
           onFocusService,
         },
@@ -186,16 +190,16 @@ function ServiceMapPresentation({
       services?.values() ?? [],
     )
       .filter(service => service.incomingRequestsByClient.size > 0)
-      .flatMap(({ serviceName, incomingRequestsByClient: requestsByClient }) =>
-        Array.from(requestsByClient.entries()).map(
+      .flatMap(({ key, serviceName, dimensions, incomingRequestsByClient }) =>
+        Array.from(incomingRequestsByClient.entries()).map(
           ([
-            clientServiceName,
+            clientKey,
             { totalRequests, errorPercentage, p50, p95, p99, hasLatency },
           ]) => {
             return {
-              id: `${serviceName}-${clientServiceName}`,
-              source: clientServiceName,
-              target: serviceName,
+              id: `${clientKey}->${key}`,
+              source: clientKey,
+              target: key,
               animated: true,
               type: 'request',
               data: {
@@ -208,6 +212,8 @@ function ServiceMapPresentation({
                 source,
                 dateRange,
                 serviceName,
+                dimensions,
+                groupBy,
                 isSingleTrace,
               },
             };
@@ -225,6 +231,7 @@ function ServiceMapPresentation({
     source,
     metricMax.throughput,
     isSingleTrace,
+    groupBy,
     focusedService,
     onFocusService,
   ]);
@@ -336,10 +343,16 @@ interface ServiceMapProps {
   where?: string;
   whereLanguage?: 'sql' | 'lucene';
   serviceNames?: string[];
+  // Extra group-by SQL expressions; ServiceName is always the first key.
+  groupBy?: string[];
   // Called when a node is clicked, e.g. to drive the service filter to focus
   // on that service and its immediate dependencies.
   onFocusService?: (serviceName: string) => void;
 }
+
+// A stable default so the layout effect does not re-run on every render when
+// the caller passes no group-by.
+const NO_GROUP_BY: string[] = [];
 
 export default function ServiceMap({
   traceId,
@@ -350,6 +363,7 @@ export default function ServiceMap({
   where,
   whereLanguage,
   serviceNames,
+  groupBy = NO_GROUP_BY,
   onFocusService,
 }: ServiceMapProps) {
   const {
@@ -364,6 +378,7 @@ export default function ServiceMap({
     where,
     whereLanguage,
     serviceNames,
+    groupBy,
   });
 
   useEffect(() => {
@@ -390,6 +405,7 @@ export default function ServiceMap({
         dateRange={dateRange}
         source={traceTableSource}
         isSingleTrace={isSingleTrace}
+        groupBy={groupBy}
         focusedService={focusedService}
         onFocusService={onFocusService}
       />
