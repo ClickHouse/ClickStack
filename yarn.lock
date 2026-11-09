@@ -4977,7 +4977,7 @@ __metadata:
     timestamp-nano: "npm:^1.0.1"
     ts-jest: "npm:^29.4.11"
     typescript: "npm:^6.0.3"
-    uplot: "npm:^1.6.31"
+    uplot: "patch:uplot@npm%3A1.6.32#~/.yarn/patches/uplot-npm-1.6.32-350d2da00d.patch"
     uplot-react: "npm:^1.2.2"
     zod: "npm:3.25"
   languageName: unknown
@@ -30604,10 +30604,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"uplot@npm:^1.6.31":
+"uplot@npm:1.6.32":
   version: 1.6.32
   resolution: "uplot@npm:1.6.32"
   checksum: 10c0/4d9cdd5f53371656cfc178ea4ae0d8c9bdbe4c98c99df847926d7e5f5a5bcb8043561219da2979fee7616aabe3619d80fee093befdfe39aae65e6621284c39b1
+  languageName: node
+  linkType: hard
+
+"uplot@patch:uplot@npm%3A1.6.32#~/.yarn/patches/uplot-npm-1.6.32-350d2da00d.patch":
+  version: 1.6.32
+  resolution: "uplot@patch:uplot@npm%3A1.6.32#~/.yarn/patches/uplot-npm-1.6.32-350d2da00d.patch::version=1.6.32&hash=d25b41"
+  checksum: 10c0/8eac8ee3e294a2834f6295eea230bd6dba6c7031a0d67f79f02eacec15ceaada5e82accd9ef1b6462326ec35e9475779f072b9be7625550a3e2f1d8fc70d2470
   languageName: node
   linkType: hard
 
