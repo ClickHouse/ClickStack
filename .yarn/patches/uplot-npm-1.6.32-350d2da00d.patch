@@ -1,0 +1,40 @@
+diff --git a/dist/uPlot.cjs.js b/dist/uPlot.cjs.js
+index 98b7582dff68d4f4d9e0068cc77bec9d33ea4904..d137fbcb9f24358d7e59350907181106fc5b231d 100644
+--- a/dist/uPlot.cjs.js
++++ b/dist/uPlot.cjs.js
+@@ -441,7 +441,14 @@ function _rangeNum(_min, _max, cfg) {
+ }
+ 
+ // alternative: https://stackoverflow.com/a/2254896
+-const numFormatter = new Intl.NumberFormat(domEnv ? nav.language : 'en-US');
++// Patched: Intl rejects POSIX-style tags such as 'en-US@posix', which some
++// browsers report as navigator.language. Fall back instead of throwing at import.
++let numFormatter;
++try {
++	numFormatter = new Intl.NumberFormat(domEnv ? nav.language : 'en-US');
++} catch (e) {
++	numFormatter = new Intl.NumberFormat('en-US');
++}
+ const fmtNum = val => numFormatter.format(val);
+ 
+ const M = Math;
+diff --git a/dist/uPlot.esm.js b/dist/uPlot.esm.js
+index 87473c9cfb3366f57883cb803114a87c64d4b6b8..740bd3626a1f8bd6bbe352878e55e898e759784c 100644
+--- a/dist/uPlot.esm.js
++++ b/dist/uPlot.esm.js
+@@ -439,7 +439,14 @@ function _rangeNum(_min, _max, cfg) {
+ }
+ 
+ // alternative: https://stackoverflow.com/a/2254896
+-const numFormatter = new Intl.NumberFormat(domEnv ? nav.language : 'en-US');
++// Patched: Intl rejects POSIX-style tags such as 'en-US@posix', which some
++// browsers report as navigator.language. Fall back instead of throwing at import.
++let numFormatter;
++try {
++	numFormatter = new Intl.NumberFormat(domEnv ? nav.language : 'en-US');
++} catch (e) {
++	numFormatter = new Intl.NumberFormat('en-US');
++}
+ const fmtNum = val => numFormatter.format(val);
+ 
+ const M = Math;
