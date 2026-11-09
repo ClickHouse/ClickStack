@@ -571,6 +571,27 @@ async function clickhouseServesPrometheusHttpApi(
   }
 }
 
+/**
+ * Whether a connection serves PromQL over ClickHouse's HTTP API right now,
+ * for callers that want to pin a source to it (see the onboarding flow). Reads
+ * the same kept answer the queries do. Only a definitive yes is true: a
+ * Prometheus endpoint, an old server, a missing handler and a server that
+ * could not be asked all answer false.
+ */
+export async function connectionServesPrometheusHttpApi(connection: {
+  id: string;
+  host: string;
+  username: string;
+  password?: string;
+  isPrometheusEndpoint?: boolean;
+}): Promise<boolean> {
+  if (connection.isPrometheusEndpoint) return false;
+  return clickhouseServesPrometheusHttpApi(
+    newPromqlClickhouseClient(connection),
+    connection,
+  );
+}
+
 type ClickhouseQueryBackend =
   | {
       kind: 'clickhouse-http';
