@@ -26,7 +26,6 @@ import {
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import HyperDX from '@hyperdx/browser';
 import {
   ClickHouseQueryError,
   ColumnMeta,
@@ -87,6 +86,7 @@ import { SortingState } from '@tanstack/react-table';
 import CodeMirror from '@uiw/react-codemirror';
 
 import api, { useCompleteOnboardingTask } from '@/api';
+import { usePageTitle } from '@/brand';
 import { ActiveFilterPills } from '@/components/ActiveFilterPills';
 import { AlertStatusIcon } from '@/components/AlertStatusIcon';
 import { ResponsiveSidePanel } from '@/components/CompactViewport/ResponsiveSidePanel';
@@ -133,7 +133,6 @@ import {
 } from '@/savedSearch';
 import { useSearchPageFilterState } from '@/searchFilters';
 import { getEventBody, useSource, useSources } from '@/source';
-import { useAppTheme, usePageTitle } from '@/theme/ThemeProvider';
 import {
   parseRelativeTimeQuery,
   useDefaultTimeRange,
@@ -149,6 +148,7 @@ import {
   usePrevious,
   withMapKeyAlias,
 } from '@/utils';
+import { recordAction } from '@/utils/browserTelemetry';
 
 import ChartSQLPreview, { SQLPreview } from './components/ChartSQLPreview';
 import DBSqlRowTableWithSideBar from './components/DBSqlRowTableWithSidebar';
@@ -292,13 +292,10 @@ function ResumeLiveTailButton({
 }: {
   handleResumeLiveTail: () => void;
 }) {
-  const { themeName } = useAppTheme();
-  const variant = themeName === 'clickstack' ? 'secondary' : 'primary';
-
   return (
     <Button
       size="compact-xs"
-      variant={variant}
+      variant="secondary"
       onClick={handleResumeLiveTail}
       leftSection={<IconBolt size={14} />}
     >
@@ -1015,7 +1012,7 @@ export function useSearchTelemetry({
   // telemetry.
   useEffect(() => {
     if (completedSearch == null || !completedSearch.emit) return;
-    HyperDX.addAction('search executed', {
+    recordAction('search executed', {
       latency_ms: completedSearch.latency_ms,
       source_id: completedSearch.source_id,
     });

@@ -2,10 +2,8 @@ import React, { useEffect } from 'react';
 import type { NextPage } from 'next';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
-import { env } from 'next-runtime-env';
 import randomUUID from 'crypto-randomuuid';
 import { enableMapSet } from 'immer';
-import HyperDX from '@hyperdx/browser';
 import {
   MutationCache,
   QueryCache,
@@ -14,28 +12,16 @@ import {
 } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 
-import { DynamicFavicon } from '@/components/DynamicFavicon';
-import { IS_LOCAL_MODE, parseResourceAttributes } from '@/config';
-import {
-  DEFAULT_FONT_VAR,
-  FONT_VAR_MAP,
-  MANTINE_FONT_MAP,
-} from '@/config/fonts';
+import { usePageTitle } from '@/brand';
+import { MANTINE_FONT_MAP } from '@/config/fonts';
 import { ibmPlexMono, inter, roboto, robotoMono } from '@/fonts';
 import { fetchServerVersion, installHdxDebug } from '@/hdxDebug';
-import {
-  AppThemeProvider,
-  useAppTheme,
-  usePageTitle,
-} from '@/theme/ThemeProvider';
 import { ThemeWrapper } from '@/ThemeWrapper';
-import { NextApiConfigResponseData } from '@/types';
 import { ConfirmProvider } from '@/useConfirm';
 import {
   SystemColorSchemeScript,
   useContentFontSize,
   useResolvedColorScheme,
-  useUserPreferences,
 } from '@/useUserPreferences';
 
 import '@mantine/core/styles.css';
@@ -72,8 +58,6 @@ type AppPropsWithLayout = AppProps & {
   Component: NextPageWithLayout;
 };
 
-// Component that renders Head content requiring user preferences
-// Must be rendered inside AppThemeProvider to avoid hydration mismatch
 function AppHeadContent() {
   const title = usePageTitle();
 
@@ -87,8 +71,6 @@ function AppHeadContent() {
   );
 }
 
-// Component that uses user preferences for theme wrapper
-// Must be rendered inside AppThemeProvider to avoid hydration mismatch
 function AppContent({
   Component,
   pageProps,
@@ -96,27 +78,9 @@ function AppContent({
   Component: NextPageWithLayout;
   pageProps: AppProps['pageProps'];
 }) {
-  const { userPreferences } = useUserPreferences();
   const resolvedColorScheme = useResolvedColorScheme();
-  const { themeName } = useAppTheme();
   const { base: contentFontSize, compact: compactContentFontSize } =
     useContentFontSize();
-
-  // ClickStack theme always uses Inter font - user preference is ignored
-  // HyperDX theme allows user to select font preference
-  const isClickStackTheme = themeName === 'clickstack';
-  const effectiveFont = isClickStackTheme ? 'Inter' : userPreferences.font;
-  const selectedMantineFont = effectiveFont
-    ? MANTINE_FONT_MAP[effectiveFont] || undefined
-    : undefined;
-
-  useEffect(() => {
-    // Update CSS variable for global font cascading
-    if (typeof document !== 'undefined') {
-      const fontVar = FONT_VAR_MAP[effectiveFont] || DEFAULT_FONT_VAR;
-      document.documentElement.style.setProperty('--app-font-family', fontVar);
-    }
-  }, [effectiveFont]);
 
   useEffect(() => {
     // Single write point for the content font size preference; tables and
@@ -137,7 +101,7 @@ function AppContent({
 
   return (
     <ThemeWrapper
-      fontFamily={selectedMantineFont}
+      fontFamily={MANTINE_FONT_MAP.Inter}
       colorScheme={resolvedColorScheme}
     >
       <ConfirmProvider>
@@ -156,50 +120,10 @@ export default function MyApp({ Component, pageProps }: AppPropsWithLayout) {
     fetchServerVersion();
   }, []);
 
-  // port to react query ? (needs to wrap with QueryClientProvider)
   useEffect(() => {
-    if (IS_LOCAL_MODE) {
-      return;
-    }
-    fetch('/api/config')
-      .then(res => res.json())
-      .then((_jsonData?: NextApiConfigResponseData) => {
-        if (_jsonData?.apiKey) {
-          const frontendAttrs = parseResourceAttributes(
-            env('NEXT_PUBLIC_OTEL_RESOURCE_ATTRIBUTES') ?? '',
-          );
-          HyperDX.init({
-            apiKey: _jsonData.apiKey,
-            consoleCapture: true,
-            maskAllInputs: true,
-            maskAllText: true,
-            // service.version is applied last so it always reflects the
-            // NEXT_PUBLIC_APP_VERSION and cannot be overridden by
-            // NEXT_PUBLIC_OTEL_RESOURCE_ATTRIBUTES.
-            otelResourceAttributes: {
-              ...frontendAttrs,
-              'service.version': process.env.NEXT_PUBLIC_APP_VERSION,
-            },
-            service: _jsonData.serviceName,
-            // tracePropagationTargets: [new RegExp(hostname ?? 'localhost', 'i')],
-            url: _jsonData.collectorUrl,
-            tracesUrl: _jsonData.collectorTracesUrl,
-            logsUrl: _jsonData.collectorLogsUrl,
-          });
-        } else {
-          console.warn('No API key found to enable OTEL exporter');
-        }
-      })
-      .catch(() => {
-        // ignore
-      });
-  }, []);
-
-  useEffect(() => {
-    // Apply font classes to html element for CSS variable resolution.
-    // Although _document.tsx sets these server-side, they must be re-applied client-side
-    // during hydration to ensure CSS variables are available for dynamic font switching.
-    // This is critical for the --app-font-family CSS variable to work across all components.
+    // Apply font classes to html so next/font CSS variables resolve.
+    // _document.tsx sets these server-side; re-apply on the client so
+    // portaled overlays inherit the same families.
     if (typeof document !== 'undefined') {
       const fontClasses = [
         ibmPlexMono.variable,
@@ -213,14 +137,11 @@ export default function MyApp({ Component, pageProps }: AppPropsWithLayout) {
 
   return (
     <React.Fragment>
-      <AppThemeProvider>
-        <AppHeadContent />
-        <DynamicFavicon />
-        <QueryClientProvider client={queryClient}>
-          <AppContent Component={Component} pageProps={pageProps} />
-          <ReactQueryDevtools initialIsOpen={true} />
-        </QueryClientProvider>
-      </AppThemeProvider>
+      <AppHeadContent />
+      <QueryClientProvider client={queryClient}>
+        <AppContent Component={Component} pageProps={pageProps} />
+        <ReactQueryDevtools initialIsOpen={true} />
+      </QueryClientProvider>
     </React.Fragment>
   );
 }
