@@ -2093,6 +2093,8 @@ async function translateMetricChartConfig(
   // AttributesHash is computed inline with a variadic cityHash64 call
   // (HDX-4466). This works for both Map(LowCardinality(String), String) and
   // JSON attribute columns, so no schema detection round-trip is needed.
+  // ScopeName is in the key because two scopes can report the same metric
+  // with the same attributes, and OTel makes them two streams.
 
   if (
     metricType === MetricsDataType.Gauge &&
@@ -2152,7 +2154,7 @@ async function translateMetricChartConfig(
           sql: chSql`
             SELECT
               *,
-              cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash${{ UNSAFE_RAW_SQL: computedColumns.select }}
+              cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash${{ UNSAFE_RAW_SQL: computedColumns.select }}
             FROM ${renderFrom({ from: { ...from, tableName: metricTables[MetricsDataType.Gauge] }, isRenderingRawSqlTemplate: chartConfig.isRenderingRawSqlTemplate, metricType: MetricsDataType.Gauge })}
             WHERE ${where}
           `,
@@ -2281,7 +2283,7 @@ async function translateMetricChartConfig(
         sql: chSql`
                 SELECT
                   *,
-                  cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash,
+                  cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash,
                   IF(
                     AggregationTemporality = 1,
                     Value, -- DELTA: Value is already the per-interval increase

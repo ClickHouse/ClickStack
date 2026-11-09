@@ -58,8 +58,10 @@ const renderDimensionGroupBy = ({
 // Map(LowCardinality(String), String) and JSON columns. Prior to HDX-4466
 // the Map-schema path wrapped the three maps in mapConcat() before hashing;
 // see the ticket for the cross-scope same-key implications of the switch.
+// ScopeName is in the key because two scopes can report the same metric with
+// the same attributes, and OTel makes them two streams.
 const ATTR_HASH_EXPR =
-  'cityHash64(ScopeAttributes, ResourceAttributes, Attributes)';
+  'cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes)';
 
 export const translateHistogram = ({
   select,

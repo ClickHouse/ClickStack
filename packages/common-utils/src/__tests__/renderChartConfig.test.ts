@@ -124,7 +124,7 @@ describe('renderChartConfig', () => {
     );
     const sql = rendered.sql.replace(/\s+/g, ' ');
     expect(sql).toContain(
-      'cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash, `host.name`, `region` FROM',
+      'cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash, `host.name`, `region` FROM',
     );
     expect(sql).toContain(
       'any(`host.name`) AS `host.name`, any(`region`) AS `region`',
@@ -1038,6 +1038,45 @@ describe('renderChartConfig', () => {
       },
     );
   });
+
+  // Two scopes can report the same metric with the same attributes. They are
+  // two OTel streams, so ScopeName must be part of the series key.
+  it.each([
+    [MetricsDataType.Gauge, { aggFn: 'avg' }],
+    [MetricsDataType.Sum, { aggFn: 'avg' }],
+    [MetricsDataType.Histogram, { aggFn: 'quantile', level: 0.5 }],
+    [MetricsDataType.Histogram, { aggFn: 'count' }],
+    [MetricsDataType.ExponentialHistogram, { aggFn: 'quantile', level: 0.5 }],
+    [MetricsDataType.ExponentialHistogram, { aggFn: 'count' }],
+  ] as const)(
+    'keys each %s series on its ScopeName (%o)',
+    async (metricType, select) => {
+      const rendered = await renderChartConfig(
+        {
+          ...gaugeConfiguration,
+          select: [
+            {
+              ...select,
+              aggCondition: '',
+              aggConditionLanguage: 'sql',
+              valueExpression: 'Value',
+              metricName: 'test.metric',
+              metricType,
+            },
+          ],
+        } as ChartConfigWithOptDateRange,
+        mockMetadata,
+        querySettings,
+      );
+      const sql = parameterizedQueryToSql(rendered);
+      expect(sql).toContain(
+        'cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes)',
+      );
+      expect(sql).not.toContain(
+        'cityHash64(ScopeAttributes, ResourceAttributes, Attributes)',
+      );
+    },
+  );
 
   describe('histogram metric queries', () => {
     describe('quantile', () => {
@@ -4663,7 +4702,7 @@ describe('renderChartConfig', () => {
 
   // The Map-schema vs JSON-schema attrHashExpr distinction was collapsed in
   // HDX-4466. Both schemas now render the same variadic
-  // cityHash64(ScopeAttributes, ResourceAttributes, Attributes) expression,
+  // cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes) expression,
   // which works for both Map(LowCardinality(String), String) and JSON
   // attribute columns. Coverage of the variadic form lives in the regenerated
   // gauge / sum / histogram snapshots earlier in this file plus the
