@@ -1,4 +1,8 @@
-import { SourceKind, UseTextIndex } from '@hyperdx/common-utils/dist/types';
+import {
+  type PromqlSourceBackend,
+  SourceKind,
+  UseTextIndex,
+} from '@hyperdx/common-utils/dist/types';
 
 import {
   MV_AGGREGATE_FUNCTIONS,
@@ -48,6 +52,15 @@ export const OTEL_CLICKHOUSE_EXPRESSIONS = {
 export const MIN_AUTO_GRANULARITY_OPTIONS = [
   { value: '', label: 'No minimum' },
   ...MV_GRANULARITY_OPTIONS.filter(option => option.value !== '1 second'),
+];
+
+export const PROMQL_BACKEND_OPTIONS: {
+  value: PromqlSourceBackend;
+  label: string;
+}[] = [
+  { value: 'auto', label: 'Auto (detect from server)' },
+  { value: 'clickhouse-http', label: 'Prometheus HTTP API' },
+  { value: 'table-function', label: 'Table functions' },
 ];
 
 export const USE_TEXT_INDEX_OPTIONS = [
