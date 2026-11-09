@@ -843,8 +843,8 @@ test.describe('Saved Search Functionality', () => {
       await test.step('Save a search that opens on the past 1 day', async () => {
         await searchPage.timePicker.selectRelativeTime('Last 1 days');
         await searchPage.openSaveSearchModal();
-        await searchPage.savedSearchModal.chooseTimeRange(
-          'Show the past 1 day',
+        await searchPage.savedSearchModal.expectOpensWith(
+          'Opens with the past 1 day',
         );
         await searchPage.savedSearchModal.saveSearchAndWaitForNavigation(
           `Saved Time Range ${Date.now()}`,
@@ -886,8 +886,8 @@ test.describe('Saved Search Functionality', () => {
         await searchPage.timePicker.enableRelativeTime();
         await searchPage.timePicker.selectTimeInterval('Last 1 hour');
         await searchPage.openSaveSearchModal();
-        await searchPage.savedSearchModal.chooseTimeRange(
-          'Show live tail for the past 1 hour',
+        await searchPage.savedSearchModal.expectOpensWith(
+          'Opens in live tail for the past 1 hour',
         );
         await searchPage.savedSearchModal.saveSearchAndWaitForNavigation(
           `Saved Live Interval ${Date.now()}`,

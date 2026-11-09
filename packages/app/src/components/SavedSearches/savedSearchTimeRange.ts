@@ -89,73 +89,46 @@ export type CurrentTimeRange =
   | { kind: 'live'; intervalMs: number }
   | { kind: 'window'; range: [Date, Date] };
 
-export type TimeRangeChoice = 'live' | 'keep' | 'current';
-
-function getCurrentCandidate(
-  current: CurrentTimeRange,
-  nowMs: number,
-): RelativeDateRange | null {
-  if (current.kind === 'live') {
-    // Plain live tail is already what a search opens with by default.
-    return current.intervalMs === LIVE_TAIL_DURATION_MS
-      ? null
-      : toDefaultTimeRange(current.intervalMs);
-  }
-  if (!isRangeEndingNow(current.range, nowMs)) return null;
-  const [start, end] = current.range;
-  return toDefaultTimeRange(end.getTime() - start.getTime());
-}
-
-export function getTimeRangeChoices({
+/**
+ * What saving does with the time range on screen.
+ * - `value`: the `defaultTimeRange` to send. A range to store, null to clear,
+ *   or undefined to omit the key (the server keeps what is stored on update).
+ * - `opensWith`: what the saved search will open with; null means live tail.
+ */
+export function getSaveTimeRangeOutcome({
   current,
   stored,
+  isUpdate,
   nowMs,
 }: {
   current: CurrentTimeRange;
   stored: RelativeDateRange | null | undefined;
+  isUpdate: boolean;
   nowMs: number;
 }): {
-  choices: TimeRangeChoice[];
-  defaultChoice: TimeRangeChoice;
-  currentRange: RelativeDateRange | null;
+  value: RelativeDateRange | null | undefined;
+  opensWith: RelativeDateRange | null;
 } {
-  const choices: TimeRangeChoice[] = ['live'];
-  if (stored != null) choices.push('keep');
-
-  const candidate = getCurrentCandidate(current, nowMs);
-  const currentRange =
-    candidate != null && stored?.value !== candidate.value ? candidate : null;
-  if (currentRange != null) choices.push('current');
-
-  return {
-    choices,
-    defaultChoice: stored != null ? 'keep' : 'live',
-    currentRange,
-  };
-}
-
-/**
- * The `defaultTimeRange` to send: a value to store, null to clear, or
- * undefined to omit the key (the server keeps what is stored on update).
- */
-export function resolveDefaultTimeRange({
-  isUpdate,
-  choice,
-  stored,
-  currentRange,
-}: {
-  isUpdate: boolean;
-  choice: TimeRangeChoice;
-  stored: RelativeDateRange | null | undefined;
-  currentRange: RelativeDateRange | null;
-}): RelativeDateRange | null | undefined {
-  switch (choice) {
-    case 'keep':
-      // "Save as new" copies the range of the search it came from.
-      return isUpdate ? undefined : (stored ?? undefined);
-    case 'current':
-      return currentRange ?? undefined;
-    case 'live':
-      return isUpdate && stored != null ? null : undefined;
+  if (current.kind === 'live') {
+    // Plain live tail is what a search opens with when nothing is stored.
+    if (current.intervalMs === LIVE_TAIL_DURATION_MS) {
+      return {
+        value: isUpdate && stored != null ? null : undefined,
+        opensWith: null,
+      };
+    }
+    const range = toDefaultTimeRange(current.intervalMs);
+    return { value: range, opensWith: range };
   }
+  if (isRangeEndingNow(current.range, nowMs)) {
+    const [start, end] = current.range;
+    const range = toDefaultTimeRange(end.getTime() - start.getTime());
+    return { value: range, opensWith: range };
+  }
+  // A window in the past (e.g. brushed on the histogram) doesn't read as
+  // "the past N", so it is never saved; an update keeps what is stored.
+  return {
+    value: undefined,
+    opensWith: isUpdate ? (stored ?? null) : null,
+  };
 }

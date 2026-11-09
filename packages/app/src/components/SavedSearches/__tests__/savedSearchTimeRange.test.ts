@@ -1,11 +1,10 @@
 import {
   formatRelativeDuration,
   getSavedSearchLanding,
-  getTimeRangeChoices,
+  getSaveTimeRangeOutcome,
   hasExplicitTimeParams,
   isLiveTailDuration,
   isRangeEndingNow,
-  resolveDefaultTimeRange,
   toDefaultTimeRange,
 } from '@/components/SavedSearches/savedSearchTimeRange';
 
@@ -122,98 +121,49 @@ describe('formatRelativeDuration', () => {
   });
 });
 
-describe('getTimeRangeChoices', () => {
-  const lastDay = { kind: 'window' as const, range: windowEndingAt(NOW, DAY) };
+describe('getSaveTimeRangeOutcome', () => {
+  const live = (intervalMs: number) => ({ kind: 'live' as const, intervalMs });
+  const window = (range: [Date, Date]) => ({ kind: 'window' as const, range });
+  const outcome = (
+    current: ReturnType<typeof live> | ReturnType<typeof window>,
+    stored: typeof ONE_DAY | typeof ONE_HOUR | null,
+    isUpdate: boolean,
+  ) => getSaveTimeRangeOutcome({ current, stored, isUpdate, nowMs: NOW });
 
-  it('offers only live tail during default live tail with nothing stored', () => {
-    expect(
-      getTimeRangeChoices({
-        current: { kind: 'live', intervalMs: 15 * MINUTE },
-        stored: null,
-        nowMs: NOW,
-      }),
-    ).toEqual({ choices: ['live'], defaultChoice: 'live', currentRange: null });
-  });
-
-  it('offers a live tail interval picked in the time picker', () => {
-    expect(
-      getTimeRangeChoices({
-        current: { kind: 'live', intervalMs: HOUR },
-        stored: null,
-        nowMs: NOW,
-      }),
-    ).toEqual({
-      choices: ['live', 'current'],
-      defaultChoice: 'live',
-      currentRange: ONE_HOUR,
+  it('saves a live tail interval picked in the time picker', () => {
+    expect(outcome(live(HOUR), null, false)).toEqual({
+      value: ONE_HOUR,
+      opensWith: ONE_HOUR,
     });
   });
 
-  it('offers the current window when it ends now, defaulting to live tail', () => {
-    expect(
-      getTimeRangeChoices({ current: lastDay, stored: null, nowMs: NOW }),
-    ).toEqual({
-      choices: ['live', 'current'],
-      defaultChoice: 'live',
-      currentRange: ONE_DAY,
+  it('saves a window that ends now', () => {
+    expect(outcome(window(windowEndingAt(NOW, DAY)), ONE_HOUR, true)).toEqual({
+      value: ONE_DAY,
+      opensWith: ONE_DAY,
     });
   });
 
-  it('defaults to keeping a stored range', () => {
-    const tenMinutes = {
-      kind: 'window' as const,
-      range: windowEndingAt(NOW, 10 * MINUTE),
-    };
-    expect(
-      getTimeRangeChoices({ current: tenMinutes, stored: ONE_DAY, nowMs: NOW }),
-    ).toMatchObject({
-      choices: ['live', 'keep', 'current'],
-      defaultChoice: 'keep',
+  it('stores nothing for default live tail, and clears a stored range on update', () => {
+    expect(outcome(live(15 * MINUTE), null, false)).toEqual({
+      value: undefined,
+      opensWith: null,
+    });
+    expect(outcome(live(15 * MINUTE), ONE_DAY, true)).toEqual({
+      value: null,
+      opensWith: null,
     });
   });
 
-  it('does not offer the current window when it equals the stored range', () => {
-    expect(
-      getTimeRangeChoices({ current: lastDay, stored: ONE_DAY, nowMs: NOW })
-        .choices,
-    ).toEqual(['live', 'keep']);
+  it('keeps the stored range when an update is made on a window in the past', () => {
+    const brushed = window(windowEndingAt(NOW - 3 * HOUR, 10 * MINUTE));
+    expect(outcome(brushed, ONE_DAY, true)).toEqual({
+      value: undefined,
+      opensWith: ONE_DAY,
+    });
+    expect(outcome(brushed, ONE_DAY, false)).toEqual({
+      value: undefined,
+      opensWith: null,
+    });
   });
-
-  it('does not offer a window brushed into the past', () => {
-    const brushed = {
-      kind: 'window' as const,
-      range: windowEndingAt(NOW - 3 * 60 * MINUTE, 10 * MINUTE),
-    };
-    expect(
-      getTimeRangeChoices({ current: brushed, stored: ONE_DAY, nowMs: NOW })
-        .choices,
-    ).toEqual(['live', 'keep']);
-  });
-});
-
-describe('resolveDefaultTimeRange', () => {
-  const TEN_MINUTES = { type: 'relative' as const, value: 600 };
-
-  it.each([
-    [true, 'keep', ONE_DAY, undefined],
-    [true, 'current', ONE_DAY, TEN_MINUTES],
-    [true, 'current', null, TEN_MINUTES],
-    [true, 'live', ONE_DAY, null],
-    [true, 'live', null, undefined],
-    [false, 'keep', ONE_DAY, ONE_DAY],
-    [false, 'current', null, TEN_MINUTES],
-    [false, 'live', ONE_DAY, undefined],
-  ] as const)(
-    'update=%s choice=%s stored=%j -> %j',
-    (isUpdate, choice, stored, expected) => {
-      expect(
-        resolveDefaultTimeRange({
-          isUpdate,
-          choice,
-          stored,
-          currentRange: TEN_MINUTES,
-        }),
-      ).toEqual(expected);
-    },
-  );
 });

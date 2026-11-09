@@ -493,11 +493,12 @@ function SaveSearchModalComponent({
     },
   );
 
-  const timeRangeField = useSaveTimeRangeField({
+  const timeRangeOutcome = useSaveTimeRangeField({
     openedAtMs,
     isLive,
     liveIntervalMs,
     searchedTimeRange,
+    isUpdate,
     stored: savedSearch?.defaultTimeRange,
   });
 
@@ -549,7 +550,7 @@ function SaveSearchModalComponent({
     e.preventDefault();
 
     handleSubmit(async ({ name }) => {
-      const timeRange = timeRangeField.resolve(isUpdate);
+      const timeRange = timeRangeOutcome.value;
       const defaultTimeRangeUpdate =
         timeRange === undefined ? {} : { defaultTimeRange: timeRange };
       if (isUpdate) {
@@ -727,7 +728,7 @@ function SaveSearchModalComponent({
               </Tags>
             </Group>
           </Box>
-          <SaveTimeRangeField field={timeRangeField} />
+          <SaveTimeRangeField opensWith={timeRangeOutcome.opensWith} />
           <Button
             data-testid="save-search-submit-button"
             variant="primary"
