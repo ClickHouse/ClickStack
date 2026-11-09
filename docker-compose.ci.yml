@@ -34,6 +34,16 @@ services:
       - '${HDX_CI_CH_PORT:-18123}:8123' # http api
     networks:
       - internal
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    volumes:
+      - ./docker/prometheus/prometheus.ci.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - '${HDX_CI_PROMETHEUS_PORT:-19100}:9090'
+    networks:
+      - internal
+    depends_on:
+      - ch-server
   db:
     image: mongo:5.0.32-focal
     command: --port 29999
