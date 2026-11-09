@@ -1,3 +1,5 @@
+import type { PromqlSourceBackend } from '@hyperdx/common-utils/dist/types';
+
 import {
   clearBackendProbeCache,
   resolveClickhouseQueryBackend,
@@ -19,16 +21,23 @@ const noHandlerAnswer = () =>
     status: 404,
   });
 
-const target = (host = 'http://ch:8123') => ({
+const target = (
+  host = 'http://ch:8123',
+  promqlBackend?: PromqlSourceBackend,
+) => ({
   connection: { id: 'conn-1', host, username: 'default', password: '' },
   databaseName: 'db',
   tableName: 'ts',
+  promqlBackend,
 });
 
-const resolveKind = async (host?: string) => {
+const resolveKind = async (
+  host?: string,
+  promqlBackend?: PromqlSourceBackend,
+) => {
   const backend = await resolveClickhouseQueryBackend(
     // @ts-expect-error mock connection carries only the fields the resolver reads
-    target(host),
+    target(host, promqlBackend),
   );
   return backend.kind;
 };
@@ -147,6 +156,43 @@ describe('resolveClickhouseQueryBackend', () => {
       ).resolves.toEqual(['clickhouse-http', 'clickhouse-http']);
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('source setting', () => {
+    it.each([
+      ['clickhouse-http', 'clickhouse-http'],
+      ['table-function', 'table-function'],
+    ] as const)(
+      'takes %s at its word, without a version check or probe',
+      async (setting, kind) => {
+        await expect(resolveKind(undefined, setting)).resolves.toBe(kind);
+
+        expect(mockVersionCheck).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([[undefined], ['auto' as const]])(
+      'probes when the setting is %s',
+      async setting => {
+        mockFetch.mockResolvedValueOnce(handlerAnswer());
+
+        await expect(resolveKind(undefined, setting)).resolves.toBe(
+          'clickhouse-http',
+        );
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('ignores a kept probe answer once the source names a backend', async () => {
+      mockFetch.mockResolvedValueOnce(handlerAnswer());
+      await resolveKind();
+
+      await expect(resolveKind(undefined, 'table-function')).resolves.toBe(
+        'table-function',
+      );
     });
   });
 });

@@ -6,7 +6,11 @@ import { getCurrentQueryAttribution } from '@hyperdx/common-utils/dist/clickhous
 import { MetadataCache } from '@hyperdx/common-utils/dist/core/metadata';
 import type { PromqlQuery } from '@hyperdx/common-utils/dist/core/promqlChart';
 import { parseJSON } from '@hyperdx/common-utils/dist/core/utils';
-import { SourceKind, type SQLInterval } from '@hyperdx/common-utils/dist/types';
+import {
+  type PromqlSourceBackend,
+  SourceKind,
+  type SQLInterval,
+} from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import { z } from 'zod';
 
@@ -163,10 +167,23 @@ const SERVER_ERROR_TYPES = new Set(['timeout', 'canceled', 'unavailable']);
 const labelListSchema = z.array(z.string());
 
 /**
+ * What a user is told when a source set to the Prometheus HTTP API reaches a
+ * ClickHouse server that does not serve it. Without it they would see a bare
+ * 404 from a path they never chose.
+ */
+export const CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE =
+  "This ClickHouse connection does not serve the Prometheus HTTP API. Enable the prometheus_api_v1 HTTP handler on the server, or set the source's PromQL backend to Auto.";
+
+/**
  * GETs a Prometheus API path from a Prometheus-compatible endpoint and returns
  * the response's `data`, checked against `dataSchema`. Errors name only the
  * origin and path: the host may carry credentials in its userinfo or query
  * string.
+ *
+ * `handlerMissingMessage` is for ClickHouse's own Prometheus API: a 404 there
+ * means the handler is not configured (the handler itself answers failures
+ * with a 400), which is reported with this message as a user error instead of
+ * by its status.
  */
 async function fetchPrometheusData<T extends z.ZodTypeAny>(
   host: string,
@@ -175,6 +192,7 @@ async function fetchPrometheusData<T extends z.ZodTypeAny>(
   dataSchema: T,
   signal?: AbortSignal,
   headers?: Record<string, string>,
+  handlerMissingMessage?: string,
 ): Promise<z.infer<T>> {
   const request = buildPrometheusRequest(host, path, params, headers);
   const { redactedTarget } = request;
@@ -193,6 +211,11 @@ async function fetchPrometheusData<T extends z.ZodTypeAny>(
         : `Failed to reach Prometheus at ${redactedTarget}`,
       'server',
     );
+  }
+
+  if (handlerMissingMessage && resp.status === 404) {
+    await resp.body?.cancel().catch(() => {});
+    throw new PromQLQueryError(handlerMissingMessage, 'user');
   }
 
   let text: string;
@@ -321,6 +344,8 @@ type PromqlTarget = {
   tableName: string;
   /** The source's scrape interval floor, e.g. "1 minute". */
   minAutoGranularity?: SQLInterval;
+  /** How the source is evaluated on ClickHouse; unset means `auto`. */
+  promqlBackend?: PromqlSourceBackend;
 };
 
 /**
@@ -358,6 +383,7 @@ export async function resolvePromqlTarget(
     databaseName: source.from.databaseName,
     tableName: source.from.tableName,
     minAutoGranularity: source.minAutoGranularity,
+    promqlBackend: source.promqlBackend,
   };
 }
 
@@ -568,16 +594,28 @@ type PromqlQueryBackend =
 /**
  * How to evaluate PromQL on a ClickHouse-backed target. The Prometheus HTTP
  * API is the only surface ClickHouse holds forward-compatible while TimeSeries
- * is in preview, so it is preferred wherever the server has it (26.6+); the
- * table function is the fallback.
+ * is in preview, so under `auto` it is preferred wherever the server has it
+ * (26.6+) and the table function is the fallback. A source set to either one
+ * is taken at its word, with no probe.
  */
 export async function resolveClickhouseQueryBackend({
   connection,
   databaseName,
   tableName,
+  promqlBackend = 'auto',
 }: PromqlTarget): Promise<ClickhouseQueryBackend> {
   const client = newPromqlClickhouseClient(connection);
-  if (await clickhouseServesPrometheusHttpApi(client, connection)) {
+  const span = trace.getActiveSpan();
+  span?.setAttribute('hyperdx.promql.backend_setting', promqlBackend);
+
+  let useHttpApi: boolean;
+  if (promqlBackend === 'auto') {
+    useHttpApi = await clickhouseServesPrometheusHttpApi(client, connection);
+  } else {
+    span?.setAttribute('hyperdx.promql.backend_probe', 'skipped');
+    useHttpApi = promqlBackend === 'clickhouse-http';
+  }
+  if (useHttpApi) {
     return {
       kind: 'clickhouse-http',
       connection: {
@@ -674,6 +712,7 @@ async function evaluatePromqlQuery(
         promqlQueryDataSchema,
         signal,
         headers,
+        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
       );
     }
     case 'table-function':

@@ -2833,6 +2833,22 @@ export const MinAutoGranularitySchema = z.preprocess(
   SQLIntervalSchema.optional(),
 );
 
+/**
+ * How a PromQL source on a ClickHouse connection is evaluated: through the
+ * Prometheus HTTP API (`clickhouse-http`, which needs ClickHouse 26.6+ with the
+ * `prometheus_api_v1` handler configured) or through the `prometheusQuery`
+ * table functions (`table-function`). `auto`, which is also what an unset
+ * value means, probes the server on first use and prefers the HTTP API. A
+ * connection that is itself a Prometheus endpoint ignores it.
+ */
+export const PROMQL_SOURCE_BACKENDS = [
+  'auto',
+  'clickhouse-http',
+  'table-function',
+] as const;
+export const PromqlSourceBackendSchema = z.enum(PROMQL_SOURCE_BACKENDS);
+export type PromqlSourceBackend = z.infer<typeof PromqlSourceBackendSchema>;
+
 // Metric source form schema
 export const MetricSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Metric),
@@ -2860,6 +2876,7 @@ export const MetricSourceSchema = BaseSourceSchema.extend({
 export const PromqlSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Promql),
   minAutoGranularity: MinAutoGranularitySchema,
+  promqlBackend: PromqlSourceBackendSchema.optional(),
 });
 
 // Union of all source form schemas for validation
