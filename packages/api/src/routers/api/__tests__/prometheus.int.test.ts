@@ -8,6 +8,7 @@ import { Types } from 'mongoose';
 
 import * as config from '@/config';
 import {
+  clearBackendProbeCache,
   CLICKHOUSE_PROMETHEUS_API_PREFIX,
   clickhousePrometheusUpstream,
   joinPrometheusUpstreamUrl,
@@ -74,6 +75,7 @@ describe('prometheus router', () => {
 
   afterEach(async () => {
     await server.clearDBs();
+    clearBackendProbeCache();
     mockFetch.mockReset();
     mockFetch.mockResolvedValue(fakeUpstreamResponse({}));
   });
@@ -1325,6 +1327,33 @@ describe('prometheus router', () => {
       expect(init?.headers).toMatchObject({
         'X-ClickHouse-User': config.CLICKHOUSE_USER,
       });
+    });
+
+    it('probes the handler once across queries on the same connection', async () => {
+      const { agent, team } = await getLoggedInAgent(server);
+      const source = await seedClickHouseSource(team._id);
+      const answer = () =>
+        fakeUpstreamResponse({
+          status: 'success',
+          data: { resultType: 'vector', result: [] },
+        });
+      mockFetch
+        .mockResolvedValueOnce(handlerProbeResponse())
+        .mockResolvedValueOnce(answer())
+        .mockResolvedValueOnce(answer());
+
+      for (let i = 0; i < 2; i++) {
+        await agent
+          .get('/v1/prometheus/query')
+          .query({ query: 'up', sourceId: source._id.toString() })
+          .expect(200);
+      }
+
+      const urls = mockFetch.mock.calls.map(([url]) => String(url));
+      expect(urls.filter(url => url.includes('/format_query'))).toHaveLength(1);
+      expect(
+        urls.filter(url => url.includes('/prometheus/api/v1/query?')),
+      ).toHaveLength(2);
     });
   });
 
