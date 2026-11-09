@@ -2060,9 +2060,11 @@ async function renderMetricWhere(
  * variadic cityHash64 works for both Map(LowCardinality(String), String) and
  * JSON attribute columns (HDX-4466). ScopeName is in the key because two
  * instrumentation scopes can report the same metric with the same attributes,
- * and OTel makes them two streams. HyperDX does not require ScopeName on
- * metric tables (the gauge and sum CTEs read it, the histogram CTEs do not),
- * so a table without it (or a failed column lookup) keeps the key without it.
+ * and OTel makes them two streams. Every metric type uses this key, but
+ * HyperDX does not require ScopeName on metric tables. The gauge and sum
+ * Bucketed CTEs select ScopeName anyway; the histogram queries did not read
+ * it before. So a table without it (or a failed column lookup) keeps the key
+ * without it, which is the query from before ScopeName was added.
  * A NULL argument makes cityHash64 return NULL, which would merge every series
  * with a NULL ScopeName, so a Nullable ScopeName is hashed as ''.
  */
