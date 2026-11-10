@@ -151,7 +151,7 @@ function extractTableNames(source: SourceDocument): string[] {
 
 const getClickhouseTableSize = async () => {
   // fetch mongo data
-  const connections = await Connection.find();
+  const connections = await Connection.find().select('+password');
   const sources = await Source.find();
 
   // build map for each db instance
