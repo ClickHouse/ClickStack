@@ -3224,6 +3224,39 @@ describe('Metadata', () => {
         );
       },
     );
+
+    it.each(textIndexLookups)(
+      'shares one read between concurrent callers on the %s text index path',
+      async (_, textIndexLookup) => {
+        const md = new Metadata(mockClickhouseClient, new MetadataCache());
+        jest.spyOn(md, 'getServerVersion').mockResolvedValue([26, 3, 0, 0]);
+        jest
+          .spyOn(md, 'getMapColumnTextIndexes')
+          .mockResolvedValue(textIndexLookup);
+        (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+          json: () => Promise.resolve({ data: [{ key: 'http.method' }] }),
+        });
+        const args = {
+          databaseName: 'default',
+          tableName: 'otel_logs',
+          column: 'LogAttributes',
+          connectionId: 'test_connection',
+          dateRange: [
+            new Date('2024-01-01T00:00:00Z'),
+            new Date('2024-01-01T01:00:00Z'),
+          ] as [Date, Date],
+          timestampValueExpression: 'Timestamp',
+        };
+
+        const results = await Promise.all([
+          md.getMapKeys(args),
+          md.getMapKeys(args),
+        ]);
+
+        expect(results).toEqual([['http.method'], ['http.method']]);
+        expect(mockClickhouseClient.query).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
   describe('getMapValues', () => {
