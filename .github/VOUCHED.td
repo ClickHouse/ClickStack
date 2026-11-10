@@ -1,4 +1,4 @@
-# Vouched contributors for hyperdxio/hyperdx.
+# Vouched contributors for ClickHouse/ClickStack.
 #
 # Pull requests from GitHub users who are not in this list are closed
 # automatically by .github/workflows/vouch.yml. See CONTRIBUTING.md for how to
@@ -29,10 +29,12 @@
 adityapimpalkar
 alex-fedotyev
 alok87
+andrewdunndev
 archat-hash
 arj22
 aryainguz
 bahltushar
+bcanvural
 bilalatique
 brandon-pereira
 colehpage
@@ -47,6 +49,7 @@ fleon
 gingerwizard
 gyancr7
 harshul1484
+hercynium FIPS fix for #3390
 jaggederest
 jeyrathnam
 jordan-simonovski

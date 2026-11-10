@@ -1,12 +1,12 @@
 import { useCallback, useState } from 'react';
 import { SubmitHandler, useForm } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { DEFAULT_METADATA_MAX_ROWS_TO_READ } from '@hyperdx/common-utils/dist/core/metadata';
 import { type TeamClickHouseSettings } from '@hyperdx/common-utils/dist/types';
 import {
   Box,
   Button,
   Card,
-  Divider,
   Group,
   InputLabel,
   Stack,
@@ -18,13 +18,13 @@ import { notifications } from '@mantine/notifications';
 import { IconHelpCircle, IconPencil } from '@tabler/icons-react';
 
 import api from '@/api';
+import { useBrandDisplayName } from '@/brand';
 import SelectControlled from '@/components/SelectControlled';
 import {
   DEFAULT_FILTER_KEYS_FETCH_LIMIT,
   DEFAULT_QUERY_TIMEOUT,
   DEFAULT_SEARCH_ROW_LIMIT,
 } from '@/defaults';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 
 type ClickhouseSettingType = 'number' | 'boolean';
 
@@ -282,7 +282,7 @@ export default function TeamQueryConfigSection() {
   return (
     <Box id="team_query_config">
       <Text size="md">ClickHouse Client Settings</Text>
-      <Divider my="md" />
+      <Separator size="lg" />
       <Card>
         <Stack>
           <ClickhouseSettingForm

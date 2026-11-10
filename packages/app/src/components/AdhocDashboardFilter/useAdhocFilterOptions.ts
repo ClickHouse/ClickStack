@@ -11,6 +11,7 @@ import { Field, tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   getAdhocFilterSourceKinds,
   isAdhocComparableDataType,
+  ResolvedFilterValuesQuery,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AdhocDashboardFilter,
@@ -59,8 +60,14 @@ const toQuotedKeys = (keys: string[], columns: ColumnMeta[]) => {
 /**
  * A SQL source's filterable keys, as SQL expressions in the search sidebar's
  * key format: scalar columns, and the keys inside its map and JSON columns.
+ * `keepType` defaults to the ad hoc rule, which drops DateTime. Column and
+ * sort pickers pass a predicate that keeps every type.
  */
-export function getSqlSourceKeys(fields: Field[], columns: ColumnMeta[]) {
+export function getSqlSourceKeys(
+  fields: Field[],
+  columns: ColumnMeta[],
+  keepType: (type: string) => boolean = isAdhocComparableDataType,
+) {
   const columnNames = (types: JSDataType[]) =>
     filterColumnMetaByType(columns, types)?.map(column => column.name) ?? [];
   const jsonColumns = columnNames([JSDataType.JSON]);
@@ -69,19 +76,22 @@ export function getSqlSourceKeys(fields: Field[], columns: ColumnMeta[]) {
     .filter(
       field =>
         (field.path.length > 1 || isJSDataTypeScalar(field.jsType)) &&
-        isAdhocComparableDataType(field.type),
+        keepType(field.type),
     )
     .map(field => mergePath(field.path, jsonColumns, mapColumns));
   return toQuotedKeys(keys, columns);
 }
 
 /** A SQL source's scalar columns, the only keys known without field metadata. */
-export function getSqlSourceColumnKeys(columns: ColumnMeta[]) {
+export function getSqlSourceColumnKeys(
+  columns: ColumnMeta[],
+  keepType: (type: string) => boolean = isAdhocComparableDataType,
+) {
   const keys = columns
     .filter(
       column =>
         isJSDataTypeScalar(convertCHDataTypeToJSType(column.type)) &&
-        isAdhocComparableDataType(column.type),
+        keepType(column.type),
     )
     .map(column => column.name);
   return toQuotedKeys(keys, columns);
@@ -134,6 +144,8 @@ type AdhocFilterSuggestions = {
   data: string[];
   isLoading: boolean;
   isError: boolean;
+  /** Set when every source's lookup failed. */
+  error?: Error | null;
 };
 
 type AdhocFilterKeys = AdhocFilterSuggestions & {
@@ -145,15 +157,32 @@ type AdhocFilterKeys = AdhocFilterSuggestions & {
 function useSqlSourceKeys(
   sources: TSource[],
   dateRange: [Date, Date],
+  suggestionsWhere: ResolvedFilterValuesQuery | undefined,
 ): AdhocFilterKeys {
   const tableConnections = useMemo(() => sources.map(tcFromSource), [sources]);
+  const where = suggestionsWhere?.where.trim()
+    ? suggestionsWhere.where
+    : undefined;
+  const whereLanguage = suggestionsWhere?.whereLanguage;
+  const conditions = useMemo(
+    () =>
+      where
+        ? sources.map(source => ({
+            ...pickSourceConfigFields(source),
+            where,
+            whereLanguage,
+          }))
+        : undefined,
+    [sources, where, whereLanguage],
+  );
   const {
     fieldsByTableConnection,
     columnsByTableConnection,
     isFieldMetadataDisabled,
     isLoading,
     isError,
-  } = useMultipleAllFields(tableConnections, { dateRange });
+    error,
+  } = useMultipleAllFields(tableConnections, { dateRange, conditions });
 
   return useMemo(() => {
     const keysBySourceId = new Map<string, string[]>();
@@ -175,6 +204,7 @@ function useSqlSourceKeys(
       columnNames,
       isLoading,
       isError,
+      error,
     };
   }, [
     sources,
@@ -183,6 +213,7 @@ function useSqlSourceKeys(
     isFieldMetadataDisabled,
     isLoading,
     isError,
+    error,
   ]);
 }
 
@@ -217,6 +248,7 @@ function usePromqlSourceKeys(
         columnNames: NO_COLUMNS,
         isLoading: results.some(result => result.isLoading),
         isError: results.some(result => result.isError),
+        error: results.find(result => result.error)?.error,
       };
     },
     [sources],
@@ -250,7 +282,10 @@ function useSqlSourceValues(
   key: string,
   dateRange: [Date, Date],
   columnNames: Set<string>,
+  suggestionsWhere: ResolvedFilterValuesQuery | undefined,
 ): AdhocFilterSuggestions {
+  const where = suggestionsWhere?.where ?? '';
+  const whereLanguage = suggestionsWhere?.whereLanguage ?? 'sql';
   const chartConfigs = useMemo(
     () =>
       sources.map(source => ({
@@ -258,10 +293,10 @@ function useSqlSourceValues(
         dateRange,
         source: source.id,
         select: '',
-        where: '',
-        whereLanguage: 'sql' as const,
+        where,
+        whereLanguage,
       })),
-    [sources, dateRange],
+    [sources, dateRange, where, whereLanguage],
   );
   // Quoted like the search sidebar does, so a column named e.g.
   // `log-attributes` isn't read as a subtraction.
@@ -269,14 +304,14 @@ function useSqlSourceValues(
     () => (key ? [toQuotedClickHouseKeyExpression(key, columnNames)] : []),
     [key, columnNames],
   );
-  const { data, isFetching, isError } = useMultipleGetKeyValues(
+  const { data, isFetching, isError, error } = useMultipleGetKeyValues(
     { chartConfigs, keys, limit: SINGLE_KEY_VALUES_LIMIT },
     // The previous key's values aren't suggestions for this one.
     { placeholderData: undefined, retry: false, enabled: sources.length > 0 },
   );
 
   const values = useMemo(() => getValueSuggestions(data), [data]);
-  return { data: values, isLoading: !!key && isFetching, isError };
+  return { data: values, isLoading: !!key && isFetching, isError, error };
 }
 
 const combineValues = (
@@ -285,6 +320,7 @@ const combineValues = (
   data: unionSorted(results.map(result => result.data)),
   isLoading: results.some(result => result.isFetching),
   isError: results.some(result => result.isError),
+  error: results.find(result => result.error)?.error,
 });
 
 function usePromqlSourceValues(
@@ -323,16 +359,22 @@ function usePromqlSourceValues(
  * Suggestions for an ad hoc filter's condition editor, deduplicated across its
  * sources. Keys are the columns and map / JSON keys of its SQL sources, in the
  * search sidebar's key format, or the label names of its PromQL sources.
- * Values are those observed for `key`.
+ * Values are those observed for `key`. For SQL sources, `suggestionsWhere` (the
+ * filter's `where` with variables expanded) narrows the rows both are read from.
  */
 export function useAdhocFilterOptions(
   filter: AdhocDashboardFilter,
   key: string,
   dateRange: [Date, Date],
+  suggestionsWhere?: ResolvedFilterValuesQuery,
 ): { keys: AdhocFilterSuggestions; values: AdhocFilterSuggestions } {
   const sources = useAdhocFilterSources(filter);
   const isPromql = filter.sourceType === 'promql';
-  const sqlKeys = useSqlSourceKeys(isPromql ? NO_SOURCES : sources, dateRange);
+  const sqlKeys = useSqlSourceKeys(
+    isPromql ? NO_SOURCES : sources,
+    dateRange,
+    suggestionsWhere,
+  );
   const promqlKeys = usePromqlSourceKeys(
     isPromql ? sources : NO_SOURCES,
     dateRange,
@@ -351,6 +393,7 @@ export function useAdhocFilterOptions(
     lookupKey,
     dateRange,
     keys.columnNames,
+    suggestionsWhere,
   );
   const promqlValues = usePromqlSourceValues(
     isPromql ? sourcesWithKey : NO_SOURCES,

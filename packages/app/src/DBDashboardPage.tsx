@@ -207,8 +207,8 @@ import { Tags } from './components/Tags';
 import useDashboardFilters from './hooks/useDashboardFilters';
 import { useDashboardRefresh } from './hooks/useDashboardRefresh';
 import useTileSelection from './hooks/useTileSelection';
-import { usePageTitle } from './theme/ThemeProvider';
 import { parseAsJsonEncoded, parseAsStringEncoded } from './utils/queryParsers';
+import { usePageTitle } from './brand';
 import {
   buildDashboardReplaySearchUrl,
   buildEventsSearchUrl,
@@ -236,10 +236,15 @@ import {
   parseRelativeTimeQuery,
   useDefaultTimeRange,
   useNewTimeQuery,
+  useTimeRangeInputText,
 } from './timeQuery';
+import {
+  TimeZoneOverrideProvider,
+  useTimeZoneLinkParam,
+} from './timeZoneOverride';
 import { useConfirm } from './useConfirm';
+import { useDisplayTimeZone } from './useDisplayTimeZone';
 import { FormatTime } from './useFormatTime';
-import { useUserPreferences } from './useUserPreferences';
 import { getMetricTableName, useLocalStorage } from './utils';
 import { useZIndex, ZIndexContext } from './zIndex';
 
@@ -278,6 +283,7 @@ function HeatmapTile({
   );
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const addTimeZone = useTimeZoneLinkParam();
   const eventDeltasUrl = useMemo(() => {
     // Search page event deltas only supports trace sources and distribution mode
     if (
@@ -294,8 +300,8 @@ function HeatmapTile({
     });
     if (!url) return null;
     const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}mode=delta`;
-  }, [source, mode, queriedConfig, dateRange]);
+    return addTimeZone(`${url}${separator}mode=delta`);
+  }, [source, mode, queriedConfig, dateRange, addTimeZone]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -534,17 +540,14 @@ const Tile = ({
     setHasBeenVisible(true);
   }
 
-  const {
-    userPreferences: { isUTC },
-  } = useUserPreferences();
+  const timeZone = useDisplayTimeZone();
 
   // Date range and granularity state local to the fullscreen view so that
   // changing them does not propagate up to the dashboard.
   const [fullscreenDateRange, setFullscreenDateRange] =
     useState<[Date, Date]>(dateRange);
-  const [fullscreenInputValue, setFullscreenInputValue] = useState<string>(() =>
-    dateRangeToString(dateRange, isUTC),
-  );
+  const [fullscreenInputValue, setFullscreenInputValue] =
+    useTimeRangeInputText(fullscreenDateRange);
   const [fullscreenGranularity, setFullscreenGranularity] = useState<
     Granularity | 'auto' | undefined
   >(() => (granularity as Granularity | undefined) ?? 'auto');
@@ -553,21 +556,21 @@ const Tile = ({
     // Reinitialize to the dashboard's current date range and granularity
     // each time the fullscreen view is opened.
     setFullscreenDateRange(dateRange);
-    setFullscreenInputValue(dateRangeToString(dateRange, isUTC));
+    setFullscreenInputValue(dateRangeToString(dateRange, timeZone));
     setFullscreenGranularity(
       (granularity as Granularity | undefined) ?? 'auto',
     );
     setIsFullscreen(true);
-  }, [dateRange, granularity, isUTC]);
+  }, [dateRange, granularity, timeZone, setFullscreenInputValue]);
 
   const handleFullscreenSearch = useCallback(
     (value: string) => {
-      const [start, end] = parseTimeRangeInput(value, isUTC);
+      const [start, end] = parseTimeRangeInput(value, timeZone);
       if (start != null && end != null) {
         setFullscreenDateRange([start, end]);
       }
     },
-    [isUTC],
+    [timeZone],
   );
 
   useEffect(() => {
@@ -916,13 +919,15 @@ const Tile = ({
     );
   }, [sqlFilters, queriedConfig, source]);
 
+  const addTimeZone = useTimeZoneLinkParam();
   const replaySearchUrl = useMemo(() => {
-    return buildDashboardReplaySearchUrl({
+    const url = buildDashboardReplaySearchUrl({
       source,
       config: queriedConfig,
       dateRange,
     });
-  }, [dateRange, queriedConfig, source]);
+    return url && addTimeZone(url);
+  }, [dateRange, queriedConfig, source, addTimeZone]);
 
   const hoverToolbar = useMemo(() => {
     if (readOnly) return null;
@@ -1313,13 +1318,15 @@ const Tile = ({
                     variant="default"
                     getRowSearchLink={
                       isBuilderChartConfig(effectiveQueriedConfig)
-                        ? row =>
-                            buildTableRowSearchUrl({
+                        ? row => {
+                            const url = buildTableRowSearchUrl({
                               row,
                               source,
                               config: effectiveQueriedConfig,
                               dateRange: effectiveDateRange,
-                            })
+                            });
+                            return url && addTimeZone(url);
+                          }
                         : undefined
                     }
                     onFilter={onFilter}
@@ -1480,6 +1487,7 @@ const Tile = ({
       );
     },
     [
+      addTimeZone,
       hoverToolbar,
       queriedConfig,
       title,
@@ -1880,9 +1888,7 @@ function DBDashboardPage({
   } = dashboardProps;
   const title = usePageTitle(dashboard?.name ? dashboard.name : 'Dashboard');
   const confirm = useConfirm();
-  const {
-    userPreferences: { isUTC },
-  } = useUserPreferences();
+  const timeZone = useDisplayTimeZone();
 
   const router = useRouter();
   const dashboardId = router.query.dashboardId as string | undefined;
@@ -2169,7 +2175,7 @@ function DBDashboardPage({
 
     const currentRelativeDateRange = timeRangeInputToSeconds(
       displayedTimeInputValue,
-      isUTC,
+      timeZone,
     );
 
     setDashboard(
@@ -2202,7 +2208,7 @@ function DBDashboardPage({
     getValues,
     filterValueEntries,
     onSubmit,
-    isUTC,
+    timeZone,
     displayedTimeInputValue,
   ]);
   const handleRemoveSavedQuery = useCallback(() => {
@@ -3325,6 +3331,7 @@ function DBDashboardPage({
           onSetAdhocConditions={setAdhocConditions}
           dateRange={searchedTimeRange}
           variables={variables}
+          unsatisfiedRequiredFilters={unsatisfiedRequiredFilters}
         />
       )}
       {/* Selection indicator */}
@@ -3542,9 +3549,7 @@ function DBDashboardPageGuarded({
     dashboardId: dashboardId as string | undefined,
     presetConfig,
   });
-  const {
-    userPreferences: { isUTC },
-  } = useUserPreferences();
+  const timeZone = useDisplayTimeZone();
 
   const savedDateRange = dashboardProps.dashboard?.savedDateRange;
   // Keyed on the saved range, not the render: a relative range re-stringifies
@@ -3557,8 +3562,8 @@ function DBDashboardPageGuarded({
         ? parseRelativeTimeQuery(savedDateRange.value * 1000)
         : savedDateRange.value.map(v => new Date(v));
     // TODO: show relative ranges as "Past Xh" via getRelativeInterval
-    return dateRangeToString([start, end], isUTC);
-  }, [savedDateRange, isUTC]);
+    return dateRangeToString([start, end], timeZone);
+  }, [savedDateRange, timeZone]);
 
   if (!dashboardProps || !router.isReady) return <Loader size="lg" />;
 
@@ -3574,9 +3579,19 @@ function DBDashboardPageGuarded({
   );
 }
 
-const DBDashboardPageDynamic = dynamic(async () => DBDashboardPageGuarded, {
-  ssr: false,
-});
+// Outside DBDashboardPageGuarded, which formats the saved range in the zone.
+function DBDashboardPageWithTimeZone(props: { presetConfig?: Dashboard }) {
+  return (
+    <TimeZoneOverrideProvider>
+      <DBDashboardPageGuarded {...props} />
+    </TimeZoneOverrideProvider>
+  );
+}
+
+const DBDashboardPageDynamic = dynamic(
+  async () => DBDashboardPageWithTimeZone,
+  { ssr: false },
+);
 
 // @ts-expect-error for getLayout
 DBDashboardPageDynamic.getLayout = withAppNavForSurface('dashboard');

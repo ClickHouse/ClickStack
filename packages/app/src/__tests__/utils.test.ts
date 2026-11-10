@@ -1564,6 +1564,33 @@ describe('orderByAfterRemovingSelectItem', () => {
       orderByAfterRemovingSelectItem('Body', 'Body DESC', 'Timestamp DESC'),
     ).toBe('Body DESC');
   });
+
+  it('drops only the removed alias from a multi-field sort', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        item,
+        '"service.name" ASC, Timestamp DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        item,
+        '"http.method" DESC, "service.name" ASC',
+        'Timestamp DESC',
+      ),
+    ).toBe('"http.method" DESC');
+  });
+
+  it('keeps a comma inside a backtick-quoted sort name', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS "message"',
+        '"message" ASC, `a,b` DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('`a,b` DESC');
+  });
 });
 
 describe('getLogSeverityLevel', () => {
@@ -1618,8 +1645,7 @@ describe('getColorFromCSSToken', () => {
       throw new Error('getComputedStyle unavailable');
     });
 
-    // Defaults to HyperDX in jsdom because the document has no
-    // theme-clickstack class.
+    // Falls back to the semantic palette when the CSS var cannot be read.
     expect(getColorFromCSSToken('chart-success')).toBe('#3ca951');
     expect(getColorFromCSSToken('chart-warning')).toBe('#efb118');
     expect(getColorFromCSSToken('chart-error')).toBe('#ff725c');
