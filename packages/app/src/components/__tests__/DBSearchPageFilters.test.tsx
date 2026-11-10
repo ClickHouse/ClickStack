@@ -6,6 +6,7 @@ import {
   cleanedFacetName,
   FilterGroup,
   type FilterGroupProps,
+  getFilterGroupDefaultExpanded,
 } from '@/components/DBSearchPageFilters';
 import { NestedFilterGroup } from '@/components/DBSearchPageFilters/NestedFilterGroup';
 import {
@@ -1147,5 +1148,62 @@ describe('NestedFilterGroup', () => {
 
     expect(screen.getByText('No properties found')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Search keys...')).toBeInTheDocument();
+  });
+});
+
+describe('getFilterGroupDefaultExpanded', () => {
+  const base = {
+    hasSelection: false,
+    isPinned: false,
+    isCollapsed: false,
+    isPrimary: false,
+  };
+
+  it('opens a pinned field by default', () => {
+    expect(getFilterGroupDefaultExpanded({ ...base, isPinned: true })).toBe(
+      true,
+    );
+  });
+
+  it('keeps a pinned field the user collapsed closed', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('still opens a collapsed pinned field that has an active filter', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+        hasSelection: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps it closed in the Shared Filters section, which forces groups open', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+        forceExpanded: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('ignores a stale collapsed entry once the field is no longer pinned', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isCollapsed: true,
+        isPrimary: true,
+      }),
+    ).toBe(true);
   });
 });
