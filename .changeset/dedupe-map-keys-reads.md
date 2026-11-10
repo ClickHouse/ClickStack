@@ -4,7 +4,7 @@
 
 perf: share one Map key read between concurrent callers
 
-The search page's filter panel, search bar and group-by each load the same Map
-keys when the page opens. Each sent its own text index read, which on large
-tables can use several GiB of memory. Concurrent requests for the same keys now
-share one query.
+Two Map key lookups with the same arguments, made while the first was still
+running, each sent their own query. On large tables a Map key text index read
+can use several GiB of memory. Concurrent lookups for the same keys now share
+one query.
