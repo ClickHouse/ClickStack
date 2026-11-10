@@ -23,4 +23,15 @@ describe('MCP tool annotations', () => {
 
     expect(missing).toEqual([]);
   });
+
+  it('mirrors the tool title into annotations.title', async () => {
+    const client = await createTestClient(context);
+    const { tools } = await client.listTools();
+
+    const mismatched = tools
+      .filter(tool => !tool.title || tool.annotations?.title !== tool.title)
+      .map(tool => tool.name);
+
+    expect(mismatched).toEqual([]);
+  });
 });
