@@ -224,3 +224,22 @@ describe('useCollapsedPinnedFields', () => {
     );
   });
 });
+
+describe('useCollapsedPinnedFields pruning', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('keeps only the fields still pinned after a reset', () => {
+    const { result } = renderHook(() => useCollapsedPinnedFields('source1'));
+    act(() => result.current.setPinnedFieldCollapsed('ServiceName', true));
+    act(() => result.current.setPinnedFieldCollapsed('SeverityText', true));
+
+    act(() =>
+      result.current.pruneCollapsedPinnedFields(f => f === 'SeverityText'),
+    );
+
+    expect(result.current.isPinnedFieldCollapsed('ServiceName')).toBe(false);
+    expect(result.current.isPinnedFieldCollapsed('SeverityText')).toBe(true);
+  });
+});

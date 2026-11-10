@@ -476,7 +476,23 @@ export function useCollapsedPinnedFields(sourceId: string | null) {
     [sourceId, setCollapsed],
   );
 
-  return { isPinnedFieldCollapsed, setPinnedFieldCollapsed };
+  /** Keep only the collapsed fields for which `keep` is true (e.g. after a pin reset). */
+  const pruneCollapsedPinnedFields = useCallback(
+    (keep: (field: string) => boolean) => {
+      if (!sourceId) return;
+      setCollapsed(prev => ({
+        ...prev,
+        [sourceId]: (prev[sourceId] ?? []).filter(keep),
+      }));
+    },
+    [sourceId, setCollapsed],
+  );
+
+  return {
+    isPinnedFieldCollapsed,
+    setPinnedFieldCollapsed,
+    pruneCollapsedPinnedFields,
+  };
 }
 
 export function usePinnedFilters(sourceId: string | null) {
