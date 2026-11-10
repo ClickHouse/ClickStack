@@ -1798,11 +1798,13 @@ export class Metadata {
             partSelection,
           });
           const valueSql = chSql`substring(token, position(token, ${{ String: info.separator }}) + ${{ Int32: info.separator.length }})`;
+          // `cardinality` is the token's row count in the part, so this keeps
+          // each key's most frequent values rather than the first ones read.
           const sql = chSql`
         SELECT * FROM (
           SELECT ${{ String: columnName }} as column,
             substring(token, 1, position(token, ${{ String: info.separator }}) - 1) AS key,
-            groupUniqArray(${{ Int32: info.limit }})(${valueSql}) AS value
+            topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(${valueSql}, cardinality) AS value
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
             AND (${orChain})
@@ -1885,7 +1887,7 @@ export class Metadata {
           const sql = chSql`
         SELECT * FROM (
           SELECT ${{ String: columnName }} AS key,
-            groupUniqArray(${{ Int32: info.limit }})(token) AS value
+            topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(token, cardinality) AS value
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
             AND token != ''

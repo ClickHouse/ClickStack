@@ -907,6 +907,33 @@ describe('Metadata Integration Tests', () => {
       );
     });
 
+    it('keeps the most frequent text index values when maxValuesPerKey truncates the list', async () => {
+      if (!textIndexSupported) {
+        console.warn(
+          'Skipping: ClickHouse < 26.3 does not support mergeTreeTextIndex()',
+        );
+        return;
+      }
+      // The index dictionary is sorted, so 'a-rare' is read first.
+      const freqKey = `freq.${tag}`;
+      const timestamp = testTime.toISOString().replace('T', ' ').slice(0, 23);
+      await client.command({
+        query: `INSERT INTO default.otel_logs (Timestamp, ResourceAttributes)
+          SELECT '${timestamp}', map('${freqKey}', if(number = 0, 'a-rare', 'z-common'))
+          FROM numbers(4)`,
+      });
+
+      const result = await metadata.getAllKeyValues({
+        ...commonArgs,
+        keyExpressions: [`ResourceAttributes['${freqKey}']`],
+        maxValuesPerKey: 1,
+      });
+
+      expect(result).toEqual([
+        { key: `ResourceAttributes['${freqKey}']`, value: ['z-common'] },
+      ]);
+    });
+
     it('routes TraceId through getTextIndexKeyValues', async () => {
       if (!textIndexSupported) {
         console.warn(
