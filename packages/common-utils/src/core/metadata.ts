@@ -1117,12 +1117,62 @@ export class Metadata {
     const cacheKey = conditionSql
       ? `${unscopedCacheKey}.${objectHash(conditionSql)}.condition`
       : unscopedCacheKey;
-    const cachedKeys = this.cache.get<string[]>(cacheKey);
 
-    if (cachedKeys != null) {
-      return cachedKeys;
-    }
+    // getOrFetch shares one in-flight read between concurrent callers (the
+    // filter panel, search bar and group-by all load fields at once); a text
+    // index read can take GiBs of memory. A condition changes with variable
+    // selections, so its entries expire instead of piling up.
+    return this.cache.getOrFetch<string[]>(
+      cacheKey,
+      () =>
+        this.queryMapKeys({
+          databaseName,
+          tableName,
+          column,
+          maxKeys,
+          connectionId,
+          metricName,
+          metadataMVs,
+          dateRange,
+          alignedDateRange,
+          timestampValueExpression,
+          conditionSql,
+          cacheKey,
+          signal,
+        }),
+      { ttlMs: conditionSql ? CONDITION_KEYS_CACHE_TTL_MS : undefined },
+    );
+  }
 
+  private async queryMapKeys({
+    databaseName,
+    tableName,
+    column,
+    maxKeys,
+    connectionId,
+    metricName,
+    metadataMVs,
+    dateRange,
+    alignedDateRange,
+    timestampValueExpression,
+    conditionSql,
+    cacheKey,
+    signal,
+  }: {
+    databaseName: string;
+    tableName: string;
+    column: string;
+    maxKeys: number;
+    connectionId: string;
+    metricName?: string;
+    metadataMVs?: MetadataMaterializedViews;
+    dateRange: [Date, Date];
+    alignedDateRange?: [Date, Date];
+    timestampValueExpression?: string;
+    conditionSql?: string;
+    cacheKey: string;
+    signal?: AbortSignal;
+  }): Promise<string[]> {
     const textIndexInfoLookup = await this.getMapColumnTextIndexes({
       databaseName,
       tableName,
@@ -1176,10 +1226,7 @@ export class Metadata {
           })
           .then(r => r.json<{ key: string }>())
           .then(d => d.data.map(r => r.key).filter(Boolean));
-        if (keys.length > 0) {
-          this.cache.set(cacheKey, keys);
-          return keys;
-        }
+        if (keys.length > 0) return keys;
       } catch (e) {
         // The caller gave up; don't start the fallback with a dead signal and
         // cache its instant rejection under the rollup key.
@@ -1225,10 +1272,7 @@ export class Metadata {
           })
           .then(r => r.json<{ key: string }>())
           .then(d => d.data.map(r => r.key).filter(Boolean));
-        if (keys.length > 0) {
-          this.cache.set(cacheKey, keys);
-          return keys;
-        }
+        if (keys.length > 0) return keys;
       } catch (e) {
         // See the key text index catch above.
         if (signal?.aborted) throw e;
@@ -1403,42 +1447,34 @@ export class Metadata {
       `;
     }
 
-    const fetchKeys = async () => {
-      const keys = await this.clickhouseClient
-        .query<'JSON'>({
-          query: sql.sql,
-          query_params: sql.params,
-          connectionId,
-          clickhouse_settings: {
-            ...this.getClickHouseSettings(),
-            // Max 15 seconds to get keys
-            timeout_overflow_mode: 'break',
-            max_execution_time: 15,
-            // Set the value to 0 (unlimited) so that the LIMIT is used instead
-            max_rows_to_read: '0',
-          },
-          abort_signal: signal,
-        })
-        .then(res => res.json<{ keysArr?: string[]; key?: string }>())
-        .then(d => {
-          let output: string[];
-          if (strategy === 'groupUniqArrayArray') {
-            output = d.data[0].keysArr ?? [];
-          } else {
-            output = d.data
-              .map(row => row.key)
-              .filter((k): k is string => Boolean(k));
-          }
+    return this.clickhouseClient
+      .query<'JSON'>({
+        query: sql.sql,
+        query_params: sql.params,
+        connectionId,
+        clickhouse_settings: {
+          ...this.getClickHouseSettings(),
+          // Max 15 seconds to get keys
+          timeout_overflow_mode: 'break',
+          max_execution_time: 15,
+          // Set the value to 0 (unlimited) so that the LIMIT is used instead
+          max_rows_to_read: '0',
+        },
+        abort_signal: signal,
+      })
+      .then(res => res.json<{ keysArr?: string[]; key?: string }>())
+      .then(d => {
+        let output: string[];
+        if (strategy === 'groupUniqArrayArray') {
+          output = d.data[0].keysArr ?? [];
+        } else {
+          output = d.data
+            .map(row => row.key)
+            .filter((k): k is string => Boolean(k));
+        }
 
-          return output.filter(r => r);
-        });
-      return keys;
-    };
-    // A condition changes with variable selections; expire its entries so
-    // they don't pile up.
-    return this.cache.getOrFetch<string[]>(cacheKey, fetchKeys, {
-      ttlMs: conditionSql ? CONDITION_KEYS_CACHE_TTL_MS : undefined,
-    });
+        return output.filter(r => r);
+      });
   }
 
   async getJSONKeys({
