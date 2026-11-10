@@ -317,21 +317,25 @@ export class MetadataCache {
       return cachedValue;
     }
 
-    return this.dedupe(key, async () => {
-      const result = await query();
+    // Check if there is a pending query
+    if (this.pendingQueries.has(key)) {
+      return this.pendingQueries.get(key)!;
+    }
+
+    // If no pending query, initiate the new query
+    const queryPromise = query();
+
+    // Store the pending query promise
+    this.pendingQueries.set(key, queryPromise);
+
+    try {
+      const result = await queryPromise;
       this.set(key, result, ttlMs);
       return result;
-    });
-  }
-
-  /** Shares one in-flight call per key between concurrent callers, without caching its result. */
-  dedupe<T>(key: string, query: () => Promise<T>): Promise<T> {
-    const pending = this.pendingQueries.get(key);
-    if (pending) return pending;
-
-    const queryPromise = query().finally(() => this.pendingQueries.delete(key));
-    this.pendingQueries.set(key, queryPromise);
-    return queryPromise;
+    } finally {
+      // Clean up the pending query map
+      this.pendingQueries.delete(key);
+    }
   }
 
   set<T>(key: string, value: T, ttlMs?: number) {
@@ -1113,35 +1117,30 @@ export class Metadata {
     const cacheKey = conditionSql
       ? `${unscopedCacheKey}.${objectHash(conditionSql)}.condition`
       : unscopedCacheKey;
-    const cachedKeys = this.cache.get<string[]>(cacheKey);
 
-    if (cachedKeys != null) {
-      return cachedKeys;
-    }
-
-    // Concurrent callers share one read, since a text index read can take
-    // GiBs of memory. The in-flight key carries the aligned range: without
-    // timestampValueExpression cacheKey has none, but a rollup answer depends
-    // on it.
-    const inFlightKey = alignedDateRange
-      ? `${cacheKey}.${alignedDateRange[0].getTime()}.${alignedDateRange[1].getTime()}.inFlight`
-      : `${cacheKey}.inFlight`;
-    return this.cache.dedupe(inFlightKey, () =>
-      this.queryMapKeys({
-        databaseName,
-        tableName,
-        column,
-        maxKeys,
-        connectionId,
-        metricName,
-        metadataMVs,
-        dateRange,
-        alignedDateRange,
-        timestampValueExpression,
-        conditionSql,
-        cacheKey,
-        signal,
-      }),
+    // getOrFetch shares one in-flight read between concurrent callers (the
+    // filter panel, search bar and group-by all load fields at once); a text
+    // index read can take GiBs of memory. A condition changes with variable
+    // selections, so its entries expire instead of piling up.
+    return this.cache.getOrFetch<string[]>(
+      cacheKey,
+      () =>
+        this.queryMapKeys({
+          databaseName,
+          tableName,
+          column,
+          maxKeys,
+          connectionId,
+          metricName,
+          metadataMVs,
+          dateRange,
+          alignedDateRange,
+          timestampValueExpression,
+          conditionSql,
+          cacheKey,
+          signal,
+        }),
+      { ttlMs: conditionSql ? CONDITION_KEYS_CACHE_TTL_MS : undefined },
     );
   }
 
@@ -1227,10 +1226,7 @@ export class Metadata {
           })
           .then(r => r.json<{ key: string }>())
           .then(d => d.data.map(r => r.key).filter(Boolean));
-        if (keys.length > 0) {
-          this.cache.set(cacheKey, keys);
-          return keys;
-        }
+        if (keys.length > 0) return keys;
       } catch (e) {
         // The caller gave up; don't start the fallback with a dead signal and
         // cache its instant rejection under the rollup key.
@@ -1276,10 +1272,7 @@ export class Metadata {
           })
           .then(r => r.json<{ key: string }>())
           .then(d => d.data.map(r => r.key).filter(Boolean));
-        if (keys.length > 0) {
-          this.cache.set(cacheKey, keys);
-          return keys;
-        }
+        if (keys.length > 0) return keys;
       } catch (e) {
         // See the key text index catch above.
         if (signal?.aborted) throw e;
@@ -1454,42 +1447,34 @@ export class Metadata {
       `;
     }
 
-    const fetchKeys = async () => {
-      const keys = await this.clickhouseClient
-        .query<'JSON'>({
-          query: sql.sql,
-          query_params: sql.params,
-          connectionId,
-          clickhouse_settings: {
-            ...this.getClickHouseSettings(),
-            // Max 15 seconds to get keys
-            timeout_overflow_mode: 'break',
-            max_execution_time: 15,
-            // Set the value to 0 (unlimited) so that the LIMIT is used instead
-            max_rows_to_read: '0',
-          },
-          abort_signal: signal,
-        })
-        .then(res => res.json<{ keysArr?: string[]; key?: string }>())
-        .then(d => {
-          let output: string[];
-          if (strategy === 'groupUniqArrayArray') {
-            output = d.data[0].keysArr ?? [];
-          } else {
-            output = d.data
-              .map(row => row.key)
-              .filter((k): k is string => Boolean(k));
-          }
+    return this.clickhouseClient
+      .query<'JSON'>({
+        query: sql.sql,
+        query_params: sql.params,
+        connectionId,
+        clickhouse_settings: {
+          ...this.getClickHouseSettings(),
+          // Max 15 seconds to get keys
+          timeout_overflow_mode: 'break',
+          max_execution_time: 15,
+          // Set the value to 0 (unlimited) so that the LIMIT is used instead
+          max_rows_to_read: '0',
+        },
+        abort_signal: signal,
+      })
+      .then(res => res.json<{ keysArr?: string[]; key?: string }>())
+      .then(d => {
+        let output: string[];
+        if (strategy === 'groupUniqArrayArray') {
+          output = d.data[0].keysArr ?? [];
+        } else {
+          output = d.data
+            .map(row => row.key)
+            .filter((k): k is string => Boolean(k));
+        }
 
-          return output.filter(r => r);
-        });
-      return keys;
-    };
-    // A condition changes with variable selections; expire its entries so
-    // they don't pile up.
-    return this.cache.getOrFetch<string[]>(cacheKey, fetchKeys, {
-      ttlMs: conditionSql ? CONDITION_KEYS_CACHE_TTL_MS : undefined,
-    });
+        return output.filter(r => r);
+      });
   }
 
   async getJSONKeys({
