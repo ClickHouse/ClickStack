@@ -4,6 +4,7 @@ import {
 } from '@clickhouse/client-common';
 import { getHeatmapMode } from '@hyperdx/common-utils/dist/core/heatmap';
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
+import { PromqlChartError } from '@hyperdx/common-utils/dist/core/promqlChart';
 import {
   convertToCategoricalChartConfig,
   getFirstTimestampValueExpression,
@@ -30,6 +31,7 @@ import ms from 'ms';
 
 import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';
+import { PromQLQueryError } from '@/controllers/promql';
 import { getSource } from '@/controllers/sources';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
@@ -47,6 +49,7 @@ import { trimToolResponse } from '@/utils/trimToolResponse';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 import { externalDashboardTileSchemaWithId } from '@/utils/zod';
 
+import { runPromqlTile } from './promqlTile';
 import { runEventPatterns } from './runEventPatterns';
 
 // ─── Source body expression helpers ──────────────────────────────────────────
@@ -355,10 +358,12 @@ function isEmptyResult(result: unknown): boolean {
 }
 
 function formatQueryResult(result: unknown, maxResponseChars?: number) {
-  const { data: trimmedResult, isTrimmed } = trimToolResponse(
-    result,
-    maxResponseChars,
-  );
+  // Trimmed under its response key, so note paths read `result.data…`.
+  const {
+    data: { result: trimmedResult },
+    isTrimmed,
+    notes: trimNotes,
+  } = trimToolResponse({ result }, maxResponseChars);
   const empty = isEmptyResult(result);
   return {
     content: [
@@ -370,6 +375,7 @@ function formatQueryResult(result: unknown, maxResponseChars?: number) {
             ...(isTrimmed
               ? {
                   note: 'Result was trimmed for context size. Narrow the time range or add filters to reduce data.',
+                  trimNotes,
                 }
               : {}),
             ...(empty
@@ -706,7 +712,28 @@ export async function runConfigTile(
 
   // PromQL is evaluated by the Prometheus API, not the SQL renderer.
   if (isPromqlSavedChartConfig(savedConfig)) {
-    return mcpUserError('PromQL tiles cannot be queried through MCP yet.');
+    try {
+      return formatQueryResult(
+        await runPromqlTile({
+          teamId,
+          config: savedConfig,
+          dateRange: [startDate, endDate],
+          variables: options?.variables,
+          signal: options?.abortSignal,
+        }),
+      );
+    } catch (e) {
+      if (e instanceof PromQLQueryError) {
+        return e.category === 'user'
+          ? mcpUserError(e.message)
+          : mcpServerError(e.message);
+      }
+      if (e instanceof PromqlChartError) {
+        return mcpUserError(e.message);
+      }
+      // The table-function backend throws ClickHouse errors as they come.
+      return clickHouseErrorResult(e);
+    }
   }
 
   // Raw SQL tile — hydrate source fields for macro support ($__sourceTable, $__filters)
