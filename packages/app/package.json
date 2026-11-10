@@ -100,7 +100,7 @@
     "store2": "^2.14.3",
     "strip-ansi": "^6.0.1",
     "timestamp-nano": "^1.0.1",
-    "uplot": "^1.6.31",
+    "uplot": "patch:uplot@npm%3A1.6.32#~/.yarn/patches/uplot-npm-1.6.32-350d2da00d.patch",
     "uplot-react": "^1.2.2",
     "zod": "3.25"
   },

@@ -1,4 +1,5 @@
-import { Box, Button, Card, Divider, Group, Text } from '@mantine/core';
+import { Separator } from '@clickhouse/click-ui';
+import { Box, Button, Card, Group, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 
 import api from '@/api';
@@ -109,7 +110,7 @@ export default function ApiKeysSection() {
   return (
     <Box id="api_keys" data-testid="api-keys-section">
       <Text size="md">API keys</Text>
-      <Divider my="md" />
+      <Separator size="lg" />
       <Card mb="md">
         <Text mb="md">Ingestion API key</Text>
         <Group gap="xs" align="flex-start" wrap="nowrap">

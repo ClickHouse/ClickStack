@@ -20,7 +20,8 @@ const NO_SELF_TELEMETRY = 'HDX_EXPORTER_ENABLED=false';
 // Timeout configuration constants (in milliseconds)
 const TEST_TIMEOUT_MS = 60 * 1000; // 60 seconds per test
 const API_SERVER_STARTUP_TIMEOUT_MS = 120 * 1000; // 2 minutes for API to start
-const APP_SERVER_STARTUP_TIMEOUT_MS = 180 * 1000; // 3 minutes for Next.js build + start
+// The Next.js build alone exceeds 3 minutes on the 4-vCPU runner fork PRs use.
+const APP_SERVER_STARTUP_TIMEOUT_MS = 360 * 1000;
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -74,6 +75,9 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     /* Record video on failure */
     video: 'retain-on-failure',
+    // Otherwise Chromium takes navigator.language from the host locale, so
+    // number and date formatting would vary between machines.
+    locale: 'en-US',
   },
 
   /* Global test timeout - CI needs more time than local */

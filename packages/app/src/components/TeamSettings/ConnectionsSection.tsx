@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Box, Button, Card, Divider, Flex, Stack, Text } from '@mantine/core';
+import { Separator } from '@clickhouse/click-ui';
+import { Box, Button, Card, Flex, Stack, Text } from '@mantine/core';
 import { IconPencil, IconX } from '@tabler/icons-react';
 
 import { ConnectionForm } from '@/components/ConnectionForm';
@@ -16,7 +17,7 @@ export default function ConnectionsSection() {
   return (
     <Box id="connections" data-testid="connections-section">
       <Text size="md">Connections</Text>
-      <Divider my="md" />
+      <Separator size="lg" />
       <Card>
         <Stack mb="md">
           {connections?.map(connection => (
@@ -65,7 +66,7 @@ export default function ConnectionsSection() {
                   showDeleteButton
                 />
               )}
-              <Divider my="md" />
+              <Separator size="lg" />
             </Box>
           ))}
         </Stack>
