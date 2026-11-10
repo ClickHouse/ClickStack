@@ -3189,7 +3189,7 @@ describe('Metadata', () => {
     });
 
     it.each(textIndexLookups)(
-      'ranks keys by row count before the LIMIT on the %s text index path',
+      'keeps the maxKeys most frequent keys with topKWeighted on the %s text index path',
       async (_, textIndexLookup) => {
         const md = new Metadata(mockClickhouseClient, new MetadataCache());
         jest.spyOn(md, 'getServerVersion').mockResolvedValue([26, 3, 0, 0]);
@@ -3220,8 +3220,9 @@ describe('Metadata', () => {
           .calls[0][0];
         expect(query).toContain('FROM mergeTreeTextIndex(');
         expect(query).toMatch(
-          /GROUP BY key HAVING key != ''\s+ORDER BY sum\(cardinality\) DESC, key\s+LIMIT/,
+          /arrayJoin\(topKWeighted\(2\)\(\w+, cardinality\)\)/,
         );
+        expect(query).not.toContain('GROUP BY');
       },
     );
 
