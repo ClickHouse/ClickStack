@@ -131,7 +131,7 @@ function useOptimizedKeyValuesCalls({
   // (so the constrained columns exist in the queried table), EXCLUDING the
   // filter's own expression (otherwise a multi-select would collapse to only
   // its already-selected values). Passing this down as a per-key constraint
-  // lets all of a source's filters resolve in one `groupUniqArrayIf` scan
+  // lets all of a source's filters resolve in one `topKIf` scan
   // instead of one query per filter.
   //
   // The constraint stays a FilterState rather than SQL: getKeyValues renders
@@ -174,7 +174,7 @@ function useOptimizedKeyValuesCalls({
   // Group filters by (source, metricType, where, whereLanguage). Every filter in
   // a group is resolved together: an unconstrained group goes through the MV
   // optimizer (one batched, rollup-eligible query); a constrained group runs a
-  // single faceted `groupUniqArrayIf` scan carrying a per-key condition.
+  // single faceted `topKIf` scan carrying a per-key condition.
   const filtersByGroupKey = useMemo(() => {
     const byGroupKey = new Map<string, QueryExpressionDashboardFilter[]>();
     for (const filter of filters) {
@@ -262,7 +262,7 @@ function useOptimizedKeyValuesCalls({
           staleTime: 1000 * 60 * 5, // Cache every 5 min
           queryFn: async ({ signal }): Promise<EnrichedCall[]> => {
             // Constrained: resolve every key in one faceted scan
-            // (groupUniqArrayIf). A per-key condition can't be split across
+            // (topKIf). A per-key condition can't be split across
             // single-key MVs, but it can run against one MV whose dimensions
             // cover every filter column (else the raw table).
             if (isFaceted) {

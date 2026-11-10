@@ -1214,7 +1214,7 @@ describe('useQueriedDashboardFilterValues', () => {
       await waitFor(() => expect(result.current.isFetching).toBe(false));
 
       expect(mockMetadata.getKeyValues).toHaveBeenCalledTimes(1);
-      // No conditions → plain groupUniqArray (no keyConditions passed).
+      // No conditions → plain topK (no keyConditions passed).
       expect(
         callForKeys(['environment', 'status'])?.keyConditions,
       ).toBeUndefined();

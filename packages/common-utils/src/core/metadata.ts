@@ -3073,7 +3073,7 @@ export class Metadata {
     /**
      * Optional per-key constraint, aligned with `keys`: the selections that
      * should narrow this key's values. When provided for a key, its values are
-     * gathered with `groupUniqArrayIf(key, <predicate>)` so several "faceted"
+     * gathered with `topKIf(key, <predicate>)` so several "faceted"
      * value lists (each constrained differently) resolve in a single table
      * scan. Only applied when `disableRowLimit` is true (the path used by
      * filter dropdowns).
@@ -3124,6 +3124,11 @@ export class Metadata {
 
         // When disableRowLimit is true, query directly without CTE
         // Otherwise, use CTE with row limits for sampling
+        // topK returns the most frequent values, most frequent first, where
+        // groupUniqArray kept whichever `limit` values it read first. NULL (a
+        // missing JSON path) and '' (a missing Map key) are often the most
+        // frequent and are dropped below, so leave room for both.
+        const topKLimit = limit + 2;
         const sqlConfig = disableRowLimit
           ? {
               ...chartConfig,
@@ -3136,12 +3141,12 @@ export class Metadata {
                   // physical column than the aggregate wrapping it.
                   const condition =
                     state && filterStateToPredicate(state, renderKey);
-                  // `groupUniqArrayIf` lets each key be constrained by its own
+                  // `topKIf` lets each key be constrained by its own
                   // predicate, so multiple faceted value lists are computed in a
                   // single scan instead of one query per key.
                   return condition
-                    ? `groupUniqArrayIf(${limit})(${k}, ${condition}) AS param${i}`
-                    : `groupUniqArray(${limit})(${k}) AS param${i}`;
+                    ? `topKIf(${topKLimit})(${k}, ${condition}) AS param${i}`
+                    : `topK(${topKLimit})(${k}) AS param${i}`;
                 })
                 .join(', '),
             }
@@ -3173,10 +3178,7 @@ export class Metadata {
                   },
                 ],
                 select: keys
-                  .map(
-                    (_, i) =>
-                      `groupUniqArray(${limit})(param${i}) AS param${i}`,
-                  )
+                  .map((_, i) => `topK(${topKLimit})(param${i}) AS param${i}`)
                   .join(', '),
                 connection: chartConfig.connection,
                 from: { databaseName: '', tableName: 'sampledData' },
@@ -3214,9 +3216,9 @@ export class Metadata {
         return Object.entries(json?.data?.[0]).map(([key, value]) => ({
           key: keys[parseInt(key.replace('param', ''))],
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          value: value?.filter(v => v != null && v !== '') as  // remove nulls and empty strings
-            | string[]
-            | number[],
+          value: value
+            ?.filter(v => v != null && v !== '') // remove nulls and empty strings
+            .slice(0, limit) as string[] | number[],
         }));
       },
     );

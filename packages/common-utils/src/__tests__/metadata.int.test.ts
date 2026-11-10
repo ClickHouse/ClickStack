@@ -218,6 +218,23 @@ describe('Metadata Integration Tests', () => {
           ),
         ).toBeTruthy();
       });
+
+      it('keeps the most frequent values when the limit truncates the list', async () => {
+        // The first row read has action 'ping'; NULL (no action) and '' (no
+        // pod name) are more frequent than any real value.
+        const result = await metadata.getKeyValues({
+          chartConfig,
+          keys: ['LogAttributes.action', "ResourceAttributes['k8s.pod.name']"],
+          limit: 1,
+          disableRowLimit,
+          source,
+        });
+
+        expect(result).toEqual([
+          { key: 'LogAttributes.action', value: ['login'] },
+          { key: "ResourceAttributes['k8s.pod.name']", value: ['pod1'] },
+        ]);
+      });
     });
   });
 

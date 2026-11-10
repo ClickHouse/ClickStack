@@ -686,7 +686,7 @@ export function useGetKeyValues(
   }: {
     chartConfig?: BuilderChartConfigWithDateRange;
     keys: string[];
-    /** Per-key constraints for faceted value lookups (groupUniqArrayIf). */
+    /** Per-key constraints for faceted value lookups (topKIf). */
     keyConditions?: (FilterState | undefined)[];
     limit?: number;
     disableRowLimit?: boolean;
@@ -712,8 +712,8 @@ export function useGetKeyValues(
 /**
  * List metric names for one metrics table, ordered and matched server-side.
  *
- * Prefer this over `useGetKeyValues({ keys: ['MetricName'] })`, which samples an
- * arbitrary subset via `groupUniqArray` and can silently omit metrics on
+ * Prefer this over `useGetKeyValues({ keys: ['MetricName'] })`, which keeps only
+ * the most frequent names (`topK`) and can silently omit rare metrics on
  * high-cardinality sources.
  */
 export function useGetMetricNames(

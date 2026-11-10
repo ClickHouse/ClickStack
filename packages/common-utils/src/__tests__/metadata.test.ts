@@ -848,7 +848,7 @@ describe('Metadata', () => {
       );
     });
 
-    it('uses groupUniqArrayIf for keys that have a condition (faceted lookup)', async () => {
+    it('uses topKIf for keys that have a condition (faceted lookup)', async () => {
       const renderChartConfigSpy = jest.spyOn(
         renderChartConfigModule,
         'renderChartConfig',
@@ -869,13 +869,11 @@ describe('Metadata', () => {
       const actualConfig = renderChartConfigSpy.mock.calls.at(-1)![0];
       if (!isBuilderChartConfig(actualConfig))
         throw new Error('Expected builder config');
-      // No condition → plain groupUniqArray; condition → groupUniqArrayIf so
+      // No condition → plain topK; condition → topKIf so
       // both facets resolve in a single scan.
+      expect(actualConfig.select).toContain('topK(12)(colA) AS param0');
       expect(actualConfig.select).toContain(
-        'groupUniqArray(10)(colA) AS param0',
-      );
-      expect(actualConfig.select).toContain(
-        "groupUniqArrayIf(10)(colB, (colA IN ('x'))) AS param1",
+        "topKIf(12)(colB, (colA IN ('x'))) AS param1",
       );
     });
 
@@ -919,7 +917,7 @@ describe('Metadata', () => {
       if (!isBuilderChartConfig(actualConfig))
         throw new Error('Expected builder config');
       expect(actualConfig.select).toContain(
-        'groupUniqArrayIf(10)(Attributes.`namespace`.:String, ' +
+        'topKIf(12)(Attributes.`namespace`.:String, ' +
           "(Attributes.`cluster`.:String IN ('prod'))) AS param1",
       );
       // The raw bracket form must not survive into either half.
@@ -980,9 +978,7 @@ describe('Metadata', () => {
         const actualConfig = renderChartConfigSpy.mock.calls.at(-1)![0];
         if (!isBuilderChartConfig(actualConfig))
           throw new Error('Expected builder config');
-        expect(actualConfig.select).toContain(
-          `groupUniqArray(${limit})(column1)`,
-        );
+        expect(actualConfig.select).toContain(`topK(${limit + 2})(column1)`);
       }
     });
 
@@ -1008,6 +1004,24 @@ describe('Metadata', () => {
       expect(result).toEqual([
         { key: 'column1', value: ['value1', 'value2', 0, 10] },
       ]);
+    });
+
+    it('returns at most limit values once nulls and empty strings are dropped', async () => {
+      (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+        json: () =>
+          Promise.resolve({
+            data: [{ param0: [null, 'value1', '', 'value2', 'value3'] }],
+          }),
+      });
+
+      const result = await metadata.getKeyValues({
+        chartConfig: mockChartConfig,
+        keys: ['column1'],
+        limit: 2,
+        source,
+      });
+
+      expect(result).toEqual([{ key: 'column1', value: ['value1', 'value2'] }]);
     });
 
     it('should return an empty list when no keys are provided', async () => {
@@ -1530,7 +1544,7 @@ describe('Metadata', () => {
       const configArg = renderChartConfigSpy.mock.calls[
         renderChartConfigSpy.mock.calls.length - 1
       ][0] as any;
-      expect(configArg.select).toContain('groupUniqArray(');
+      expect(configArg.select).toContain('topK(');
       expect(configArg.select).toContain('param0');
     });
 
@@ -1626,7 +1640,7 @@ describe('Metadata', () => {
       const configArg = renderChartConfigSpy.mock.calls[
         renderChartConfigSpy.mock.calls.length - 1
       ][0] as any;
-      expect(configArg.select).toContain('groupUniqArray(');
+      expect(configArg.select).toContain('topK(');
     });
 
     it('routes ResourceAttributes["k8s.pod.name"] to the raw table when its map has no KV text index', async () => {
@@ -1645,7 +1659,7 @@ describe('Metadata', () => {
       const configArg = renderChartConfigSpy.mock.calls[
         renderChartConfigSpy.mock.calls.length - 1
       ][0] as any;
-      expect(configArg.select).toContain('groupUniqArray(');
+      expect(configArg.select).toContain('topK(');
       expect(configArg.select).toContain('param0');
     });
 
@@ -1789,7 +1803,7 @@ describe('Metadata', () => {
         const configArg = renderChartConfigSpy.mock.calls[
           renderChartConfigSpy.mock.calls.length - 1
         ][0] as any;
-        expect(configArg.select).toContain(`groupUniqArray(${MAX_VALUES})`);
+        expect(configArg.select).toContain(`topK(${MAX_VALUES + 2})`);
       });
     });
 

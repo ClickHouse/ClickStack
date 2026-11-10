@@ -203,7 +203,7 @@ export const KubernetesFilters: React.FC<KubernetesFiltersProps> = ({
 
   // Faceted (linked) lookups: build a per-field constraint from the OTHER
   // selected fields (exclude-self) so all five value lists are computed in a
-  // single `groupUniqArrayIf` scan. The free-text search is applied as a shared
+  // single `topKIf` scan. The free-text search is applied as a shared
   // WHERE. When unlinked there are no constraints and every dropdown lists all
   // values (still a single batched query).
   //

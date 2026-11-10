@@ -188,7 +188,7 @@ const DashboardFilters = ({
   // "Link" mode (opt-in, off by default): each dropdown's values are narrowed by
   // the others' selections. Off by default because contingent value lookups
   // can't use the cheap per-key rollups and are more expensive at scale. When
-  // on, all of a source's facets are computed in a single groupUniqArrayIf scan.
+  // on, all of a source's facets are computed in a single topKIf scan.
   const [linked, setLinked] = useState(false);
 
   const {
