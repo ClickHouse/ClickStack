@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { Box, Card, Divider, Text } from '@mantine/core';
+import { Separator } from '@clickhouse/click-ui';
+import { Box, Card, Text } from '@mantine/core';
 
 import api from '@/api';
 import { type DeploymentShape } from '@/components/ClickStackOnboarding/installSnippets';
@@ -15,7 +16,7 @@ import McpInstallPanel from '@/components/ClickStackOnboarding/McpInstallPanel';
  *
  * Structure mirrors `IntegrationsSection.tsx` and
  * `ApiKeysSection.tsx`: outer `<Box>` with a `<Text size="md">`
- * header and `<Divider />`, then a single `<Card>` wrapping the
+ * header and `<Separator />`, then a single `<Card>` wrapping the
  * install panel. No subtitle below the header so the visual
  * rhythm matches the rest of the Integrations tab.
  *
@@ -45,7 +46,7 @@ export default function McpServerSection() {
   return (
     <Box id="mcp_server" data-testid="mcp-server-section">
       <Text size="md">Connect your AI Agents</Text>
-      <Divider my="md" />
+      <Separator size="lg" />
       <Card>
         <McpInstallPanel deployment={deployment} />
       </Card>
