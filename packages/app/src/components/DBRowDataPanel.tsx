@@ -8,7 +8,7 @@ import {
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { Box } from '@mantine/core';
+import { Box, Center, Loader } from '@mantine/core';
 import type { Query } from '@tanstack/react-query';
 
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
@@ -431,6 +431,18 @@ export function getMapColumnNames(meta: ResponseJSON['meta'] | undefined) {
   );
 }
 
+export function RowPanelLoader({
+  'data-testid': dataTestId,
+}: {
+  'data-testid'?: string;
+}) {
+  return (
+    <Center py="xl" data-testid={dataTestId}>
+      <Loader size="sm" aria-label="Loading row" />
+    </Center>
+  );
+}
+
 export function RowDataPanel({
   source,
   rowId,
@@ -448,7 +460,12 @@ export function RowDataPanel({
   flush?: boolean;
   'data-testid'?: string;
 }) {
-  const { data } = useRowData({ source, rowId, aliasWith, dateRange });
+  const { data, isLoading } = useRowData({
+    source,
+    rowId,
+    aliasWith,
+    dateRange,
+  });
 
   const firstRow = useMemo(() => {
     const firstRow = { ...(data?.data?.[0] ?? {}) };
@@ -460,6 +477,10 @@ export function RowDataPanel({
 
   const jsonColumns = getJSONColumnNames(data?.meta);
   const mapColumns = getMapColumnNames(data?.meta);
+
+  if (isLoading) {
+    return <RowPanelLoader data-testid={dataTestId} />;
+  }
 
   return (
     <div className="flex-grow-1 overflow-auto" data-testid={dataTestId}>
