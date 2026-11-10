@@ -10,7 +10,7 @@ import {
 import { createTeam } from '@/controllers/team';
 import {
   createVirtualUser,
-  deleteTeamMemberKeepingOne,
+  deleteTeamMember,
   findUserByAccessKey,
   findUsersByTeam,
   hashOrgApiKey,
@@ -128,6 +128,14 @@ describe('orgApiKey controller', () => {
     touchOrgApiKeyLastUsed(fresh, new Date(t0.getTime() + 60_000));
     expect(await lastUsed()).toBe(t0.getTime());
 
+    // A request holding a stale copy passes the in-memory check, so only the
+    // conditional filter stops it overwriting a recent write.
+    touchOrgApiKeyLastUsed(
+      { _id: doc._id, lastUsedAt: null },
+      new Date(t0.getTime() + 60_000),
+    );
+    expect(await lastUsed()).toBe(t0.getTime());
+
     const t6 = new Date(t0.getTime() + 6 * 60_000);
     touchOrgApiKeyLastUsed(fresh, t6);
     expect(await lastUsed()).toBe(t6.getTime());
@@ -190,7 +198,7 @@ describe('orgApiKey controller', () => {
       const { team, serviceAccount, users } = await setupTeam(1);
       const deleteSpy = jest.spyOn(User, 'findOneAndDelete');
 
-      const result = await deleteTeamMemberKeepingOne(
+      const result = await deleteTeamMember(
         team._id,
         users[0]._id.toString(),
         serviceAccount,
@@ -208,7 +216,7 @@ describe('orgApiKey controller', () => {
       const insert: jest.SpyInstance = jest.spyOn(User.collection, 'insertOne');
       insert.mockRejectedValueOnce(new Error('transient'));
 
-      const result = await deleteTeamMemberKeepingOne(
+      const result = await deleteTeamMember(
         team._id,
         users[0]._id.toString(),
         serviceAccount,
@@ -229,7 +237,7 @@ describe('orgApiKey controller', () => {
         }),
       );
 
-      const result = await deleteTeamMemberKeepingOne(
+      const result = await deleteTeamMember(
         team._id,
         users[0]._id.toString(),
         serviceAccount,

@@ -37,7 +37,7 @@ import TeamMembersSection from './components/TeamSettings/TeamMembersSection';
 import TeamQueryConfigSection from './components/TeamSettings/TeamQueryConfigSection';
 import api from './api';
 import { usePageTitle } from './brand';
-import { IS_IAC_EXPORT_ENABLED } from './config';
+import { IS_IAC_EXPORT_ENABLED, IS_LOCAL_MODE } from './config';
 import { APP_CONTENT_SCROLL_CONTAINER_ID, withAppNav } from './layout';
 
 type TeamTab = {
@@ -167,10 +167,15 @@ export default function TeamPage() {
           id: 'team-api-agents-api-keys',
           content: () => <ApiKeysSection />,
         },
-        {
-          id: 'team-api-agents-org-api-keys',
-          content: () => <OrgApiKeysSection />,
-        },
+        // Org keys are stored by the API, which local mode doesn't run.
+        ...(IS_LOCAL_MODE
+          ? []
+          : [
+              {
+                id: 'team-api-agents-org-api-keys',
+                content: () => <OrgApiKeysSection />,
+              },
+            ]),
         {
           id: 'team-api-agents-mcp-server',
           content: () => <McpServerSection />,

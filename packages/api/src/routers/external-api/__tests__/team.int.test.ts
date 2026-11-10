@@ -152,12 +152,25 @@ describe('External API v2 Team', () => {
       expect(res.body.data[0].isCurrentUser).toBe(false);
     });
 
-    it('can invite and remove members', async () => {
+    it("can't reach an invite link", async () => {
       const key = await createKey();
       await withKey(key, agent.post(`${TEAM_BASE_URL}/invitation`))
         .send({ email: 'new@deploysentinel.com' })
-        .expect(200);
+        .expect(403);
 
+      await authRequest('post', `${TEAM_BASE_URL}/invitation`)
+        .send({ email: 'new@deploysentinel.com' })
+        .expect(200);
+      const list = await withKey(
+        key,
+        agent.get(`${TEAM_BASE_URL}/invitations`),
+      ).expect(200);
+      expect(list.body.data).toHaveLength(1);
+      expect(list.body.data[0]).not.toHaveProperty('url');
+    });
+
+    it('can remove members', async () => {
+      const key = await createKey();
       const member = await createMember();
       const alert = await Alert.create({
         team: team._id,

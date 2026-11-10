@@ -1,32 +1,23 @@
 import { useEffect, useState } from 'react';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import type { OrgApiKeyApiResponse } from '@hyperdx/common-utils/dist/types';
-import {
-  Badge,
-  Box,
-  Button,
-  Card,
-  Divider,
-  Group,
-  Table,
-  Text,
-} from '@mantine/core';
+import { Box, Button, Card, Group, Table, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 
 import api from '@/api';
 import EmptyState from '@/components/EmptyState';
 import { InlineNameInput } from '@/components/InlineNameInput/InlineNameInput';
+import { currentDate } from '@/timeZone';
 import { useConfirm } from '@/useConfirm';
+import { useFormatTime } from '@/useFormatTime';
 
 import CreateOrgApiKeyModal from './CreateOrgApiKeyModal';
 
-const formatDate = (iso: string) => new Date(iso).toLocaleDateString();
-
-// Expiry is shown to the day, so a minute tick is enough to flip the badge.
+// A minute tick is close enough for flipping the Expired badge.
 const EXPIRY_TICK_MS = 60_000;
 
 // Only read in a state initialiser and the interval, never during render.
-// eslint-disable-next-line no-restricted-syntax
-const currentTime = () => Date.now();
+const currentTime = () => currentDate().getTime();
 
 function useNow() {
   const [now, setNow] = useState(currentTime);
@@ -47,6 +38,8 @@ function OrgApiKeyRow({
   const updateKey = api.useUpdateOrgApiKey();
   const deleteKey = api.useDeleteOrgApiKey();
   const confirm = useConfirm();
+  const formatTime = useFormatTime();
+  const formatDate = (iso: string) => formatTime(iso, { format: 'withYear' });
   const isExpired =
     apiKey.expiresAt != null && Date.parse(apiKey.expiresAt) <= now;
 
@@ -98,9 +91,7 @@ function OrgApiKeyRow({
       </Table.Td>
       <Table.Td>
         {isExpired ? (
-          <Badge color="red" variant="light">
-            Expired
-          </Badge>
+          <Badge size="sm" text="Expired" state="danger" />
         ) : apiKey.expiresAt ? (
           formatDate(apiKey.expiresAt)
         ) : (
@@ -136,7 +127,7 @@ export default function OrgApiKeysSection() {
           Create API key
         </Button>
       </Group>
-      <Divider my="md" />
+      <Separator size="lg" />
       {isError ? (
         <Text size="sm" variant="danger">
           Couldn&apos;t load organization API keys

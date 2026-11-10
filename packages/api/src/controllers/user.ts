@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ObjectId } from '@/models';
 import Alert from '@/models/alert';
 import User, { type IUser } from '@/models/user';
+import { isDuplicateKeyError } from '@/utils/errors';
 import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 
@@ -147,39 +148,15 @@ export function recordOnboardingTaskCompletion(
   });
 }
 
+/**
+ * Never removes the last person, so someone can always sign in to revoke the
+ * team's org API keys. Mongo here has no transactions, so delete first and put
+ * the member back if a concurrent removal emptied the team.
+ */
 export async function deleteTeamMember(
   teamId: string | ObjectId,
   userIdToDelete: string,
   userIdRequestingDelete: string | ObjectId,
-) {
-  // Delete first: reassigning alerts for a user that wasn't deleted (such as a
-  // service account) would steal their attribution.
-  const deletedUser = await User.findOneAndDelete({
-    team: teamId,
-    _id: userIdToDelete,
-    ...NOT_VIRTUAL,
-  });
-  if (deletedUser == null) {
-    return null;
-  }
-  await Alert.updateMany(
-    { createdBy: deletedUser._id, team: teamId },
-    {
-      $set: { createdBy: new mongoose.Types.ObjectId(userIdRequestingDelete) },
-    },
-  );
-  return deletedUser;
-}
-
-/**
- * Member removal by an org API key's service account, which must not leave the
- * team without a person who can sign in. Mongo here has no transactions, so
- * delete first and put the member back if a concurrent removal emptied it.
- */
-export async function deleteTeamMemberKeepingOne(
-  teamId: string | ObjectId,
-  userIdToDelete: string,
-  serviceAccountId: ObjectId,
 ): Promise<'deleted' | 'not_found' | 'last_member'> {
   const countPeople = () =>
     User.countDocuments({ team: teamId, ...NOT_VIRTUAL });
@@ -212,7 +189,9 @@ export async function deleteTeamMemberKeepingOne(
   }
   await Alert.updateMany(
     { createdBy: deletedUser._id, team: teamId },
-    { $set: { createdBy: serviceAccountId } },
+    {
+      $set: { createdBy: new mongoose.Types.ObjectId(userIdRequestingDelete) },
+    },
   );
   return 'deleted';
 }
@@ -221,15 +200,12 @@ const memberRestoreFailures = getCounter(
   'hyperdx.team.member_restore_failures',
   {
     description:
-      'Members deleted by an org API key that could not be put back.',
+      'Removed team members that could not be put back after the team emptied.',
   },
 );
 
 const RESTORE_ATTEMPTS = 3;
 const RESTORE_RETRY_DELAY_MS = 100;
-
-const isDuplicateKey = (err: unknown): err is { keyPattern?: object } =>
-  typeof err === 'object' && err != null && 'code' in err && err.code === 11000;
 
 async function restoreTeamMember(user: IUser) {
   for (let attempt = 1; ; attempt++) {
@@ -237,12 +213,22 @@ async function restoreTeamMember(user: IUser) {
       await User.collection.insertOne(user);
       return;
     } catch (err) {
+      const isDuplicate = isDuplicateKeyError(err);
+      const keyPattern =
+        typeof err === 'object' && err != null && 'keyPattern' in err
+          ? err.keyPattern
+          : undefined;
       // A duplicate _id means an earlier attempt already landed.
-      if (isDuplicateKey(err) && err.keyPattern && '_id' in err.keyPattern) {
+      if (
+        isDuplicate &&
+        typeof keyPattern === 'object' &&
+        keyPattern != null &&
+        '_id' in keyPattern
+      ) {
         return;
       }
       // Any other duplicate (the email was taken meanwhile) can't succeed.
-      if (!isDuplicateKey(err) && attempt < RESTORE_ATTEMPTS) {
+      if (!isDuplicate && attempt < RESTORE_ATTEMPTS) {
         await new Promise(r => setTimeout(r, RESTORE_RETRY_DELAY_MS * attempt));
         continue;
       }
@@ -256,7 +242,7 @@ async function restoreTeamMember(user: IUser) {
           userId: user._id.toString(),
           teamId: user.team.toString(),
         },
-        'Failed to restore team member removed by an org API key',
+        'Failed to restore a removed team member',
       );
       throw err;
     }

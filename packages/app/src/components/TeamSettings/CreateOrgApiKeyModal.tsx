@@ -63,7 +63,16 @@ export default function CreateOrgApiKeyModal({
   };
 
   return (
-    <Modal opened={opened} onClose={close} title="Create API key" centered>
+    <Modal
+      opened={opened}
+      onClose={close}
+      title="Create API key"
+      centered
+      // The key is shown once, so only Done may dismiss it.
+      closeOnClickOutside={createdKey == null}
+      closeOnEscape={createdKey == null}
+      withCloseButton={createdKey == null}
+    >
       {createdKey != null ? (
         <Stack>
           <Text size="sm">

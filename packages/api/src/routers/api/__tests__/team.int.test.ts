@@ -332,6 +332,15 @@ describe('team router', () => {
     expect(resp2.body.data).toHaveLength(1);
   });
 
+  it('DELETE /team/member/:userId keeps the last person in the team', async () => {
+    const { agent, user } = await getLoggedInAgent(server);
+
+    const res = await agent.delete(`/team/member/${user._id}`).expect(400);
+
+    expect(res.body.message).toBe('Cannot remove the last team member');
+    expect(await User.findById(user._id)).not.toBeNull();
+  });
+
   it('DELETE /team/member/:userId updates alerts created by the removed user', async () => {
     const { agent, team, user } = await getLoggedInAgent(server);
 

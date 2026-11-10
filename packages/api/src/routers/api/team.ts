@@ -301,7 +301,16 @@ router.delete(
         throw new Error(`Requesting user has no id`);
       }
 
-      await deleteTeamMember(teamId, userIdToDelete, userIdRequestingDelete);
+      const result = await deleteTeamMember(
+        teamId,
+        userIdToDelete,
+        userIdRequestingDelete,
+      );
+      if (result === 'last_member') {
+        return res
+          .status(400)
+          .json({ message: 'Cannot remove the last team member' });
+      }
 
       res.json({ message: 'User deleted' });
     } catch (e) {
