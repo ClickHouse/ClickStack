@@ -98,6 +98,24 @@ describe('MCP tool input schemas', () => {
 
     expect(missing).toEqual([]);
   });
+
+  // zod-to-json-schema emits a reused Zod schema instance as a bare `$ref` to
+  // its first use. The MCP directory flags a top-level parameter rendered that
+  // way as having no type, so build reused schemas with a factory instead.
+  it('do not render a top-level parameter as a bare $ref', async () => {
+    const client = await createTestClient(context);
+    const { tools } = await client.listTools();
+
+    expect(tools.length).toBeGreaterThan(0);
+
+    const offenders = tools.flatMap(tool =>
+      Object.entries(tool.inputSchema.properties ?? {})
+        .filter(([, prop]) => isRecord(prop) && '$ref' in prop)
+        .map(([key]) => `${tool.name}.${key}`),
+    );
+
+    expect(offenders).toEqual([]);
+  });
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
