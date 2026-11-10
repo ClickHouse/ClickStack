@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { Box, Flex, Loader, ScrollArea, Text } from '@mantine/core';
+import { Box, Flex, ScrollArea, Text } from '@mantine/core';
 
 import type { NumberFormat } from '@/types';
 import { formatNumber, truncateMiddle } from '@/utils';
@@ -10,6 +10,7 @@ import {
   useCategoricalChart,
 } from './charts/CategoricalChart';
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState from './charts/ChartErrorState';
 import { ChartTooltipContainer, ChartTooltipItem } from './charts/ChartTooltip';
 
@@ -104,21 +105,13 @@ export const DBPieChart = (props: CategoricalChartProps) => {
   return (
     <ChartContainer title={title} toolbarItems={toolbarItems}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          <Loader size="xs" mr="xs" />
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : responseFormatError ? (
         <ChartErrorState error={responseFormatError} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          {isPlaceholderData && <Loader size="xs" mr="xs" />}
-          {isPlaceholderData
-            ? 'Loading Chart Data...'
-            : 'No data found within time range.'}
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Flex
           data-testid="pie-chart-container"

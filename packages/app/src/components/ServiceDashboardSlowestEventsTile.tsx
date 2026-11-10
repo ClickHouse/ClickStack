@@ -4,13 +4,14 @@ import {
   pickSampleWeightExpressionProps,
   type TTraceSource,
 } from '@hyperdx/common-utils/dist/types';
-import { Loader, Text } from '@mantine/core';
+import { Text } from '@mantine/core';
 
 import { ChartCard } from '@/components/charts/ChartCard';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import { useServiceDashboardExpressions } from '@/serviceDashboard';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState from './charts/ChartErrorState';
 import DBSqlRowTableWithSideBar from './DBSqlRowTableWithSidebar';
 
@@ -77,16 +78,11 @@ export default function SlowestEventsTile({
         ]}
       >
         {isLoading && !data ? (
-          <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-            <Loader size="xs" mr="xs" />
-            Loading Chart Data...
-          </div>
+          <ChartEmptyState isLoading />
         ) : isError ? (
           <ChartErrorState error={error} />
         ) : data?.data.length === 0 ? (
-          <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-            No data found within time range.
-          </div>
+          <ChartEmptyState />
         ) : (
           source &&
           expressions && (

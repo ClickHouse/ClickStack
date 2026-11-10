@@ -10,7 +10,7 @@ import {
   YAxis,
 } from 'recharts';
 import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
-import { Loader, Text } from '@mantine/core';
+import { Text } from '@mantine/core';
 
 import { buildMVDateRangeIndicator, INTEGER_NUMBER_FORMAT } from '@/ChartUtils';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
@@ -20,6 +20,7 @@ import { useContentFontSize } from '@/useUserPreferences';
 import { getColorFromCSSToken } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -296,19 +297,11 @@ export default function DBHistogramChart({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          <Loader size="xs" mr="xs" />
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          {isPlaceholderData && <Loader size="xs" mr="xs" />}
-          {isPlaceholderData
-            ? 'Loading Chart Data...'
-            : 'No data found within time range.'}
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <HistogramChart
           graphResults={buckets}

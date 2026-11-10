@@ -23,7 +23,7 @@ import {
   ChartConfigWithDateRange,
   DisplayType,
 } from '@hyperdx/common-utils/dist/types';
-import { Loader, Popover, Portal } from '@mantine/core';
+import { Popover, Portal } from '@mantine/core';
 import {
   IconChartAreaLine,
   IconChartBar,
@@ -65,6 +65,7 @@ import { useTimeZoneLinkParam } from '@/timeZoneOverride';
 import type { NumberFormat, TileFilterHandler } from '@/types';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -1100,10 +1101,7 @@ function DBTimeChartComponent({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          <Loader size="xs" mr="xs" />
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : resultFormattingError ? (
@@ -1116,12 +1114,7 @@ function DBTimeChartComponent({
           }
         />
       ) : graphResults.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          {isFetchingAnyPeriod && <Loader size="xs" mr="xs" />}
-          {isFetchingAnyPeriod
-            ? 'Loading Chart Data...'
-            : 'No data found within time range.'}
-        </div>
+        <ChartEmptyState isLoading={isFetchingAnyPeriod} />
       ) : (
         <>
           {/* Pinned (click-locked) tooltip; hover is handled in MemoChart. */}

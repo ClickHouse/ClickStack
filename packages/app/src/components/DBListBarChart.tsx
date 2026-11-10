@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { omit } from 'lodash';
 import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import type { FloatingPosition } from '@mantine/core';
-import { Box, Flex, HoverCard, Loader, Text } from '@mantine/core';
+import { Box, Flex, HoverCard, Text } from '@mantine/core';
 
 import { buildMVDateRangeIndicator } from '@/ChartUtils';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
@@ -13,6 +13,7 @@ import type { NumberFormat } from '@/types';
 import { formatNumber, semanticKeyedColor } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -277,19 +278,11 @@ export default function DBListBarChart({
       disableReactiveContainer
     >
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          <Loader size="xs" mr="xs" />
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          {isPlaceholderData && <Loader size="xs" mr="xs" />}
-          {isPlaceholderData
-            ? 'Loading Chart Data...'
-            : 'No data found within time range.'}
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <div className={isPlaceholderData ? 'effect-pulse' : undefined}>
           <ListBar
