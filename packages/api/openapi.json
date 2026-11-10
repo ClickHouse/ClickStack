@@ -8937,6 +8937,9 @@
           },
           "400": {
             "description": "User already exists"
+          },
+          "403": {
+            "description": "Org API keys can't invite people"
           }
         }
       }
@@ -8951,7 +8954,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Successfully retrieved invitations"
+            "description": "Successfully retrieved invitations. Invite links are left out for org API keys."
           }
         }
       }
@@ -9007,7 +9010,7 @@
             "description": "Successfully removed the member"
           },
           "400": {
-            "description": "Cannot remove yourself from the team"
+            "description": "Cannot remove yourself or the last team member"
           },
           "404": {
             "description": "Member not found"
