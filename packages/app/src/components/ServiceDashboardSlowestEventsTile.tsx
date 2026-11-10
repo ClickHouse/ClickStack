@@ -4,7 +4,7 @@ import {
   pickSampleWeightExpressionProps,
   type TTraceSource,
 } from '@hyperdx/common-utils/dist/types';
-import { Text } from '@mantine/core';
+import { Loader, Text } from '@mantine/core';
 
 import { ChartCard } from '@/components/charts/ChartCard';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
@@ -78,6 +78,7 @@ export default function SlowestEventsTile({
       >
         {isLoading && !data ? (
           <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+            <Loader size="xs" mr="xs" />
             Loading Chart Data...
           </div>
         ) : isError ? (

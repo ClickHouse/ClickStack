@@ -1,10 +1,9 @@
 import { useMemo } from 'react';
 import Link from 'next/link';
-import cx from 'classnames';
 import { omit } from 'lodash';
 import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import type { FloatingPosition } from '@mantine/core';
-import { Box, Flex, HoverCard, Text } from '@mantine/core';
+import { Box, Flex, HoverCard, Loader, Text } from '@mantine/core';
 
 import { buildMVDateRangeIndicator } from '@/ChartUtils';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
@@ -279,18 +278,17 @@ export default function DBListBarChart({
     >
       {isLoading && !data ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          <Loader size="xs" mr="xs" />
           Loading Chart Data...
         </div>
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
+        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          {isPlaceholderData && <Loader size="xs" mr="xs" />}
+          {isPlaceholderData
+            ? 'Loading Chart Data...'
+            : 'No data found within time range.'}
         </div>
       ) : (
         <div className={isPlaceholderData ? 'effect-pulse' : undefined}>

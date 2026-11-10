@@ -23,7 +23,7 @@ import {
   ChartConfigWithDateRange,
   DisplayType,
 } from '@hyperdx/common-utils/dist/types';
-import { Popover, Portal } from '@mantine/core';
+import { Loader, Popover, Portal } from '@mantine/core';
 import {
   IconChartAreaLine,
   IconChartBar,
@@ -1088,6 +1088,7 @@ function DBTimeChartComponent({
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          <Loader size="xs" mr="xs" />
           Loading Chart Data...
         </div>
       ) : isError ? (
@@ -1103,7 +1104,10 @@ function DBTimeChartComponent({
         />
       ) : graphResults.length === 0 ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          No data found within time range.
+          {isLoadingOrPlaceholder && <Loader size="xs" mr="xs" />}
+          {isLoadingOrPlaceholder
+            ? 'Loading Chart Data...'
+            : 'No data found within time range.'}
         </div>
       ) : (
         <>

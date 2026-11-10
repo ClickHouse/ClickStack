@@ -1,7 +1,6 @@
 import { memo } from 'react';
-import cx from 'classnames';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { Box, Flex, ScrollArea, Text } from '@mantine/core';
+import { Box, Flex, Loader, ScrollArea, Text } from '@mantine/core';
 
 import type { NumberFormat } from '@/types';
 import { formatNumber, truncateMiddle } from '@/utils';
@@ -106,6 +105,7 @@ export const DBPieChart = (props: CategoricalChartProps) => {
     <ChartContainer title={title} toolbarItems={toolbarItems}>
       {isLoading && !data ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          <Loader size="xs" mr="xs" />
           Loading Chart Data...
         </div>
       ) : isError && error ? (
@@ -113,13 +113,11 @@ export const DBPieChart = (props: CategoricalChartProps) => {
       ) : responseFormatError ? (
         <ChartErrorState error={responseFormatError} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
+        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          {isPlaceholderData && <Loader size="xs" mr="xs" />}
+          {isPlaceholderData
+            ? 'Loading Chart Data...'
+            : 'No data found within time range.'}
         </div>
       ) : (
         <Flex

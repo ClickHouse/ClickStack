@@ -1,5 +1,4 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import cx from 'classnames';
 import { omit } from 'lodash';
 import { useHotkeys } from 'react-hotkeys-hook';
 import {
@@ -11,7 +10,7 @@ import {
   YAxis,
 } from 'recharts';
 import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
-import { Text } from '@mantine/core';
+import { Loader, Text } from '@mantine/core';
 
 import { buildMVDateRangeIndicator, INTEGER_NUMBER_FORMAT } from '@/ChartUtils';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
@@ -298,18 +297,17 @@ export default function DBHistogramChart({
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          <Loader size="xs" mr="xs" />
           Loading Chart Data...
         </div>
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
+        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          {isPlaceholderData && <Loader size="xs" mr="xs" />}
+          {isPlaceholderData
+            ? 'Loading Chart Data...'
+            : 'No data found within time range.'}
         </div>
       ) : (
         <HistogramChart

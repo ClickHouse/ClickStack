@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from 'react';
-import cx from 'classnames';
 import { inferNumericColumn } from '@hyperdx/common-utils/dist/clickhouse';
 import { isRatioChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
@@ -12,7 +11,7 @@ import {
   ChartPaletteToken,
   ColorCondition,
 } from '@hyperdx/common-utils/dist/types';
-import { Text } from '@mantine/core';
+import { Loader, Text } from '@mantine/core';
 import { SortingState } from '@tanstack/react-table';
 
 import {
@@ -336,18 +335,17 @@ export default function DBTableChart({
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          <Loader size="xs" mr="xs" />
           Loading Chart Data...
         </div>
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
+        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          {isPlaceholderData && <Loader size="xs" mr="xs" />}
+          {isPlaceholderData
+            ? 'Loading Chart Data...'
+            : 'No data found within time range.'}
         </div>
       ) : (
         <Table

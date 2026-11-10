@@ -1,5 +1,4 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import cx from 'classnames';
 import { ErrorBoundary } from 'react-error-boundary';
 import {
   filterColumnMetaByType,
@@ -14,7 +13,7 @@ import {
   ChartConfigWithDateRange,
   resolveChartPaletteToken,
 } from '@hyperdx/common-utils/dist/types';
-import { Flex, Text } from '@mantine/core';
+import { Flex, Loader, Text } from '@mantine/core';
 
 import {
   buildMVDateRangeIndicator,
@@ -383,6 +382,7 @@ export default function DBNumberChart({
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          <Loader size="xs" mr="xs" />
           Loading Chart Data...
         </div>
       ) : isError ? (
@@ -390,13 +390,11 @@ export default function DBNumberChart({
       ) : resultError ? (
         <ChartErrorState error={resultError} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
+        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          {isPlaceholderData && <Loader size="xs" mr="xs" />}
+          {isPlaceholderData
+            ? 'Loading Chart Data...'
+            : 'No data found within time range.'}
         </div>
       ) : (
         <div

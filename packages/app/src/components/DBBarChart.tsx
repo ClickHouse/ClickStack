@@ -1,5 +1,4 @@
 import { memo } from 'react';
-import cx from 'classnames';
 import {
   Bar,
   BarChart,
@@ -9,7 +8,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Flex } from '@mantine/core';
+import { Flex, Loader } from '@mantine/core';
 
 import type { NumberFormat } from '@/types';
 import { useContentFontSize } from '@/useUserPreferences';
@@ -86,6 +85,7 @@ export const DBBarChart = (props: CategoricalChartProps) => {
     <ChartContainer title={props.title} toolbarItems={toolbarItems}>
       {isLoading && !data ? (
         <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          <Loader size="xs" mr="xs" />
           Loading Chart Data...
         </div>
       ) : isError && error ? (
@@ -96,13 +96,11 @@ export const DBBarChart = (props: CategoricalChartProps) => {
           variant={props.errorVariant}
         />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
+        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
+          {isPlaceholderData && <Loader size="xs" mr="xs" />}
+          {isPlaceholderData
+            ? 'Loading Chart Data...'
+            : 'No data found within time range.'}
         </div>
       ) : (
         <Flex
