@@ -55,6 +55,9 @@ describe('selectorMetricName', () => {
     );
     expect(selectorMetricName('{job="x", __name__="up"}')).toBe('up');
     expect(selectorMetricName('{__name__="up"}')).toBe('up');
+    expect(selectorMetricName(`{job=~'a|b', env!=\`x\`, __name__='up'}`)).toBe(
+      'up',
+    );
   });
 
   it('returns undefined when the selector may match several metrics', () => {
@@ -62,5 +65,8 @@ describe('selectorMetricName', () => {
     expect(selectorMetricName('{__name__=~"up|down"}')).toBeUndefined();
     expect(selectorMetricName('{__name__!="up"}')).toBeUndefined();
     expect(selectorMetricName('{job="__name__=\\"up\\""}')).toBeUndefined();
+    expect(selectorMetricName(`{job='a,__name__="up"'}`)).toBeUndefined();
+    expect(selectorMetricName('{job=`a,__name__="up"`}')).toBeUndefined();
+    expect(selectorMetricName('{__name__="a\\"b"}')).toBeUndefined();
   });
 });

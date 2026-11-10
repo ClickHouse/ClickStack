@@ -125,13 +125,18 @@ function getSeriesSelectorCondition({
   // The tags table is sorted by metric name, so `id IN (...)` alone reads every
   // tags row. When each selector names its metric, say so: same rows, but only
   // those metrics' part of the table is read.
-  const names = match.map(selectorMetricName);
-  if (names.some(n => n == null)) return ids;
-  const list = [...new Set(names as string[])].map(
-    n => chSql`${{ String: n }}`,
-  );
+  const names = match
+    .map(selectorMetricName)
+    .filter((n): n is string => n != null);
+  if (names.length < match.length) return ids;
+  const list = [...new Set(names)].map(n => chSql`${{ String: n }}`);
   return chSql`metric_name IN (${concatChSql(', ', list)}) AND ${ids}`;
 }
+
+// Whole matchers before `__name__`, so a quoted value containing
+// `__name__="x"` isn't read as one. Names that need escaping fall back.
+const NAME_MATCHER =
+  /^\s*\{(?:\s*[a-zA-Z_]\w*\s*(?:=~|!~|!=|=)\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)\s*,)*\s*__name__\s*=\s*(["'`])([a-zA-Z_:][a-zA-Z0-9_:]*)\1/;
 
 /**
  * The metric a series selector is limited to: `name{...}`, `name`, or
@@ -140,10 +145,7 @@ function getSeriesSelectorCondition({
 export function selectorMetricName(selector: string): string | undefined {
   const bare = /^\s*([a-zA-Z_:][a-zA-Z0-9_:]*)\s*(\{|$)/.exec(selector);
   if (bare) return bare[1];
-  const label = /^\s*\{(?:[^}]*,)?\s*__name__\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(
-    selector,
-  );
-  return label ? label[1] : undefined;
+  return NAME_MATCHER.exec(selector)?.[2];
 }
 
 /**
