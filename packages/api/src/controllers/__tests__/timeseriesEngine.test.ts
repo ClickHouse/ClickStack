@@ -1,6 +1,7 @@
 import {
   formatMatrixResponse,
   formatVectorResponse,
+  selectorMetricName,
 } from '@/controllers/timeseriesEngine';
 
 describe('formatMatrixResponse', () => {
@@ -43,5 +44,23 @@ describe('formatVectorResponse', () => {
       { metric: { service: 'api' }, value: [1700000000, '42'] },
       { metric: {}, value: [1700000000, '3'] },
     ]);
+  });
+});
+
+describe('selectorMetricName', () => {
+  it('reads the metric name of a bare or braced selector', () => {
+    expect(selectorMetricName('up')).toBe('up');
+    expect(selectorMetricName(' node_cpu:rate5m{job="x"}')).toBe(
+      'node_cpu:rate5m',
+    );
+    expect(selectorMetricName('{job="x", __name__="up"}')).toBe('up');
+    expect(selectorMetricName('{__name__="up"}')).toBe('up');
+  });
+
+  it('returns undefined when the selector may match several metrics', () => {
+    expect(selectorMetricName('{job="x"}')).toBeUndefined();
+    expect(selectorMetricName('{__name__=~"up|down"}')).toBeUndefined();
+    expect(selectorMetricName('{__name__!="up"}')).toBeUndefined();
+    expect(selectorMetricName('{job="__name__=\\"up\\""}')).toBeUndefined();
   });
 });
