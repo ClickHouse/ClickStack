@@ -446,6 +446,39 @@ function usePersonalPinnedFilters(sourceId: string | null) {
   return { filters, fields, setFilters, setFields };
 }
 
+/**
+ * Pinned fields the user collapsed, per source, so they stay collapsed on the
+ * next load instead of always opening. Personal (localStorage), like the
+ * other expanded/collapsed states of the filters sidebar.
+ */
+export function useCollapsedPinnedFields(sourceId: string | null) {
+  const [collapsed, setCollapsed] = useLocalStorage<{
+    [sourceId: string]: string[];
+  }>('hdx-collapsed-pinned-fields', {});
+
+  const isPinnedFieldCollapsed = useCallback(
+    (field: string) =>
+      sourceId != null && (collapsed[sourceId] ?? []).includes(field),
+    [collapsed, sourceId],
+  );
+
+  const setPinnedFieldCollapsed = useCallback(
+    (field: string, isCollapsed: boolean) => {
+      if (!sourceId) return;
+      setCollapsed(prev => {
+        const fields = (prev[sourceId] ?? []).filter(f => f !== field);
+        return {
+          ...prev,
+          [sourceId]: isCollapsed ? [...fields, field] : fields,
+        };
+      });
+    },
+    [sourceId, setCollapsed],
+  );
+
+  return { isPinnedFieldCollapsed, setPinnedFieldCollapsed };
+}
+
 export function usePinnedFilters(sourceId: string | null) {
   // Personal pins: localStorage (per-user, per-browser)
   const personal = usePersonalPinnedFilters(sourceId);

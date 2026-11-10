@@ -65,6 +65,7 @@ import { usePinnedFiltersApi } from '@/pinnedFilters';
 import {
   FilterStateHook,
   IS_ROOT_SPAN_COLUMN_NAME,
+  useCollapsedPinnedFields,
   usePinnedFilters,
 } from '@/searchFilters';
 import { useSource } from '@/source';
@@ -1172,6 +1173,8 @@ const DBSearchPageFiltersComponent = ({
     hasPersonalPins,
     hasSharedPins,
   } = usePinnedFilters(sourceId ?? null);
+  const { isPinnedFieldCollapsed, setPinnedFieldCollapsed } =
+    useCollapsedPinnedFields(sourceId ?? null);
   const { data: pinnedFiltersApiData } = usePinnedFiltersApi(sourceId ?? null);
   const [isSharedFiltersVisible, setSharedFiltersVisible] = useLocalStorage(
     'hdx-shared-filters-visible',
@@ -1504,6 +1507,8 @@ const DBSearchPageFiltersComponent = ({
       const { keyPrefix = '', isDefaultExpanded: forceExpanded } =
         options ?? {};
       const { grouped, nonGrouped } = groupFacetsByBaseName(facets);
+      const isFieldPinnedAny = (key: string) =>
+        isFieldPinned(key) || isSharedFieldPinned(key);
 
       const makeValuePins = (key: string): ValuePinHandlers => ({
         onPinClick: (value: string | boolean) => toggleFilterPin(key, value),
@@ -1641,17 +1646,32 @@ const DBSearchPageFiltersComponent = ({
                 hasLoadedMore={extraFacetKeys.has(facet.key)}
                 isDefaultExpanded={(() => {
                   const entry = getFilterStateEntry(filterState, facet.key);
+                  const hasSelection =
+                    entry != null &&
+                    (entry.included.size > 0 ||
+                      entry.excluded.size > 0 ||
+                      entry.range != null);
+                  // A pinned field the user collapsed stays collapsed, unless
+                  // it has an active filter.
+                  if (
+                    !hasSelection &&
+                    isFieldPinnedAny(facet.key) &&
+                    isPinnedFieldCollapsed(facet.key)
+                  ) {
+                    return false;
+                  }
                   return (
                     forceExpanded ??
                     (isFieldPrimary(tableMetadata, facet.key) ||
-                      isFieldPinned(facet.key) ||
-                      isSharedFieldPinned(facet.key) ||
-                      (entry != null &&
-                        (entry.included.size > 0 ||
-                          entry.excluded.size > 0 ||
-                          entry.range != null)))
+                      isFieldPinnedAny(facet.key) ||
+                      hasSelection)
                   );
                 })()}
+                onExpandedChange={expanded => {
+                  if (isFieldPinnedAny(facet.key)) {
+                    setPinnedFieldCollapsed(facet.key, !expanded);
+                  }
+                }}
                 chartConfig={chartConfig}
                 isLive={isLive}
                 onRangeChange={range => setFilterRange(facet.key, range)}
@@ -1673,6 +1693,8 @@ const DBSearchPageFiltersComponent = ({
       isFieldPinned,
       toggleSharedFieldPin,
       isSharedFieldPinned,
+      isPinnedFieldCollapsed,
+      setPinnedFieldCollapsed,
       onColumnToggle,
       displayedColumns,
       loadMoreFacetsForKey,
