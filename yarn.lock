@@ -3287,9 +3287,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@clickhouse/clickstack-browser@npm:^1.2.0":
-  version: 1.2.0
-  resolution: "@clickhouse/clickstack-browser@npm:1.2.0"
+"@clickhouse/clickstack-browser@npm:^1.2.1":
+  version: 1.2.1
+  resolution: "@clickhouse/clickstack-browser@npm:1.2.1"
   dependencies:
     "@opentelemetry/api-logs": "npm:^0.223.0"
     "@opentelemetry/browser-instrumentation": "npm:^0.9.0"
@@ -3304,7 +3304,7 @@ __metadata:
   peerDependencies:
     "@opentelemetry/api": ">=1.9.1 <1.10.0"
     "@opentelemetry/browser-sdk": ^0.6.0
-  checksum: 10c0/794386d9d3675bd350d977ab5c6c7f4375313221fcf72911d6259683a61a28658c1393ab2ba615e45e589b55bd3774bc4661421b02c3d6a7c084940fcd85bc72
+  checksum: 10c0/0cd745d118b16faee1399c0d5577f75fde042b9714daaa0cbbc76ab607660364e830c72322f9327d88b0cdc1d517bd5d4e223263019285f8f8bab046b93eb64f
   languageName: node
   linkType: hard
 
@@ -4820,7 +4820,7 @@ __metadata:
     migrate-mongo: "npm:^11.0.0"
     minimist: "npm:^1.2.7"
     mongodb: "npm:^6.15.0"
-    mongoose: "npm:^6.13.10"
+    mongoose: "npm:^6.13.12"
     ms: "npm:^2.1.3"
     nodemon: "npm:^2.0.20"
     on-headers: "npm:^1.1.0"
@@ -4855,7 +4855,7 @@ __metadata:
   dependencies:
     "@chromatic-com/storybook": "npm:^4.1.3"
     "@clickhouse/click-ui": "npm:^0.12.0"
-    "@clickhouse/clickstack-browser": "npm:^1.2.0"
+    "@clickhouse/clickstack-browser": "npm:^1.2.1"
     "@clickhouse/clickstack-node": "npm:^1.0.2"
     "@codemirror/autocomplete": "npm:^6.0.0"
     "@codemirror/lang-json": "npm:^6.0.1"
@@ -23455,18 +23455,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"mongoose@npm:^6.13.10":
-  version: 6.13.10
-  resolution: "mongoose@npm:6.13.10"
+"mongoose@npm:^6.13.12":
+  version: 6.13.12
+  resolution: "mongoose@npm:6.13.12"
   dependencies:
     bson: "npm:^4.7.2"
     kareem: "npm:2.5.1"
     mongodb: "npm:4.17.2"
     mpath: "npm:0.9.0"
-    mquery: "npm:4.0.3"
+    mquery: "npm:4.0.4"
     ms: "npm:2.1.3"
     sift: "npm:16.0.1"
-  checksum: 10c0/87b28f1535c0250b5fb23e0d8c8da3f36be2942b383a9e2513cd4a88ee75028ebca31c4d9f3b81e8f8381ece518bc8fe41fd41c2da5a36943119a2f8b4a34f4a
+  checksum: 10c0/07d7ca1c146475408fc79cd90afb89a6ea4da9fcbb1eddda7cb19e7cc81a7be3fa3f580ffc45938b22e3fa47c7f52c7c527ce3df265adac9a80d47d0f7e0c08d
   languageName: node
   linkType: hard
 
@@ -23484,12 +23484,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"mquery@npm:4.0.3":
-  version: 4.0.3
-  resolution: "mquery@npm:4.0.3"
+"mquery@npm:4.0.4":
+  version: 4.0.4
+  resolution: "mquery@npm:4.0.4"
   dependencies:
     debug: "npm:4.x"
-  checksum: 10c0/771eb00466f2c1a1342737fa0379d50c21bb6c09545d6fa4488a81c096a62548ec2080d53e5ead57c8e19f7354d3315e2403878abfb5a6bc8f3e732236874374
+  checksum: 10c0/fe9eb6920768343d3f66aa864f3928856483491e10e13a86f8dbf25c0c4551522061d6966e24023282258feedea2df1669051258aa11b80601298f701b732d0b
   languageName: node
   linkType: hard
 

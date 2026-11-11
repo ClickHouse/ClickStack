@@ -30,19 +30,12 @@ import { fetchTileData } from '@/shared/tileQuery';
 import { renderTileContent } from '@/shared/tileRender';
 import { clearSession, loadSession, setActiveTeam } from '@/utils/config';
 import { parseTimeValue } from '@/utils/editor';
+import { isValidUrl } from '@/utils/url';
 import { uploadSourcemaps } from '@/sourcemaps';
+import { mcpClients } from '@/mcp/install';
+import McpInstallPrompt, { type InstallResult } from '@/mcp/McpInstallPrompt';
 
 // ---- Standalone interactive login for `hdx auth login` -------------
-
-/** Returns true if the string is a valid HTTP(S) URL. */
-function isValidUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
 
 // Add new login methods here to extend the login flow.
 const LOGIN_METHODS = [
@@ -546,6 +539,68 @@ function resolveActiveTeam(
   }
   return me.team ?? null;
 }
+
+// ---- MCP -----------------------------------------------------------
+
+const mcp = program
+  .command('mcp')
+  .description('Connect AI agents to ClickStack over MCP')
+  .enablePositionalOptions()
+  .passThroughOptions();
+
+mcp
+  .command('install')
+  .description(
+    'Add the ClickStack MCP server to Claude Code, Codex, Cursor, and VS Code',
+  )
+  .option('-a, --app-url <url>', 'ClickStack app URL')
+  .action(async opts => {
+    if (!process.stdin.isTTY) {
+      _origError(
+        chalk.red(
+          'hdx mcp install needs an interactive terminal so the key stays out of logs and agent chats. Run it yourself in a terminal.\n',
+        ),
+      );
+      process.exit(1);
+    }
+    const clients = mcpClients().filter(c => c.detect());
+    if (clients.length === 0) {
+      _origError(
+        chalk.red(
+          'No supported agent found (Claude Code, Codex, Cursor, VS Code).\n',
+        ),
+      );
+      process.exit(1);
+    }
+
+    let results: InstallResult[] | null = null;
+    const { waitUntilExit } = render(
+      <McpInstallPrompt
+        initialAppUrl={resolveServer(opts.appUrl)}
+        clients={clients}
+        onDone={r => {
+          results = r;
+        }}
+      />,
+    );
+    await waitUntilExit();
+
+    const done = results as InstallResult[] | null;
+    if (done == null) {
+      process.stdout.write('Cancelled. No configs were changed.\n');
+      return;
+    }
+    for (const { client, error } of done) {
+      process.stdout.write(
+        error
+          ? chalk.red(`✗ ${client.label}: ${error}\n`)
+          : chalk.green(`✓ ${client.label}`) +
+              chalk.dim(` (key stored in ${client.location})\n`),
+      );
+    }
+    process.stdout.write('Restart your agents to pick up the new server.\n');
+    if (done.some(r => r.error)) process.exit(1);
+  });
 
 // ---- Teams ---------------------------------------------------------
 

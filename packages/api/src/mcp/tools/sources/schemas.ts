@@ -28,26 +28,31 @@ const KIND_DESCRIPTION =
 // Advanced nested config, modeled loosely (SourceSchemaNoId does the strict
 // validation) so it round-trips through describe_source -> save_source.
 // Granularity fields use the internal "<n> <unit>" form (e.g. "5 minute").
-const highlightedAttributeExpressionsSchema = z.array(
-  z.object({
-    sqlExpression: z
-      .string()
-      .describe(
-        "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
-      ),
-    luceneExpression: z
-      .string()
-      .optional()
-      .describe(
-        'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
-          'When set, it is used when searching for this attribute value.',
-      ),
-    alias: z
-      .string()
-      .optional()
-      .describe('Display name for the attribute (rendered as AS <alias>).'),
-  }),
-);
+//
+// A factory, not a shared constant: zod-to-json-schema emits a reused schema
+// instance as a bare `$ref` to its first use, and MCP directory validators
+// flag that property as untyped.
+const highlightedAttributeExpressionsSchema = () =>
+  z.array(
+    z.object({
+      sqlExpression: z
+        .string()
+        .describe(
+          "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
+        ),
+      luceneExpression: z
+        .string()
+        .optional()
+        .describe(
+          'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
+            'When set, it is used when searching for this attribute value.',
+        ),
+      alias: z
+        .string()
+        .optional()
+        .describe('Display name for the attribute (rendered as AS <alias>).'),
+    }),
+  );
 
 const aggregatedColumnSchema = z.object({
   sourceColumn: z
@@ -377,13 +382,13 @@ const mcpSaveSourceSchema = z.object({
     ),
 
   // ── Highlighted attribute expressions (advanced) ──
-  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Trace-level attributes displayed in the trace ' +
         'view for the selected trace.',
     ),
-  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Row-level attributes displayed in the row side ' +
