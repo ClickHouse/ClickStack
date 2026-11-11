@@ -726,6 +726,10 @@ export default function EditTimeChartForm({
   // type could have been switched to one that drops it since it was added.
   const handleSaveAlert = useCallback(
     (form: ChartEditorFormState) => {
+      if (!beforeSave(form)) {
+        return;
+      }
+
       const { errors, config } = validateAndNormalize(form);
       if (errors.length > 0) {
         notifications.show({
@@ -751,7 +755,7 @@ export default function EditTimeChartForm({
 
       onSaveAlert?.(config);
     },
-    [validateAndNormalize, onSaveAlert],
+    [beforeSave, validateAndNormalize, onSaveAlert],
   );
 
   // The edit-alert modal requires the alert and saves it by saving the chart,

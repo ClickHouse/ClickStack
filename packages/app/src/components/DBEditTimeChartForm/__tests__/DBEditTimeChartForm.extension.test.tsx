@@ -331,6 +331,30 @@ describe('DBEditTimeChartForm with an alert UI extension', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it('does not save an inline alert when beforeSave returns false', async () => {
+    mockUseChartEditor.mockReturnValue({ beforeSave: blockSave });
+    const onSaveAlert = jest.fn();
+    renderComponent({
+      chartConfig: {
+        ...defaultChartConfig,
+        displayType: DisplayType.Number,
+        select: [series],
+        alert: {
+          ...DEFAULT_TILE_ALERT,
+          channels: [{ type: 'webhook', webhookId: 'hook-1' }],
+        },
+      },
+      enableAlerts: true,
+      onSaveAlert,
+    });
+
+    await userEvent.click(screen.getByTestId('alert-button'));
+    await userEvent.click(screen.getByTestId('chart-save-alert-button'));
+
+    await waitFor(() => expect(blockSave).toHaveBeenCalledTimes(1));
+    expect(onSaveAlert).not.toHaveBeenCalled();
+  });
+
   it('saves the alert normalizeAlert returns', async () => {
     mockUseChartEditor.mockReturnValue({ normalizeAlert: raiseThreshold });
     const onSave = jest.fn();
