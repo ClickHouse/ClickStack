@@ -161,6 +161,68 @@ describe('DBTimeChart', () => {
     expect(secondCallOptions.enabled).toBe(false);
   });
 
+  describe('empty state', () => {
+    const emptyResult = {
+      data: {
+        data: [],
+        meta: [
+          { name: 'timestamp', type: 'DateTime' },
+          { name: 'value', type: 'UInt64' },
+        ],
+        rows: 0,
+        isComplete: true,
+      },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      isPlaceholderData: false,
+    };
+    // Zero-filled buckets would otherwise render an empty line, not the empty state.
+    const emptyConfig = { ...baseTestConfig, fillNulls: false as const };
+    const isPreviousPeriod = (config: { dateRange: [Date, Date] }) =>
+      config.dateRange[0] < baseTestConfig.dateRange[0];
+
+    it('shows loading while the query is still fetching', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        ...emptyResult,
+        data: { ...emptyResult.data, isComplete: false },
+        isFetching: true,
+      });
+
+      renderWithMantine(<DBTimeChart config={emptyConfig} />);
+
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+    });
+
+    it('shows no data when the previous-period query fails', () => {
+      mockUseQueriedChartConfig.mockImplementation(config =>
+        isPreviousPeriod(config)
+          ? {
+              data: undefined,
+              isLoading: false,
+              isFetching: false,
+              isError: true,
+              error: new Error('previous period failed'),
+              isSuccess: false,
+              isPlaceholderData: false,
+            }
+          : emptyResult,
+      );
+
+      renderWithMantine(
+        <DBTimeChart
+          config={{ ...emptyConfig, compareToPreviousPeriod: true }}
+        />,
+      );
+
+      expect(
+        screen.getByText('No data found within time range.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading Chart Data...')).toBeNull();
+    });
+  });
+
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
     jest.mocked(useSource).mockReturnValue({
