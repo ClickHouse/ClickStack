@@ -3,6 +3,7 @@ import { AlertThresholdType } from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
 
 import { ChartPreviewPanel } from '@/components/DBEditTimeChartForm/ChartPreviewPanel';
+import { DEFAULT_TILE_ALERT } from '@/utils/alerts';
 
 const mockUseTimeChartPreview = jest.fn();
 jest.mock('@/extensions', () => ({
@@ -41,10 +42,9 @@ const config = {
   dateRange,
 };
 const alert = {
+  ...DEFAULT_TILE_ALERT,
   threshold: 5,
   thresholdType: AlertThresholdType.ABOVE,
-  interval: '5m' as const,
-  channels: [],
 };
 
 const renderPanel = () =>
@@ -60,8 +60,7 @@ const renderPanel = () =>
       onSubmit={jest.fn()}
       queriedConfig={config}
       dbTimeChartConfig={config}
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the preview reads only these alert fields
-      alert={alert as React.ComponentProps<typeof ChartPreviewPanel>['alert']}
+      alert={alert}
     />,
   );
 
