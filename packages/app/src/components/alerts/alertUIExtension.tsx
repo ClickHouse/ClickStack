@@ -5,7 +5,10 @@ import {
   UseFormSetValue,
   UseFormWatch,
 } from 'react-hook-form';
-import { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
+import {
+  BuilderSavedChartConfig,
+  ChartConfigWithDateRange,
+} from '@hyperdx/common-utils/dist/types';
 
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
 import type { DBTimeChart } from '@/components/DBTimeChart';
@@ -13,6 +16,7 @@ import { alertUIExtension } from '@/extensions';
 import { TILE_ALERT_INTERVAL_OPTIONS } from '@/utils/alerts';
 
 type ChartEditorAlert = NonNullable<ChartEditorFormState['alert']>;
+type SavedBuilderAlert = BuilderSavedChartConfig['alert'];
 
 /** Pieces of the alert condition row an extension can supply.
  * @public For extension implementations. */
@@ -25,6 +29,9 @@ export type AlertConditionUI = {
   conditionLabel?: ReactNode;
   /** Replaces "over" before the interval. */
   intervalLabel?: ReactNode;
+  /** Narrows the interval choices. The extension must also move
+   * `alert.interval` into these options when they change; the editor does not
+   * reset it. */
   intervalOptions?: Partial<typeof TILE_ALERT_INTERVAL_OPTIONS>;
   /** Below the condition row. */
   footer?: ReactNode;
@@ -37,7 +44,13 @@ export type AlertTimeChartPreviewUI = {
   config?: ChartConfigWithDateRange;
   /** Hides the threshold reference lines. */
   hideThresholdLines?: boolean;
-  timeChartProps?: Partial<ComponentProps<typeof DBTimeChart>>;
+  /** Set the config and threshold lines through the fields above. */
+  timeChartProps?: Partial<
+    Omit<
+      ComponentProps<typeof DBTimeChart>,
+      'config' | 'referenceLines' | 'referenceLineValues'
+    >
+  >;
   /** Below the chart. */
   footer?: ReactNode;
 };
@@ -48,7 +61,7 @@ export type AlertChartEditorUI = {
   /** Return false to stop a save; show the reason to the user yourself. */
   beforeSave?: (form: ChartEditorFormState) => boolean;
   /** Applied to the alert of a saved builder chart. */
-  normalizeAlert?: <T>(alert: T) => T;
+  normalizeAlert?: (alert: SavedBuilderAlert) => SavedBuilderAlert;
 };
 
 /**
@@ -78,7 +91,7 @@ export type AlertUIExtension = {
 
 const useNone = () => ({});
 const allowSave = () => true;
-const keepAlert = <T,>(alert: T) => alert;
+const keepAlert = (alert: SavedBuilderAlert) => alert;
 
 // Resolved once: `@/extensions` is static, so each hook is the same function
 // on every render.

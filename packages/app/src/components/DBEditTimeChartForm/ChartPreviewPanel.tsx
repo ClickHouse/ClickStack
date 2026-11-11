@@ -336,9 +336,12 @@ export function ChartPreviewPanel({
             showDateRangeIndicator={false}
             {...alertPreview.timeChartProps}
           />
-          {alertPreview.footer}
         </div>
       )}
+      {queryReady &&
+        dbTimeChartConfig != null &&
+        activeTab === 'time' &&
+        alertPreview.footer}
       {queryReady && queriedConfig != null && activeTab === 'pie' && (
         <div className="flex-grow-1 d-flex flex-column" style={{ height: 400 }}>
           <DBPieChart
