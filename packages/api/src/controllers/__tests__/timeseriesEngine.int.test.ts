@@ -192,6 +192,15 @@ describe('timeseriesEngine controller', () => {
         ).toEqual(['api']);
       });
 
+      it('reads a quoted metric name', async () => {
+        expect(
+          await labelValues({
+            labelName: 'job',
+            match: ['{"recent_metric", "job"="api"}'],
+          }),
+        ).toEqual(['api']);
+      });
+
       // Prometheus unions the selectors rather than intersecting them.
       it('unions the series matched by each selector', async () => {
         expect(
