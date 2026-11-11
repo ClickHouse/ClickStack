@@ -18,9 +18,10 @@ import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';
 import { getSource } from '@/controllers/sources';
 import {
-  connectionSupportsPrometheusHttpApi,
+  connectionPrometheusHttpApiSupport,
   PROMETHEUS_MAX_EXECUTION_SEC,
   PROMETHEUS_MAX_RESULT_ROWS,
+  type PrometheusHttpApiSupport,
   queryInstantViaTableFunction,
   queryLabelNames,
   queryLabelValues,
@@ -486,11 +487,17 @@ export function clearBackendProbeCache(): void {
 /** The probe could not tell, so its outcome must not be kept. */
 class InconclusiveProbeError extends Error {}
 
+const NO_PROMETHEUS_HTTP_API: PrometheusHttpApiSupport = {
+  query: false,
+  labels: false,
+};
+
 /**
- * Asks a ClickHouse connection whether it answers PromQL over HTTP. Two
- * conditions, cheapest first: the server is new enough (26.6+), and the
- * prometheus_api_v1 handler is actually configured — a self-managed server
- * needs an `<http_handlers>` rule for that, which a stock install lacks. The
+ * Asks a ClickHouse connection which parts of the Prometheus HTTP API it
+ * serves. Two conditions, cheapest first: the server is new enough (26.6+ for
+ * queries, 26.9+ for label lookups), and the prometheus_api_v1 handler is
+ * actually configured — a self-managed server needs an `<http_handlers>` rule
+ * for that, which a stock install lacks. The
  * handler answers every request, error or not, with Prometheus JSON
  * (`{status, ...}`); a server without it answers a plain-text 404.
  * `format_query` is used as the probe because it is the one endpoint that
@@ -504,13 +511,13 @@ class InconclusiveProbeError extends Error {}
 async function probePrometheusHttpApi(
   client: ClickhouseClient,
   connection: { id: string; host: string; username: string; password?: string },
-): Promise<boolean> {
-  const supported = await connectionSupportsPrometheusHttpApi({
+): Promise<PrometheusHttpApiSupport> {
+  const supported = await connectionPrometheusHttpApiSupport({
     client,
     connectionId: connection.id,
   });
   if (supported === undefined) throw new InconclusiveProbeError();
-  if (!supported) return false;
+  if (!supported.query) return NO_PROMETHEUS_HTTP_API;
 
   let status: number;
   let text: string;
@@ -531,27 +538,27 @@ async function probePrometheusHttpApi(
     throw new InconclusiveProbeError();
   }
 
-  if (typeof parseJSON(text)?.status === 'string') return true;
-  if (status === 404) return false;
+  if (typeof parseJSON(text)?.status === 'string') return supported;
+  if (status === 404) return NO_PROMETHEUS_HTTP_API;
   throw new InconclusiveProbeError();
 }
 
 /**
- * Whether a ClickHouse connection answers PromQL over HTTP, keeping a
- * definitive answer for BACKEND_PROBE_TTL_MS so each query does not pay for a
- * `SELECT version()` and a probe request first. Keyed on the host as well as
- * the connection, so editing a connection's host drops its answer. Concurrent
- * callers share one probe. An inconclusive probe is answered "no" for this
- * request only.
+ * Which parts of the Prometheus HTTP API a ClickHouse connection serves,
+ * keeping a definitive answer for BACKEND_PROBE_TTL_MS so each request does
+ * not pay for a `SELECT version()` and a probe request first. Keyed on the
+ * host as well as the connection, so editing a connection's host drops its
+ * answer. Concurrent callers share one probe. An inconclusive probe is
+ * answered "none" for this request only.
  */
-async function clickhouseServesPrometheusHttpApi(
+async function prometheusHttpApiSupport(
   client: ClickhouseClient,
   connection: { id: string; host: string; username: string; password?: string },
-): Promise<boolean> {
+): Promise<PrometheusHttpApiSupport> {
   const key = `${connection.id}|${connection.host}`;
   const span = trace.getActiveSpan();
 
-  const kept = backendProbeCache.get<boolean>(key);
+  const kept = backendProbeCache.get<PrometheusHttpApiSupport>(key);
   if (kept !== undefined) {
     span?.setAttribute('hyperdx.promql.backend_probe', 'cached');
     return kept;
@@ -567,7 +574,7 @@ async function clickhouseServesPrometheusHttpApi(
     return served;
   } catch {
     span?.setAttribute('hyperdx.promql.backend_probe', 'inconclusive');
-    return false;
+    return NO_PROMETHEUS_HTTP_API;
   }
 }
 
@@ -586,10 +593,11 @@ export async function connectionServesPrometheusHttpApi(connection: {
   isPrometheusEndpoint?: boolean;
 }): Promise<boolean> {
   if (connection.isPrometheusEndpoint) return false;
-  return clickhouseServesPrometheusHttpApi(
+  const support = await prometheusHttpApiSupport(
     newPromqlClickhouseClient(connection),
     connection,
   );
+  return support.query;
 }
 
 type ClickhouseQueryBackend =
@@ -631,7 +639,7 @@ export async function resolveClickhouseQueryBackend({
 
   let useHttpApi: boolean;
   if (promqlBackend === 'auto') {
-    useHttpApi = await clickhouseServesPrometheusHttpApi(client, connection);
+    useHttpApi = (await prometheusHttpApiSupport(client, connection)).query;
   } else {
     span?.setAttribute('hyperdx.promql.backend_probe', 'skipped');
     useHttpApi = promqlBackend === 'clickhouse-http';
@@ -655,6 +663,36 @@ export async function resolveClickhouseQueryBackend({
     databaseName,
     tableName,
   };
+}
+
+/**
+ * How to answer a label lookup (`/labels`, `/label/<name>/values`) on a
+ * ClickHouse target: through the Prometheus HTTP API, or with SQL against the
+ * tags table. The handler serves label lookups only from 26.9, three releases
+ * after it serves queries, so a source on the HTTP API reads labels with SQL
+ * on 26.6-26.8 rather than losing them. That holds for a source set to
+ * `clickhouse-http` too, so it is probed like `auto`. A source set to
+ * `table-function` reads them with SQL, with no probe.
+ */
+export async function resolveClickhouseLabelBackend({
+  connection,
+  promqlBackend = 'auto',
+}: PromqlTarget): Promise<'clickhouse-http' | 'sql'> {
+  const span = trace.getActiveSpan();
+  span?.setAttribute('hyperdx.promql.backend_setting', promqlBackend);
+
+  let labelBackend: 'clickhouse-http' | 'sql' = 'sql';
+  if (promqlBackend === 'table-function') {
+    span?.setAttribute('hyperdx.promql.backend_probe', 'skipped');
+  } else {
+    const support = await prometheusHttpApiSupport(
+      newPromqlClickhouseClient(connection),
+      connection,
+    );
+    if (support.labels) labelBackend = 'clickhouse-http';
+  }
+  span?.setAttribute('hyperdx.promql.label_backend', labelBackend);
+  return labelBackend;
 }
 
 /** How to evaluate PromQL on a target. Probes ClickHouse targets for the HTTP API. */

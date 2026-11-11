@@ -3,7 +3,10 @@ import {
   chSql,
   concatChSql,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { supportsPrometheusHttpApi } from '@hyperdx/common-utils/dist/core/clickhouseVersion';
+import {
+  supportsPrometheusHttpApi,
+  supportsPrometheusLabelsApi,
+} from '@hyperdx/common-utils/dist/core/clickhouseVersion';
 import {
   Metadata,
   MetadataCache,
@@ -179,7 +182,7 @@ async function getSeriesFilterConditions({
     // that would answer a different question.
     if (timeBounds == null) {
       throw new Error(
-        'match[] requires a TimeSeries table that stores time ranges (store_time_ranges = 1, or store_min_time_and_max_time = 1 before version 8)',
+        'match[] requires a TimeSeries table that stores time ranges (store_time_ranges = 1, or store_min_time_and_max_time = 1 before version 8), or the prometheus_api_v1 HTTP handler on ClickHouse 26.9+',
       );
     }
     conditions.push(
@@ -460,19 +463,29 @@ export async function queryInstantViaTableFunction({
 }
 
 /**
- * Whether the connection's ClickHouse is new enough for the Prometheus HTTP
- * API, or `undefined` when its version could not be read. `SELECT version()`
- * runs each call (throwaway cache); callers that keep the answer decide how
- * long to.
+ * The parts of ClickHouse's Prometheus HTTP API a server can serve: queries
+ * (26.6+) and label lookups (26.9+).
  */
-export async function connectionSupportsPrometheusHttpApi({
+export type PrometheusHttpApiSupport = { query: boolean; labels: boolean };
+
+/**
+ * Which parts of the Prometheus HTTP API the connection's ClickHouse is new
+ * enough for, or `undefined` when its version could not be read.
+ * `SELECT version()` runs each call (throwaway cache); callers that keep the
+ * answer decide how long to.
+ */
+export async function connectionPrometheusHttpApiSupport({
   client,
   connectionId,
 }: {
   client: ClickhouseClient;
   connectionId: string;
-}): Promise<boolean | undefined> {
+}): Promise<PrometheusHttpApiSupport | undefined> {
   const metadata = new Metadata(client, new MetadataCache());
   const version = await metadata.getServerVersion({ connectionId });
-  return version == null ? undefined : supportsPrometheusHttpApi(version);
+  if (version == null) return undefined;
+  return {
+    query: supportsPrometheusHttpApi(version),
+    labels: supportsPrometheusLabelsApi(version),
+  };
 }
