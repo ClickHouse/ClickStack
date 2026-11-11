@@ -1537,6 +1537,24 @@ describe('Metadata', () => {
       },
     );
 
+    it('splits Map text index values into queries of at most 10 keys', async () => {
+      setupDefaultLogsSchema();
+
+      await metadata.getAllKeyValues({
+        ...baseArgs,
+        keyExpressions: Array.from(
+          { length: 25 },
+          (_, i) => `LogAttributes['key${i}']`,
+        ),
+      });
+
+      const branchCounts = (mockClickhouseClient.query as jest.Mock).mock.calls
+        .map(([opts]) => opts.query as string)
+        .filter(q => q.includes('startsWith(token,'))
+        .map(q => q.split('UNION ALL').length);
+      expect(branchCounts).toEqual([10, 10, 5]);
+    });
+
     it('routes ServiceName and SeverityText through getMetadataMVKeyValues (KV rollup MV path)', async () => {
       setupDefaultLogsSchema();
 
