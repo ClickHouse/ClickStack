@@ -1,7 +1,9 @@
-import { Box, Text } from '@mantine/core';
+import { useMemo } from 'react';
+import { Box, Button, Collapse, Group, Stack, Text } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
 
+import { simplifyPattern } from '@/components/Patterns/simplifyPattern';
 import type { DenoiseSkipReason } from '@/hooks/useDenoisedRows';
-import type { Pattern } from '@/hooks/usePatterns';
 
 function skipMessage(
   skipped: DenoiseSkipReason,
@@ -17,33 +19,90 @@ function skipMessage(
   }
 }
 
+const percent = (count: number, total: number) =>
+  `${Math.max(Math.round((count / total) * 100), 1)}%`;
+
 export function DenoiseSummary({
   noisyPatterns,
+  sampledRowCount,
   skipped,
   bodyExpression,
+  isLoading,
 }: {
-  noisyPatterns: Pick<Pattern, 'id' | 'pattern'>[];
+  noisyPatterns: { pattern: string; count: number }[];
+  sampledRowCount: number;
   skipped: DenoiseSkipReason | undefined;
   bodyExpression: string | undefined;
+  isLoading: boolean;
 }) {
+  const [opened, { toggle }] = useDisclosure(false);
+
+  // Patterns that read the same once simplified are shown once
+  const lines = useMemo(() => {
+    const byText = new Map<string, { full: string; count: number }>();
+    for (const p of noisyPatterns) {
+      const text = simplifyPattern(p.pattern);
+      const line = byText.get(text);
+      if (line) line.count += p.count;
+      else byText.set(text, { full: p.pattern, count: p.count });
+    }
+    return [...byText.entries()]
+      .map(([text, line]) => ({ text, ...line }))
+      .sort((a, b) => b.count - a.count);
+  }, [noisyPatterns]);
+
+  const hiddenCount = noisyPatterns.reduce((sum, p) => sum + p.count, 0);
+
+  let summary: string;
+  if (skipped != null) {
+    summary = skipMessage(skipped, bodyExpression);
+  } else if (isLoading) {
+    summary = 'Finding common patterns…';
+  } else if (lines.length === 0) {
+    summary = 'No common patterns to hide.';
+  } else {
+    summary =
+      `Hiding ${lines.length} common ${lines.length === 1 ? 'pattern' : 'patterns'}, ` +
+      `about ${percent(hiddenCount, sampledRowCount)} of events. ` +
+      'Errors and warnings are never hidden.';
+  }
+
+  const canExpand = skipped == null && !isLoading && lines.length > 0;
+
   return (
     <Box mb="xxs" px="sm">
-      <Text fw="bold" fz="xs" mb="xxs">
-        Removed noisy event patterns
-      </Text>
-      <Box mah={100} style={{ overflow: 'auto' }}>
-        {skipped != null ? (
-          <Text fz="xs">{skipMessage(skipped, bodyExpression)}</Text>
-        ) : noisyPatterns.length === 0 ? (
-          <Text fz="xs">No noisy patterns found</Text>
-        ) : (
-          noisyPatterns.map(p => (
-            <Text fz="xs" key={p.id}>
-              {p.pattern}
-            </Text>
-          ))
+      <Group gap="xs" wrap="nowrap">
+        <Text fz="xs" c="dimmed">
+          {summary}
+        </Text>
+        {canExpand && (
+          <Button variant="link" size="compact-xs" onClick={toggle}>
+            {opened ? 'Hide patterns' : 'Show patterns'}
+          </Button>
         )}
-      </Box>
+      </Group>
+      {canExpand && (
+        <Collapse expanded={opened}>
+          <Stack gap={2} mt={4} mah={160} style={{ overflow: 'auto' }}>
+            {lines.map(line => (
+              <Group key={line.text} gap="xs" wrap="nowrap">
+                <Text
+                  fz="xs"
+                  c="dimmed"
+                  w={32}
+                  ta="right"
+                  style={{ flexShrink: 0 }}
+                >
+                  {percent(line.count, sampledRowCount)}
+                </Text>
+                <Text fz="xs" ff="monospace" truncate="end" title={line.full}>
+                  {line.text}
+                </Text>
+              </Group>
+            ))}
+          </Stack>
+        </Collapse>
+      )}
     </Box>
   );
 }

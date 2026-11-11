@@ -9,6 +9,7 @@ import { findBodyResultColumn, useDenoisedRows } from '@/hooks/useDenoisedRows';
 import { useGroupedPatterns } from '@/hooks/usePatterns';
 
 jest.mock('@/hooks/usePatterns', () => ({
+  LEVEL_COLUMN_ALIAS: '__hdx_level',
   DRAIN_EXTRA_DELIMITERS: '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'.split(''),
   useGroupedPatterns: jest.fn(),
 }));
@@ -59,22 +60,36 @@ describe('findBodyResultColumn', () => {
   });
 });
 
+const patternQueryState = {
+  isLoading: false,
+  error: null,
+  miner: undefined,
+  patternQueryConfig: undefined,
+};
+
 describe('useDenoisedRows', () => {
   beforeEach(() => {
     mockUseGroupedPatterns.mockReturnValue({
       data: {
-        '1': { id: '1', pattern: 'info cache refreshed for <*>', count: 80 },
-        '2': { id: '2', pattern: 'user <*> logged in', count: 5 },
+        '1': {
+          id: '1',
+          pattern: 'info cache refreshed for <*>',
+          count: 80,
+          samples: [{ __hdx_level: 'info' }],
+        },
+        '2': {
+          id: '2',
+          pattern: 'user <*> logged in',
+          count: 5,
+          samples: [{ __hdx_level: 'info' }],
+        },
       },
       sampledRowCount: 100,
       clusterTemplates: {
         '1': 'info cache refreshed for <*>',
         '2': 'user <*> logged in',
       },
-      isLoading: false,
-      error: null,
-      miner: undefined,
-      patternQueryConfig: undefined,
+      ...patternQueryState,
     });
   });
 
@@ -99,6 +114,46 @@ describe('useDenoisedRows', () => {
     expect(result.current.skipped).toBeUndefined();
     expect(result.current.noisyPatterns.map(p => p.id)).toEqual(['1']);
     expect(result.current.rows).toEqual([rows[1], rows[2]]);
+  });
+
+  it('never hides a pattern with error or warning samples', () => {
+    mockUseGroupedPatterns.mockReturnValue({
+      ...patternQueryState,
+      sampledRowCount: 100,
+      data: {
+        '1': {
+          id: '1',
+          pattern: 'connection refused to <*>',
+          count: 80,
+          samples: [{ __hdx_level: 'INFO' }, { __hdx_level: 'ERROR' }],
+        },
+        '2': {
+          id: '2',
+          pattern: 'user <*> logged in',
+          count: 20,
+          samples: [{ __hdx_level: 'info' }],
+        },
+      },
+      clusterTemplates: {
+        '1': 'connection refused to <*>',
+        '2': 'user <*> logged in',
+      },
+    });
+    const rows = [
+      { Body: 'connection refused to db1' },
+      { Body: 'user bob logged in' },
+    ];
+    const { result } = renderHook(() =>
+      useDenoisedRows({
+        config: config('Timestamp, Body'),
+        source,
+        columns: ['Timestamp', 'Body'],
+        rows,
+        enabled: true,
+      }),
+    );
+    expect(result.current.noisyPatterns.map(p => p.id)).toEqual(['2']);
+    expect(result.current.rows).toEqual([rows[0]]);
   });
 
   it('skips denoising when the body is not in the results', () => {

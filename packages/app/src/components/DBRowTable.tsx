@@ -1964,6 +1964,8 @@ function DBSqlRowTableComponent({
       {denoiseResults && (
         <DenoiseSummary
           noisyPatterns={denoised.noisyPatterns}
+          sampledRowCount={denoised.sampledRowCount}
+          isLoading={denoised.isLoading}
           skipped={denoised.skipped}
           bodyExpression={denoised.bodyExpression}
         />

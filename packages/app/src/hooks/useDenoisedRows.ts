@@ -13,10 +13,18 @@ import {
 
 import {
   DRAIN_EXTRA_DELIMITERS,
+  LEVEL_COLUMN_ALIAS,
   useGroupedPatterns,
 } from '@/hooks/usePatterns';
 import { getEventBody, getLevelExpression } from '@/source';
-import { selectItemExpression } from '@/utils';
+import { getLogLevelClass, selectItemExpression } from '@/utils';
+
+function isErrorOrWarning(row: Record<string, unknown>) {
+  const level = row[LEVEL_COLUMN_ALIAS];
+  if (typeof level !== 'string') return false;
+  const levelClass = getLogLevelClass(level);
+  return levelClass === 'error' || levelClass === 'warn';
+}
 
 export type DenoiseSkipReason =
   | 'no_body_expression'
@@ -89,10 +97,14 @@ export function useDenoisedRows<TRow extends Record<string, any>>({
     skipped = 'patterns_failed';
   }
 
+  // Frequency is not importance: a flood of errors during an incident must
+  // stay visible, so patterns with any error or warning sample are kept.
   const noisyPatterns = useMemo(
     () =>
       selectNoisyPatterns(
-        Object.values(patternGroups),
+        Object.values(patternGroups).filter(
+          p => !p.samples.some(isErrorOrWarning),
+        ),
         p => p.count,
         sampledRowCount ?? 0,
       ),
@@ -129,7 +141,8 @@ export function useDenoisedRows<TRow extends Record<string, any>>({
     rows: denoisedRows,
     bodyExpression,
     noisyPatterns,
+    sampledRowCount: sampledRowCount ?? 0,
     skipped,
-    isLoading: enabled && skipped == null && groupedPatterns.isLoading,
+    isLoading: enabled && skipped == null && clusterTemplates == null,
   };
 }
