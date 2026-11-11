@@ -1,5 +1,6 @@
 import React from 'react';
-import { Divider, Group, Kbd, Modal, Stack, Text } from '@mantine/core';
+import { Separator } from '@clickhouse/click-ui';
+import { Group, Kbd, Modal, Stack, Text } from '@mantine/core';
 
 type ShortcutRow = {
   keys: readonly string[];
@@ -96,7 +97,7 @@ export const KeyboardShortcutsModal = ({
                 {label}
               </Text>
             </Group>
-            {rowIndex < SHORTCUTS.length - 1 ? <Divider /> : null}
+            {rowIndex < SHORTCUTS.length - 1 ? <Separator size="xs" /> : null}
           </React.Fragment>
         ))}
       </Stack>
