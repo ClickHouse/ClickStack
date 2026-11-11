@@ -145,7 +145,11 @@ async function globalSetup(_config: FullConfig) {
   console.log('Creating test user and logging in');
 
   const browser = await chromium.launch();
-  const context = await browser.newContext({ baseURL: APP_URL });
+  // Global setup doesn't inherit `use` from playwright.config.ts.
+  const context = await browser.newContext({
+    baseURL: APP_URL,
+    locale: 'en-US',
+  });
   const page = await context.newPage();
 
   try {

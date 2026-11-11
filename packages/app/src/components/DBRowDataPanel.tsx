@@ -8,7 +8,8 @@ import {
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { Box } from '@mantine/core';
+import { Box, Center, Loader } from '@mantine/core';
+import type { Query } from '@tanstack/react-query';
 
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import {
@@ -23,6 +24,7 @@ import {
   getDurationMsExpression,
   getEventBody,
 } from '@/source';
+import type { ChartQueryResult } from '@/types';
 import { getSelectExpressionsForHighlightedAttributes } from '@/utils/highlightedAttributes';
 import { getTimestampValueSelects } from '@/utils/rowTimestamps';
 
@@ -46,6 +48,14 @@ export enum ROW_DATA_ALIASES {
   SPAN_KIND = '__hdx_span_kind',
   SPAN_LINKS = '__hdx_span_links',
   EVENT_NAME = '__hdx_event_name',
+}
+
+// The side panel mounts its tabs once its own lookup settles, and each tab
+// looks the same row up again. Those lookups reuse a found row instead of
+// running `SELECT *` again. A miss stays stale so the next lookup retries it:
+// the row may not have been ingested yet.
+function rowLookupStaleTime(query: Query<ChartQueryResult>) {
+  return query.state.data?.data.length ? Infinity : 0;
 }
 
 export function useRowData({
@@ -289,6 +299,7 @@ export function useRowData({
       queryKey: [...baseQueryKey, dateRange],
       enabled: rowId != null && hasWindow && !isEventNameColumnPending,
       additionalQuerySettings,
+      staleTime: rowLookupStaleTime,
     },
   );
 
@@ -310,6 +321,7 @@ export function useRowData({
     queryKey: [...baseQueryKey, undefined],
     enabled: rowId != null && isFallbackActive && !isEventNameColumnPending,
     additionalQuerySettings,
+    staleTime: rowLookupStaleTime,
   });
 
   const queryResult = isFallbackActive ? fallbackResult : boundedResult;
@@ -419,6 +431,18 @@ export function getMapColumnNames(meta: ResponseJSON['meta'] | undefined) {
   );
 }
 
+export function RowPanelLoader({
+  'data-testid': dataTestId,
+}: {
+  'data-testid'?: string;
+}) {
+  return (
+    <Center py="xl" data-testid={dataTestId}>
+      <Loader size="sm" aria-label="Loading row" />
+    </Center>
+  );
+}
+
 export function RowDataPanel({
   source,
   rowId,
@@ -436,7 +460,12 @@ export function RowDataPanel({
   flush?: boolean;
   'data-testid'?: string;
 }) {
-  const { data } = useRowData({ source, rowId, aliasWith, dateRange });
+  const { data, isLoading } = useRowData({
+    source,
+    rowId,
+    aliasWith,
+    dateRange,
+  });
 
   const firstRow = useMemo(() => {
     const firstRow = { ...(data?.data?.[0] ?? {}) };
@@ -448,6 +477,10 @@ export function RowDataPanel({
 
   const jsonColumns = getJSONColumnNames(data?.meta);
   const mapColumns = getMapColumnNames(data?.meta);
+
+  if (isLoading) {
+    return <RowPanelLoader data-testid={dataTestId} />;
+  }
 
   return (
     <div className="flex-grow-1 overflow-auto" data-testid={dataTestId}>

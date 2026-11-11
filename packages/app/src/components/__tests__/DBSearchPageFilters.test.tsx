@@ -6,6 +6,7 @@ import {
   cleanedFacetName,
   FilterGroup,
   type FilterGroupProps,
+  getFilterGroupDefaultExpanded,
 } from '@/components/DBSearchPageFilters';
 import { NestedFilterGroup } from '@/components/DBSearchPageFilters/NestedFilterGroup';
 import {
@@ -845,7 +846,7 @@ describe('FilterGroup', () => {
     expect(screen.getAllByTestId(/filter-checkbox-.+-input/)).toHaveLength(3);
   });
 
-  // https://github.com/hyperdxio/hyperdx/issues/2576 — an empty map attribute
+  // https://github.com/ClickHouse/ClickStack/issues/2576 — an empty map attribute
   // key (e.g. LogAttributes['']) yields an empty name, which Mantine rejects
   // as an Accordion.Item value and crashes the filter panel.
   it('should render a placeholder instead of crashing when name is empty', () => {
@@ -1147,5 +1148,62 @@ describe('NestedFilterGroup', () => {
 
     expect(screen.getByText('No properties found')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Search keys...')).toBeInTheDocument();
+  });
+});
+
+describe('getFilterGroupDefaultExpanded', () => {
+  const base = {
+    hasSelection: false,
+    isPinned: false,
+    isCollapsed: false,
+    isPrimary: false,
+  };
+
+  it('opens a pinned field by default', () => {
+    expect(getFilterGroupDefaultExpanded({ ...base, isPinned: true })).toBe(
+      true,
+    );
+  });
+
+  it('keeps a pinned field the user collapsed closed', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('still opens a collapsed pinned field that has an active filter', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+        hasSelection: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps it closed in the Shared Filters section, which forces groups open', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+        forceExpanded: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('ignores a stale collapsed entry once the field is no longer pinned', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isCollapsed: true,
+        isPrimary: true,
+      }),
+    ).toBe(true);
   });
 });

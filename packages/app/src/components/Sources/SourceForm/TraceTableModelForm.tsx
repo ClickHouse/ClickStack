@@ -1,11 +1,12 @@
 import { Controller, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
-import { Box, Divider, Slider, Stack } from '@mantine/core';
+import { Box, Slider, Stack } from '@mantine/core';
 
+import { useBrandDisplayName } from '@/brand';
 import { SourceSelectControlled } from '@/components/SourceSelect';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { useColumns } from '@/hooks/useMetadata';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 
 import {
   DEFAULT_DATABASE,
@@ -74,7 +75,7 @@ export function TraceTableModelForm(props: TableModelProps) {
           placeholder="Timestamp, ServiceName, StatusCode, Duration, SpanName"
         />
       </FormRow>
-      <Divider />
+      <Separator size="xs" />
       <FormRow label={'Duration Expression'}>
         <SQLInlineEditorControlled
           tableConnection={{
@@ -222,7 +223,7 @@ export function TraceTableModelForm(props: TableModelProps) {
           placeholder="SpanKind"
         />
       </FormRow>
-      <Divider />
+      <Separator size="xs" />
       <FormRow
         label={'Correlated Log Source'}
         helpText={`${brandName} Source for logs associated with traces. Optional`}
@@ -394,7 +395,7 @@ export function TraceTableModelForm(props: TableModelProps) {
           disableKeywordAutocomplete
         />
       </FormRow>
-      <Divider />
+      <Separator size="xs" />
       <HighlightedAttributeExpressionsFormRow
         {...props}
         name="highlightedRowAttributeExpressions"
@@ -407,11 +408,11 @@ export function TraceTableModelForm(props: TableModelProps) {
         label="Highlighted Trace Attributes"
         helpText="Expressions defining trace-level attributes which are displayed in the trace view for the selected trace."
       />
-      <Divider />
+      <Separator size="xs" />
       <MaterializedViewsFormSection {...props} />
-      <Divider />
+      <Separator size="xs" />
       <MetadataMaterializedViewsFormSection {...props} />
-      <Divider />
+      <Separator size="xs" />
       <OrderByFormRow
         control={control}
         databaseName={databaseName}
