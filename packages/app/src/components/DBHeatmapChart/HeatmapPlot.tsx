@@ -109,8 +109,8 @@ export function HeatmapPlot({
   });
 
   const { ref, width, height } = useElementSize();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mergedRef = useMergedRef(ref, containerRef);
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const mergedRef = useMergedRef(ref, setContainer);
 
   // Reapply the URL-backed selection whenever the bounds prop changes
   // (e.g. a fresh drag-select arrives via the round-trip through the
@@ -376,8 +376,7 @@ export function HeatmapPlot({
         <HeatmapTooltip
           point={highlightedPoint}
           cell={highlightedCell}
-          // eslint-disable-next-line react-hooks/refs
-          containerRect={containerRef.current?.getBoundingClientRect()}
+          containerRect={container?.getBoundingClientRect()}
           showDragHint={!!onFilter}
         />
       )}
