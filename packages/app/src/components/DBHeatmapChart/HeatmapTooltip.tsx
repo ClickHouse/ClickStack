@@ -39,9 +39,6 @@ type HeatmapTooltipProps = {
   showDragHint: boolean;
 };
 
-// shortcut: fixed estimate of the tooltip height (with drag hint), measure it if rows get added.
-const TOOLTIP_MAX_HEIGHT_PX = 150;
-
 export function HeatmapTooltip({
   point,
   cell,
@@ -53,10 +50,12 @@ export function HeatmapTooltip({
     x: point.xCoord,
     y: point.yCoord,
   });
-  const flipLeft = point.xCoord > (containerRect?.width ?? 0) / 2;
   // Fixed elements resolve against the viewport minus scrollbars, not window.inner*.
   const { clientWidth: viewportWidth, clientHeight: viewportHeight } =
     document.documentElement;
+  // Open away from the nearer edges so the tooltip fits without knowing its size.
+  const flipLeft = point.xCoord > (containerRect?.width ?? 0) / 2;
+  const flipUp = anchor.y > viewportHeight / 2;
 
   return (
     <>
@@ -77,10 +76,9 @@ export function HeatmapTooltip({
           style={{
             position: 'fixed',
             zIndex,
-            top: Math.max(
-              0,
-              Math.min(anchor.y + 5, viewportHeight - TOOLTIP_MAX_HEIGHT_PX),
-            ),
+            ...(flipUp
+              ? { bottom: viewportHeight - anchor.y + 5 }
+              : { top: anchor.y + 5 }),
             ...(flipLeft
               ? { right: viewportWidth - anchor.x + 10 }
               : { left: anchor.x + 10 }),

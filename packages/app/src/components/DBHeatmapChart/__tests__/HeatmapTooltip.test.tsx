@@ -120,8 +120,9 @@ describe('HeatmapTooltip', () => {
     const tooltip = screen
       .getByText('time:1000')
       .closest<HTMLElement>('div[style*="position: fixed"]');
-    // Cursor at y=390 in the viewport: the 150px tooltip is lifted to fit.
-    expect(tooltip?.style.top).toBe('250px');
+    // Cursor at y=390 in a 400px viewport: opens above the cursor.
+    expect(tooltip?.style.bottom).toBe('15px');
+    expect(tooltip?.style.top).toBe('');
     // Right half of the container: anchored to the left of the cursor.
     expect(tooltip?.style.right).toBe('810px');
     expect(tooltip?.style.left).toBe('');
