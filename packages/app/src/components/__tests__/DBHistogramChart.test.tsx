@@ -192,7 +192,7 @@ describe('DBHistogramChart', () => {
       expect(chart()).not.toHaveClass('effect-pulse');
     });
 
-    it('pulses the empty state while a refresh loads', () => {
+    it('shows loading instead of the stale empty result during a refetch', () => {
       mockUseQueriedChartConfig.mockReturnValue({
         data: { data: [], meta: [] },
         isLoading: false,
@@ -202,9 +202,8 @@ describe('DBHistogramChart', () => {
 
       renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 
-      expect(screen.getByText('No data found within time range.')).toHaveClass(
-        'effect-pulse',
-      );
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
     });
 
     it('does not pulse a fresh empty result', () => {
