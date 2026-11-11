@@ -72,6 +72,7 @@ export function HeatmapTooltip({
       />
       {createPortal(
         <div
+          data-testid="heatmap-tooltip"
           className="px-2 py-1 fs-8"
           style={{
             position: 'fixed',
