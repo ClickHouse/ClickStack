@@ -8,6 +8,7 @@ import {
   Metadata,
   MetadataCache,
 } from '@hyperdx/common-utils/dist/core/metadata';
+import { promqlSelectorMetricName } from '@hyperdx/common-utils/dist/core/promqlSelector';
 import {
   PrometheusMatrixResult,
   PrometheusVectorResult,
@@ -121,7 +122,16 @@ function getSeriesSelectorCondition({
       )`,
   );
 
-  return chSql`id IN (${concatChSql(' UNION DISTINCT ', idsPerSelector)})`;
+  const ids = chSql`id IN (${concatChSql(' UNION DISTINCT ', idsPerSelector)})`;
+  // The tags table is sorted by metric name, so `id IN (...)` alone reads every
+  // tags row. When each selector names its metric, say so: same rows, but only
+  // those metrics' part of the table is read.
+  const names = match
+    .map(promqlSelectorMetricName)
+    .filter((n): n is string => n != null);
+  if (names.length < match.length) return ids;
+  const list = [...new Set(names)].map(n => chSql`${{ String: n }}`);
+  return chSql`metric_name IN (${concatChSql(', ', list)}) AND ${ids}`;
 }
 
 /**

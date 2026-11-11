@@ -67,15 +67,16 @@ describe('McpServerSection', () => {
     expect(screen.queryByTestId('mcp-server-section')).not.toBeInTheDocument();
   });
 
-  it('renders all six host options when the deployment shape is valid', () => {
+  it('offers only file and deep-link hosts for manual setup', () => {
     renderSection();
 
-    expect(screen.getByText('Claude Code')).toBeInTheDocument();
     expect(screen.getByText('Cursor')).toBeInTheDocument();
     expect(screen.getByText('VS Code')).toBeInTheDocument();
-    expect(screen.getByText('Codex CLI')).toBeInTheDocument();
     expect(screen.getByText('OpenCode')).toBeInTheDocument();
     expect(screen.getByText('Other')).toBeInTheDocument();
+    // Their setup is a shell command with the key in it; the CLI covers them.
+    expect(screen.queryByText('Claude Code')).not.toBeInTheDocument();
+    expect(screen.queryByText('Codex CLI')).not.toBeInTheDocument();
   });
 
   // Auth-gate parity with `ApiKeysSection`: when `me` resolves to
@@ -89,10 +90,12 @@ describe('McpServerSection', () => {
     expect(screen.queryByTestId('mcp-server-section')).not.toBeInTheDocument();
   });
 
-  it('renders the fixed clickstack server name in the install snippet', () => {
+  it('leads with the CLI installer command', () => {
     renderSection();
 
-    expect(screen.getByText(/claude mcp add clickstack /)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^npx @hyperdx\/cli mcp install --app-url /),
+    ).toBeInTheDocument();
   });
 
   // `MeApiResponseSchema.accessKey` is `z.string()` non-nullable
@@ -106,22 +109,6 @@ describe('McpServerSection', () => {
     renderSection();
 
     expect(screen.queryByTestId('mcp-server-section')).not.toBeInTheDocument();
-  });
-
-  it('switches to the Codex CLI snippet when the host picker selects Codex CLI', async () => {
-    const user = userEvent.setup();
-    renderSection();
-
-    await user.click(screen.getByText('Codex CLI'));
-
-    expect(
-      screen.getByText(
-        /codex mcp add clickstack --url .*--bearer-token-env-var/s,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/^claude mcp add clickstack /),
-    ).not.toBeInTheDocument();
   });
 
   it('renders the Cursor deeplink button with a cursor:// href when Cursor is selected', async () => {
