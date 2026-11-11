@@ -15,6 +15,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 
 import { ClickhouseClient } from '@/clickhouse';
+import { getClickHouseErrorType } from '@/utils/clickhouseErrors';
 import logger from '@/utils/logger';
 
 export const PROMETHEUS_MAX_EXECUTION_SEC = 30;
@@ -33,14 +34,21 @@ export type TimeSeriesTagsQueryArgs = {
   signal?: AbortSignal;
 };
 
-// What a table without a time ranges table answers (version 7 or earlier, or
-// store_time_ranges off): servers before 26.10 have no timeSeriesTimeRanges(),
-// newer ones reject the table. Any other error is unexpected.
-const isNoTimeRangesTableError = (e: unknown): boolean =>
-  e instanceof Error &&
-  /Unknown table function timeSeriesTimeRanges|has no TimeRanges target table/.test(
-    e.message,
-  );
+/**
+ * What a table without a time ranges table answers (version 7 or earlier, or
+ * store_time_ranges off): servers before 26.10 have no timeSeriesTimeRanges()
+ * (UNKNOWN_FUNCTION), newer ones reject the table (UNKNOWN_TABLE). Any other
+ * error is unexpected.
+ *
+ * 26.10 also answers UNKNOWN_TABLE when the TimeSeries table itself is
+ * missing. That case already failed, and warned, on the Tags probe that
+ * timeSeriesTimeBounds runs first, so treating it as expected here hides
+ * nothing.
+ */
+export const isNoTimeRangesTableError = (e: unknown): boolean => {
+  const type = getClickHouseErrorType(e);
+  return type === 'UNKNOWN_FUNCTION' || type === 'UNKNOWN_TABLE';
+};
 
 /**
  * Where the given TimeSeries table keeps each series' time range, if anywhere:
@@ -60,6 +68,7 @@ async function timeSeriesTimeBounds({
   database: string;
   table: string;
 }): Promise<'tags' | 'timeRanges' | undefined> {
+  // Tags first: a version 7 table returns there without a second query.
   for (const [innerTableType, bounds] of [
     ['Tags', 'tags'],
     ['TimeRanges', 'timeRanges'],

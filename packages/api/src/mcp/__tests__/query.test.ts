@@ -17,7 +17,6 @@ import {
   assertSourceKindMatchesSelect,
   clickHouseErrorResult,
   errorHint,
-  getClickHouseErrorType,
   INCREASE_TOP_N_CAP,
   isServerError,
   mergeWhereIntoSelectItems,
@@ -34,6 +33,7 @@ import {
 } from '@/mcp/tools/query/schemas';
 import { defaultOrderBy, resolveOrderBy } from '@/mcp/tools/query/table';
 import { getErrorCategory } from '@/mcp/utils/errors';
+import { getClickHouseErrorType } from '@/utils/clickhouseErrors';
 
 describe('parseTimeRange', () => {
   it('should return default range (last 15 minutes) when no arguments provided', () => {
