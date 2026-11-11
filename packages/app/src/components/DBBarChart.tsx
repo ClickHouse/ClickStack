@@ -1,5 +1,4 @@
 import { memo } from 'react';
-import cx from 'classnames';
 import {
   Bar,
   BarChart,
@@ -20,6 +19,7 @@ import {
   useCategoricalChart,
 } from './charts/CategoricalChart';
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState from './charts/ChartErrorState';
 import { ChartTooltipContainer, ChartTooltipItem } from './charts/ChartTooltip';
 
@@ -85,9 +85,7 @@ export const DBBarChart = (props: CategoricalChartProps) => {
   return (
     <ChartContainer title={props.title} toolbarItems={toolbarItems}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={props.errorVariant} />
       ) : responseFormatError ? (
@@ -96,14 +94,7 @@ export const DBBarChart = (props: CategoricalChartProps) => {
           variant={props.errorVariant}
         />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Flex
           data-testid="bar-chart-container"
