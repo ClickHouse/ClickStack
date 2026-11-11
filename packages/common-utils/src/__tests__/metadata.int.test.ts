@@ -925,13 +925,21 @@ describe('Metadata Integration Tests', () => {
 
       const result = await metadata.getAllKeyValues({
         ...commonArgs,
-        keyExpressions: [`ResourceAttributes['${freqKey}']`],
+        keyExpressions: [
+          `ResourceAttributes['${freqKey}']`,
+          `ResourceAttributes['${mapKey}']`,
+        ],
         maxValuesPerKey: 1,
       });
 
-      expect(result).toEqual([
-        { key: `ResourceAttributes['${freqKey}']`, value: ['z-common'] },
-      ]);
+      // UNION ALL branches can arrive in any order.
+      expect(result).toHaveLength(2);
+      expect(result).toEqual(
+        expect.arrayContaining([
+          { key: `ResourceAttributes['${freqKey}']`, value: ['z-common'] },
+          { key: `ResourceAttributes['${mapKey}']`, value: [podNameA] },
+        ]),
+      );
     });
 
     it('routes TraceId through getTextIndexKeyValues', async () => {
