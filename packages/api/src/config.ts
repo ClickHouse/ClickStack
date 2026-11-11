@@ -41,6 +41,9 @@ export const IS_LOCAL_IMAGE = HYPERDX_IMAGE === 'all-in-one-noauth';
 export const IS_INLINE_API = env.HDX_PREVIEW_INLINE_API === 'true';
 export const FRONTEND_REDIRECT_BASE = IS_INLINE_API ? '' : FRONTEND_URL;
 export const INGESTION_API_KEY = env.INGESTION_API_KEY ?? '';
+// Opt-in: honor INGESTION_API_KEY on the app image too, where it is ignored
+// by default. The key is accepted alongside the team's key.
+export const ENABLE_INGESTION_API_KEY = env.ENABLE_INGESTION_API_KEY === 'true';
 // Opt-in: emit the contrib `datadogreceiver` on the collector so a
 // Datadog Agent can ship APM traces (DD trace API -> OTLP -> ClickHouse).
 // Off by default because the receiver has no per-team bearer-token auth like

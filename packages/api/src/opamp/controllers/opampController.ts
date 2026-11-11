@@ -182,8 +182,14 @@ export const buildOtelCollectorConfig = (
 ): CollectorConfig => {
   const apiKeys = teams.filter(team => team.apiKey).map(team => team.apiKey);
 
-  if (config.IS_ALL_IN_ONE_IMAGE || config.IS_LOCAL_APP_MODE || config.IS_DEV) {
-    // Only allow INGESTION_API_KEY for dev or all-in-one images for security reasons
+  if (
+    config.IS_ALL_IN_ONE_IMAGE ||
+    config.IS_LOCAL_APP_MODE ||
+    config.IS_DEV ||
+    config.ENABLE_INGESTION_API_KEY
+  ) {
+    // Only allow INGESTION_API_KEY for dev or all-in-one images for security
+    // reasons, unless the deployment opts in with ENABLE_INGESTION_API_KEY
     if (config.INGESTION_API_KEY) {
       apiKeys.push(config.INGESTION_API_KEY);
     }
