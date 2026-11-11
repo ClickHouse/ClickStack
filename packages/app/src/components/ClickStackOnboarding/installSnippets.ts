@@ -1,7 +1,9 @@
 // Per-host snippet builders for the "Connect your AI assistant"
 // section. Each builder takes a `DeploymentShape` (URL + access
-// key) and returns the install primitive for one host: a CLI
-// one-liner, a deep link, or a JSON config block.
+// key) and returns the install primitive for one host: a deep link
+// or a JSON config block. Nothing here emits a shell command with the
+// key in it, since that lands in shell history; `hdx mcp install`
+// covers the CLI-configured hosts instead.
 //
 // Pure functions only. Component-level state (host picker) lives
 // in `McpInstallPanel.tsx`. Keeping the builders here makes unit
@@ -20,17 +22,6 @@
  */
 export const SERVER_NAME = 'clickstack';
 
-/**
- * Environment variable the Codex CLI snippet reads the bearer token
- * from. The current `codex mcp add` command has no `--header` flag;
- * for a Streamable HTTP server with bearer auth it accepts
- * `--bearer-token-env-var <NAME>` and reads the token from that env
- * var at connect time (see https://developers.openai.com/codex/mcp).
- * We emit an `export` line for the same name so the copy-paste is
- * self-contained.
- */
-export const CODEX_TOKEN_ENV_VAR = 'CLICKSTACK_ACCESS_KEY';
-
 export interface DeploymentShape {
   /** Origin used to build the MCP URL, e.g. `https://example.com/api`. */
   apiUrl: string;
@@ -39,14 +30,10 @@ export interface DeploymentShape {
 }
 
 export interface BuiltSnippets {
-  /** Claude Code CLI one-liner. */
-  claudeCode: string;
   /** Cursor `cursor://` deep link. */
   cursor: string;
   /** VS Code + Copilot `vscode:mcp/install` deep link. */
   vscode: string;
-  /** OpenAI Codex CLI one-liner. */
-  codexCli: string;
   /** OpenCode JSON config under an `mcp` block (uses `type: "remote"`). */
   openCode: string;
   /** Canonical `mcpServers` JSON block for any other host. */
@@ -115,69 +102,6 @@ function buildUrl(deployment: DeploymentShape): string {
     ? deployment.apiUrl.slice(0, -1)
     : deployment.apiUrl;
   return `${base}/mcp`;
-}
-
-/**
- * Escape a value for safe inclusion inside a double-quoted shell
- * argument. Defensive: today's `accessKey` is a UUIDv4 with no
- * shell metacharacters, but a future format that permits `"`, `$`,
- * `\`, or backtick would otherwise turn a copy-paste install into a
- * shell-injection vector.
- */
-function shellEscape(value: string): string {
-  return value.replace(/(["\\$`])/g, '\\$1');
-}
-
-/**
- * Wrap a value in double quotes with the metacharacters escaped,
- * for use as a standalone shell argument (e.g. the right-hand side
- * of an `export`).
- */
-function shellQuoteValue(value: string): string {
-  return `"${shellEscape(value)}"`;
-}
-
-/**
- * Quote and escape a header value for safe inclusion inside a
- * double-quoted `--header "Name: value"` shell argument.
- */
-function shellQuoteHeader(name: string, value: string): string {
-  return `--header "${name}: ${shellEscape(value)}"`;
-}
-
-function headerArgs(headers: Record<string, string>): string {
-  return Object.entries(headers)
-    .map(([key, value]) => shellQuoteHeader(key, value))
-    .join(' ');
-}
-
-/**
- * Claude Code `mcp add` one-liner: `claude mcp add <name>
- * --transport http <url> --header "..."`. Claude passes the bearer
- * token inline as an `Authorization` header.
- */
-function buildClaudeOneLiner(deployment: DeploymentShape): string {
-  const url = buildUrl(deployment);
-  const headers = buildHeaders(deployment);
-  return `claude mcp add ${SERVER_NAME} --transport http ${url} ${headerArgs(headers)}`;
-}
-
-/**
- * OpenAI Codex CLI `mcp add` command. Unlike Claude Code, the
- * current Codex CLI (see https://developers.openai.com/codex/mcp)
- * does not accept `--transport` or `--header`; its Streamable HTTP
- * form is `codex mcp add <name> --url <url>` and bearer auth is
- * supplied via `--bearer-token-env-var <ENV_VAR>`, which reads the
- * token from the named environment variable rather than embedding
- * it in the command. We prepend an `export` for that variable so
- * the snippet is a self-contained copy-paste.
- */
-function buildCodexOneLiner(deployment: DeploymentShape): string {
-  const url = buildUrl(deployment);
-  const token = deployment.accessKey || '<accessKey>';
-  const exportLine = `export ${CODEX_TOKEN_ENV_VAR}=${shellQuoteValue(token)}`;
-  const addLine = `codex mcp add ${SERVER_NAME} --url ${url} --bearer-token-env-var ${CODEX_TOKEN_ENV_VAR}`;
-  return `${exportLine}\n${addLine}`;
 }
 
 /**
@@ -263,16 +187,23 @@ function buildMcpJsonBlock(deployment: DeploymentShape): string {
 }
 
 /**
+ * `npx` command for the CLI installer. It prompts for the API key itself, so
+ * the key never appears in a copied command or shell history.
+ */
+export function buildCliInstallCommand(deployment: DeploymentShape): string {
+  const appUrl = deployment.apiUrl.replace(/\/api\/?$/, '');
+  return `npx @hyperdx/cli mcp install --app-url ${appUrl}`;
+}
+
+/**
  * Build every host's snippet in one call. The component pulls the
  * field matching the current host out of the result; tests assert
  * round-trip shape through this entry point.
  */
 export function buildAllSnippets(deployment: DeploymentShape): BuiltSnippets {
   return {
-    claudeCode: buildClaudeOneLiner(deployment),
     cursor: buildCursorDeeplink(deployment),
     vscode: buildVSCodeDeeplink(deployment),
-    codexCli: buildCodexOneLiner(deployment),
     openCode: buildOpenCodeJsonBlock(deployment),
     jsonBlock: buildMcpJsonBlock(deployment),
   };
