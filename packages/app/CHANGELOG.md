@@ -1,5 +1,214 @@
 # @hyperdx/app
 
+## 2.44.0
+
+### Minor Changes
+
+- 142c9cc87: feat: narrow ad hoc dashboard filter suggestions with a condition
+
+  An ad hoc filter on SQL sources can now carry a SQL or Lucene "Keys and values
+  filter", like a queried filter's dropdown values filter, that limits the rows
+  its keys and values are suggested from. It can reference the dashboard's other
+  variables. While it references a required filter with nothing selected, the ad
+  hoc filter can't add or edit conditions and names the filter it is waiting on.
+  Failed suggestions now show the database's error message.
+
+- cd0e9edfa: feat: add optional `titleEmoji` webhook option; `false` removes the emoji prefix from notification titles sent through that webhook
+- 5b0d07441: feat: self-instrument with `@clickhouse/clickstack-node` and
+  `@clickhouse/clickstack-browser` instead of `@hyperdx/node-opentelemetry` and
+  `@hyperdx/browser`
+
+  HyperDX's own telemetry changes shape. HTTP spans use the stable semantic
+  convention keys (`http.request.method`, `http.response.status_code`,
+  `url.full`). pino records come from the `@opentelemetry/instrumentation-pino`
+  scope with real severity numbers instead of the `node-logger` scope with
+  severity number 0. Console capture covers every `console` call in the API, and
+  browser console output is recorded as log records instead of spans. Uncaught
+  exceptions are recorded as FATAL log records, and API errors as an exception
+  event on the Express span instead of a separate error span.
+
+  Browser telemetry records the user as `user.id`, `user.email` and `user.name`
+  instead of `userEmail` and `userName`, keeps the team name as `teamName`, and no
+  longer records a `user navigated` action. Browser fetch and XHR spans no longer
+  record request and response headers or bodies. Browser sessions restart once
+  after the upgrade. The per-signal browser endpoints and
+  `NEXT_PUBLIC_OTEL_RESOURCE_ATTRIBUTES` work as before. Browser traces and logs
+  are now sent gzip-compressed every 5 seconds. If the browser sends to a
+  collector other than ClickStack's, its CORS `allowed_headers` must be `"*"` or
+  include `content-type` and `content-encoding` (and `authorization`), and a proxy
+  in front of it must forward `Content-Encoding` unchanged.
+
+  The Next.js server now sends its own telemetry in production builds too, not
+  only under `next dev`, when `HYPERDX_API_KEY` or `OTEL_EXPORTER_OTLP_HEADERS` is
+  set. `HDX_EXPORTER_ENABLED=false` turns it off along with browser telemetry. It
+  reports under its own service name, the configured one plus `-next`
+  (`hdx-oss-app-next` in the docker-compose `app` service and when no name is
+  set), so its spans stay apart from the API's and the browser's. The HyperDX
+  images now default `OTEL_SERVICE_NAME` to `hdx-oss-app`. Each `/api` request
+  adds Next.js server spans for the proxy hop. Requests for build and `public/`
+  assets, such as `/_next/static/*`, `/__ENV.js` and `/pyodide/*`, are not traced.
+
+  `HYPERDX_API_KEY` still enables self-instrumentation. Without
+  `OTEL_EXPORTER_OTLP_ENDPOINT`, server-side self-telemetry now goes to
+  `http://localhost:4318` instead of `https://in-otel.hyperdx.io`, so set the
+  endpoint explicitly. `HDX_NODE_*` variables are no longer read. For request
+  headers and bodies set `OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_*` and
+  `CLICKSTACK_CAPTURE_HTTP_BODY`.
+
+- 0b7926d1d: feat: Team members can create team-owned API keys with a description and expiry that keep working after their creator leaves.
+- af17e8ff8: The app always uses ClickStack branding. Brand selection, the HyperDX palette, and the font picker are removed. Light, dark, and system color mode stay in Preferences.
+- dd8c2e4b6: feat: Pick a time zone for the search and dashboard pages from the time picker, overriding the time zone in User Preferences. The picker shows the zone it uses, and the choice is kept in the URL and in links from charts and tables
+
+### Patch Changes
+
+- 7de661b6a: feat: Row side panel summarizes clicks, navigations and console messages from OpenTelemetry browser SDKs, and navigation rows no longer show an HTTP Request section
+- df737d8aa: refactor: use the click-ui `Separator` instead of the Mantine `Divider` in the
+  chart display, heatmap, number format, and on-click drawers, and in the ad hoc
+  and query expression dashboard filter forms.
+- 4b8df6d8a: fix: show a neutral spinner while charts load
+
+  Chart tiles now show a spinner with "Loading Chart Data..." while a query is in
+  flight, including when the previous result was empty. Before, they kept showing
+  "No data found within time range." until the new query finished. Loaders now
+  default to a neutral gray instead of yellow.
+
+- ab36d4e13: feat: publish the HyperDX image as `clickhouse/clickstack` alongside
+  `hyperdx/hyperdx`, matching the other `clickhouse/clickstack-*` images. Release
+  workflows no longer log into ghcr.io, which received no pushes.
+- f56d4ad5b: fix(app): use the ClickStack hexagon and bolt mark in the logo, the collapsed nav, and the favicon.
+- d7df729e6: chore: GitHub links (changelog, support, package metadata) now point at `ClickHouse/ClickStack`, and `docker-compose.yml` pulls the app image as `clickhouse/clickstack`
+- f56d4ad5b: fix(app): open the full nav over the page on compact viewports. On narrow screens the sidebar toggle now opens the full nav as an overlay instead of doing nothing.
+- 513b23796: fix: start the trace waterfall higher in the side panel
+
+  Trace spans no longer repeat their name in a box under the panel title, or the
+  service as a chip next to the metadata row that already shows it. The
+  "⌘/Ctrl + scroll to zoom" hint moves into the timeline's top-left corner
+  instead of taking its own row. Long span names that the title truncates keep
+  the box. Log panels keep their body box and service chip.
+
+- 9269f7784: fix: "Denoise results" now removes noise on typical data. A pattern now counts as noisy above 5% of sampled events instead of 10%, which often matched nothing. Patterns that include error or warning lines are never hidden. The MCP `denoise` option uses the same 5% threshold. Denoise also mines the source's body column instead of the last table column, removes ANSI-colored rows that match a noisy pattern, says when results can't be denoised, and shows hidden patterns as a short summary with a shortened, expandable list.
+- e2754d203: fix: use SHA256 instead of MD5 for JSON row lookup WHERE clauses so row
+  details and drill-down work on FIPS-enabled ClickHouse deployments
+- 5abf27ed3: Saving a search no longer reloads the page: the new saved search is opened with
+  a client-side navigation, which also fixes the 404 this caused on the static
+  ClickStack build.
+- ba7d0066f: fix: heatmap hover tooltip no longer adds scrollbars or shifts the tile; it now
+  sits above the chart instead of inside it
+- 04f55d12c: feat: Exception panel parses JavaScript stack traces from OpenTelemetry SDKs into frames, with a section per `Caused by:` error
+- d0dd06fe8: fix: count legacy STATUS_CODE_ERROR spans as errors on the service map and trace
+  waterfall
+- 7935c64bc: feat: add `hdx mcp install` to connect AI agents without pasting a key
+
+  `npx @hyperdx/cli mcp install` asks for a personal access key or an
+  organization API key with hidden input, checks it, and adds the ClickStack MCP
+  server to Claude Code, Codex, Cursor, and VS Code. Team Settings now leads with
+  this command, so the key no longer has to go into a copied command or an agent
+  chat. The per-agent snippets remain for setting up one agent by hand.
+
+- 41b2b742a: feat: fall back to server MergeTree settings to detect persisted `_block_number` and `_block_offset` columns when the table's CREATE query omits them
+- 442d6dfd9: fix: refresh cached table columns after 5 minutes
+
+  The shared metadata cache kept each table's `DESCRIBE` result for the life of
+  the process, so the API did not see columns added with `ALTER TABLE`, such as
+  new MATERIALIZED columns, until it restarted. Cached columns now expire after 5
+  minutes. Other cached metadata is unchanged.
+
+- eb2439ed0: fix: leave metric points with no recorded value out of charts and alerts
+
+  When a scraped series goes away or a scrape fails, the collector's `prometheus`
+  receiver sends a point flagged "no recorded value" (a Prometheus staleness
+  marker), and the ClickHouse exporter stores it as zeros. Metric charts and
+  alerts read it as a real value: a gauge's `min` and `avg` dropped and `count`
+  included the series that went away, and a counter or histogram that came back
+  after the marker counted its whole total again. Metric queries now skip points
+  with this flag.
+
+- 81b6b605e: refactor: use the click-ui `Separator` instead of the Mantine `Divider` in the
+  keyboard shortcuts modal, What's new drawer, filter settings popover, metric
+  explorer, chart explorer, time picker, and Service Map tooltip.
+- 9df8b8d47: fix: bump next to 16.4.3 so builds no longer fail intermittently when Google Fonts returns extensionless font URLs
+- ec0db7ac9: fix: Creating an alert from the search page asks for one name, not two. An unsaved search is named once in the alert modal's header and the alert inherits that name and its tags; on a saved search the alert's own name field is labelled "Alert name" and shows the inherited name as its placeholder instead of pre-filling a duplicate.
+- 467c16792: feat: A pinned filter collapsed in the search sidebar stays collapsed the next
+  time the source loads, instead of always opening
+- 6468dadcf: fix: keep session replay events from different page loads apart
+
+  Browser SDKs up to `@clickhouse/clickstack-browser` 1.2.0 number replay events
+  from 1 again on every page load. When a page closed before all chunks of a large
+  event were sent, its leftover chunk could be joined with a later page's event of
+  the same number. That page's snapshot then failed to parse and did not render.
+  Chunks are now grouped by event number and full-precision timestamp, and replay
+  rows are ordered by the full-precision timestamp, so rows of two page loads in
+  the same second no longer interleave.
+
+  The app's own browser telemetry now uses `@clickhouse/clickstack-browser` 1.2.1,
+  whose replay event numbers no longer repeat across page loads.
+
+- 86cd38b7e: fix: only use the key-only row details lookup when the table persists both `_block_number` and `_block_offset`. A lone block column (e.g. a server-wide `enable_block_offset_column`) is not unique with a second-precision primary key and could open the wrong row; it is now only added as a tiebreaker to the full-row lookup.
+- 82b2104bb: fix: show a loader while row details load
+
+  Expanded search rows and the trace viewer's span details showed "Empty" or "No
+  body for this event." while the row was still loading. They now show a loader
+  until the row arrives.
+
+- 3a412e4f8: fix: run the row details query once when opening a row
+
+  The side panel ran the same `SELECT *` row query twice: once for the panel, and
+  again when its Overview or Column Values tab mounted. A row that was found is
+  now reused from the cache, so the tab and later tab switches do not query it
+  again. A different row or source still runs the query, and a row that was not
+  found is looked up again.
+
+- 78143c81a: feat: on ClickHouse Cloud, read `system.shared_merge_tree_settings` when detecting `_block_number` and `_block_offset` columns, falling back to `system.merge_tree_settings` per key
+- 4e93ae500: fix(app): render the ClickStack name as text in the expanded sidebar, 8px from the logo symbol.
+- 38f58cff2: refactor: use the click-ui `Separator` instead of the Mantine `Divider` in the
+  source form and the sources list.
+- 2bad9af17: refactor: use the click-ui `Separator` instead of the Mantine `Divider` in the
+  Team Settings sections.
+- af75b2b59: feat: Trace waterfall shows OpenTelemetry browser SDK request timings as dots on fetch and XHR spans, and the click that triggered a browser trace
+- 4e93ae500: fix(app): use the new favicon set, including an SVG, in the browser tab, bookmarks, and touch icon.
+- dc58efde2: fix: The app no longer crashes on load in browsers that report a POSIX-style language such as `en-US@posix`
+- Updated dependencies [142c9cc87]
+- Updated dependencies [30b1494d8]
+- Updated dependencies [0453aa134]
+- Updated dependencies [cd0e9edfa]
+- Updated dependencies [5b0d07441]
+- Updated dependencies [5b0d07441]
+- Updated dependencies [769c0def3]
+- Updated dependencies [9269f7784]
+- Updated dependencies [48c83790a]
+- Updated dependencies [e2754d203]
+- Updated dependencies [22f824c6e]
+- Updated dependencies [642533255]
+- Updated dependencies [d0dd06fe8]
+- Updated dependencies [349fc2141]
+- Updated dependencies [631002374]
+- Updated dependencies [5584f84bb]
+- Updated dependencies [253a690d4]
+- Updated dependencies [66e394136]
+- Updated dependencies [7e8522914]
+- Updated dependencies [9093282e5]
+- Updated dependencies [53bf54096]
+- Updated dependencies [0eec5e140]
+- Updated dependencies [917c9ca49]
+- Updated dependencies [95fa36412]
+- Updated dependencies [d08b2fa73]
+- Updated dependencies [a13c80efe]
+- Updated dependencies [0262822da]
+- Updated dependencies [41b2b742a]
+- Updated dependencies [442d6dfd9]
+- Updated dependencies [eb2439ed0]
+- Updated dependencies [0b7926d1d]
+- Updated dependencies [0eec5e140]
+- Updated dependencies [0a5237e6c]
+- Updated dependencies [78143c81a]
+- Updated dependencies [b7b4d9579]
+- Updated dependencies [b1d4e60f8]
+- Updated dependencies [ef56bd726]
+- Updated dependencies [c792850fd]
+- Updated dependencies [90302c773]
+  - @hyperdx/common-utils@0.34.0
+  - @hyperdx/api@2.44.0
+
 ## 2.43.1
 
 ### Patch Changes
