@@ -82,6 +82,8 @@ export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
 // so a key with more distinct values than this gets the most frequent among
 // its alphabetically first ones. Keep it above "Load more"'s 10,000 values.
 const TEXT_INDEX_TOKENS_PER_KEY = 100_000;
+// Keys per text index values query; see dispatchKeyValueQueries.
+const TEXT_INDEX_KEYS_PER_QUERY = 10;
 
 /**
  * The index read could not be scoped to the requested date range, so it was
@@ -3060,28 +3062,35 @@ export class Metadata {
 
     // fire all the kv fetch queries
     const promises: Array<Promise<KeyValues[] | undefined>> = [];
-    if (mapTextIndexQueryOptions.size > 0) {
-      promises.push(
-        this.getMapTextIndexKeyValues({
-          databaseName,
-          tableName,
-          connectionId,
-          queryOptions: mapTextIndexQueryOptions,
-          maxParts: mapKeyIndexMaxParts,
-          partSelection: mapKeyIndexPartSelection,
-          dateRange,
-          timestampValueExpression,
-          signal,
-        }),
-      );
+    // Text index lookups run in small parallel batches, so a slow,
+    // high-cardinality key holds up only its own batch's values.
+    for (const [column, options] of mapTextIndexQueryOptions) {
+      for (const keys of chunk(options.keys, TEXT_INDEX_KEYS_PER_QUERY)) {
+        promises.push(
+          this.getMapTextIndexKeyValues({
+            databaseName,
+            tableName,
+            connectionId,
+            queryOptions: new Map([[column, { ...options, keys }]]),
+            maxParts: mapKeyIndexMaxParts,
+            partSelection: mapKeyIndexPartSelection,
+            dateRange,
+            timestampValueExpression,
+            signal,
+          }),
+        );
+      }
     }
-    if (nativeTextIndexQueryOptions.size > 0) {
+    for (const entries of chunk(
+      [...nativeTextIndexQueryOptions],
+      TEXT_INDEX_KEYS_PER_QUERY,
+    )) {
       promises.push(
         this.getTextIndexKeyValues({
           databaseName,
           tableName,
           connectionId,
-          queryOptions: nativeTextIndexQueryOptions,
+          queryOptions: new Map(entries),
           maxParts: mapKeyIndexMaxParts,
           partSelection: mapKeyIndexPartSelection,
           dateRange,
