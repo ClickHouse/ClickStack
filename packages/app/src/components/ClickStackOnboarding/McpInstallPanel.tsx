@@ -13,6 +13,7 @@ import { CopySnippet } from './CopySnippet';
 import { DeeplinkInstall } from './DeeplinkInstall';
 import {
   buildAllSnippets,
+  buildCliInstallCommand,
   type BuiltSnippets,
   type DeploymentShape,
 } from './installSnippets';
@@ -63,6 +64,13 @@ export default function McpInstallPanel({ deployment }: McpInstallPanelProps) {
 
   return (
     <Stack gap="md">
+      <CopySnippet
+        label="Run in your terminal. It asks for an API key, then sets up Claude Code, Codex, Cursor, and VS Code:"
+        snippet={buildCliInstallCommand(deployment)}
+      />
+      <Text size="sm" fw={500}>
+        Or set up one agent by hand:
+      </Text>
       <SegmentedControl
         fullWidth
         value={host}

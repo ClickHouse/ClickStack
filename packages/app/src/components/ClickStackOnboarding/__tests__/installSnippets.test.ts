@@ -15,7 +15,7 @@ describe('buildAllSnippets > Claude Code', () => {
     const { claudeCode } = buildAllSnippets(DEPLOYMENT);
 
     expect(claudeCode).toBe(
-      `claude mcp add ${SERVER_NAME} --transport http https://hyperdx.example.com/api/mcp --header "Authorization: Bearer k_abcdef123456"`,
+      `claude mcp add --scope user ${SERVER_NAME} --transport http https://hyperdx.example.com/api/mcp --header "Authorization: Bearer k_abcdef123456"`,
     );
   });
 });
@@ -204,7 +204,9 @@ describe('buildAllSnippets > host coverage', () => {
     const all = buildAllSnippets(DEPLOYMENT);
 
     expect(all).toMatchObject({
-      claudeCode: expect.stringContaining(`claude mcp add ${SERVER_NAME}`),
+      claudeCode: expect.stringContaining(
+        `claude mcp add --scope user ${SERVER_NAME}`,
+      ),
       cursor: expect.stringContaining('cursor://'),
       vscode: expect.stringContaining('vscode:mcp/install'),
       codexCli: expect.stringContaining(`codex mcp add ${SERVER_NAME}`),

@@ -152,14 +152,14 @@ function headerArgs(headers: Record<string, string>): string {
 }
 
 /**
- * Claude Code `mcp add` one-liner: `claude mcp add <name>
- * --transport http <url> --header "..."`. Claude passes the bearer
- * token inline as an `Authorization` header.
+ * Claude Code `mcp add` one-liner: `claude mcp add --scope user <name>
+ * --transport http <url> --header "..."`. User scope matches what
+ * `hdx mcp install` writes, so a later install replaces this entry.
  */
 function buildClaudeOneLiner(deployment: DeploymentShape): string {
   const url = buildUrl(deployment);
   const headers = buildHeaders(deployment);
-  return `claude mcp add ${SERVER_NAME} --transport http ${url} ${headerArgs(headers)}`;
+  return `claude mcp add --scope user ${SERVER_NAME} --transport http ${url} ${headerArgs(headers)}`;
 }
 
 /**
@@ -260,6 +260,15 @@ function buildMcpJsonBlock(deployment: DeploymentShape): string {
     },
   };
   return JSON.stringify(block, null, 2);
+}
+
+/**
+ * `npx` command for the CLI installer. It prompts for the API key itself, so
+ * the key never appears in a copied command or shell history.
+ */
+export function buildCliInstallCommand(deployment: DeploymentShape): string {
+  const appUrl = deployment.apiUrl.replace(/\/api\/?$/, '');
+  return `npx @hyperdx/cli mcp install --app-url ${appUrl}`;
 }
 
 /**

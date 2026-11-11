@@ -22,6 +22,17 @@ function renderPanel() {
   );
 }
 
+describe('McpInstallPanel CLI installer', () => {
+  it('shows the npx command, which carries no access key', () => {
+    renderPanel();
+    expect(
+      screen.getByText(
+        'npx @hyperdx/cli mcp install --app-url https://app.example.com',
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
 function codeText(): string {
   // Every masked host renders its snippet in the shared code block.
   return screen.getByTestId('reveal-snippet-code').textContent ?? '';
