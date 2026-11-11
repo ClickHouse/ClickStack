@@ -128,29 +128,13 @@ describe('selectNoisyPatterns', () => {
       sampleSize,
     ).map(p => p.id);
 
-  it('takes the most frequent patterns until they cover half the sample', () => {
+  it('takes patterns above 5% of the sample, most frequent first', () => {
     // No pattern passes 10% on its own, as in the demo logs
-    expect(select([6, 9, 8, 7, 7, 6, 6, 5, 5, 5, 4, 3, 29])).toEqual([
-      12, 1, 2, 3,
-    ]);
+    expect(select([6, 9, 5, 7, 4, 3, 66])).toEqual([6, 1, 3, 0]);
   });
 
-  it('includes the pattern that crosses the coverage line', () => {
-    expect(select([40, 30, 30])).toEqual([0, 1]);
-  });
-
-  it('stops at a single dominant pattern', () => {
-    expect(select([94, 1, 1, 1, 1, 1, 1])).toEqual([0]);
-  });
-
-  it('never removes patterns under 1% of the sample', () => {
-    expect(
-      select(
-        Array.from({ length: 200 }, () => 1),
-        200,
-      ),
-    ).toEqual([]);
-    expect(select([30, 5, 0.5], 100)).toEqual([0, 1]);
+  it('keeps patterns at exactly 5%', () => {
+    expect(select([5, 95])).toEqual([1]);
   });
 
   it('returns nothing for an empty sample', () => {

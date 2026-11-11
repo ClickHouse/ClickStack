@@ -38,8 +38,8 @@ export interface DenoiseResult {
 
 /**
  * Denoise search results by mining patterns from a random sample, identifying
- * "noisy" patterns (the most frequent ones, up to half of the sample), and
- * filtering them out of the result rows.
+ * "noisy" patterns (those accounting for >5% of the sample), and filtering
+ * them out of the result rows.
  *
  * This mirrors the web app's "Denoise Results" feature
  * (packages/app/src/components/DBRowTable.tsx) but runs server-side using

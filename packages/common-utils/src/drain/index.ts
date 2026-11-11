@@ -11,8 +11,7 @@ export type {
   TrendBucket,
 } from './mine-patterns';
 export {
-  DENOISE_COVERAGE,
-  DENOISE_MIN_PATTERN_SHARE,
+  DENOISE_NOISE_THRESHOLD,
   DENOISE_SAMPLE_SIZE,
   flattenBody,
   minePatterns,

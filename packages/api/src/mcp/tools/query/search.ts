@@ -46,7 +46,7 @@ const searchSchema = z.object({
     .default(false)
     .describe(
       'When true, automatically removes events matching high-frequency patterns ' +
-        '(the most frequent patterns, together covering about half of sampled events) from the results. ' +
+        '(those accounting for >5% of sampled events) from the results. ' +
         'Useful for cutting through log noise to find unusual or interesting events. ' +
         'Adds ~1-2s of latency for the pattern sampling queries.',
     ),

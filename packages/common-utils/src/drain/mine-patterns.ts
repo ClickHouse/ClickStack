@@ -15,15 +15,11 @@ import { TemplateMiner } from './template-miner';
 export const DENOISE_SAMPLE_SIZE = 10_000;
 
 /**
- * Noisy patterns are taken most frequent first until they cover this
- * fraction of the sample. A fixed per-pattern cutoff fails because Drain
- * splits one logical pattern across clusters (by token count and first
- * token), so even the dominant patterns can each sit below it.
+ * Patterns matching more than this fraction of sampled events are "noisy".
+ * Drain splits one logical pattern across clusters (by token count and
+ * first token), so dominant patterns often sit well below 10% each.
  */
-export const DENOISE_COVERAGE = 0.5;
-
-/** Patterns under this fraction of the sample are never noisy. */
-export const DENOISE_MIN_PATTERN_SHARE = 0.01;
+export const DENOISE_NOISE_THRESHOLD = 0.05;
 
 // ─── Body normalization ──────────────────────────────────────────────────────
 

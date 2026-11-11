@@ -578,7 +578,7 @@ describe('MCP Query Tools', () => {
           });
         }
 
-        // Rare events — kept, as the health check alone covers half the sample
+        // Rare events — 1 row each, well below the 5% threshold
         for (let i = 0; i < 5; i++) {
           logs.push({
             Body: `Rare event type ${String.fromCharCode(65 + i)} occurred in subsystem`,
