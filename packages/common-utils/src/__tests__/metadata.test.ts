@@ -1383,10 +1383,6 @@ describe('Metadata', () => {
       expect(sql).toContain('topKWeighted(');
       expect(sql).toContain('LIMIT 100000');
       expect(sql).not.toContain('startsWith(token,');
-      expect(calls[calls.length - 1][0].clickhouse_settings).toMatchObject({
-        max_rows_to_read: '0',
-        max_block_size: '1024',
-      });
     });
 
     it("routes LogAttributes['requestId'] through getMapTextIndexKeyValues (map KV text index path)", async () => {
@@ -1431,7 +1427,6 @@ describe('Metadata', () => {
       }
       expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
       expect(call.clickhouse_settings.read_overflow_mode).toBeUndefined();
-      expect(call.clickhouse_settings.max_block_size).toBe('1024');
     });
 
     it.each([

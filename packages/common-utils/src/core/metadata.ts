@@ -1828,9 +1828,6 @@ export class Metadata {
               // The per-key LIMIT bounds the read. A row cap would stop the
               // sorted dictionary read partway and leave later keys empty.
               max_rows_to_read: '0',
-              // LIMIT stops a part's read only after a whole block, so the
-              // default 65k-row block makes every key read far past its LIMIT.
-              max_block_size: '1024',
             },
             abort_signal: signal,
           })
@@ -1913,7 +1910,6 @@ export class Metadata {
               ...this.getClickHouseSettings(),
               // See getMapTextIndexKeyValues.
               max_rows_to_read: '0',
-              max_block_size: '1024',
             },
             abort_signal: signal,
           })
