@@ -29,12 +29,17 @@ export class HeatmapComponent {
     return this.root.getByText('Not enough data points to render heatmap');
   }
 
+  /** The open cell tooltip, rendered into the page body rather than the chart. */
+  private get tooltipRoot() {
+    return this.page.getByTestId('heatmap-tooltip');
+  }
+
   /**
    * The hover tooltip, which only appears for a cell with a non-zero count.
    * Series-axis heatmaps label the cell's series instead of its count.
    */
   get tooltip() {
-    return this.container.getByText(/^(Count Value|Series):$/);
+    return this.tooltipRoot.getByText(/^(Count Value|Series):$/);
   }
 
   /**
@@ -70,7 +75,7 @@ export class HeatmapComponent {
 
   /** The series named by the open cell tooltip of a series-axis heatmap. */
   async hoveredSeriesName() {
-    const row = this.container
+    const row = this.tooltipRoot
       .getByText('Series:', { exact: true })
       .locator('..');
     await expect(row).toBeVisible();
@@ -79,7 +84,7 @@ export class HeatmapComponent {
 
   /** A labelled value of the open cell tooltip, e.g. `Count Value`. */
   async hoveredTooltipValue(label: 'Count Value' | 'Y Value' | 'Bucket') {
-    const row = this.container
+    const row = this.tooltipRoot
       .getByText(`${label}:`, { exact: true })
       .locator('..');
     await expect(row).toBeVisible();
