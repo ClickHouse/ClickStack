@@ -1,6 +1,8 @@
-import { minePatterns } from '@hyperdx/common-utils/dist/drain';
-
-import { buildNoisyBodyMatcher } from '@/mcp/tools/query/denoise';
+import { minePatterns } from '@/drain/mine-patterns';
+import {
+  buildNoisyBodyMatcher,
+  selectNoisyPatterns,
+} from '@/drain/noisy-matcher';
 
 function lcg(seed: number) {
   let s = seed;
@@ -104,5 +106,38 @@ describe('buildNoisyBodyMatcher', () => {
       new Set(['a b <*>']),
     );
     expect(isNoisy('a b c')).toBe(true);
+  });
+
+  it('splits bodies on the miner delimiters', () => {
+    const isNoisy = buildNoisyBodyMatcher(
+      ['GET api v1 <*> 200 <*>', 'user <*> logged in'],
+      new Set(['GET api v1 <*> 200 <*>']),
+      { extraDelimiters: ['/', '.', ':'] },
+    );
+    expect(isNoisy('GET /api/v1/search 200 12ms')).toBe(true);
+    expect(isNoisy('user bob logged in')).toBe(false);
+    expect(isNoisy('GET /api/v1/search 500 12ms')).toBe(false);
+  });
+});
+
+describe('selectNoisyPatterns', () => {
+  const select = (counts: number[], sampleSize = 100) =>
+    selectNoisyPatterns(
+      counts.map((count, i) => ({ id: i, count })),
+      p => p.count,
+      sampleSize,
+    ).map(p => p.id);
+
+  it('takes patterns above 5% of the sample, most frequent first', () => {
+    // No pattern passes 10% on its own, as in the demo logs
+    expect(select([6, 9, 5, 7, 4, 3, 66])).toEqual([6, 1, 3, 0]);
+  });
+
+  it('keeps patterns at exactly 5%', () => {
+    expect(select([5, 95])).toEqual([1]);
+  });
+
+  it('returns nothing for an empty sample', () => {
+    expect(select([], 0)).toEqual([]);
   });
 });
