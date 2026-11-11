@@ -105,4 +105,26 @@ describe('HeatmapTooltip', () => {
     expect(tooltip?.style.left).toBe('120px');
     viewportHeight.mockRestore();
   });
+
+  it('keeps the tooltip inside the viewport near its bottom and right edges', () => {
+    const viewport = [
+      jest
+        .spyOn(document.documentElement, 'clientHeight', 'get')
+        .mockReturnValue(400),
+      jest
+        .spyOn(document.documentElement, 'clientWidth', 'get')
+        .mockReturnValue(1200),
+    ];
+    renderTooltip({ point: { ...point, xCoord: 300, yCoord: 190 } });
+
+    const tooltip = screen
+      .getByText('time:1000')
+      .closest<HTMLElement>('div[style*="position: fixed"]');
+    // Cursor at y=390 in the viewport: the 150px tooltip is lifted to fit.
+    expect(tooltip?.style.top).toBe('250px');
+    // Right half of the container: anchored to the left of the cursor.
+    expect(tooltip?.style.right).toBe('810px');
+    expect(tooltip?.style.left).toBe('');
+    viewport.forEach(spy => spy.mockRestore());
+  });
 });

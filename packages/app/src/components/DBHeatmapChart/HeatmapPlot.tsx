@@ -73,6 +73,16 @@ export function HeatmapPlot({
     HighlightedPoint | undefined
   >(undefined);
 
+  // The tooltip is fixed to the viewport, so a scroll under a still cursor
+  // would leave it behind; hide it until the next mouse move.
+  const hasHighlight = highlightedPoint != null;
+  useEffect(() => {
+    if (!hasHighlight) return;
+    const hide = () => setHighlightedPoint(undefined);
+    window.addEventListener('scroll', hide, { capture: true, passive: true });
+    return () => window.removeEventListener('scroll', hide, { capture: true });
+  }, [hasHighlight]);
+
   // Gate tooltip display on actual mouse interaction. uPlot fires setCursor
   // on init (before user hovers), which would show the tooltip on page load.
   const mouseInsideRef = useRef(false);
