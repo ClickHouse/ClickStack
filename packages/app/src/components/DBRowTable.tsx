@@ -10,7 +10,6 @@ import cx from 'classnames';
 import { formatDistance } from 'date-fns';
 import { isString } from 'lodash';
 import curry from 'lodash/curry';
-import ms from 'ms';
 import { useHotkeys } from 'react-hotkeys-hook';
 import {
   Bar,
@@ -30,10 +29,6 @@ import {
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
-import {
-  DENOISE_NOISE_THRESHOLD,
-  DENOISE_SAMPLE_SIZE,
-} from '@hyperdx/common-utils/dist/drain';
 import {
   BuilderChartConfigWithDateRange,
   SelectList,
@@ -57,7 +52,7 @@ import {
   IconTextWrap,
   IconTextWrapDisabled,
 } from '@tabler/icons-react';
-import { FetchNextPageOptions, useQuery } from '@tanstack/react-query';
+import { FetchNextPageOptions } from '@tanstack/react-query';
 import {
   ColumnDef,
   ColumnResizeMode,
@@ -78,13 +73,13 @@ import {
   useRenderedSqlChartConfig,
 } from '@/hooks/useChartConfig';
 import { CsvColumn, useCsvExport } from '@/hooks/useCsvExport';
+import { useDenoisedRows } from '@/hooks/useDenoisedRows';
 import {
   useColumns,
   useMergeTreeSettings,
   useTableMetadata,
 } from '@/hooks/useMetadata';
 import useOffsetPaginatedQuery from '@/hooks/useOffsetPaginatedQuery';
-import { useGroupedPatterns } from '@/hooks/usePatterns';
 import { useRowSelection } from '@/hooks/useRowSelection';
 import useRowWhere, {
   getRowId,
@@ -93,7 +88,7 @@ import useRowWhere, {
   WithClause,
 } from '@/hooks/useRowWhere';
 import { useTableSearch } from '@/hooks/useTableSearch';
-import { getLevelExpression, useSource } from '@/source';
+import { useSource } from '@/source';
 import {
   MIN_COLUMN_WIDTH,
   MIN_LAST_COLUMN_WIDTH,
@@ -137,6 +132,7 @@ import {
 import { SQLPreview } from './ChartSQLPreview';
 import { CsvExportButton } from './CsvExportButton';
 import { RowSidePanelContext } from './DBRowSidePanel';
+import { DenoiseSummary } from './DenoiseSummary';
 import {
   createExpandButtonColumn,
   ExpandedLogRow,
@@ -1948,87 +1944,15 @@ function DBSqlRowTableComponent({
   }, [data?.meta, onResolvedColumnsChange]);
 
   const { data: source } = useSource({ id: sourceId });
-  const patternColumn = columns[columns.length - 1];
-  const groupedPatterns = useGroupedPatterns({
+  const denoised = useDenoisedRows({
     config,
-    samples: DENOISE_SAMPLE_SIZE,
-    bodyValueExpression: patternColumn ?? '',
-    levelExpression: getLevelExpression(source),
-    totalCount: undefined,
+    source,
+    columns,
+    rows: processedRows,
     enabled: denoiseResults,
   });
-  const noisyPatterns = useQuery({
-    queryKey: ['noisy-patterns', config],
-    queryFn: async () => {
-      return Object.values(groupedPatterns.data).filter(
-        p =>
-          p.count / (groupedPatterns.sampledRowCount ?? 1) >
-          DENOISE_NOISE_THRESHOLD,
-      );
-    },
-    enabled:
-      denoiseResults &&
-      groupedPatterns.data != null &&
-      Object.values(groupedPatterns.data).length > 0 &&
-      groupedPatterns.miner != null,
-  });
-  const noisyPatternIds = useMemo(() => {
-    return noisyPatterns.data?.map(p => p.id) ?? [];
-  }, [noisyPatterns.data]);
 
-  const denoisedRows = useQuery({
-    queryKey: [
-      'denoised-rows',
-      config,
-      denoiseResults,
-      // Only include processed rows if denoising is enabled
-      // This helps prevent the queryKey from getting extremely large
-      // and causing memory issues, when it's not used.
-      ...(denoiseResults ? [processedRows] : []),
-      noisyPatternIds,
-      patternColumn,
-    ],
-    queryFn: async () => {
-      if (!denoiseResults) {
-        return [];
-      }
-      // No noisy patterns, so no need to denoise
-      if (noisyPatternIds.length === 0) {
-        return processedRows;
-      }
-
-      const matchedLogs = await groupedPatterns.miner?.matchLogs(
-        processedRows.map(row => row[patternColumn]),
-      );
-      return processedRows.filter((row, i) => {
-        const match = matchedLogs?.[i];
-        return !noisyPatternIds.includes(`${match}`);
-      });
-    },
-    placeholderData: (previousData, previousQuery) => {
-      // If it's the same search, but new data, return the previous data while we load
-      if (
-        previousQuery?.queryKey?.[0] === 'denoised-rows' &&
-        previousQuery?.queryKey?.[1] === config
-      ) {
-        return previousData;
-      }
-      return undefined;
-    },
-    gcTime: isLive ? ms('30s') : ms('5m'), // more aggressive gc for live data, since it can end up holding lots of data
-    enabled:
-      denoiseResults &&
-      noisyPatterns.isSuccess &&
-      processedRows.length > 0 &&
-      groupedPatterns.miner != null,
-  });
-
-  const isLoading = denoiseResults
-    ? isFetching ||
-      denoisedRows.isFetching ||
-      noisyPatterns.isFetching ||
-      groupedPatterns.isLoading
-    : isFetching;
+  const isLoading = isFetching || denoised.isLoading;
 
   const loadingDate =
     data?.window?.direction === 'ASC'
@@ -2038,28 +1962,18 @@ function DBSqlRowTableComponent({
   return (
     <>
       {denoiseResults && (
-        <Box mb="xxs" px="sm">
-          <Text fw="bold" fz="xs" mb="xxs">
-            Removed Noisy Event Patterns
-          </Text>
-          <Box mah={100} style={{ overflow: 'auto' }}>
-            {noisyPatterns.data?.map(p => (
-              <Text fz="xs" key={p.id}>
-                {p.pattern}
-              </Text>
-            ))}
-            {noisyPatternIds.length === 0 && (
-              <Text fz="xs">No noisy patterns found</Text>
-            )}
-          </Box>
-        </Box>
+        <DenoiseSummary
+          noisyPatterns={denoised.noisyPatterns}
+          skipped={denoised.skipped}
+          bodyExpression={denoised.bodyExpression}
+        />
       )}
       <RawLogTable
         isLive={isLive}
         wrapLines={false}
         displayedColumns={columns}
         highlightedLineId={highlightedLineId}
-        rows={denoiseResults ? (denoisedRows?.data ?? []) : processedRows}
+        rows={denoised.rows}
         renderRowDetails={renderRowDetails}
         isLoading={isLoading}
         fetchNextPage={fetchNextPage}

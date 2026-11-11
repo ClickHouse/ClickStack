@@ -1,6 +1,5 @@
-import { minePatterns } from '@hyperdx/common-utils/dist/drain';
-
-import { buildNoisyBodyMatcher } from '@/mcp/tools/query/denoise';
+import { minePatterns } from '@/drain/mine-patterns';
+import { buildNoisyBodyMatcher } from '@/drain/noisy-matcher';
 
 function lcg(seed: number) {
   let s = seed;
@@ -104,5 +103,16 @@ describe('buildNoisyBodyMatcher', () => {
       new Set(['a b <*>']),
     );
     expect(isNoisy('a b c')).toBe(true);
+  });
+
+  it('splits bodies on the miner delimiters', () => {
+    const isNoisy = buildNoisyBodyMatcher(
+      ['GET api v1 <*> 200 <*>', 'user <*> logged in'],
+      new Set(['GET api v1 <*> 200 <*>']),
+      { extraDelimiters: ['/', '.', ':'] },
+    );
+    expect(isNoisy('GET /api/v1/search 200 12ms')).toBe(true);
+    expect(isNoisy('user bob logged in')).toBe(false);
+    expect(isNoisy('GET /api/v1/search 500 12ms')).toBe(false);
   });
 });

@@ -1,9 +1,9 @@
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { getFirstTimestampValueExpression } from '@hyperdx/common-utils/dist/core/utils';
 import {
+  buildNoisyBodyMatcher,
   DENOISE_NOISE_THRESHOLD,
   DENOISE_SAMPLE_SIZE,
-  flattenBody,
   minePatterns,
 } from '@hyperdx/common-utils/dist/drain';
 import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
@@ -15,8 +15,6 @@ import { getSource } from '@/controllers/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 
 import { resolveBodyExpression } from './helpers';
-
-const PATTERN_WILDCARD = '<*>';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -249,54 +247,6 @@ export async function denoiseSearchResults(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Return a predicate that is true when the most specific template a body
- * fits (fewest <*>) is noisy. Fitting means same token count, same literal
- * tokens, any token at each <*>. Taking the most specific fit keeps rows of
- * a rare `user login` cluster when a broad `<*> <*>` cluster is noisy; ties
- * go to the noisy template. Re-running Drain's `match` instead can land a
- * member on a different same-length cluster than the one it was counted in.
- */
-export function buildNoisyBodyMatcher(
-  templates: string[],
-  noisyTemplates: Set<string>,
-): (body: string) => boolean {
-  const candidates = templates.map(template => {
-    const tokens = tokenize(template);
-    return {
-      tokens,
-      wildcards: tokens.filter(t => t === PATTERN_WILDCARD).length,
-      noisy: noisyTemplates.has(template),
-    };
-  });
-  return body => {
-    const tokens = tokenize(flattenBody(body));
-    let best: (typeof candidates)[number] | undefined;
-    for (const c of candidates) {
-      const fits =
-        c.tokens.length === tokens.length &&
-        c.tokens.every(
-          (tok, i) => tok === PATTERN_WILDCARD || tok === tokens.at(i),
-        );
-      if (!fits) continue;
-      if (
-        best == null ||
-        c.wildcards < best.wildcards ||
-        (c.wildcards === best.wildcards && c.noisy)
-      ) {
-        best = c;
-      }
-    }
-    return best?.noisy ?? false;
-  };
-}
-
-// Drain tokenizes with trim + split(/\s+/).
-function tokenize(text: string): string[] {
-  const trimmed = text.trim();
-  return trimmed === '' ? [] : trimmed.split(/\s+/);
-}
 
 /**
  * Find the key in a result row that corresponds to the body column expression.
