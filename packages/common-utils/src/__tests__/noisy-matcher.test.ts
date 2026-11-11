@@ -1,5 +1,8 @@
 import { minePatterns } from '@/drain/mine-patterns';
-import { buildNoisyBodyMatcher } from '@/drain/noisy-matcher';
+import {
+  buildNoisyBodyMatcher,
+  selectNoisyPatterns,
+} from '@/drain/noisy-matcher';
 
 function lcg(seed: number) {
   let s = seed;
@@ -114,5 +117,43 @@ describe('buildNoisyBodyMatcher', () => {
     expect(isNoisy('GET /api/v1/search 200 12ms')).toBe(true);
     expect(isNoisy('user bob logged in')).toBe(false);
     expect(isNoisy('GET /api/v1/search 500 12ms')).toBe(false);
+  });
+});
+
+describe('selectNoisyPatterns', () => {
+  const select = (counts: number[], sampleSize = 100) =>
+    selectNoisyPatterns(
+      counts.map((count, i) => ({ id: i, count })),
+      p => p.count,
+      sampleSize,
+    ).map(p => p.id);
+
+  it('takes the most frequent patterns until they cover half the sample', () => {
+    // No pattern passes 10% on its own, as in the demo logs
+    expect(select([6, 9, 8, 7, 7, 6, 6, 5, 5, 5, 4, 3, 29])).toEqual([
+      12, 1, 2, 3,
+    ]);
+  });
+
+  it('includes the pattern that crosses the coverage line', () => {
+    expect(select([40, 30, 30])).toEqual([0, 1]);
+  });
+
+  it('stops at a single dominant pattern', () => {
+    expect(select([94, 1, 1, 1, 1, 1, 1])).toEqual([0]);
+  });
+
+  it('never removes patterns under 1% of the sample', () => {
+    expect(
+      select(
+        Array.from({ length: 200 }, () => 1),
+        200,
+      ),
+    ).toEqual([]);
+    expect(select([30, 5, 0.5], 100)).toEqual([0, 1]);
+  });
+
+  it('returns nothing for an empty sample', () => {
+    expect(select([], 0)).toEqual([]);
   });
 });

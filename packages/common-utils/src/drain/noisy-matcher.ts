@@ -1,6 +1,35 @@
-import { flattenBody } from './mine-patterns';
+import {
+  DENOISE_COVERAGE,
+  DENOISE_MIN_PATTERN_SHARE,
+  flattenBody,
+} from './mine-patterns';
 
 const PATTERN_WILDCARD = '<*>';
+
+/**
+ * The patterns to remove when denoising: most frequent first, until they
+ * cover `DENOISE_COVERAGE` of the sample, skipping any pattern under
+ * `DENOISE_MIN_PATTERN_SHARE`. The pattern that crosses the coverage line is
+ * included.
+ */
+export function selectNoisyPatterns<T>(
+  patterns: T[],
+  getCount: (pattern: T) => number,
+  sampleSize: number,
+): T[] {
+  if (sampleSize <= 0) return [];
+  const noisy: T[] = [];
+  let covered = 0;
+  const sorted = [...patterns].sort((a, b) => getCount(b) - getCount(a));
+  for (const p of sorted) {
+    const count = getCount(p);
+    if (covered / sampleSize >= DENOISE_COVERAGE) break;
+    if (count / sampleSize < DENOISE_MIN_PATTERN_SHARE) break;
+    noisy.push(p);
+    covered += count;
+  }
+  return noisy;
+}
 
 /**
  * Return a predicate that is true when the most specific template a body

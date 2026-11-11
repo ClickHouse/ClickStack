@@ -3,8 +3,8 @@ import stripAnsi from 'strip-ansi';
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
 import {
   buildNoisyBodyMatcher,
-  DENOISE_NOISE_THRESHOLD,
   DENOISE_SAMPLE_SIZE,
+  selectNoisyPatterns,
 } from '@hyperdx/common-utils/dist/drain';
 import {
   BuilderChartConfigWithDateRange,
@@ -91,8 +91,10 @@ export function useDenoisedRows<TRow extends Record<string, any>>({
 
   const noisyPatterns = useMemo(
     () =>
-      Object.values(patternGroups).filter(
-        p => p.count / (sampledRowCount || 1) > DENOISE_NOISE_THRESHOLD,
+      selectNoisyPatterns(
+        Object.values(patternGroups),
+        p => p.count,
+        sampledRowCount ?? 0,
       ),
     [patternGroups, sampledRowCount],
   );

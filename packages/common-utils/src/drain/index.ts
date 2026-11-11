@@ -11,12 +11,13 @@ export type {
   TrendBucket,
 } from './mine-patterns';
 export {
-  DENOISE_NOISE_THRESHOLD,
+  DENOISE_COVERAGE,
+  DENOISE_MIN_PATTERN_SHARE,
   DENOISE_SAMPLE_SIZE,
   flattenBody,
   minePatterns,
 } from './mine-patterns';
 export { Node } from './node';
-export { buildNoisyBodyMatcher } from './noisy-matcher';
+export { buildNoisyBodyMatcher, selectNoisyPatterns } from './noisy-matcher';
 export type { AddLogMessageResult, ExtractedParameter } from './template-miner';
 export { TemplateMiner } from './template-miner';

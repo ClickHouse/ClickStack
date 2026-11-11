@@ -2,9 +2,9 @@ import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { getFirstTimestampValueExpression } from '@hyperdx/common-utils/dist/core/utils';
 import {
   buildNoisyBodyMatcher,
-  DENOISE_NOISE_THRESHOLD,
   DENOISE_SAMPLE_SIZE,
   minePatterns,
+  selectNoisyPatterns,
 } from '@hyperdx/common-utils/dist/drain';
 import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
@@ -38,8 +38,8 @@ export interface DenoiseResult {
 
 /**
  * Denoise search results by mining patterns from a random sample, identifying
- * "noisy" patterns (those accounting for >10% of the sample), and filtering
- * them out of the result rows.
+ * "noisy" patterns (the most frequent ones, up to half of the sample), and
+ * filtering them out of the result rows.
  *
  * This mirrors the web app's "Denoise Results" feature
  * (packages/app/src/components/DBRowTable.tsx) but runs server-side using
@@ -201,21 +201,17 @@ export async function denoiseSearchResults(
     return { rows, removedPatterns: [] };
   }
 
-  // ── Identify noisy patterns (>10% of sampled events) ──
-  const sampledRowCount = sampleRows.length;
-  const noisyTemplates = new Set<string>();
-  const removedPatterns: DenoiseResult['removedPatterns'] = [];
-
-  for (const p of patterns) {
-    if (p.sampleCount / sampledRowCount > DENOISE_NOISE_THRESHOLD) {
-      noisyTemplates.add(p.pattern);
-      removedPatterns.push({
-        pattern: p.pattern,
-        estimatedCount: p.estimatedCount,
-        sampleCount: p.sampleCount,
-      });
-    }
-  }
+  const noisy = selectNoisyPatterns(
+    patterns,
+    p => p.sampleCount,
+    sampleRows.length,
+  );
+  const noisyTemplates = new Set(noisy.map(p => p.pattern));
+  const removedPatterns: DenoiseResult['removedPatterns'] = noisy.map(p => ({
+    pattern: p.pattern,
+    estimatedCount: p.estimatedCount,
+    sampleCount: p.sampleCount,
+  }));
 
   if (noisyTemplates.size === 0) {
     return { rows, removedPatterns: [] };

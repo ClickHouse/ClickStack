@@ -568,7 +568,7 @@ describe('MCP Query Tools', () => {
       beforeEach(async () => {
         const logs: Parameters<typeof bulkInsertLogs>[0] = [];
 
-        // Noisy pattern: "Health check OK from <ip>" — 80 rows (>10% threshold)
+        // Noisy pattern: "Health check OK from <ip>" — 80 of 85 rows
         for (let i = 0; i < 80; i++) {
           logs.push({
             Body: `Health check OK from 10.0.${Math.floor(i / 256)}.${i % 256}`,
@@ -578,7 +578,7 @@ describe('MCP Query Tools', () => {
           });
         }
 
-        // Unique/rare events — 5 rows (well below 10% threshold)
+        // Rare events — kept, as the health check alone covers half the sample
         for (let i = 0; i < 5; i++) {
           logs.push({
             Body: `Rare event type ${String.fromCharCode(65 + i)} occurred in subsystem`,
