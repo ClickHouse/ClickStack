@@ -21,6 +21,7 @@ import {
   getAlertReferenceLines,
   getAlertReferenceLineValues,
 } from '@/components/Alerts';
+import { useAlertTimeChartPreviewUI } from '@/components/alerts/alertUIExtension';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
 import ChartSQLPreview from '@/components/ChartSQLPreview';
 import { DBBarChart } from '@/components/DBBarChart';
@@ -216,6 +217,12 @@ export function ChartPreviewPanel({
   const queryReady =
     !isBlockedByRequiredFilters && !!isQueryReady(queriedConfig);
 
+  const alertPreview = useAlertTimeChartPreviewUI({
+    alert,
+    config: dbTimeChartConfig,
+    enabled: queryReady && activeTab === 'time',
+  });
+
   const onTableSortingChange = useCallback(
     (sortState: SortingState | null) => {
       setValue('orderBy', sortingStateToOrderByString(sortState) ?? '');
@@ -306,25 +313,30 @@ export function ChartPreviewPanel({
         <div className="flex-grow-1 d-flex flex-column" style={{ height: 400 }}>
           <DBTimeChart
             sourceId={sourceId}
-            config={dbTimeChartConfig}
+            config={alertPreview.config ?? dbTimeChartConfig}
             setDisplayType={setDisplayType}
             onTimeRangeSelect={onTimeRangeSelect}
             referenceLines={
-              alert &&
-              getAlertReferenceLines({
-                threshold: alert.threshold,
-                thresholdMax: alert.thresholdMax,
-                thresholdType: alert.thresholdType,
-              })
+              alert && !alertPreview.hideThresholdLines
+                ? getAlertReferenceLines({
+                    threshold: alert.threshold,
+                    thresholdMax: alert.thresholdMax,
+                    thresholdType: alert.thresholdType,
+                  })
+                : undefined
             }
-            referenceLineValues={referenceLineValues}
+            referenceLineValues={
+              alertPreview.hideThresholdLines ? undefined : referenceLineValues
+            }
             errorVariant="inline"
             showMVOptimizationIndicator={false}
             // Preview doesn't need the MV indicators; disabling both lets
             // DBTimeChart skip the extra MV-optimization EXPLAIN query, which
             // otherwise fires on every edit-modal open / submit.
             showDateRangeIndicator={false}
+            {...alertPreview.timeChartProps}
           />
+          {alertPreview.footer}
         </div>
       )}
       {queryReady && queriedConfig != null && activeTab === 'pie' && (

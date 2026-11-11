@@ -58,6 +58,7 @@ import {
 
 import { getPreviousDateRange } from '@/ChartUtils';
 import { AlertPanelLayout } from '@/components/AlertPanel';
+import { useAlertChartEditorUI } from '@/components/alerts/alertUIExtension';
 import ChartDisplaySettingsDrawer, {
   ChartConfigDisplaySettings,
 } from '@/components/ChartDisplaySettingsDrawer';
@@ -267,6 +268,12 @@ export default function EditTimeChartForm({
     defaultValues: formValue,
     values: formValue,
     resolver: zodResolver(zSavedChartConfig),
+  });
+
+  const { beforeSave, normalizeAlert } = useAlertChartEditorUI({
+    watch,
+    getValues,
+    setValue,
   });
 
   const {
@@ -605,15 +612,17 @@ export default function EditTimeChartForm({
         ? savedConfig
         : {
             ...savedConfig,
-            alert: normalizeNoOpAlertScheduleFields(
-              savedConfig.alert,
-              chartConfigAlert,
-              {
-                preserveExplicitScheduleOffsetMinutes:
-                  dirtyFields.alert?.scheduleOffsetMinutes === true,
-                preserveExplicitScheduleStartAt:
-                  dirtyFields.alert?.scheduleStartAt === true,
-              },
+            alert: normalizeAlert(
+              normalizeNoOpAlertScheduleFields(
+                savedConfig.alert,
+                chartConfigAlert,
+                {
+                  preserveExplicitScheduleOffsetMinutes:
+                    dirtyFields.alert?.scheduleOffsetMinutes === true,
+                  preserveExplicitScheduleStartAt:
+                    dirtyFields.alert?.scheduleStartAt === true,
+                },
+              ),
             ),
           };
 
@@ -627,6 +636,7 @@ export default function EditTimeChartForm({
       chartConfigAlert,
       dirtyFields.alert?.scheduleOffsetMinutes,
       dirtyFields.alert?.scheduleStartAt,
+      normalizeAlert,
     ],
   );
 
@@ -689,6 +699,10 @@ export default function EditTimeChartForm({
 
   const handleSave = useCallback(
     (form: ChartEditorFormState) => {
+      if (!beforeSave(form)) {
+        return;
+      }
+
       const { errors, config } = validateAndNormalize(form);
       if (errors.length > 0) {
         notifications.show({
@@ -704,7 +718,7 @@ export default function EditTimeChartForm({
         onSave?.(config);
       }
     },
-    [validateAndNormalize, onSave],
+    [beforeSave, validateAndNormalize, onSave],
   );
 
   // Same validation path as a tile save, but hands the config to the

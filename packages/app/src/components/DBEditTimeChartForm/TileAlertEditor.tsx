@@ -6,17 +6,13 @@ import {
 } from 'react-hook-form';
 import { Badge } from '@clickhouse/click-ui';
 import { formatTileAlertDisplayName } from '@hyperdx/common-utils/dist/alerts';
-import {
-  AlertThresholdType,
-  isRangeThresholdType,
-} from '@hyperdx/common-utils/dist/types';
+import { AlertThresholdType } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
   Alert,
   Box,
   Group,
   NativeSelect,
-  NumberInput,
   Paper,
   Text,
   Tooltip,
@@ -39,6 +35,7 @@ import {
 import { AlertChannelForm } from '@/components/Alerts';
 import { AckAlert } from '@/components/alerts/AckAlert';
 import { AlertHistoryCardList } from '@/components/alerts/AlertHistoryCards';
+import { useAlertConditionUI } from '@/components/alerts/alertUIExtension';
 import { AlertScheduleFields } from '@/components/AlertScheduleFields';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
 import { useDashboards } from '@/dashboard';
@@ -48,8 +45,9 @@ import {
   ALERT_CHANNEL_OPTIONS,
   intervalToMinutes,
   TILE_ALERT_INTERVAL_OPTIONS,
-  TILE_ALERT_THRESHOLD_TYPE_OPTIONS,
 } from '@/utils/alerts';
+
+import { ThresholdConditionFields } from './ThresholdConditionFields';
 
 export function TileAlertEditor({
   control,
@@ -87,8 +85,7 @@ export function TileAlertEditor({
   };
 
   const alertThresholdType = useWatch({ control, name: 'alert.thresholdType' });
-  const alertThreshold = useWatch({ control, name: 'alert.threshold' });
-  const alertThresholdMax = useWatch({ control, name: 'alert.thresholdMax' });
+  const conditionUI = useAlertConditionUI({ control, setValue, alert });
   const alertScheduleOffsetMinutes = useWatch({
     control,
     name: 'alert.scheduleOffsetMinutes',
@@ -188,63 +185,23 @@ export function TileAlertEditor({
           </Group>
         </Group>
         <Box px="sm" pb="sm">
+          {conditionUI.header}
           <Group gap="xs">
             <Text size="sm" opacity={0.7}>
-              Trigger when the value
+              {conditionUI.conditionLabel ?? 'Trigger when the value'}
             </Text>
-            <Controller
-              control={control}
-              name="alert.thresholdType"
-              render={({ field }) => (
-                <NativeSelect
-                  data={optionsToSelectData(TILE_ALERT_THRESHOLD_TYPE_OPTIONS)}
-                  size="xs"
-                  {...field}
-                  onChange={e => {
-                    field.onChange(e);
-                    if (
-                      isRangeThresholdType(e.currentTarget.value) &&
-                      alertThresholdMax == null
-                    ) {
-                      setValue('alert.thresholdMax', (alertThreshold ?? 0) + 1);
-                    }
-                  }}
-                />
-              )}
-            />
-            <Controller
-              control={control}
-              name="alert.threshold"
-              render={({ field }) => (
-                <NumberInput size="xs" w={80} {...field} />
-              )}
-            />
-            {isRangeThresholdType(alertThresholdType as AlertThresholdType) && (
-              <>
-                <Text size="sm" opacity={0.7}>
-                  and
-                </Text>
-                <Controller
-                  control={control}
-                  name="alert.thresholdMax"
-                  render={({ field, fieldState }) => (
-                    <NumberInput
-                      size="xs"
-                      w={80}
-                      {...field}
-                      error={fieldState.error?.message}
-                    />
-                  )}
-                />
-              </>
+            {conditionUI.conditionFields ?? (
+              <ThresholdConditionFields control={control} setValue={setValue} />
             )}
-            over
+            {conditionUI.intervalLabel ?? 'over'}
             <Controller
               control={control}
               name="alert.interval"
               render={({ field }) => (
                 <NativeSelect
-                  data={optionsToSelectData(TILE_ALERT_INTERVAL_OPTIONS)}
+                  data={optionsToSelectData(
+                    conditionUI.intervalOptions ?? TILE_ALERT_INTERVAL_OPTIONS,
+                  )}
                   size="xs"
                   {...field}
                 />
@@ -265,6 +222,7 @@ export function TileAlertEditor({
               )}
             />
           </Group>
+          {conditionUI.footer}
           {alert?.createdBy && (
             <Text size="xs" opacity={0.6} mt="xs">
               Created by {alert.createdBy.name || alert.createdBy.email}
