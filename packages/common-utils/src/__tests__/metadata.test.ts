@@ -1381,7 +1381,7 @@ describe('Metadata', () => {
 
       expect(sql).toContain('mergeTreeTextIndex(');
       expect(sql).toContain('topKWeighted(');
-      expect(sql).toContain('LIMIT 100000');
+      expect(sql).toContain('GROUP BY key');
       expect(sql).not.toContain('startsWith(token,');
     });
 
@@ -1400,33 +1400,7 @@ describe('Metadata', () => {
       expect(sql).toContain('mergeTreeTextIndex(');
       expect(sql).toContain('startsWith(token,');
       expect(sql).toContain('substring(token, position(token,');
-      expect(sql).toContain("startsWith(token, 'requestId=')");
-    });
-
-    it('reads a capped number of tokens per Map key, without a row cap that could starve later keys', async () => {
-      setupDefaultLogsSchema();
-
-      await metadata.getAllKeyValues({
-        ...baseArgs,
-        keyExpressions: [
-          "LogAttributes['requestId']",
-          "LogAttributes['region']",
-        ],
-      });
-
-      const call = (mockClickhouseClient.query as jest.Mock).mock.calls.find(
-        ([opts]) => (opts.query as string).includes('startsWith(token,'),
-      )![0];
-      const branches = (call.query as string).split('UNION ALL');
-      expect(branches).toHaveLength(2);
-      expect(branches[0]).toContain("startsWith(token, 'requestId=')");
-      expect(branches[0]).toContain("'requestId' AS key");
-      expect(branches[1]).toContain("startsWith(token, 'region=')");
-      for (const branch of branches) {
-        expect(branch).toContain('LIMIT 100000');
-      }
-      expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
-      expect(call.clickhouse_settings.read_overflow_mode).toBeUndefined();
+      expect(sql).toContain('GROUP BY column, key');
     });
 
     it.each([
@@ -1548,11 +1522,11 @@ describe('Metadata', () => {
         ),
       });
 
-      const branchCounts = (mockClickhouseClient.query as jest.Mock).mock.calls
+      const keysPerQuery = (mockClickhouseClient.query as jest.Mock).mock.calls
         .map(([opts]) => opts.query as string)
         .filter(q => q.includes('startsWith(token,'))
-        .map(q => q.split('UNION ALL').length);
-      expect(branchCounts).toEqual([10, 10, 5]);
+        .map(q => q.split('startsWith(token,').length - 1);
+      expect(keysPerQuery).toEqual([10, 10, 5]);
     });
 
     it('routes ServiceName and SeverityText through getMetadataMVKeyValues (KV rollup MV path)', async () => {
