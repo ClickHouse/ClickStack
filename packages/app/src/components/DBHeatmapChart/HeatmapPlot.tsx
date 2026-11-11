@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import cx from 'classnames';
 import uPlot from 'uplot';
 import UplotReact from 'uplot-react';
-import { useElementSize } from '@mantine/hooks';
+import { useElementSize, useMergedRef } from '@mantine/hooks';
 
 import { useStableValue } from '@/hooks/useStableValue';
 import { NumberFormat } from '@/types';
@@ -73,6 +73,16 @@ export function HeatmapPlot({
     HighlightedPoint | undefined
   >(undefined);
 
+  // The tooltip is fixed to the viewport, so a scroll under a still cursor
+  // would leave it behind; hide it until the next mouse move.
+  const hasHighlight = highlightedPoint != null;
+  useEffect(() => {
+    if (!hasHighlight) return;
+    const hide = () => setHighlightedPoint(undefined);
+    window.addEventListener('scroll', hide, { capture: true, passive: true });
+    return () => window.removeEventListener('scroll', hide, { capture: true });
+  }, [hasHighlight]);
+
   // Gate tooltip display on actual mouse interaction. uPlot fires setCursor
   // on init (before user hovers), which would show the tooltip on page load.
   const mouseInsideRef = useRef(false);
@@ -109,6 +119,8 @@ export function HeatmapPlot({
   });
 
   const { ref, width, height } = useElementSize();
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const mergedRef = useMergedRef(ref, setContainer);
 
   // Reapply the URL-backed selection whenever the bounds prop changes
   // (e.g. a fresh drag-select arrives via the round-trip through the
@@ -329,7 +341,7 @@ export function HeatmapPlot({
 
   return (
     <div
-      ref={ref}
+      ref={mergedRef}
       className={cx('heatmap-selection-container', className)}
       style={{ width: '100%', height: '100%', position: 'relative' }}
       onClick={() => {
@@ -374,8 +386,7 @@ export function HeatmapPlot({
         <HeatmapTooltip
           point={highlightedPoint}
           cell={highlightedCell}
-          width={width}
-          height={height}
+          containerRect={container?.getBoundingClientRect()}
           showDragHint={!!onFilter}
         />
       )}
