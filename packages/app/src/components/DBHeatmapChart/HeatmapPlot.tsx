@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import cx from 'classnames';
 import uPlot from 'uplot';
 import UplotReact from 'uplot-react';
-import { useElementSize } from '@mantine/hooks';
+import { useElementSize, useMergedRef } from '@mantine/hooks';
 
 import { useStableValue } from '@/hooks/useStableValue';
 import { NumberFormat } from '@/types';
@@ -109,6 +109,8 @@ export function HeatmapPlot({
   });
 
   const { ref, width, height } = useElementSize();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mergedRef = useMergedRef(ref, containerRef);
 
   // Reapply the URL-backed selection whenever the bounds prop changes
   // (e.g. a fresh drag-select arrives via the round-trip through the
@@ -329,7 +331,7 @@ export function HeatmapPlot({
 
   return (
     <div
-      ref={ref}
+      ref={mergedRef}
       className={cx('heatmap-selection-container', className)}
       style={{ width: '100%', height: '100%', position: 'relative' }}
       onClick={() => {
@@ -374,8 +376,8 @@ export function HeatmapPlot({
         <HeatmapTooltip
           point={highlightedPoint}
           cell={highlightedCell}
-          width={width}
-          height={height}
+          // eslint-disable-next-line react-hooks/refs
+          containerRect={containerRef.current?.getBoundingClientRect()}
           showDragHint={!!onFilter}
         />
       )}

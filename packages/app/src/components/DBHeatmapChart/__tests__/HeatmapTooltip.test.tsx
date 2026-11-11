@@ -25,8 +25,7 @@ const renderTooltip = (
     <HeatmapTooltip
       point={point}
       cell={{ kind: 'distribution', formattedY: 'y=2', percentile: undefined }}
-      width={400}
-      height={300}
+      containerRect={new DOMRect(100, 200, 400, 300)}
       showDragHint={false}
       {...props}
     />,
@@ -89,5 +88,21 @@ describe('HeatmapTooltip', () => {
 
     renderTooltip({ showDragHint: true });
     expect(screen.getByText(/Drag to Compare/)).toBeInTheDocument();
+  });
+
+  it('renders the tooltip outside the chart container, in viewport coordinates', () => {
+    const viewportHeight = jest
+      .spyOn(document.documentElement, 'clientHeight', 'get')
+      .mockReturnValue(1000);
+    const { container } = renderTooltip();
+
+    const tooltip = screen
+      .getByText('time:1000')
+      .closest<HTMLElement>('div[style*="position: fixed"]');
+    expect(tooltip).not.toBeNull();
+    expect(container.contains(tooltip)).toBe(false);
+    expect(tooltip?.style.top).toBe('215px');
+    expect(tooltip?.style.left).toBe('120px');
+    viewportHeight.mockRestore();
   });
 });
