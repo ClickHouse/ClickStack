@@ -11,10 +11,17 @@
  *
  * All chunks of one event share the same log timestamp, so the stream order
  * of chunks is only as reliable as the query's ORDER BY. This assembler
- * buffers chunks per event id and joins them sorted by chunk index, so a
+ * buffers chunks per event and joins them sorted by chunk index, so a
  * replay can never be corrupted by out-of-order or interleaved chunks —
  * which previously scrambled the concatenation, made JSON.parse throw, and
- * silently dropped the event (https://github.com/hyperdxio/hyperdx/issues/2569).
+ * silently dropped the event (https://github.com/ClickHouse/ClickStack/issues/2569).
+ *
+ * `@hyperdx/browser` and `@clickhouse/clickstack-browser` up to 1.2.0 restart
+ * `rr-web.event` at 1 on every page load, so one session repeats event ids.
+ * Events are keyed by id plus full-precision timestamp: keyed by id alone, a
+ * page's orphaned chunk (the rest lost when the page closed) completes a later
+ * page's event of the same id and corrupts it. Second precision is not enough,
+ * since two page loads can start within the same second.
  *
  * ClickHouse returns the attributes as strings (or `''` when absent), so all
  * fields are coerced before use.
@@ -31,6 +38,8 @@ export type RRWebStreamRow = {
   tcks?: number | string;
   /** rr-web.event — event counter shared by all chunks of an event */
   ev?: number | string;
+  /** Full-precision log timestamp, shared by all chunks of an event */
+  ts?: string;
 };
 
 export type RRWebAssemblerErrorInfo = {
@@ -40,19 +49,23 @@ export type RRWebAssemblerErrorInfo = {
     | 'duplicate-chunk'
     | 'buffer-overflow';
   eventId?: number;
+  timestamp?: string;
   chunksReceived: number;
   totalChunks: number;
 };
 
 type PendingEvent = {
+  eventId: number;
+  timestamp: string;
   totalChunks: number;
   parts: Map<number, string>;
 };
 
 /**
  * Max number of chunked events buffered concurrently. With a correctly
- * ordered stream at most one event is pending at a time; the cap only guards
- * against pathological data endlessly growing memory.
+ * ordered stream at most one event is pending at a time, plus events whose
+ * remaining chunks were lost; the cap only guards against pathological data
+ * endlessly growing memory.
  */
 const MAX_PENDING_EVENTS = 20;
 
@@ -70,38 +83,37 @@ export function createRrwebChunkAssembler({
   /** Called when an event had to be dropped */
   onError: (error: unknown, info: RRWebAssemblerErrorInfo) => void;
 }) {
-  // Insertion-ordered by first-seen chunk, used for overflow eviction
-  const pending = new Map<number, PendingEvent>();
+  // Keyed by eventKey; insertion-ordered by first-seen chunk, used for
+  // overflow eviction
+  const pending = new Map<string, PendingEvent>();
 
   const parseAndEmit = (
     body: string,
-    eventId: number | undefined,
-    chunksReceived: number,
-    totalChunks: number,
+    info: Omit<RRWebAssemblerErrorInfo, 'reason'>,
   ) => {
     try {
       onEvent(JSON.parse(body));
     } catch (error) {
-      onError(error, {
-        reason: 'parse-error',
-        eventId,
-        chunksReceived,
-        totalChunks,
-      });
+      onError(error, { reason: 'parse-error', ...info });
     }
   };
 
+  const pendingInfo = (entry: PendingEvent) => ({
+    eventId: entry.eventId,
+    timestamp: entry.timestamp,
+    chunksReceived: entry.parts.size,
+    totalChunks: entry.totalChunks,
+  });
+
   const dropPending = (
-    eventId: number,
+    key: string,
     entry: PendingEvent,
     reason: RRWebAssemblerErrorInfo['reason'],
   ) => {
-    pending.delete(eventId);
+    pending.delete(key);
     onError(new Error(`rrweb event dropped: ${reason}`), {
       reason,
-      eventId,
-      chunksReceived: entry.parts.size,
-      totalChunks: entry.totalChunks,
+      ...pendingInfo(entry),
     });
   };
 
@@ -110,54 +122,59 @@ export function createRrwebChunkAssembler({
       const totalChunks = toNumber(row.tcks);
       const chunk = toNumber(row.ck);
       const eventId = toNumber(row.ev);
+      const timestamp = row.ts ?? '';
 
       // Unchunked event — parse directly.
       if (totalChunks <= 1 || chunk === 0) {
-        parseAndEmit(row.b, eventId, 1, 1);
+        parseAndEmit(row.b, {
+          eventId,
+          timestamp,
+          chunksReceived: 1,
+          totalChunks: 1,
+        });
         return;
       }
 
-      let entry = pending.get(eventId);
+      const key = `${eventId}:${timestamp}`;
+      let entry = pending.get(key);
       if (entry != null && entry.parts.has(chunk)) {
-        // The event counter resets on page reload, so a colliding id means a
-        // new event started before the previous one completed. Drop the
-        // incomplete one rather than mixing bodies.
-        dropPending(eventId, entry, 'duplicate-chunk');
+        // A chunk index seen twice for one event: a re-sent record, or rows
+        // without a timestamp whose counter restarted on page reload. Drop
+        // the incomplete event rather than mix bodies.
+        dropPending(key, entry, 'duplicate-chunk');
         entry = undefined;
       }
       if (entry == null) {
-        entry = { totalChunks, parts: new Map() };
-        pending.set(eventId, entry);
+        entry = { eventId, timestamp, totalChunks, parts: new Map() };
+        pending.set(key, entry);
       }
       entry.parts.set(chunk, row.b);
 
       if (entry.parts.size >= entry.totalChunks) {
-        pending.delete(eventId);
+        pending.delete(key);
         const body = [...entry.parts.entries()]
           .sort(([a], [b]) => a - b)
           .map(([, part]) => part)
           .join('');
-        parseAndEmit(body, eventId, entry.parts.size, entry.totalChunks);
+        parseAndEmit(body, pendingInfo(entry));
         return;
       }
 
       if (pending.size > MAX_PENDING_EVENTS) {
         const oldest = pending.entries().next().value;
         if (oldest != null) {
-          const [oldestId, oldestEntry] = oldest;
-          dropPending(oldestId, oldestEntry, 'buffer-overflow');
+          const [oldestKey, oldestEntry] = oldest;
+          dropPending(oldestKey, oldestEntry, 'buffer-overflow');
         }
       }
     },
 
     /** Reports any events still incomplete when the stream ends. */
     end(): void {
-      for (const [eventId, entry] of pending) {
+      for (const entry of pending.values()) {
         onError(new Error('rrweb event dropped: incomplete-event'), {
           reason: 'incomplete-event',
-          eventId,
-          chunksReceived: entry.parts.size,
-          totalChunks: entry.totalChunks,
+          ...pendingInfo(entry),
         });
       }
       pending.clear();

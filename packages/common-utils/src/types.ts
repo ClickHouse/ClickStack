@@ -259,9 +259,9 @@ export const RootValueExpressionSchema = z
  * number-tile colors, reference lines, and threshold rules.
  *
  * Tokens map to CSS variables in
- * `packages/app/src/theme/themes/<theme>/_tokens.scss`:
- *   chart-{hue}                 -> --color-chart-{hue}                    (10 hues, unified across themes)
- *   chart-success/warning/error -> --color-chart-{success|warning|error}  (semantic; unified across brands)
+ * `packages/app/src/theme/_tokens.scss`:
+ *   chart-{hue}                 -> --color-chart-{hue}                    (10 hues)
+ *   chart-success/warning/error -> --color-chart-{success|warning|error}  (semantic)
  *
  * `chart-info` is a render-time CSS variable (defined in the shared
  * `chart-semantic-tokens` SCSS mixin) but is intentionally *not* in the
@@ -269,7 +269,7 @@ export const RootValueExpressionSchema = z
  * brand-primary (e.g. info-level log series, `getChartColorInfo()`).
  *
  * Storing tokens (not hex) lets user choices reflow correctly across
- * themes and color modes; see notes/repo-conventions/hyperdx/tile-styling.md.
+ * color modes; see notes/repo-conventions/hyperdx/tile-styling.md.
  *
  * Lives in common-utils because the schema is shared between the app
  * and the API; the theme-aware CSS resolver (`getColorFromCSSToken`)
@@ -652,6 +652,7 @@ export const WEBHOOK_TEMPLATE_VARIABLES = [
   'sourceQuery',
   'teamId',
   'note',
+  'tags',
 ] as const;
 
 export type WebhookTemplateVariable =
@@ -692,6 +693,7 @@ export const WebhookSchema = z.object({
       'Internal API returns masked value (<origin>/****). PUT accepts the masked form to preserve the stored URL.',
     ),
   description: z.string().optional(),
+  titleEmoji: z.boolean().optional(),
   queryParams: z
     .record(z.string(), z.string())
     .optional()
@@ -778,7 +780,8 @@ export const DEFAULT_INCIDENT_IO_WEBHOOK_BODY = `{
     "value": "{{value}}",
     "group_key": "{{groupKey}}",
     "window_start": "{{startTimeISO}}",
-    "window_end": "{{endTimeISO}}"
+    "window_end": "{{endTimeISO}}",
+    "tags": "{{tags}}"
   }
 }`;
 
@@ -2440,6 +2443,12 @@ export const AdhocDashboardFilterSchema = dashboardFilterBaseSchema
     /** IDs of the sources whose keys and values the filter offers, all of `sourceType`. */
     sources: z.array(z.string().min(1)).min(1),
     /**
+     * Narrows the rows keys and values are suggested from, as a queried filter's
+     * `where` narrows its dropdown. SQL sources only, and never broadcast.
+     */
+    where: QueryExpressionDashboardFilterSchema.shape.where,
+    whereLanguage: QueryExpressionDashboardFilterSchema.shape.whereLanguage,
+    /**
      * Sources the conditions are broadcast to, all of `sourceType`. Undefined /
      * empty means the filter's `sources`.
      */
@@ -3415,6 +3424,56 @@ export const RotateAccessKeyApiResponseSchema = z.object({
 
 export type RotateAccessKeyApiResponse = z.infer<
   typeof RotateAccessKeyApiResponseSchema
+>;
+
+// Team-owned bearer keys for external API v2 and MCP. They outlive the admin
+// who created them; the plaintext `key` is only returned on create.
+export const OrgApiKeyExpirySchema = z.enum(['30d', '1y', 'never']);
+export type OrgApiKeyExpiry = z.infer<typeof OrgApiKeyExpirySchema>;
+
+const OrgApiKeyDescriptionSchema = z.string().trim().min(1).max(100);
+
+export const CreateOrgApiKeyRequestSchema = z.object({
+  description: OrgApiKeyDescriptionSchema,
+  expiry: OrgApiKeyExpirySchema,
+});
+export type CreateOrgApiKeyRequest = z.infer<
+  typeof CreateOrgApiKeyRequestSchema
+>;
+
+export const UpdateOrgApiKeyRequestSchema = z.object({
+  description: OrgApiKeyDescriptionSchema,
+});
+export type UpdateOrgApiKeyRequest = z.infer<
+  typeof UpdateOrgApiKeyRequestSchema
+>;
+
+export const OrgApiKeyApiResponseSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string().nullable(),
+  lastUsedAt: z.string().nullable(),
+  // Null once the creating user has been removed from the team.
+  createdBy: z
+    .object({
+      id: z.string(),
+      name: z.string().optional(),
+      email: z.string(),
+    })
+    .nullable(),
+});
+export type OrgApiKeyApiResponse = z.infer<typeof OrgApiKeyApiResponseSchema>;
+
+export const OrgApiKeysApiResponseSchema = z.object({
+  data: z.array(OrgApiKeyApiResponseSchema),
+});
+export type OrgApiKeysApiResponse = z.infer<typeof OrgApiKeysApiResponseSchema>;
+
+export const CreateOrgApiKeyApiResponseSchema =
+  OrgApiKeyApiResponseSchema.extend({ key: z.string() });
+export type CreateOrgApiKeyApiResponse = z.infer<
+  typeof CreateOrgApiKeyApiResponseSchema
 >;
 
 // IaC (Terraform) export

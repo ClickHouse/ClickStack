@@ -19,29 +19,40 @@ const _assertSourceKindsMatchEnum: readonly (typeof SOURCE_KINDS)[number][] = [
 ];
 void _assertSourceKindsMatchEnum;
 
+const NON_PROMQL_SOURCE_KINDS = ['log', 'trace', 'session', 'metric'] as const;
+
+const KIND_DESCRIPTION =
+  'Type of telemetry the table holds. Determines which other fields are ' +
+  'required; see the tool description.';
+
 // Advanced nested config, modeled loosely (SourceSchemaNoId does the strict
 // validation) so it round-trips through describe_source -> save_source.
 // Granularity fields use the internal "<n> <unit>" form (e.g. "5 minute").
-const highlightedAttributeExpressionsSchema = z.array(
-  z.object({
-    sqlExpression: z
-      .string()
-      .describe(
-        "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
-      ),
-    luceneExpression: z
-      .string()
-      .optional()
-      .describe(
-        'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
-          'When set, it is used when searching for this attribute value.',
-      ),
-    alias: z
-      .string()
-      .optional()
-      .describe('Display name for the attribute (rendered as AS <alias>).'),
-  }),
-);
+//
+// A factory, not a shared constant: zod-to-json-schema emits a reused schema
+// instance as a bare `$ref` to its first use, and MCP directory validators
+// flag that property as untyped.
+const highlightedAttributeExpressionsSchema = () =>
+  z.array(
+    z.object({
+      sqlExpression: z
+        .string()
+        .describe(
+          "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
+        ),
+      luceneExpression: z
+        .string()
+        .optional()
+        .describe(
+          'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
+            'When set, it is used when searching for this attribute value.',
+        ),
+      alias: z
+        .string()
+        .optional()
+        .describe('Display name for the attribute (rendered as AS <alias>).'),
+    }),
+  );
 
 const aggregatedColumnSchema = z.object({
   sourceColumn: z
@@ -150,7 +161,7 @@ const metricTablesSchema = z
       'metric sources.',
   );
 
-export const mcpSaveSourceSchema = z.object({
+const mcpSaveSourceSchema = z.object({
   // ── Update selector ──
   id: z
     .string()
@@ -160,12 +171,7 @@ export const mcpSaveSourceSchema = z.object({
     ),
 
   // ── Always required (base) ──
-  kind: z
-    .enum(SOURCE_KINDS)
-    .describe(
-      'Type of telemetry the table holds. Determines which other fields are ' +
-        'required; see the tool description.',
-    ),
+  kind: z.enum(SOURCE_KINDS).describe(KIND_DESCRIPTION),
   name: z.string().min(1).describe('Display name shown in source selectors.'),
   connection: z
     .string()
@@ -376,13 +382,13 @@ export const mcpSaveSourceSchema = z.object({
     ),
 
   // ── Highlighted attribute expressions (advanced) ──
-  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Trace-level attributes displayed in the trace ' +
         'view for the selected trace.',
     ),
-  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Row-level attributes displayed in the row side ' +
@@ -450,6 +456,15 @@ export const mcpSaveSourceSchema = z.object({
 });
 
 export type McpSaveSourceInput = z.infer<typeof mcpSaveSourceSchema>;
+
+/** The save_source input schema, without the promql kind when PromQL is off. */
+export function buildMcpSaveSourceSchema(promqlEnabled: boolean) {
+  return promqlEnabled
+    ? mcpSaveSourceSchema
+    : mcpSaveSourceSchema.extend({
+        kind: z.enum(NON_PROMQL_SOURCE_KINDS).describe(KIND_DESCRIPTION),
+      });
+}
 
 /**
  * Assemble the flat MCP input into the SourceSchemaNoId shape: nest from.*,

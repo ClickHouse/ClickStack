@@ -6,12 +6,7 @@ import {
   toWallClock,
 } from '@hyperdx/common-utils/dist/core/utils';
 
-import { getLocalTimeZone } from '@/timeZone';
-
-function currentDate(): Date {
-  // eslint-disable-next-line no-restricted-syntax
-  return new Date();
-}
+import { currentDate, getLocalTimeZone } from '@/timeZone';
 
 function resolveTimeZone(timeZone?: string): string {
   return timeZone ?? getLocalTimeZone();

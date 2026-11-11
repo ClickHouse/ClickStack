@@ -1,23 +1,14 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import Router, { useRouter } from 'next/router';
 import Script from 'next/script';
 import cx from 'classnames';
 import { Badge } from '@clickhouse/click-ui';
-import HyperDX from '@hyperdx/browser';
+import { setAttributes, setUser } from '@clickhouse/clickstack-browser';
 import { SavedSearchListApiResponse } from '@hyperdx/common-utils/dist/types';
+import { Anchor, Collapse, Flex, Group, ScrollArea, Text } from '@mantine/core';
+import { useDisclosure, useFocusTrap, useLocalStorage } from '@mantine/hooks';
 import {
-  ActionIcon,
-  Anchor,
-  Collapse,
-  Flex,
-  Group,
-  ScrollArea,
-  Text,
-} from '@mantine/core';
-import { useDisclosure, useLocalStorage } from '@mantine/hooks';
-import {
-  IconArrowBarToLeft,
   IconBell,
   IconChartDots,
   IconDeviceFloppy,
@@ -29,8 +20,10 @@ import {
 } from '@tabler/icons-react';
 
 import api from '@/api';
+import { useLogomark, useWordmark } from '@/brand';
 import { AlertStatusIcon } from '@/components/AlertStatusIcon';
 import { InstanceLabel } from '@/components/AppNav/InstanceLabel';
+import { useMobileNavOverlay } from '@/components/AppNav/useMobileNavOverlay';
 import { useCompactViewport } from '@/components/CompactViewport/useCompactViewport';
 import { APP_VERSION, IS_LOCAL_MODE } from '@/config';
 import { Dashboard, useDashboards } from '@/dashboard';
@@ -39,7 +32,6 @@ import { setHdxIdentity } from '@/hdxDebug';
 import InstallInstructionModal from '@/InstallInstructionsModal';
 import OnboardingChecklist from '@/OnboardingChecklist';
 import { useSavedSearches } from '@/savedSearch';
-import { useLogomark, useWordmark } from '@/theme/ThemeProvider';
 import { getTimeZoneShortName } from '@/timeZone';
 import { useDisplayTimeZone } from '@/useDisplayTimeZone';
 import { UserPreferencesModal } from '@/UserPreferencesModal';
@@ -80,10 +72,13 @@ type NavLinkConfig = {
   cloudOnly?: boolean; // Only show when not in local mode
 };
 
+const RAIL_WIDTH = 50;
+const FULL_NAV_WIDTH = 250;
+
 const NAV_LINKS: NavLinkConfig[] = [
   {
     id: 'chart',
-    label: 'Chart Explorer',
+    label: 'Chart explorer',
     href: '/chart',
     icon: <IconChartDots size={16} />,
   },
@@ -96,13 +91,13 @@ const NAV_LINKS: NavLinkConfig[] = [
   },
   {
     id: 'sessions',
-    label: 'Client Sessions',
+    label: 'Client sessions',
     href: '/sessions',
     icon: <IconDeviceLaptop size={16} />,
   },
   {
     id: 'service-map',
-    label: 'Service Map',
+    label: 'Service map',
     href: '/service-map',
     icon: <IconSitemap size={16} />,
     isBeta: true,
@@ -191,25 +186,43 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
     defaultValue: false,
   });
 
-  const isCollapsed = useCompactViewport() || isPreferCollapsed;
+  const isCompact = useCompactViewport();
+  const {
+    isOpen: isMobileNavOpen,
+    toggle: toggleMobileNav,
+    close: closeMobileNav,
+  } = useMobileNavOverlay(isCompact);
+  const collapseButtonRef = useRef<HTMLButtonElement>(null);
+  const wasMobileNavOpenRef = useRef(false);
+  // Traps Tab inside the open overlay so keys do not reach the page under the scrim.
+  const navFocusTrapRef = useFocusTrap(isMobileNavOpen);
 
-  const navWidth = isCollapsed ? 50 : 250;
-
+  // The toggle stays mounted when the overlay closes, so keyboard focus can
+  // return to it after Escape or the scrim removes itself.
   useEffect(() => {
-    HyperDX.addAction('user navigated', {
-      route: pathname,
-      query: JSON.stringify(query),
-    });
-  }, [pathname, query]);
+    if (wasMobileNavOpenRef.current && !isMobileNavOpen) {
+      collapseButtonRef.current?.focus();
+    }
+    wasMobileNavOpenRef.current = isMobileNavOpen;
+  }, [isMobileNavOpen]);
+
+  // The page layout reserves the rail width even while the overlay is open,
+  // so opening the nav does not shift the content.
+  const isRail = isCompact || isPreferCollapsed;
+  const isCollapsed = isRail && !isMobileNavOpen;
+  const navWidth = isCollapsed ? RAIL_WIDTH : FULL_NAV_WIDTH;
+  const reservedWidth = isRail ? RAIL_WIDTH : FULL_NAV_WIDTH;
+  // The in-flow rail is border-box, so its 1px border is already inside
+  // reservedWidth. The fixed nav's ghost keeps the extra pixel it had
+  // before. The overlay ghost must not, or the page shifts when it opens.
+  const ghostWidth =
+    isMobileNavOpen && !fixed ? reservedWidth : reservedWidth + 1;
 
   useEffect(() => {
     if (meData != null) {
-      HyperDX.enableAdvancedNetworkCapture();
-      HyperDX.setGlobalAttributes({
-        userEmail: meData.email,
-        userName: meData.name,
-        teamName: meData.team.name,
-      });
+      setUser({ id: meData.id, email: meData.email, name: meData.name });
+      // Un-namespaced because the Sessions page reads teamName (sessions.ts)
+      setAttributes({ teamName: meData.team.name });
       // Fold user/team ids + per-user toggles into window.hdx for debug reports.
       setHdxIdentity({
         userId: meData.id,
@@ -330,24 +343,35 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
 
   return (
     <AppNavContext value={{ isCollapsed, pathname }}>
-      {fixed && (
+      {(fixed || isMobileNavOpen) && (
         <div
           className={styles.navGhost}
           style={{
-            width: navWidth + 1,
-            minWidth: navWidth + 1,
+            width: ghostWidth,
+            minWidth: ghostWidth,
           }}
         ></div>
+      )}
+      {isMobileNavOpen && (
+        <button
+          type="button"
+          className={styles.navScrim}
+          aria-label="Close navigation"
+          onClick={closeMobileNav}
+        />
       )}
       <InstallInstructionModal
         show={showInstallInstructions}
         onHide={closeInstallInstructions}
       />
       <div
+        ref={navFocusTrapRef}
         data-testid="app-nav"
         className={cx(styles.nav, {
-          [styles.navFixed]: fixed,
+          [styles.navFixed]: fixed || isMobileNavOpen,
+          [styles.navOverlay]: isMobileNavOpen,
           [styles.navCollapsed]: isCollapsed,
+          [styles.navCompactRail]: isCompact && !isMobileNavOpen,
         })}
         style={{ width: navWidth }}
       >
@@ -386,17 +410,40 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
                 </Group>
               )}
             </Link>
-            <ActionIcon
-              variant="subtle"
-              size="sm"
+            {/* click-ui 0.12 has no sidebar-left icon, so the glyph is
+                inlined. Chrome matches IconButton type="primary" size="sm". */}
+            <button
+              ref={collapseButtonRef}
+              type="button"
               className={cx(styles.collapseButton, {
                 [styles.collapseButtonCollapsed]: isCollapsed,
               })}
-              title="Collapse/Expand Navigation"
-              onClick={() => setIsPreferCollapsed((v: boolean) => !v)}
+              title="Collapse/expand navigation"
+              aria-label="Collapse/expand navigation"
+              aria-expanded={!isCollapsed}
+              data-autofocus={isMobileNavOpen ? true : undefined}
+              onClick={() =>
+                isCompact
+                  ? toggleMobileNav()
+                  : setIsPreferCollapsed((v: boolean) => !v)
+              }
             >
-              <IconArrowBarToLeft size={16} />
-            </ActionIcon>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+              >
+                <path
+                  fill="currentColor"
+                  d="M20.25 5C20.25 4.30921 19.6908 3.75 19 3.75H10.752H9.25195H5C4.30921 3.75 3.75 4.30921 3.75 5V19C3.75 19.6908 4.30921 20.25 5 20.25H9.25195H10.752H19C19.6908 20.25 20.25 19.6908 20.25 19V5ZM21.75 19C21.75 20.5192 20.5192 21.75 19 21.75H5C3.48079 21.75 2.25 20.5192 2.25 19V5C2.25 3.48079 3.48079 2.25 5 2.25H19C20.5192 2.25 21.75 3.48079 21.75 5V19Z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M9.25195 3.75V20.25H10.752V3.75H9.25195Z"
+                />
+              </svg>
+            </button>
           </div>
         </div>
         <ScrollArea
@@ -417,7 +464,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
 
             {/* Saved Searches */}
             <AppNavLink
-              label="Saved Searches"
+              label="Saved searches"
               href="/search/list"
               icon={<IconDeviceFloppy size={16} />}
               isActive={isSavedSearchActive}
@@ -434,7 +481,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
                     <Text size="xs" c="dimmed" pl="lg" pr="xs" py={4} lh={1.4}>
                       No favorites. Star on{' '}
                       <Anchor component={Link} href="/search/list" size="xs">
-                        Saved Searches
+                        Saved searches
                       </Anchor>
                       .
                     </Text>
@@ -499,7 +546,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
             {/* Team Settings (Cloud only) */}
             {!IS_LOCAL_MODE && (
               <AppNavLink
-                label="Team Settings"
+                label="Team settings"
                 href="/team"
                 icon={<IconSettings size={16} />}
               />

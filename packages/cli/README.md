@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/@hyperdx/cli.svg)](https://www.npmjs.com/package/@hyperdx/cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-Terminal UI and CLI for [HyperDX](https://github.com/hyperdxio/hyperdx) —
+Terminal UI and CLI for [HyperDX](https://github.com/ClickHouse/ClickStack) —
 search, tail, chart, and query your logs, traces, and metrics without leaving
 the terminal.
 
@@ -69,6 +69,7 @@ hdx connections                     # List ClickHouse connections
 hdx dashboards                      # List dashboards with tile summaries
 hdx auth login|status|logout        # Manage authentication
 hdx team list|current|use <team>    # Switch between teams
+hdx mcp install                     # Add the MCP server to your AI agents
 hdx upload-sourcemaps               # Upload JS source maps
 ```
 
@@ -214,6 +215,20 @@ hdx team use "My Team"    # Switch by name or ID
 The choice persists across CLI invocations. On single-team deployments these
 commands are effectively no-ops.
 
+### `hdx mcp install` — Connect AI agents
+
+Adds the ClickStack MCP server to every supported agent it finds: Claude Code,
+Codex, Cursor, and VS Code. It asks for a personal access key or an
+organization API key with hidden input and checks it before changing any
+config, so the key stays out of shell history and agent chats.
+
+```bash
+npx @hyperdx/cli mcp install -a https://your-hyperdx.example
+```
+
+The key is stored in plain text in each agent's user config, which the
+command lists when it finishes. Running it again replaces the existing entry.
+
 ### `hdx upload-sourcemaps` — Source maps
 
 Upload JavaScript source maps to HyperDX for stack trace de-obfuscation. Run it
@@ -257,11 +272,11 @@ The CLI is built to be driven by scripts and AI agents:
 
 ## Links
 
-- [HyperDX repository](https://github.com/hyperdxio/hyperdx)
+- [HyperDX repository](https://github.com/ClickHouse/ClickStack)
 - [ClickStack documentation](https://clickhouse.com/docs/use-cases/observability/clickstack/overview)
-- [Report an issue](https://github.com/hyperdxio/hyperdx/issues)
-- [Contributing](https://github.com/hyperdxio/hyperdx/tree/main/packages/cli/CONTRIBUTING.md)
+- [Report an issue](https://github.com/ClickHouse/ClickStack/issues)
+- [Contributing](https://github.com/ClickHouse/ClickStack/tree/main/packages/cli/CONTRIBUTING.md)
 
 ## License
 
-[MIT](https://github.com/hyperdxio/hyperdx/blob/main/LICENSE)
+[MIT](https://github.com/ClickHouse/ClickStack/blob/main/LICENSE)

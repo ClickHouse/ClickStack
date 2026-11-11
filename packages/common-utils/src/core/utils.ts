@@ -11,7 +11,11 @@ import {
   isQueryExpressionFilter,
   isStaticListFilter,
 } from '@/filters';
-import { isBuilderSavedChartConfig, isRawSqlSavedChartConfig } from '@/guards';
+import {
+  isBuilderSavedChartConfig,
+  isPromqlSavedChartConfig,
+  isRawSqlSavedChartConfig,
+} from '@/guards';
 import { MacroExpansionError, MalformedMacroArgsError } from '@/macroErrors';
 import {
   getSourceDependentMacrosUsed,
@@ -50,6 +54,32 @@ import { SkipIndexMetadata, TableMetadata } from './metadata';
 
 /** The default maximum number of buckets setting when determining a bucket duration for 'auto' granularity */
 export const DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS = 60;
+
+/** The bucket count a time chart sizes an 'auto' granularity for. */
+export const TIME_CHART_AUTO_GRANULARITY_BUCKETS = 80;
+
+/** The bucket count a heatmap sizes an 'auto' granularity for. */
+export const HEATMAP_AUTO_GRANULARITY_BUCKETS = 245;
+
+/**
+ * The most rows a table tile shows. Arbitrary limit to prevent OOM crashes for
+ * very large result sets. Most result sets should be paginated anyway.
+ */
+export const MAX_TABLE_ROWS = 10_000;
+
+/** Code-point limit for row-lookup string hashes (matches ClickHouse leftUTF8). */
+export const LEFT_UTF8_HASH_CODE_POINTS = 1000;
+
+/** First `limit` Unicode code points, matching ClickHouse leftUTF8(s, limit). */
+export function leftUtf8Prefix(value: string, limit: number): string {
+  let prefix = '';
+  let n = 0;
+  for (const ch of value) {
+    if (n++ === limit) break;
+    prefix += ch;
+  }
+  return prefix;
+}
 
 /**
  * Returns the quantile level of a percentile shorthand aggFn (`p95` -> 0.95),
@@ -134,11 +164,28 @@ export function splitAndTrimWithBracket(input: string): string[] {
   let squareCount: number = 0;
   let inSingleQuote: boolean = false;
   let inDoubleQuote: boolean = false;
+  let inBacktick: boolean = false;
 
   const res: string[] = [];
   let cur: string = '';
   for (let i = 0; i <= input.length; i++) {
     const c = i === input.length ? ',' : input[i];
+
+    if (
+      c === '`' &&
+      !inSingleQuote &&
+      !inDoubleQuote &&
+      !isQuoteEscapedByBackslash(input, i)
+    ) {
+      inBacktick = !inBacktick;
+      cur += c;
+      continue;
+    }
+
+    if (inBacktick) {
+      cur += c;
+      continue;
+    }
 
     if (c === '"' && !inSingleQuote && !isQuoteEscapedByBackslash(input, i)) {
       inDoubleQuote = !inDoubleQuote;
@@ -177,6 +224,12 @@ export function splitAndTrimWithBracket(input: string): string[] {
     } else {
       cur += c;
     }
+  }
+  // An unclosed quote swallows the closing ','; keep its text so a half-typed
+  // name survives. Unclosed brackets still drop it, as parseToStartOfFunction expects.
+  if (inBacktick || inSingleQuote || inDoubleQuote) {
+    const rest = cur.slice(0, -1).trim();
+    if (rest) res.push(rest);
   }
   return res;
 }
@@ -572,6 +625,22 @@ export function hashCode(str: string) {
     hash |= 0; // Convert to 32bit integer
   }
   return hash;
+}
+
+/** A chart's granularity, with 'auto' (or none) resolved for its date range. */
+export function getTimeChartGranularity<T extends string>(
+  granularity: T | 'auto' | undefined,
+  dateRange: [Date, Date],
+  minGranularitySeconds?: number,
+  maxBuckets = TIME_CHART_AUTO_GRANULARITY_BUCKETS,
+) {
+  return granularity === 'auto' || granularity == null
+    ? convertDateRangeToGranularityString(
+        dateRange,
+        maxBuckets,
+        minGranularitySeconds,
+      )
+    : granularity;
 }
 
 export function convertDateRangeToGranularityString(
@@ -1650,6 +1719,22 @@ export function displayTypeSupportsPromQLAlerts(
   // TODO: Support alerts for PromQL (HDX-4636)
   // This looks funky, just doing it to satisfy knip
   return displayType ? false : false;
+}
+
+/**
+ * Whether the alert checker can evaluate an alert on a tile with this config.
+ * Shared by every save path so alerts are never stored where they cannot run.
+ */
+export function savedChartConfigSupportsAlerts(
+  config: SavedChartConfig,
+): boolean {
+  if (isPromqlSavedChartConfig(config)) {
+    return displayTypeSupportsPromQLAlerts(config.displayType);
+  }
+  if (isRawSqlSavedChartConfig(config)) {
+    return displayTypeSupportsRawSqlAlerts(config.displayType);
+  }
+  return displayTypeSupportsBuilderAlerts(config.displayType);
 }
 
 /** Expand the chart's macros, returning failures instead of throwing. */

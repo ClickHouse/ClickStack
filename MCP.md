@@ -38,21 +38,34 @@ The MCP server uses the **Streamable HTTP** transport with Bearer token
 authentication. In the examples below, replace `<your-hyperdx-url>` with your
 instance URL (e.g. `http://localhost:8080`).
 
-### Claude Code
+### Install with the CLI (recommended)
+
+This asks for a personal access key or an organization API key with hidden
+input, checks it, and adds the server to Claude Code, Codex, Cursor and VS Code.
+The key stays out of your shell history and agent chats.
 
 ```bash
-claude mcp add --transport http clickstack <your-hyperdx-url>/api/mcp \
-  --header "Authorization: Bearer <your-personal-access-key>"
+npx @hyperdx/cli mcp install --app-url <your-hyperdx-url>
+```
+
+### Claude Code
+
+`read -rs` waits for you to paste the key and press Enter, without echoing it,
+so the key isn't saved in your shell history:
+
+```bash
+read -rs CLICKSTACK_ACCESS_KEY
+claude mcp add --scope user --transport http clickstack <your-hyperdx-url>/api/mcp \
+  --header "Authorization: Bearer $CLICKSTACK_ACCESS_KEY"
 ```
 
 ### Codex CLI
 
 The Codex CLI reads the bearer token from an environment variable rather than a
-`--header` flag. Export your personal access key, then register the server with
-`--bearer-token-env-var`:
+`--header` flag, so the variable must be set wherever Codex runs:
 
 ```bash
-export CLICKSTACK_ACCESS_KEY="<your-personal-access-key>"
+read -rs CLICKSTACK_ACCESS_KEY && export CLICKSTACK_ACCESS_KEY
 codex mcp add clickstack --url <your-hyperdx-url>/api/mcp \
   --bearer-token-env-var CLICKSTACK_ACCESS_KEY
 ```
@@ -122,6 +135,7 @@ with:
 | ----------------------------- | -------------------------------------------------------------------------------------------- |
 | `clickstack_list_sources`        | List all data sources and connections as a lightweight catalog (IDs, names, kinds)            |
 | `clickstack_describe_source`     | Full column schema, attribute keys, sampled low-cardinality values, and a round-trippable `config` block (the exact shape `clickstack_save_source` accepts, incl. correlation IDs) for a single source; for metric sources also returns a per-kind metric-name sample |
+| `clickstack_describe_table`      | Inspect a ClickHouse table that is not a registered source: columns, keys, engine, skipping indices, approximate size, and an optional row sample. Without a table, lists the tables in a database (paginated) |
 | `clickstack_save_source`         | Create (omit id) or update (provide id) a data source (log, trace, session, metric, or promql) so shipped telemetry becomes queryable. To clone a source, read its `config` from `clickstack_describe_source`, drop `id`, and pass it here |
 | `clickstack_delete_source`       | Permanently delete a data source by ID                                                        |
 | `clickstack_list_metrics`        | Paginated catalog of metric names on a metric source with optional kind / namePattern / time-window filters |
@@ -133,7 +147,8 @@ with:
 | `clickstack_event_patterns`      | Discover the most common log messages and event patterns using Drain clustering               |
 | `clickstack_event_deltas`        | Compare two row groups and rank properties by how their value distributions differ            |
 | `clickstack_emerging_signals`    | Detect NEW or GONE log/event patterns between a baseline and a current window (two-window Drain novelty diff) |
-| `clickstack_sql`                 | Execute raw ClickHouse SQL for advanced queries (JOINs, CTEs, sub-queries)                   |
+| `clickstack_sql`                 | Execute raw ClickHouse SQL for advanced queries (JOINs, CTEs, sub-queries); pass `queries` to run up to 10 in parallel |
+| `clickstack_promql`              | Run a PromQL expression (range or instant) against a PromQL source. Only registered when PromQL is enabled |
 | `clickstack_get_dashboard`       | List all dashboards or get full detail for a specific dashboard                              |
 | `clickstack_save_dashboard`      | Create or update a dashboard with tiles (charts, tables, numbers, search, markdown)          |
 | `clickstack_delete_dashboard`    | Permanently delete a dashboard and its attached alerts                                       |
@@ -196,3 +211,40 @@ Discovery workflow for metrics:
 4. `clickstack_describe_metric` to drill into a specific metric and
    discover its attribute keys + sampled values before authoring queries.
 5. `clickstack_timeseries` / `clickstack_table` to chart the metric.
+
+### PromQL Sources
+
+Available when PromQL is enabled for the deployment (self-hosted: the API's
+`ENABLE_PROMQL` setting). With it off, PromQL sources, tiles, label filters,
+the `clickstack_promql` tool and the PromQL prompt sections are all hidden
+from MCP.
+
+A source with `kind: "promql"` holds Prometheus metrics, either on a
+Prometheus-compatible endpoint or in a ClickHouse `TimeSeries` table. The
+builder tools do not read it; use PromQL:
+
+1. `clickstack_list_sources` shows each PromQL source with its `backend`
+   (`prometheus` or `clickhouse`).
+2. `clickstack_describe_source` lists its metric names and label names.
+3. `clickstack_promql` runs an expression. A `range` query (default) returns
+   `{ __hdx_time_bucket, series_name, value }` rows plus `seriesLabels`; an
+   `instant` query evaluates at `endTime` and returns one row per series with
+   a column per label. `granularity` sets the step and `$__interval` in the
+   same `"<number> <unit>"` format PromQL tiles use.
+4. `clickstack_save_dashboard` with a `configType: "promql"` tile keeps the
+   chart; `clickstack_query_tile` returns the same rows for the same
+   expression and granularity. `PROMETHEUS_LABEL` filters give the dashboard
+   a label dropdown that tiles reference as `{job=~"$job"}`.
+
+```jsonc
+{
+  "sourceId": "<promql source id>",
+  "expression": "sum by (job) (rate(http_requests_total[$__rate_interval]))",
+  "startTime": "2026-01-01T00:00:00Z",
+  "endTime": "2026-01-01T01:00:00Z"
+}
+```
+
+The `$__interval`, `$__rate_interval` and `$__range` macros expand as they do
+in a PromQL tile. Dashboard variables do not resolve in `clickstack_promql`;
+write the value inline.

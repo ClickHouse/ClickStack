@@ -25,8 +25,7 @@ const renderTooltip = (
     <HeatmapTooltip
       point={point}
       cell={{ kind: 'distribution', formattedY: 'y=2', percentile: undefined }}
-      width={400}
-      height={300}
+      containerRect={new DOMRect(100, 200, 400, 300)}
       showDragHint={false}
       {...props}
     />,
@@ -89,5 +88,44 @@ describe('HeatmapTooltip', () => {
 
     renderTooltip({ showDragHint: true });
     expect(screen.getByText(/Drag to Compare/)).toBeInTheDocument();
+  });
+
+  it('renders the tooltip outside the chart container, in viewport coordinates', () => {
+    const viewportHeight = jest
+      .spyOn(document.documentElement, 'clientHeight', 'get')
+      .mockReturnValue(1000);
+    const { container } = renderTooltip();
+
+    const tooltip = screen
+      .getByText('time:1000')
+      .closest<HTMLElement>('div[style*="position: fixed"]');
+    expect(tooltip).not.toBeNull();
+    expect(container.contains(tooltip)).toBe(false);
+    expect(tooltip?.style.top).toBe('215px');
+    expect(tooltip?.style.left).toBe('120px');
+    viewportHeight.mockRestore();
+  });
+
+  it('keeps the tooltip inside the viewport near its bottom and right edges', () => {
+    const viewport = [
+      jest
+        .spyOn(document.documentElement, 'clientHeight', 'get')
+        .mockReturnValue(400),
+      jest
+        .spyOn(document.documentElement, 'clientWidth', 'get')
+        .mockReturnValue(1200),
+    ];
+    renderTooltip({ point: { ...point, xCoord: 300, yCoord: 190 } });
+
+    const tooltip = screen
+      .getByText('time:1000')
+      .closest<HTMLElement>('div[style*="position: fixed"]');
+    // Cursor at y=390 in a 400px viewport: opens above the cursor.
+    expect(tooltip?.style.bottom).toBe('15px');
+    expect(tooltip?.style.top).toBe('');
+    // Right half of the container: anchored to the left of the cursor.
+    expect(tooltip?.style.right).toBe('810px');
+    expect(tooltip?.style.left).toBe('');
+    viewport.forEach(spy => spy.mockRestore());
   });
 });
