@@ -258,7 +258,6 @@ function NamespaceDetailsSidePanelInner({
       },
       keys: [logSource.serviceNameExpression ?? ''],
       limit: 10,
-      disableRowLimit: false,
     },
     {
       enabled:

@@ -67,7 +67,6 @@ export function useAvailableMetricNames({
       // The value universe is exactly the candidate list, so this cannot cut
       // off a name we asked about.
       limit: metricNames.length,
-      disableRowLimit: true,
     },
     { enabled: enabled && !!chartConfig },
   );

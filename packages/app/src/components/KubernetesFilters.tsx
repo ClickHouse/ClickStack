@@ -282,7 +282,6 @@ export const KubernetesFilters: React.FC<KubernetesFiltersProps> = ({
     chartConfig,
     keys,
     keyConditions,
-    disableRowLimit: true,
     limit: 1000000,
   });
 

@@ -169,7 +169,6 @@ function DBServiceMapPage() {
       {
         chartConfig: serviceNamesChartConfig,
         keys: [serviceNameKey],
-        disableRowLimit: true,
         limit: 10000,
       },
       { enabled: !!source },

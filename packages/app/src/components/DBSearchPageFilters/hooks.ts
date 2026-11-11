@@ -232,7 +232,6 @@ function useFacets({
             },
             keys: [sqlKey],
             limit: SINGLE_KEY_VALUES_LIMIT,
-            disableRowLimit: true,
             source,
           });
           return {

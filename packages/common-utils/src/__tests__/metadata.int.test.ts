@@ -101,140 +101,132 @@ describe('Metadata Integration Tests', () => {
       });
     });
 
-    describe.each([true, false])('with disableRowLimit=%s', disableRowLimit => {
-      it('should return key-value pairs for a given metadata key', async () => {
-        const resultSeverityText = await metadata.getKeyValues({
-          chartConfig,
-          keys: ['SeverityText'],
-          disableRowLimit,
-          source,
-        });
+    it('should return key-value pairs for a given metadata key', async () => {
+      const resultSeverityText = await metadata.getKeyValues({
+        chartConfig,
+        keys: ['SeverityText'],
+        source,
+      });
 
-        expect(resultSeverityText).toHaveLength(1);
-        expect(resultSeverityText[0].key).toBe('SeverityText');
-        expect(resultSeverityText[0].value).toHaveLength(3);
-        expect(resultSeverityText[0].value).toEqual(
-          expect.arrayContaining(['info', 'error', 'warning']),
-        );
+      expect(resultSeverityText).toHaveLength(1);
+      expect(resultSeverityText[0].key).toBe('SeverityText');
+      expect(resultSeverityText[0].value).toHaveLength(3);
+      expect(resultSeverityText[0].value).toEqual(
+        expect.arrayContaining(['info', 'error', 'warning']),
+      );
 
-        const resultTraceId = await metadata.getKeyValues({
-          chartConfig,
-          keys: ['TraceId'],
-          disableRowLimit,
-          source,
-        });
+      const resultTraceId = await metadata.getKeyValues({
+        chartConfig,
+        keys: ['TraceId'],
+        source,
+      });
 
-        expect(resultTraceId).toHaveLength(1);
-        expect(resultTraceId[0].key).toBe('TraceId');
-        expect(resultTraceId[0].value).toHaveLength(3);
-        expect(resultTraceId[0].value).toEqual(
-          expect.arrayContaining([
+      expect(resultTraceId).toHaveLength(1);
+      expect(resultTraceId[0].key).toBe('TraceId');
+      expect(resultTraceId[0].value).toHaveLength(3);
+      expect(resultTraceId[0].value).toEqual(
+        expect.arrayContaining([
+          '1o2udn120d8n',
+          '67890-09098',
+          '11h9238re1h92',
+        ]),
+      );
+
+      const resultBoth = await metadata.getKeyValues({
+        chartConfig,
+        keys: ['TraceId', 'SeverityText'],
+        source,
+      });
+
+      expect(resultBoth).toEqual([
+        {
+          key: 'TraceId',
+          value: expect.arrayContaining([
             '1o2udn120d8n',
             '67890-09098',
             '11h9238re1h92',
           ]),
-        );
+        },
+        {
+          key: 'SeverityText',
+          value: expect.arrayContaining(['info', 'error', 'warning']),
+        },
+      ]);
+    });
 
-        const resultBoth = await metadata.getKeyValues({
-          chartConfig,
-          keys: ['TraceId', 'SeverityText'],
-          disableRowLimit,
-          source,
-        });
-
-        expect(resultBoth).toEqual([
-          {
-            key: 'TraceId',
-            value: expect.arrayContaining([
-              '1o2udn120d8n',
-              '67890-09098',
-              '11h9238re1h92',
-            ]),
-          },
-          {
-            key: 'SeverityText',
-            value: expect.arrayContaining(['info', 'error', 'warning']),
-          },
-        ]);
+    it('should handle materialized columns correctly', async () => {
+      const resultPodName = await metadata.getKeyValues({
+        chartConfig,
+        keys: ['__hdx_materialized_k8s.pod.name'],
+        source,
       });
 
-      it('should handle materialized columns correctly', async () => {
-        const resultPodName = await metadata.getKeyValues({
-          chartConfig,
-          keys: ['__hdx_materialized_k8s.pod.name'],
-          disableRowLimit,
-          source,
-        });
+      expect(resultPodName).toHaveLength(1);
+      expect(resultPodName[0].key).toBe('__hdx_materialized_k8s.pod.name');
+      expect(resultPodName[0].value).toHaveLength(2);
+      expect(resultPodName[0].value).toEqual(
+        expect.arrayContaining(['pod1', 'pod2']),
+      );
+    });
 
-        expect(resultPodName).toHaveLength(1);
-        expect(resultPodName[0].key).toBe('__hdx_materialized_k8s.pod.name');
-        expect(resultPodName[0].value).toHaveLength(2);
-        expect(resultPodName[0].value).toEqual(
-          expect.arrayContaining(['pod1', 'pod2']),
-        );
+    it('should handle JSON columns correctly', async () => {
+      const resultLogAttributes = await metadata.getKeyValues({
+        chartConfig,
+        keys: ['LogAttributes.user'],
+        source,
       });
 
-      it('should handle JSON columns correctly', async () => {
-        const resultLogAttributes = await metadata.getKeyValues({
-          chartConfig,
-          keys: ['LogAttributes.user'],
-          disableRowLimit,
-          source,
-        });
+      expect(resultLogAttributes).toHaveLength(1);
+      expect(resultLogAttributes[0].key).toBe('LogAttributes.user');
+      expect(resultLogAttributes[0].value).toHaveLength(3);
+      expect(resultLogAttributes[0].value).toEqual(
+        expect.arrayContaining(['john', 'jack', 'jane']),
+      );
+    });
 
-        expect(resultLogAttributes).toHaveLength(1);
-        expect(resultLogAttributes[0].key).toBe('LogAttributes.user');
-        expect(resultLogAttributes[0].value).toHaveLength(3);
-        expect(resultLogAttributes[0].value).toEqual(
-          expect.arrayContaining(['john', 'jack', 'jane']),
-        );
+    it('should return an empty list when no keys are provided', async () => {
+      const resultEmpty = await metadata.getKeyValues({
+        chartConfig,
+        keys: [],
+        source,
       });
 
-      it('should return an empty list when no keys are provided', async () => {
-        const resultEmpty = await metadata.getKeyValues({
-          chartConfig,
-          keys: [],
-          source,
-        });
+      expect(resultEmpty).toEqual([]);
+    });
 
-        expect(resultEmpty).toEqual([]);
+    it('should correctly limit the number of returned values', async () => {
+      const resultLimited = await metadata.getKeyValues({
+        chartConfig,
+        keys: ['SeverityText'],
+        limit: 2,
+        source,
       });
 
-      it('should correctly limit the number of returned values', async () => {
-        const resultLimited = await metadata.getKeyValues({
-          chartConfig,
-          keys: ['SeverityText'],
-          limit: 2,
-          source,
-        });
+      expect(resultLimited).toHaveLength(1);
+      expect(resultLimited[0].key).toBe('SeverityText');
+      expect(resultLimited[0].value).toHaveLength(2);
+      expect(
+        resultLimited[0].value.every(
+          v =>
+            typeof v === 'string' && ['info', 'error', 'warning'].includes(v),
+        ),
+      ).toBeTruthy();
+    });
 
-        expect(resultLimited).toHaveLength(1);
-        expect(resultLimited[0].key).toBe('SeverityText');
-        expect(resultLimited[0].value).toHaveLength(2);
-        expect(
-          resultLimited[0].value.every(
-            v =>
-              typeof v === 'string' && ['info', 'error', 'warning'].includes(v),
-          ),
-        ).toBeTruthy();
+    it('keeps the most frequent values when the limit truncates the list', async () => {
+      // The first row read has action 'ping'; NULL (no action) and '' (no
+      // pod name) are more frequent than any real value.
+      const result = await metadata.getKeyValues({
+        chartConfig,
+        keys: ['LogAttributes.action', "ResourceAttributes['k8s.pod.name']"],
+        limit: 1,
+        source,
       });
 
-      it('keeps the most frequent values when the limit truncates the list', async () => {
-        // The first row read has action 'ping'; NULL (no action) and '' (no
-        // pod name) are more frequent than any real value.
-        const result = await metadata.getKeyValues({
-          chartConfig,
-          keys: ['LogAttributes.action', "ResourceAttributes['k8s.pod.name']"],
-          limit: 1,
-          disableRowLimit,
-          source,
-        });
-
-        expect(result).toEqual([
-          { key: 'LogAttributes.action', value: ['login'] },
-          { key: "ResourceAttributes['k8s.pod.name']", value: ['pod1'] },
-        ]);
-      });
+      expect(result).toEqual([
+        { key: 'LogAttributes.action', value: ['login'] },
+        { key: "ResourceAttributes['k8s.pod.name']", value: ['pod1'] },
+      ]);
     });
   });
 
@@ -507,52 +499,6 @@ describe('Metadata Integration Tests', () => {
       expect(result).toHaveLength(1);
       expect(result[0].key).toBe('service');
       expect(result[0].value.length).toBeLessThanOrEqual(2);
-    });
-
-    it('should work with disableRowLimit: true', async () => {
-      const source = {
-        id: 'test-source',
-        name: 'Test Logs',
-        kind: 'otel-logs',
-        from: { databaseName: 'default', tableName: baseTableName },
-        timestampValueExpression: 'Timestamp',
-        connection: 'test_connection',
-        materializedViews: [
-          {
-            databaseName: 'default',
-            tableName: mvTableName,
-            dimensionColumns: 'environment, service, status_code',
-            minGranularity: '1 minute',
-            timestampColumn: 'Timestamp',
-            aggregatedColumns: [{ aggFn: 'count', mvColumn: 'count' }],
-          },
-        ],
-      };
-
-      // Should work with disableRowLimit: true (no row limits applied)
-      const result = await metadata.getKeyValuesWithMVs({
-        chartConfig,
-        keys: ['environment', 'service', 'status_code'],
-        source: source as any,
-        disableRowLimit: true,
-      });
-
-      expect(result).toHaveLength(3);
-
-      const environmentResult = result.find(r => r.key === 'environment');
-      expect(environmentResult?.value).toEqual(
-        expect.arrayContaining(['production', 'staging']),
-      );
-
-      const serviceResult = result.find(r => r.key === 'service');
-      expect(serviceResult?.value).toEqual(
-        expect.arrayContaining(['api', 'web', 'worker']),
-      );
-
-      const statusCodeResult = result.find(r => r.key === 'status_code');
-      expect(statusCodeResult?.value).toEqual(
-        expect.arrayContaining(['200', '404', '500']),
-      );
     });
   });
 

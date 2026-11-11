@@ -206,8 +206,8 @@ describe('useGetKeyValues', () => {
     ).not.toHaveBeenCalled();
   });
 
-  // Test case: Custom limit and disableRowLimit
-  it('should pass custom limit and disableRowLimit', async () => {
+  // Test case: Custom limit
+  it('should pass a custom limit', async () => {
     // Arrange
     const mockChartConfig = createMockChartConfig();
     const mockKeys = ['ResourceAttributes.service.name'];
@@ -230,7 +230,6 @@ describe('useGetKeyValues', () => {
           chartConfig: mockChartConfig,
           keys: mockKeys,
           limit: 50,
-          disableRowLimit: true,
         }),
       { wrapper },
     );

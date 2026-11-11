@@ -593,7 +593,6 @@ describe('useQueriedDashboardFilterValues', () => {
       },
       keys: ['environment'],
       limit: 10000,
-      disableRowLimit: true,
       signal: expect.any(AbortSignal),
       source: {
         connection: 'clickhouse-conn',

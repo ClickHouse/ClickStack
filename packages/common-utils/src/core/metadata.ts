@@ -3064,7 +3064,6 @@ export class Metadata {
     keys,
     keyConditions,
     limit = 20,
-    disableRowLimit = false,
     signal,
     source,
   }: {
@@ -3075,8 +3074,7 @@ export class Metadata {
      * should narrow this key's values. When provided for a key, its values are
      * gathered with `topKIf(key, <predicate>)` so several "faceted"
      * value lists (each constrained differently) resolve in a single table
-     * scan. Only applied when `disableRowLimit` is true (the path used by
-     * filter dropdowns).
+     * scan.
      *
      * Keys inside the state are RAW expressions; they are rendered here the
      * same way as `keys`, so the predicate addresses the same physical column
@@ -3084,7 +3082,6 @@ export class Metadata {
      */
     keyConditions?: (FilterState | undefined)[];
     limit?: number;
-    disableRowLimit?: boolean;
     signal?: AbortSignal;
     source:
       | Omit<TSource, 'connection'> /* for overlap with ISource type */
@@ -3103,7 +3100,6 @@ export class Metadata {
       // Serialize rather than hashing the raw state: the selections are Sets.
       keyConditions: keyConditions?.map(s => s && serializeFilterState(s)),
       limit,
-      disableRowLimit,
     };
     return this.cache.getOrFetch(
       `${objectHash(cacheKeyConfig)}.getKeyValues`,
@@ -3120,71 +3116,31 @@ export class Metadata {
           keys,
         });
         const renderKey = (key: string) => renderedByKey.get(key) ?? key;
-        const renderedKeys = keys.map(renderKey);
 
-        // When disableRowLimit is true, query directly without CTE
-        // Otherwise, use CTE with row limits for sampling
-        // topK returns the most frequent values, most frequent first, where
-        // groupUniqArray kept whichever `limit` values it read first. NULL (a
+        // topK returns the most frequent values, most frequent first. NULL (a
         // missing JSON path) and '' (a missing Map key) are often the most
         // frequent and are dropped below, so leave room for both.
         const topKLimit = limit + 2;
-        const sqlConfig = disableRowLimit
-          ? {
-              ...chartConfig,
-              select: keys
-                .map((key, i) => {
-                  const k = renderKey(key);
-                  const state = keyConditions?.at(i);
-                  // Render the constraint against the same expressions used in
-                  // the SELECT, or the predicate would address a different
-                  // physical column than the aggregate wrapping it.
-                  const condition =
-                    state && filterStateToPredicate(state, renderKey);
-                  // `topKIf` lets each key be constrained by its own
-                  // predicate, so multiple faceted value lists are computed in a
-                  // single scan instead of one query per key.
-                  return condition
-                    ? `topKIf(${topKLimit})(${k}, ${condition}) AS param${i}`
-                    : `topK(${topKLimit})(${k}) AS param${i}`;
-                })
-                .join(', '),
-            }
-          : await (async () => {
-              // Build select expression that includes each of the given keys.
-              // This avoids selecting entire JSON columns, which is significantly slower
-              // than selecting just the JSON paths corresponding to the given keys.
-              // paramN aliases are used to avoid issues with special characters or complex expressions in keys.
-              const selectExpr =
-                renderedKeys.map((k, i) => `${k} as param${i}`).join(', ') ||
-                '*';
-
-              return {
-                with: [
-                  {
-                    name: 'sampledData',
-                    chartConfig: {
-                      ...chartConfig,
-                      select: selectExpr,
-                      limit: {
-                        limit: this.getClickHouseSettings().max_rows_to_read
-                          ? Number(
-                              this.getClickHouseSettings().max_rows_to_read,
-                            )
-                          : DEFAULT_METADATA_MAX_ROWS_TO_READ,
-                      },
-                    },
-                    isSubquery: true,
-                  },
-                ],
-                select: keys
-                  .map((_, i) => `topK(${topKLimit})(param${i}) AS param${i}`)
-                  .join(', '),
-                connection: chartConfig.connection,
-                from: { databaseName: '', tableName: 'sampledData' },
-                where: '',
-              };
-            })();
+        const sqlConfig = {
+          ...chartConfig,
+          select: keys
+            .map((key, i) => {
+              const k = renderKey(key);
+              const state = keyConditions?.at(i);
+              // Render the constraint against the same expressions used in
+              // the SELECT, or the predicate would address a different
+              // physical column than the aggregate wrapping it.
+              const condition =
+                state && filterStateToPredicate(state, renderKey);
+              // `topKIf` lets each key be constrained by its own
+              // predicate, so multiple faceted value lists are computed in a
+              // single scan instead of one query per key.
+              return condition
+                ? `topKIf(${topKLimit})(${k}, ${condition}) AS param${i}`
+                : `topK(${topKLimit})(${k}) AS param${i}`;
+            })
+            .join(', '),
+        };
 
         const sql = await renderChartConfig(
           sqlConfig,
@@ -3197,16 +3153,6 @@ export class Metadata {
             query: sql.sql,
             query_params: sql.params,
             connectionId: chartConfig.connection,
-            clickhouse_settings: !disableRowLimit
-              ? {
-                  ...this.getClickHouseSettings(),
-                  // Max 15 seconds to get keys
-                  timeout_overflow_mode: 'break',
-                  max_execution_time: 15,
-                  // Set the value to 0 (unlimited) so that the LIMIT is used instead
-                  max_rows_to_read: '0',
-                }
-              : undefined,
             abort_signal: signal,
           })
           .then(res => res.json<Record<string, string[] | number[]>>());
@@ -3352,7 +3298,6 @@ export class Metadata {
     keyConditions,
     source,
     limit = 20,
-    disableRowLimit,
     signal,
   }: {
     chartConfig: BuilderChartConfigWithDateRange;
@@ -3361,7 +3306,6 @@ export class Metadata {
     keyConditions?: (FilterState | undefined)[];
     source: TSource | undefined;
     limit?: number;
-    disableRowLimit?: boolean;
     signal?: AbortSignal;
   }): Promise<KeyValues[]> {
     const cacheKeyConfig = {
@@ -3377,7 +3321,6 @@ export class Metadata {
       // Serialize rather than hashing the raw state: the selections are Sets.
       keyConditions: keyConditions?.map(s => s && serializeFilterState(s)),
       limit,
-      disableRowLimit,
     };
     return this.cache.getOrFetch(
       `${objectHash(cacheKeyConfig)}.getKeyValuesWithMVs`,
@@ -3403,7 +3346,6 @@ export class Metadata {
             keys,
             keyConditions,
             limit,
-            disableRowLimit,
             signal,
             source,
           });
@@ -3430,7 +3372,6 @@ export class Metadata {
               chartConfig,
               keys,
               limit,
-              disableRowLimit,
               signal,
               source,
             }),

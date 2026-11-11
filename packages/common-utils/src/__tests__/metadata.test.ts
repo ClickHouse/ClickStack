@@ -812,39 +812,29 @@ describe('Metadata', () => {
       });
     });
 
-    it('should apply row limit when disableRowLimit is false', async () => {
-      await metadata.getKeyValues({
-        chartConfig: mockChartConfig,
-        keys: ['column1', 'column2'],
-        limit: 10,
-        disableRowLimit: false,
-        source,
-      });
-
-      expect(mockClickhouseClient.query).toHaveBeenCalledWith(
-        expect.objectContaining({
-          clickhouse_settings: {
-            max_rows_to_read: '0',
-            timeout_overflow_mode: 'break',
-            max_execution_time: 15,
-          },
-        }),
+    it('aggregates over the whole range without a sampling CTE', async () => {
+      const renderChartConfigSpy = jest.spyOn(
+        renderChartConfigModule,
+        'renderChartConfig',
       );
-    });
 
-    it('should not apply row limit when disableRowLimit is true', async () => {
       await metadata.getKeyValues({
         chartConfig: mockChartConfig,
         keys: ['column1', 'column2'],
         limit: 10,
-        disableRowLimit: true,
         source,
       });
 
+      const actualConfig = renderChartConfigSpy.mock.calls.at(-1)![0];
+      if (!isBuilderChartConfig(actualConfig))
+        throw new Error('Expected builder config');
+      expect(actualConfig.from).toEqual(mockChartConfig.from);
+      expect(actualConfig.with).toBeUndefined();
+      expect(actualConfig.select).toBe(
+        'topK(12)(column1) AS param0, topK(12)(column2) AS param1',
+      );
       expect(mockClickhouseClient.query).toHaveBeenCalledWith(
-        expect.objectContaining({
-          clickhouse_settings: undefined,
-        }),
+        expect.not.objectContaining({ clickhouse_settings: expect.anything() }),
       );
     });
 
@@ -862,7 +852,6 @@ describe('Metadata', () => {
           { colA: { included: new Set(['x']), excluded: new Set() } },
         ],
         limit: 10,
-        disableRowLimit: true,
         source,
       });
 
@@ -909,7 +898,6 @@ describe('Metadata', () => {
           },
         ],
         limit: 10,
-        disableRowLimit: true,
         source,
       });
 
@@ -922,25 +910,6 @@ describe('Metadata', () => {
       );
       // The raw bracket form must not survive into either half.
       expect(actualConfig.select).not.toContain("Attributes['");
-    });
-
-    it('should apply row limit by default when disableRowLimit is not specified', async () => {
-      await metadata.getKeyValues({
-        chartConfig: mockChartConfig,
-        keys: ['column1', 'column2'],
-        limit: 10,
-        source,
-      });
-
-      expect(mockClickhouseClient.query).toHaveBeenCalledWith(
-        expect.objectContaining({
-          clickhouse_settings: {
-            max_rows_to_read: '0',
-            timeout_overflow_mode: 'break',
-            max_execution_time: 15,
-          },
-        }),
-      );
     });
 
     it('should correctly transform the response data', async () => {
@@ -972,7 +941,6 @@ describe('Metadata', () => {
           chartConfig: mockChartConfig,
           keys: ['column1'],
           limit,
-          disableRowLimit: true,
           source,
         });
         const actualConfig = renderChartConfigSpy.mock.calls.at(-1)![0];
@@ -1067,12 +1035,9 @@ describe('Metadata', () => {
       const actualConfig = renderChartConfigSpy.mock.calls[0][0];
       if (!isBuilderChartConfig(actualConfig))
         throw new Error('Expected builder config');
-      expect(actualConfig.with?.[0]).toMatchObject({
-        chartConfig: {
-          select:
-            'ResourceAttributes.`k8s`.`namespace`.`name`.:String as param0',
-        },
-      });
+      expect(actualConfig.select).toBe(
+        'topK(12)(ResourceAttributes.`k8s`.`namespace`.`name`.:String) AS param0',
+      );
     });
 
     it('quotes typed-looking bracket JSON keys instead of passing them through', async () => {
@@ -1101,12 +1066,9 @@ describe('Metadata', () => {
       const actualConfig = renderChartConfigSpy.mock.calls[0][0];
       if (!isBuilderChartConfig(actualConfig))
         throw new Error('Expected builder config');
-      expect(actualConfig.with?.[0]).toMatchObject({
-        chartConfig: {
-          select:
-            'ResourceAttributes.`foo`.`:String, count() AS injected`.:String as param0',
-        },
-      });
+      expect(actualConfig.select).toBe(
+        'topK(12)(ResourceAttributes.`foo`.`:String, count() AS injected`.:String) AS param0',
+      );
     });
 
     it('keeps map attribute keys in bracket form', async () => {
@@ -1135,11 +1097,9 @@ describe('Metadata', () => {
       const actualConfig = renderChartConfigSpy.mock.calls[0][0];
       if (!isBuilderChartConfig(actualConfig))
         throw new Error('Expected builder config');
-      expect(actualConfig.with?.[0]).toMatchObject({
-        chartConfig: {
-          select: "LogAttributes['k8s.namespace.name'] as param0",
-        },
-      });
+      expect(actualConfig.select).toBe(
+        "topK(12)(LogAttributes['k8s.namespace.name']) AS param0",
+      );
     });
   });
 
@@ -1681,11 +1641,11 @@ describe('Metadata', () => {
       const configArg = renderChartConfigSpy.mock.calls[
         renderChartConfigSpy.mock.calls.length - 1
       ][0] as any;
-      const innerSelect = configArg.with?.[0]?.chartConfig?.select as string;
-      expect(innerSelect).toBeDefined();
+      const select = configArg.select as string;
+      expect(select).toBeDefined();
 
-      expect(innerSelect).toContain("foo\\'");
-      expect(innerSelect).not.toMatch(/'foo'\); SELECT 1 FROM system\.tables/);
+      expect(select).toContain("foo\\'");
+      expect(select).not.toMatch(/'foo'\); SELECT 1 FROM system\.tables/);
     });
 
     // Guards against HTTP 431 from too many URL-encoded query_params. Passes

@@ -468,9 +468,8 @@ async function settleAllOrThrow<T>(promises: Promise<T>[]): Promise<T[]> {
 /**
  * Values for `keys` across one or more sources.
  *
- * - `'exact'` reads metadata MVs, else the raw table, sampling the first
- *   `max_rows_to_read` rows unless `disableRowLimit` is set. Supports
- *   `keyConditions`.
+ * - `'exact'` reads metadata MVs, else the raw table, over the whole range.
+ *   Supports `keyConditions`.
  * - `'all'` tries text indexes, then metadata MVs, then the raw table, so it is
  *   cheaper for typeahead. It skips JSON-column keys, and its lookups return no
  *   values instead of failing, so it rarely errors. When no values are showing
@@ -487,7 +486,6 @@ export function useMultipleGetKeyValues(
     keys,
     keyConditions,
     limit,
-    disableRowLimit,
     mode = 'exact',
     metadataMVs: metadataMVsOverride,
   }: {
@@ -498,7 +496,6 @@ export function useMultipleGetKeyValues(
     /** Per-key constraints for faceted ('exact' mode) value lookups. */
     keyConditions?: (FilterState | undefined)[];
     limit?: number;
-    disableRowLimit?: boolean;
     mode?: 'all' | 'exact';
     /**
      * MVs for 'all' mode, used instead of resolving them from the config's
@@ -540,7 +537,6 @@ export function useMultipleGetKeyValues(
       // Serialized: react-query hashes keys with JSON.stringify, which would
       // flatten every distinct Set selection to `{}`.
       keyConditions?.map(c => c && serializeFilterState(c)),
-      disableRowLimit,
       maxKeys,
       limit,
     ],
@@ -593,7 +589,6 @@ export function useMultipleGetKeyValues(
               keys: limitedKeys,
               keyConditions: limitedKeyConditions,
               limit,
-              disableRowLimit,
               source,
               signal,
             }),
@@ -680,7 +675,6 @@ export function useGetKeyValues(
     keys,
     keyConditions,
     limit,
-    disableRowLimit,
     mode,
     metadataMVs,
   }: {
@@ -689,7 +683,6 @@ export function useGetKeyValues(
     /** Per-key constraints for faceted value lookups (topKIf). */
     keyConditions?: (FilterState | undefined)[];
     limit?: number;
-    disableRowLimit?: boolean;
     mode?: 'all' | 'exact';
     metadataMVs?: MetadataMaterializedViews;
   },
@@ -701,7 +694,6 @@ export function useGetKeyValues(
       keys,
       keyConditions,
       limit,
-      disableRowLimit,
       mode,
       metadataMVs,
     },

@@ -393,7 +393,6 @@ export function useQueriedDashboardFilterValues({
             keys,
             keyConditions,
             limit: 10000,
-            disableRowLimit: true,
             signal,
             source,
           }),
