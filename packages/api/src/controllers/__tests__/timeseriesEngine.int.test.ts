@@ -192,6 +192,15 @@ describe('timeseriesEngine controller', () => {
         ).toEqual(['api']);
       });
 
+      it('reads a quoted metric name', async () => {
+        expect(
+          await labelValues({
+            labelName: 'job',
+            match: ['{"recent_metric", "job"="api"}'],
+          }),
+        ).toEqual(['api']);
+      });
+
       // Prometheus unions the selectors rather than intersecting them.
       it('unions the series matched by each selector', async () => {
         expect(
@@ -200,6 +209,17 @@ describe('timeseriesEngine controller', () => {
             match: ['recent_metric{job="api"}', 'old_metric'],
           }),
         ).toEqual(['api', 'batch']);
+      });
+
+      // A selector without a metric name can match any metric, so naming
+      // `old_metric` in another selector mustn't narrow the lookup to it.
+      it('keeps the series of a selector without a metric name', async () => {
+        expect(
+          await labelValues({
+            labelName: 'job',
+            match: ['{job="web"}', 'old_metric'],
+          }),
+        ).toEqual(['batch', 'web']);
       });
 
       it('scopes metric names to the selector', async () => {
