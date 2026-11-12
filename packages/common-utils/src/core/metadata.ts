@@ -1800,12 +1800,11 @@ export class Metadata {
             query_params: sql.params,
             connectionId,
             clickhouse_settings: {
-              max_rows_to_read: String(
-                this.getClickHouseSettings().max_rows_to_read ??
-                  DEFAULT_METADATA_MAX_ROWS_TO_READ,
-              ),
-              read_overflow_mode: 'break',
               ...this.getClickHouseSettings(),
+              // The dictionary is read in sorted token order, so a row cap
+              // with read_overflow_mode=break silently leaves every key that
+              // sorts after the cutoff with no values.
+              max_rows_to_read: '0',
             },
             abort_signal: signal,
           })
@@ -1876,12 +1875,9 @@ export class Metadata {
             query_params: sql.params,
             connectionId,
             clickhouse_settings: {
-              max_rows_to_read: String(
-                this.getClickHouseSettings().max_rows_to_read ??
-                  DEFAULT_METADATA_MAX_ROWS_TO_READ,
-              ),
-              read_overflow_mode: 'break',
               ...this.getClickHouseSettings(),
+              // See getMapTextIndexKeyValues.
+              max_rows_to_read: '0',
             },
             abort_signal: signal,
           })

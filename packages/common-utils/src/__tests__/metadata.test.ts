@@ -1403,6 +1403,32 @@ describe('Metadata', () => {
       expect(sql).toContain('GROUP BY column, key');
     });
 
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'reads the %s text index without a row cap, even when one is configured',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+        jest
+          .spyOn(metadata, 'getClickHouseSettings')
+          .mockReturnValue({ max_rows_to_read: '1000' });
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+        });
+
+        const calls = (mockClickhouseClient.query as jest.Mock).mock.calls;
+        const textIndexCall = calls.find(([opts]) =>
+          opts.query.includes('mergeTreeTextIndex('),
+        );
+        expect(textIndexCall[0].clickhouse_settings).toMatchObject({
+          max_rows_to_read: '0',
+        });
+      },
+    );
+
     it('routes ServiceName and SeverityText through getMetadataMVKeyValues (KV rollup MV path)', async () => {
       setupDefaultLogsSchema();
 
