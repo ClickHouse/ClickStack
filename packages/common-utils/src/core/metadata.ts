@@ -1835,7 +1835,8 @@ export class Metadata {
           // each key gets its own read whose LIMIT stops it early, and a key
           // with a value per row can't slow down the others. With small blocks
           // (ClickHouse's default 512) the sparse index is large, so all keys
-          // share one read; LIMIT BY bounds their values but not the read.
+          // share one read. That read can't stop early per key, so topKWeighted
+          // sees every token and ranks by the full counts.
           const blockSize = await this.getTextIndexDictionaryBlockSize({
             databaseName,
             tableName,
@@ -1858,7 +1859,6 @@ export class Metadata {
               info.keys.map(k => chSql`startsWith(token, ${keyPrefix(k)})`),
             )})
             AND v != ''
-          LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }} BY key
         )
         GROUP BY key`);
             continue;

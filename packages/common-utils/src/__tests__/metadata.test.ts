@@ -1461,7 +1461,8 @@ describe('Metadata', () => {
       expect(sql).toContain(
         "startsWith(token, 'requestId=') OR startsWith(token, 'region=')",
       );
-      expect(sql).toContain('LIMIT 20000 BY key');
+      expect(sql).not.toContain('BY key\n');
+      expect(sql).not.toMatch(/LIMIT \d+/);
       expect(sql).toContain('GROUP BY key');
       expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
     });
