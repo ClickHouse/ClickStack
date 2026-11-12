@@ -1381,7 +1381,7 @@ describe('Metadata', () => {
 
       expect(sql).toContain('mergeTreeTextIndex(');
       expect(sql).toContain('topKWeighted(');
-      expect(sql).toContain('LIMIT 100000');
+      expect(sql).toContain('LIMIT 20000');
       expect(sql).not.toContain('startsWith(token,');
     });
 
@@ -1423,7 +1423,7 @@ describe('Metadata', () => {
       expect(branches[0]).toContain("'requestId' AS key");
       expect(branches[1]).toContain("startsWith(token, 'region=')");
       for (const branch of branches) {
-        expect(branch).toContain('LIMIT 100000');
+        expect(branch).toContain('LIMIT 20000');
       }
       expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
       expect(call.clickhouse_settings.read_overflow_mode).toBeUndefined();
