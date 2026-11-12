@@ -2,6 +2,7 @@ import { ColumnMeta } from '@/clickhouse';
 import { ClickhouseClient } from '@/clickhouse/node';
 import {
   COLUMNS_CACHE_TTL_MS,
+  DEFAULT_METADATA_MAX_ROWS_TO_READ,
   GET_ALL_KEY_VALUES_CHUNK_SIZE,
   Metadata,
   MetadataCache,
@@ -1461,10 +1462,12 @@ describe('Metadata', () => {
       expect(sql).toContain(
         "startsWith(token, 'requestId=') OR startsWith(token, 'region=')",
       );
-      expect(sql).not.toContain('BY key\n');
-      expect(sql).not.toMatch(/LIMIT \d+/);
-      expect(sql).toContain('GROUP BY key');
-      expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
+      expect(sql).toContain('groupUniqArray(');
+      expect(sql).toContain('GROUP BY column, key');
+      expect(call.clickhouse_settings).toMatchObject({
+        max_rows_to_read: String(DEFAULT_METADATA_MAX_ROWS_TO_READ),
+        read_overflow_mode: 'break',
+      });
     });
 
     it.each([
@@ -1474,6 +1477,8 @@ describe('Metadata', () => {
       'reads the %s text index without a row cap, even when one is configured',
       async (_, keyExpression) => {
         setupDefaultLogsSchema();
+        // Small-block Map indexes keep the cap; see the one-pass test.
+        withDictionaryBlockSize(8192);
         jest
           .spyOn(metadata, 'getClickHouseSettings')
           .mockReturnValue({ max_rows_to_read: '1000' });
@@ -1926,27 +1931,34 @@ describe('Metadata', () => {
       // param dump when a test fails.
       const MAX_VALUES = 7777;
 
-      it('threads maxValuesPerKey into the map text-index query', async () => {
-        setupDefaultLogsSchema();
+      it.each([
+        [8192, 'topKWeighted'],
+        [512, 'groupUniqArray'],
+      ])(
+        'threads maxValuesPerKey into the map text-index query (dictionary blocks of %d)',
+        async (blockSize, aggregate) => {
+          setupDefaultLogsSchema();
+          withDictionaryBlockSize(blockSize);
 
-        await metadata.getAllKeyValues({
-          ...baseArgs,
-          keyExpressions: ["LogAttributes['requestId']"],
-          maxValuesPerKey: MAX_VALUES,
-        });
+          await metadata.getAllKeyValues({
+            ...baseArgs,
+            keyExpressions: ["LogAttributes['requestId']"],
+            maxValuesPerKey: MAX_VALUES,
+          });
 
-        const mapTextIndexCall = (
-          mockClickhouseClient.query as jest.Mock
-        ).mock.calls.find(
-          (c: any[]) =>
-            typeof c[0].query === 'string' &&
-            c[0].query.includes('startsWith(token,'),
-        );
-        expect(mapTextIndexCall).toBeDefined();
-        expect(mapTextIndexCall![0].query).toContain(
-          `topKWeighted(${MAX_VALUES})(`,
-        );
-      });
+          const mapTextIndexCall = (
+            mockClickhouseClient.query as jest.Mock
+          ).mock.calls.find(
+            (c: any[]) =>
+              typeof c[0].query === 'string' &&
+              c[0].query.includes('startsWith(token,'),
+          );
+          expect(mapTextIndexCall).toBeDefined();
+          expect(mapTextIndexCall![0].query).toContain(
+            `${aggregate}(${MAX_VALUES})(`,
+          );
+        },
+      );
 
       it('threads maxValuesPerKey into the native text-index query', async () => {
         setupDefaultLogsSchema();
