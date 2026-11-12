@@ -59,6 +59,7 @@ import {
 import {
   getAlignedDateRange,
   getDistributedTableArgs,
+  getTextIndexDictionaryBlockSize,
   MetadataMVQueryOptions,
   objectHash,
   splitAndTrimWithBracket,
@@ -84,6 +85,9 @@ export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
 const TEXT_INDEX_TOKENS_PER_KEY = 20_000;
 // Keys per text index values query; see dispatchKeyValueQueries.
 const TEXT_INDEX_KEYS_PER_QUERY = 10;
+// Smallest dictionary block size that gets one read per key; see
+// getMapTextIndexKeyValues.
+const PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE = 4096;
 
 /**
  * The index read could not be scoped to the requested date range, so it was
@@ -1758,6 +1762,31 @@ export class Metadata {
     });
   }
 
+  // shortcut: parts written before a table's text_index_dictionary_block_size
+  // changed keep their old block size; good enough to pick a query shape.
+  private async getTextIndexDictionaryBlockSize({
+    databaseName,
+    tableName,
+    connectionId,
+    indexName,
+  }: TableConnection & { indexName: string }): Promise<number> {
+    const [skipIndices, tableMetadata, serverMergeTreeSettings] =
+      await Promise.all([
+        this.getSkipIndices({ databaseName, tableName, connectionId }).catch(
+          () => [] as SkipIndexMetadata[],
+        ),
+        this.getTableMetadata({ databaseName, tableName, connectionId }).catch(
+          () => undefined,
+        ),
+        this.getMergeTreeSettings({ connectionId }),
+      ]);
+    return getTextIndexDictionaryBlockSize({
+      typeFull: skipIndices.find(idx => idx.name === indexName)?.typeFull,
+      engineFull: tableMetadata?.engine_full,
+      serverMergeTreeSettings,
+    });
+  }
+
   private async getMapTextIndexKeyValues({
     databaseName,
     tableName,
@@ -1792,16 +1821,49 @@ export class Metadata {
             partSelection,
           });
           const valueSql = chSql`substring(token, position(token, ${{ String: info.separator }}) + ${{ Int32: info.separator.length }})`;
-          // One branch per key, each with its own LIMIT: the read for a key
-          // stops after TEXT_INDEX_TOKENS_PER_KEY tokens, so a key with a
-          // value per row can't slow down or starve the others. `cardinality`
-          // is the token's row count in the part, so topKWeighted keeps the
-          // most frequent values among the tokens read.
+          // Inline keys as SQL-escaped literals, not bind params: ~100
+          // per-key params exceed the web client's URL param budget and
+          // silently switch the request to a multipart body that proxies
+          // may reject. Keys are ingest-controlled, hence SqlString.escape.
+          const keyPrefix = (k: string) =>
+            chSql`${{ UNSAFE_RAW_SQL: SqlString.escape(`${k}${info.separator}`) }}`;
+          // `cardinality` is the token's row count in the part, so
+          // topKWeighted keeps the most frequent values among the tokens read.
+          //
+          // Every read of the index loads each part's sparse index, which has
+          // one entry per dictionary block. With large blocks that is cheap, so
+          // each key gets its own read whose LIMIT stops it early, and a key
+          // with a value per row can't slow down the others. With small blocks
+          // (ClickHouse's default 512) the sparse index is large, so all keys
+          // share one read; LIMIT BY bounds their values but not the read.
+          const blockSize = await this.getTextIndexDictionaryBlockSize({
+            databaseName,
+            tableName,
+            connectionId,
+            indexName: info.indexName,
+          });
+          if (blockSize < PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE) {
+            sqlBranches.push(chSql`
+        SELECT ${{ String: columnName }} AS column,
+          key,
+          topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(v, cardinality) AS value
+        FROM (
+          SELECT substring(token, 1, position(token, ${{ String: info.separator }}) - 1) AS key,
+            ${valueSql} AS v,
+            cardinality
+          FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
+          WHERE ${partsFilter}
+            AND (${concatChSql(
+              ' OR ',
+              info.keys.map(k => chSql`startsWith(token, ${keyPrefix(k)})`),
+            )})
+            AND v != ''
+          LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }} BY key
+        )
+        GROUP BY key`);
+            continue;
+          }
           for (const k of info.keys) {
-            // Inline keys as SQL-escaped literals, not bind params: ~100
-            // per-key params exceed the web client's URL param budget and
-            // silently switch the request to a multipart body that proxies
-            // may reject. Keys are ingest-controlled, hence SqlString.escape.
             sqlBranches.push(chSql`
         SELECT ${{ String: columnName }} AS column,
           ${{ UNSAFE_RAW_SQL: SqlString.escape(k) }} AS key,
@@ -1810,7 +1872,7 @@ export class Metadata {
           SELECT ${valueSql} AS v, cardinality
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
-            AND startsWith(token, ${{ UNSAFE_RAW_SQL: SqlString.escape(`${k}${info.separator}`) }})
+            AND startsWith(token, ${keyPrefix(k)})
             AND v != ''
           LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }}
         )`);
@@ -1825,8 +1887,8 @@ export class Metadata {
             connectionId,
             clickhouse_settings: {
               ...this.getClickHouseSettings(),
-              // The per-key LIMIT bounds the read. A row cap would stop the
-              // sorted dictionary read partway and leave later keys empty.
+              // A row cap would stop the sorted dictionary read partway and
+              // leave the keys that sort after it with no values.
               max_rows_to_read: '0',
             },
             abort_signal: signal,
