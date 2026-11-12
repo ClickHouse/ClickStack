@@ -4,6 +4,7 @@ import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import { TTraceSource } from '@hyperdx/common-utils/dist/types';
 import {
   Box,
+  Button,
   Center,
   Code,
   Loader,
@@ -28,6 +29,7 @@ import {
 } from '@xyflow/react';
 
 import { SQLPreview } from '@/components/ChartSQLPreview';
+import EmptyState from '@/components/EmptyState';
 import useServiceMap, { ServiceAggregation } from '@/hooks/useServiceMap';
 import { useResolvedColorScheme } from '@/useUserPreferences';
 
@@ -40,6 +42,8 @@ import {
 import ServiceMapNode, { ServiceMapNodeData } from './ServiceMapNode';
 import {
   getServiceMetricValue,
+  isServiceMapTooLarge,
+  MAX_SERVICE_MAP_NODES,
   SERVICE_MAP_METRIC_LABEL,
   SERVICE_MAP_METRICS,
   ServiceMapMetric,
@@ -120,6 +124,15 @@ function ServiceMapPresentation({
   const { fitView } = useReactFlow();
   const colorScheme = useResolvedColorScheme();
   const [metric, setMetric] = useState<ServiceMapMetric>('errorRate');
+  // The dataset the user chose to render despite its size. Keyed by identity
+  // so a new query result is gated again.
+  const [showAnywayFor, setShowAnywayFor] = useState<
+    Map<string, ServiceAggregation> | undefined
+  >();
+  const tooLarge = isServiceMapTooLarge(
+    services?.size ?? 0,
+    showAnywayFor === services,
+  );
 
   // Fit the data to the viewport whenever input service information changes
   useEffect(() => {
@@ -169,6 +182,14 @@ function ServiceMapPresentation({
   }, [metric, hasLatencyData]);
 
   useEffect(() => {
+    // Skip the layout entirely for an oversized map; dagre on thousands of
+    // nodes is what locks the tab, not the query.
+    if (tooLarge) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
+
     const nodes: Node<ServiceMapNodeData>[] =
       Array.from(services?.values() ?? []).map((service, index) => ({
         id: service.key,
@@ -227,6 +248,7 @@ function ServiceMapPresentation({
     setEdges(edges);
   }, [
     services,
+    tooLarge,
     dateRange,
     source,
     metricMax.throughput,
@@ -251,6 +273,29 @@ function ServiceMapPresentation({
           No services found. The Service Map shows links between services with
           related Client- and Server-kind spans.
         </Text>
+      </Center>
+    );
+  }
+
+  if (services && tooLarge) {
+    return (
+      <Center className="w-100 h-100">
+        <EmptyState
+          title={`${services.size.toLocaleString()} nodes in this map`}
+          description={`The service map renders up to ${MAX_SERVICE_MAP_NODES} nodes. Narrow the span filter or group by an attribute with fewer values.`}
+          maw={480}
+          data-testid="service-map-too-many-nodes"
+        >
+          <Button
+            variant="secondary"
+            size="sm"
+            mt="sm"
+            onClick={() => setShowAnywayFor(services)}
+            data-testid="service-map-show-anyway"
+          >
+            Show anyway
+          </Button>
+        </EmptyState>
       </Center>
     );
   }
