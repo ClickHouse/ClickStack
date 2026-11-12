@@ -307,6 +307,21 @@ export function formatRate(perSecond: number): string {
   return `${perSecond.toFixed(2)} req/s`;
 }
 
+/**
+ * Largest map rendered without asking. Past this the dagre layout and React
+ * Flow render are what lock the tab, and a high-cardinality group-by (a URL,
+ * a trace id) can produce thousands of nodes from one keystroke.
+ */
+export const MAX_SERVICE_MAP_NODES = 100;
+
+/** Whether a map of `nodeCount` nodes is held back behind "Show anyway". */
+export function isServiceMapTooLarge(
+  nodeCount: number,
+  showAnyway: boolean,
+): boolean {
+  return !showAnyway && nodeCount > MAX_SERVICE_MAP_NODES;
+}
+
 const MIN_NODE_SIZE = 32;
 const MAX_NODE_SIZE = 60;
 

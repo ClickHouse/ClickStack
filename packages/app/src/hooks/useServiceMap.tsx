@@ -10,9 +10,20 @@ import { useClickhouseClient } from '@/clickhouse';
 
 import { useMetadataWithSettings } from './useMetadata';
 
+// Upper bound on the extra group-by expressions a map can be split by, beyond
+// the implicit ServiceName key. Enforced where the URL param is parsed and in
+// the editor's validation, so a hand-edited URL cannot exceed it.
+export const MAX_SERVICE_MAP_GROUP_BY = 3;
+
 export type SpanAggregationRow = {
   serverServiceName: string;
+  // Values of the extra group-by expressions, in groupBy order. Empty when the
+  // map is grouped by service name only.
+  serverDimensions: string[];
   clientServiceName?: string;
+  // Undefined when there is no client (node-level rows and uninstrumented
+  // callers); otherwise the same length as serverDimensions.
+  clientDimensions?: string[];
   // True for node-level (rolled-up across all callers) rows, false for
   // edge-level (a specific client→server call) rows. Derived from GROUPING()
   // over the client service in the GROUPING SETS query.
@@ -30,7 +41,18 @@ export function serviceMapErrorCountSql(): string {
   return `countIf(${errorStatusPredicateSql('ServerSpans.statusCode')})`;
 }
 
-async function getServiceMapQuery({
+const dimensionAlias = (index: number) => `dim${index}`;
+
+/**
+ * SQL for one group-by expression as the map compares and displays it: a
+ * non-nullable String, so a NULL or missing attribute reads as ''. The search
+ * links reuse it so a node's pinned value matches what the map grouped on.
+ */
+export function dimensionValueSql(expression: string): string {
+  return `ifNull(toString(${expression}), '')`;
+}
+
+export async function getServiceMapQuery({
   source,
   dateRange,
   traceId,
@@ -39,6 +61,7 @@ async function getServiceMapQuery({
   where,
   whereLanguage,
   serviceNames,
+  groupBy = [],
 }: {
   source: TTraceSource;
   dateRange: [Date, Date];
@@ -48,9 +71,11 @@ async function getServiceMapQuery({
   where?: string;
   whereLanguage?: 'sql' | 'lucene';
   serviceNames?: string[];
+  groupBy?: string[];
 }) {
   // Don't sample if we're looking for a specific trace
   const effectiveSamplingLevel = traceId ? 1 : samplingFactor;
+  const dimensionAliases = groupBy.map((_, i) => dimensionAlias(i));
 
   const baseCTEConfig = {
     from: source.from,
@@ -102,6 +127,13 @@ async function getServiceMapQuery({
         valueExpression: source.statusCodeExpression ?? 'StatusCode',
         alias: 'statusCode',
       },
+      // Extra group-by keys, as non-nullable Strings so both sides of the LEFT
+      // JOIN below compare as '' (never NULL) for an unmatched client or a
+      // missing attribute, matching how serviceName behaves.
+      ...groupBy.map((expression, i) => ({
+        valueExpression: dimensionValueSql(expression),
+        alias: dimensionAlias(i),
+      })),
       // Carry the raw span duration through so we can aggregate latency.
       // Only available when the source defines a duration expression.
       ...(source.durationExpression
@@ -166,18 +198,36 @@ async function getServiceMapQuery({
       quantiles(0.5, 0.95, 0.99)(ServerSpans.duration) as quantiles`
     : chSql``;
 
+  // A node is the tuple (serviceName, dim0, dim1, ...). Each key column is
+  // selected for both sides of the join as server_<col> / client_<col>.
+  const keyColumns = ['serviceName', ...dimensionAliases];
+  const serverKey = keyColumns.map(col => `ServerSpans.${col}`).join(', ');
+  const clientKey = keyColumns.map(col => `ClientSpans.${col}`).join(', ');
+  const keySelect = keyColumns
+    .map(
+      col =>
+        `ServerSpans.${col} AS server_${col}, ClientSpans.${col} AS client_${col}`,
+    )
+    .join(',\n      ');
+  const keyOrderBy = [
+    ...keyColumns.map(col => `server_${col}`),
+    'isNodeLevel',
+    ...keyColumns.map(col => `client_${col}`),
+  ].join(', ');
+
   // Left join to support services which receive requests from clients that are
   // not instrumented. GROUPING SETS emits, in one pass, both a per-edge row
-  // (server + client) and a rolled-up per-service node row (server only);
-  // GROUPING() flags which is which so node and edge percentiles are each
-  // computed over the right set of spans. Ordering helps stable graph layout.
+  // (server + client) and a rolled-up per-node row (server only); GROUPING()
+  // flags which is which so node and edge percentiles are each computed over
+  // the right set of spans. A node calling itself is not an edge, but two nodes
+  // of the same service (e.g. two pods) are, so the self-call exclusion compares
+  // the full key tuples. Ordering helps stable graph layout.
   return chSql`
     WITH
       ServerSpans AS (${serverCTE}),
       ClientSpans AS (${clientCTE})
     SELECT
-      ServerSpans.serviceName AS serverServiceName,
-      ClientSpans.serviceName AS clientServiceName,
+      ${{ UNSAFE_RAW_SQL: keySelect }},
       GROUPING(ClientSpans.serviceName) AS isNodeLevel,
       count(*) * ${{ Int64: effectiveSamplingLevel }} as requestCount,
       ${serviceMapErrorCountSql()} * ${{ Int64: effectiveSamplingLevel }} as errorCount${latencySelect}
@@ -185,13 +235,13 @@ async function getServiceMapQuery({
       LEFT JOIN ClientSpans
         ON ServerSpans.traceId = ClientSpans.traceId
         AND ServerSpans.parentSpanId = ClientSpans.spanId
-    WHERE (ClientSpans.serviceName IS NULL OR ServerSpans.serviceName != ClientSpans.serviceName)
+    WHERE (ClientSpans.serviceName IS NULL OR tuple(${{ UNSAFE_RAW_SQL: serverKey }}) != tuple(${{ UNSAFE_RAW_SQL: clientKey }}))
       ${serviceNameFilter}
     GROUP BY GROUPING SETS (
-      (ServerSpans.serviceName, ClientSpans.serviceName),
-      (ServerSpans.serviceName)
+      (${{ UNSAFE_RAW_SQL: serverKey }}, ${{ UNSAFE_RAW_SQL: clientKey }}),
+      (${{ UNSAFE_RAW_SQL: serverKey }})
     )
-    ORDER BY serverServiceName, isNodeLevel, clientServiceName
+    ORDER BY ${{ UNSAFE_RAW_SQL: keyOrderBy }}
   `;
 }
 
@@ -209,14 +259,30 @@ export type IncomingRequestStats = {
 };
 
 export type ServiceAggregation = {
+  // Identifies the node: the service name alone when the map has no extra
+  // dimensions, otherwise the (serviceName, ...dimensions) tuple. Keys the
+  // returned map and incomingRequestsByClient.
+  key: string;
   serviceName: string;
+  // Values of the extra group-by expressions, in groupBy order.
+  dimensions: string[];
   incomingRequests: IncomingRequestStats;
+  // Per-caller stats keyed by the caller node's key.
   incomingRequestsByClient: Map<string, IncomingRequestStats>;
   // Total requests this service makes to others (sum of edges where it is the
   // client). Combined with incoming traffic to size the node by total
   // throughput.
   outgoingRequests: number;
 };
+
+export function serviceMapNodeKey(
+  serviceName: string,
+  dimensions: string[],
+): string {
+  return dimensions.length === 0
+    ? serviceName
+    : JSON.stringify([serviceName, ...dimensions]);
+}
 
 function emptyStats(): IncomingRequestStats {
   return {
@@ -246,33 +312,39 @@ function statsFromRow(row: SpanAggregationRow): IncomingRequestStats {
 export function aggregateServiceMapData(data: SpanAggregationRow[]) {
   const services = new Map<string, ServiceAggregation>();
 
-  const ensureService = (name: string): ServiceAggregation => {
-    let service = services.get(name);
+  const ensureService = (
+    serviceName: string,
+    dimensions: string[],
+  ): ServiceAggregation => {
+    const key = serviceMapNodeKey(serviceName, dimensions);
+    let service = services.get(key);
     if (!service) {
       service = {
-        serviceName: name,
+        key,
+        serviceName,
+        dimensions,
         incomingRequests: emptyStats(),
         incomingRequestsByClient: new Map(),
         outgoingRequests: 0,
       };
-      services.set(name, service);
+      services.set(key, service);
     }
     return service;
   };
 
   for (const row of data) {
-    const service = ensureService(row.serverServiceName);
+    const service = ensureService(row.serverServiceName, row.serverDimensions);
 
     if (row.isNodeLevel) {
-      // Rolled-up totals across all callers for this service.
+      // Rolled-up totals across all callers for this node.
       service.incomingRequests = statsFromRow(row);
     } else if (row.clientServiceName) {
       // Per-caller (edge) stats. Ensure the caller exists as a node too.
-      ensureService(row.clientServiceName);
-      service.incomingRequestsByClient.set(
+      const client = ensureService(
         row.clientServiceName,
-        statsFromRow(row),
+        row.clientDimensions ?? [],
       );
+      service.incomingRequestsByClient.set(client.key, statsFromRow(row));
     }
     // Edge-level rows with no client service come from uninstrumented callers;
     // they're already included in the node-level totals, so no edge is drawn.
@@ -280,8 +352,8 @@ export function aggregateServiceMapData(data: SpanAggregationRow[]) {
 
   // Roll each edge's volume up to its caller's outgoing total.
   for (const service of services.values()) {
-    for (const [clientName, stats] of service.incomingRequestsByClient) {
-      const client = services.get(clientName);
+    for (const [clientKey, stats] of service.incomingRequestsByClient) {
+      const client = services.get(clientKey);
       if (client) {
         client.outgoingRequests += stats.totalRequests;
       }
@@ -299,6 +371,7 @@ export default function useServiceMap({
   where,
   whereLanguage,
   serviceNames,
+  groupBy,
 }: {
   source: TTraceSource;
   dateRange: [Date, Date];
@@ -307,9 +380,12 @@ export default function useServiceMap({
   where?: string;
   whereLanguage?: 'sql' | 'lucene';
   serviceNames?: string[];
+  // Extra group-by SQL expressions; ServiceName is always the first key.
+  groupBy?: string[];
 }) {
   const client = useClickhouseClient();
   const metadata = useMetadataWithSettings();
+  const dimensions = groupBy ?? [];
 
   return useQuery({
     queryKey: [
@@ -321,6 +397,7 @@ export default function useServiceMap({
       where,
       whereLanguage,
       serviceNames,
+      dimensions,
     ],
     queryFn: async ({ signal }) => {
       const query = await getServiceMapQuery({
@@ -332,6 +409,7 @@ export default function useServiceMap({
         where,
         whereLanguage,
         serviceNames,
+        groupBy: dimensions,
       });
 
       const data = await client
@@ -354,12 +432,22 @@ export default function useServiceMap({
             const quantiles = Array.isArray(row.quantiles)
               ? (row.quantiles as unknown[])
               : undefined;
+            // serviceName is a non-nullable LowCardinality(String), so
+            // rolled-up node-level rows and unmatched LEFT JOINs come back as
+            // '' rather than null — normalize those to undefined (no edge).
+            const clientServiceName =
+              (row.client_serviceName as string) || undefined;
+            const dimensionValues = (side: 'server' | 'client') =>
+              dimensions.map((_, i) =>
+                String(row[`${side}_${dimensionAlias(i)}`] ?? ''),
+              );
             return {
-              serverServiceName: row.serverServiceName as string,
-              // serviceName is a non-nullable LowCardinality(String), so
-              // rolled-up node-level rows and unmatched LEFT JOINs come back as
-              // '' rather than null — normalize those to undefined (no edge).
-              clientServiceName: (row.clientServiceName as string) || undefined,
+              serverServiceName: row.server_serviceName as string,
+              serverDimensions: dimensionValues('server'),
+              clientServiceName,
+              clientDimensions: clientServiceName
+                ? dimensionValues('client')
+                : undefined,
               isNodeLevel: Number(row.isNodeLevel) === 1,
               requestCount: Number.parseInt(row.requestCount as string, 10),
               errorCount: Number.parseInt(row.errorCount as string, 10),

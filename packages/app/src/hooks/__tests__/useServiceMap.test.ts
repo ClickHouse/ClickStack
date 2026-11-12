@@ -1,8 +1,19 @@
+import { renderChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
+import { SourceKind, TTraceSource } from '@hyperdx/common-utils/dist/types';
+
 import {
   aggregateServiceMapData,
+  getServiceMapQuery,
   serviceMapErrorCountSql,
+  serviceMapNodeKey,
   SpanAggregationRow,
 } from '@/hooks/useServiceMap';
+
+// The two CTEs are rendered by renderChartConfig; the shape of the outer join
+// and grouping query is what these tests pin down.
+jest.mock('@hyperdx/common-utils/dist/core/renderChartConfig', () => ({
+  renderChartConfig: jest.fn(),
+}));
 
 describe('serviceMapErrorCountSql', () => {
   it('counts short and legacy error statuses, not only Error', () => {
@@ -21,6 +32,7 @@ function nodeRow(
 ): SpanAggregationRow {
   return {
     serverServiceName,
+    serverDimensions: [],
     isNodeLevel: true,
     requestCount,
     errorCount,
@@ -37,6 +49,7 @@ function edgeRow(
 ): SpanAggregationRow {
   return {
     serverServiceName,
+    serverDimensions: [],
     clientServiceName,
     isNodeLevel: false,
     requestCount,
@@ -232,6 +245,7 @@ describe('aggregateServiceMapData', () => {
       const result = aggregateServiceMapData([
         {
           serverServiceName: 'api',
+          serverDimensions: [],
           isNodeLevel: true,
           requestCount: 10,
           errorCount: 0,
@@ -259,6 +273,131 @@ describe('aggregateServiceMapData', () => {
     });
   });
 
+  describe('extra group-by dimensions', () => {
+    // Rows as the query returns them when grouped by one extra expression.
+    function dimNodeRow(
+      serverServiceName: string,
+      serverDimensions: string[],
+      requestCount: number,
+    ): SpanAggregationRow {
+      return {
+        serverServiceName,
+        serverDimensions,
+        isNodeLevel: true,
+        requestCount,
+        errorCount: 0,
+      };
+    }
+
+    function dimEdgeRow(
+      serverServiceName: string,
+      serverDimensions: string[],
+      clientServiceName: string,
+      clientDimensions: string[],
+      requestCount: number,
+    ): SpanAggregationRow {
+      return {
+        serverServiceName,
+        serverDimensions,
+        clientServiceName,
+        clientDimensions,
+        isNodeLevel: false,
+        requestCount,
+        errorCount: 0,
+      };
+    }
+
+    it('keys nodes by the (serviceName, ...dimensions) tuple', () => {
+      const result = aggregateServiceMapData([
+        dimNodeRow('api', ['api-pod-0'], 60),
+        dimNodeRow('api', ['api-pod-1'], 40),
+      ]);
+
+      const pod0 = serviceMapNodeKey('api', ['api-pod-0']);
+      const pod1 = serviceMapNodeKey('api', ['api-pod-1']);
+      expect(new Set(result.keys())).toEqual(new Set([pod0, pod1]));
+      expect(result.get(pod0)).toMatchObject({
+        key: pod0,
+        serviceName: 'api',
+        dimensions: ['api-pod-0'],
+      });
+      expect(result.get(pod0)!.incomingRequests.totalRequests).toBe(60);
+      expect(result.get(pod1)!.incomingRequests.totalRequests).toBe(40);
+    });
+
+    it('keeps a caller node whose dimensions match no server node', () => {
+      // A span-level expression is evaluated on the client span, i.e. with the
+      // callee's value, so the caller side of an edge can name a node that
+      // receives no traffic itself. It is still drawn so the edge has a source.
+      const result = aggregateServiceMapData([
+        dimNodeRow('web', ['/home'], 20),
+        dimNodeRow('api', ['GetUser'], 5),
+        dimEdgeRow('api', ['GetUser'], 'web', ['GetUser'], 5),
+      ]);
+
+      const caller = result.get(serviceMapNodeKey('web', ['GetUser']))!;
+      expect(caller.incomingRequests.totalRequests).toBe(0);
+      expect(caller.outgoingRequests).toBe(5);
+      expect(
+        result.get(serviceMapNodeKey('web', ['/home']))!.outgoingRequests,
+      ).toBe(0);
+    });
+
+    it('draws an edge between two pods of the same service', () => {
+      const result = aggregateServiceMapData([
+        dimNodeRow('api', ['api-pod-1'], 10),
+        dimEdgeRow('api', ['api-pod-1'], 'api', ['api-pod-0'], 10),
+      ]);
+
+      const pod0 = serviceMapNodeKey('api', ['api-pod-0']);
+      const pod1 = serviceMapNodeKey('api', ['api-pod-1']);
+      expect(result.size).toBe(2);
+      expect(
+        result.get(pod1)!.incomingRequestsByClient.get(pod0),
+      ).toMatchObject({ totalRequests: 10 });
+      expect(result.get(pod0)!.outgoingRequests).toBe(10);
+    });
+
+    it('keys edges by the client tuple, so clients with different dimensions stay distinct', () => {
+      const result = aggregateServiceMapData([
+        dimNodeRow('api', ['api-pod-0'], 30),
+        dimEdgeRow('api', ['api-pod-0'], 'web', ['web-pod-0'], 10),
+        dimEdgeRow('api', ['api-pod-0'], 'web', ['web-pod-1'], 20),
+      ]);
+
+      const api = result.get(serviceMapNodeKey('api', ['api-pod-0']))!;
+      expect(api.incomingRequestsByClient.size).toBe(2);
+      expect(
+        result.get(serviceMapNodeKey('web', ['web-pod-1']))!.outgoingRequests,
+      ).toBe(20);
+    });
+
+    it('treats an empty dimension value as its own node', () => {
+      const result = aggregateServiceMapData([
+        dimNodeRow('api', [''], 5),
+        dimNodeRow('api', ['api-pod-0'], 7),
+      ]);
+
+      const none = result.get(serviceMapNodeKey('api', ['']))!;
+      expect(none.dimensions).toEqual(['']);
+      expect(none.incomingRequests.totalRequests).toBe(5);
+      expect(result.size).toBe(2);
+    });
+
+    it('keys by service name alone when there are no dimensions', () => {
+      expect(serviceMapNodeKey('api', [])).toBe('api');
+      const result = aggregateServiceMapData([
+        nodeRow('api', 1, 0),
+        edgeRow('api', 'web', 1, 0),
+      ]);
+      expect(result.get('api')).toMatchObject({
+        key: 'api',
+        dimensions: [],
+      });
+      expect(result.get('api')!.incomingRequestsByClient.has('web')).toBe(true);
+    });
+  });
+
   describe('data structure integrity', () => {
     it('does not mutate the input rows', () => {
       const data: SpanAggregationRow[] = [
@@ -269,5 +408,114 @@ describe('aggregateServiceMapData', () => {
       aggregateServiceMapData(data);
       expect(data).toEqual(original);
     });
+  });
+});
+
+describe('getServiceMapQuery', () => {
+  const source: TTraceSource = {
+    id: 'src',
+    name: 'Traces',
+    kind: SourceKind.Trace,
+    connection: 'conn',
+    from: { databaseName: 'default', tableName: 'otel_traces' },
+    timestampValueExpression: 'Timestamp',
+    defaultTableSelectExpression: 'Timestamp',
+    traceIdExpression: 'TraceId',
+    spanIdExpression: 'SpanId',
+    parentSpanIdExpression: 'ParentSpanId',
+    serviceNameExpression: 'ServiceName',
+    spanKindExpression: 'SpanKind',
+    statusCodeExpression: 'StatusCode',
+    durationExpression: 'Duration',
+    durationPrecision: 9,
+  } as TTraceSource;
+
+  const dateRange: [Date, Date] = [
+    new Date('2024-01-01T00:00:00Z'),
+    new Date('2024-01-01T01:00:00Z'),
+  ];
+
+  const normalize = (sql: string) => sql.replace(/\s+/g, ' ').trim();
+
+  async function render(groupBy?: string[]) {
+    jest
+      .mocked(renderChartConfig)
+      .mockResolvedValueOnce({ sql: 'SERVER_CTE', params: {} })
+      .mockResolvedValueOnce({ sql: 'CLIENT_CTE', params: {} });
+    const query = await getServiceMapQuery({
+      source,
+      dateRange,
+      metadata: {} as any,
+      samplingFactor: 1,
+      groupBy,
+    });
+    return normalize(query.sql);
+  }
+
+  beforeEach(() => {
+    jest.mocked(renderChartConfig).mockReset();
+  });
+
+  it('groups by service name only when no dimensions are given', async () => {
+    const sql = await render([]);
+
+    expect(sql).toContain(
+      'WHERE (ClientSpans.serviceName IS NULL OR tuple(ServerSpans.serviceName) != tuple(ClientSpans.serviceName))',
+    );
+    expect(sql).toContain(
+      'GROUP BY GROUPING SETS ( (ServerSpans.serviceName, ClientSpans.serviceName), (ServerSpans.serviceName) )',
+    );
+    expect(sql).toContain(
+      'SELECT ServerSpans.serviceName AS server_serviceName, ClientSpans.serviceName AS client_serviceName, GROUPING(ClientSpans.serviceName) AS isNodeLevel',
+    );
+    expect(sql).toContain(
+      'ORDER BY server_serviceName, isNodeLevel, client_serviceName',
+    );
+    expect(sql).not.toContain('dim0');
+
+    const [serverConfig] = jest.mocked(renderChartConfig).mock.calls[0];
+    expect(serverConfig).not.toMatchObject({
+      select: expect.arrayContaining([
+        expect.objectContaining({ alias: 'dim0' }),
+      ]),
+    });
+  });
+
+  it('selects each dimension as a non-nullable string and keys both sides of the join by it', async () => {
+    const sql = await render([
+      "ResourceAttributes['k8s.pod.name']",
+      "SpanAttributes['http.route']",
+    ]);
+
+    expect(jest.mocked(renderChartConfig).mock.calls).toHaveLength(2);
+    for (const [config] of jest.mocked(renderChartConfig).mock.calls) {
+      expect(config).toMatchObject({
+        select: expect.arrayContaining([
+          {
+            valueExpression:
+              "ifNull(toString(ResourceAttributes['k8s.pod.name']), '')",
+            alias: 'dim0',
+          },
+          {
+            valueExpression:
+              "ifNull(toString(SpanAttributes['http.route']), '')",
+            alias: 'dim1',
+          },
+        ]),
+      });
+    }
+
+    expect(sql).toContain(
+      'SELECT ServerSpans.serviceName AS server_serviceName, ClientSpans.serviceName AS client_serviceName, ServerSpans.dim0 AS server_dim0, ClientSpans.dim0 AS client_dim0, ServerSpans.dim1 AS server_dim1, ClientSpans.dim1 AS client_dim1, GROUPING(ClientSpans.serviceName) AS isNodeLevel',
+    );
+    expect(sql).toContain(
+      'tuple(ServerSpans.serviceName, ServerSpans.dim0, ServerSpans.dim1) != tuple(ClientSpans.serviceName, ClientSpans.dim0, ClientSpans.dim1)',
+    );
+    expect(sql).toContain(
+      'GROUP BY GROUPING SETS ( (ServerSpans.serviceName, ServerSpans.dim0, ServerSpans.dim1, ClientSpans.serviceName, ClientSpans.dim0, ClientSpans.dim1), (ServerSpans.serviceName, ServerSpans.dim0, ServerSpans.dim1) )',
+    );
+    expect(sql).toContain(
+      'ORDER BY server_serviceName, server_dim0, server_dim1, isNodeLevel, client_serviceName, client_dim0, client_dim1',
+    );
   });
 });

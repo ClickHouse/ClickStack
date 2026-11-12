@@ -20,7 +20,10 @@ export type ServiceMapEdgeData = {
   hasLatency: boolean;
   dateRange: [Date, Date];
   source: TTraceSource;
+  // The server (target) node's label parts.
   serviceName: string;
+  dimensions: string[];
+  groupBy: string[];
   isSingleTrace?: boolean;
 };
 
@@ -42,6 +45,8 @@ export default function ServiceMapEdge(
     hasLatency,
     dateRange,
     serviceName,
+    dimensions,
+    groupBy,
     source,
     isSingleTrace,
   } = props.data;
@@ -70,6 +75,8 @@ export default function ServiceMapEdge(
           source={source}
           dateRange={dateRange}
           serviceName={serviceName}
+          dimensions={dimensions}
+          groupBy={groupBy}
           isSingleTrace={isSingleTrace}
         />
       </EdgeToolbar>

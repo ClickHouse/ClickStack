@@ -4,6 +4,7 @@ import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import { TTraceSource } from '@hyperdx/common-utils/dist/types';
 import {
   Box,
+  Button,
   Center,
   Code,
   Loader,
@@ -28,6 +29,7 @@ import {
 } from '@xyflow/react';
 
 import { SQLPreview } from '@/components/ChartSQLPreview';
+import EmptyState from '@/components/EmptyState';
 import useServiceMap, { ServiceAggregation } from '@/hooks/useServiceMap';
 import { useResolvedColorScheme } from '@/useUserPreferences';
 
@@ -38,8 +40,10 @@ import {
   ServiceMapMetricMax,
 } from './ServiceMapMetricContext';
 import ServiceMapNode, { ServiceMapNodeData } from './ServiceMapNode';
+import { useServiceMapSizeGate } from './useServiceMapSizeGate';
 import {
   getServiceMetricValue,
+  MAX_SERVICE_MAP_NODES,
   SERVICE_MAP_METRIC_LABEL,
   SERVICE_MAP_METRICS,
   ServiceMapMetric,
@@ -96,6 +100,8 @@ interface ServiceMapPresentationProps {
   dateRange: [Date, Date];
   source: TTraceSource;
   isSingleTrace?: boolean;
+  // Extra group-by SQL expressions the nodes are split by (beyond ServiceName).
+  groupBy: string[];
   // The single service the map is currently scoped to (via a node's focus
   // action), or undefined when showing all/multiple services.
   focusedService?: string;
@@ -109,6 +115,7 @@ function ServiceMapPresentation({
   dateRange,
   source,
   isSingleTrace,
+  groupBy,
   focusedService,
   onFocusService,
 }: ServiceMapPresentationProps) {
@@ -117,6 +124,7 @@ function ServiceMapPresentation({
   const { fitView } = useReactFlow();
   const colorScheme = useResolvedColorScheme();
   const [metric, setMetric] = useState<ServiceMapMetric>('errorRate');
+  const { tooLarge, showAnyway } = useServiceMapSizeGate(services);
 
   // Fit the data to the viewport whenever input service information changes
   useEffect(() => {
@@ -166,15 +174,24 @@ function ServiceMapPresentation({
   }, [metric, hasLatencyData]);
 
   useEffect(() => {
+    // Skip the layout entirely for an oversized map; dagre on thousands of
+    // nodes is what locks the tab, not the query.
+    if (tooLarge) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
+
     const nodes: Node<ServiceMapNodeData>[] =
       Array.from(services?.values() ?? []).map((service, index) => ({
-        id: service.serviceName,
+        id: service.key,
         data: {
           ...service,
           dateRange,
           source,
           maxThroughput: metricMax.throughput,
           isSingleTrace,
+          groupBy,
           focusedService,
           onFocusService,
         },
@@ -186,16 +203,16 @@ function ServiceMapPresentation({
       services?.values() ?? [],
     )
       .filter(service => service.incomingRequestsByClient.size > 0)
-      .flatMap(({ serviceName, incomingRequestsByClient: requestsByClient }) =>
-        Array.from(requestsByClient.entries()).map(
+      .flatMap(({ key, serviceName, dimensions, incomingRequestsByClient }) =>
+        Array.from(incomingRequestsByClient.entries()).map(
           ([
-            clientServiceName,
+            clientKey,
             { totalRequests, errorPercentage, p50, p95, p99, hasLatency },
           ]) => {
             return {
-              id: `${serviceName}-${clientServiceName}`,
-              source: clientServiceName,
-              target: serviceName,
+              id: `${clientKey}->${key}`,
+              source: clientKey,
+              target: key,
               animated: true,
               type: 'request',
               data: {
@@ -208,6 +225,8 @@ function ServiceMapPresentation({
                 source,
                 dateRange,
                 serviceName,
+                dimensions,
+                groupBy,
                 isSingleTrace,
               },
             };
@@ -221,10 +240,12 @@ function ServiceMapPresentation({
     setEdges(edges);
   }, [
     services,
+    tooLarge,
     dateRange,
     source,
     metricMax.throughput,
     isSingleTrace,
+    groupBy,
     focusedService,
     onFocusService,
   ]);
@@ -244,6 +265,29 @@ function ServiceMapPresentation({
           No services found. The Service Map shows links between services with
           related Client- and Server-kind spans.
         </Text>
+      </Center>
+    );
+  }
+
+  if (services && tooLarge) {
+    return (
+      <Center className="w-100 h-100">
+        <EmptyState
+          title={`${services.size.toLocaleString()} nodes in this map`}
+          description={`The service map renders up to ${MAX_SERVICE_MAP_NODES} nodes. Narrow the span filter or group by an attribute with fewer values.`}
+          maw={480}
+          data-testid="service-map-too-many-nodes"
+        >
+          <Button
+            variant="secondary"
+            size="sm"
+            mt="sm"
+            onClick={showAnyway}
+            data-testid="service-map-show-anyway"
+          >
+            Show anyway
+          </Button>
+        </EmptyState>
       </Center>
     );
   }
@@ -336,10 +380,16 @@ interface ServiceMapProps {
   where?: string;
   whereLanguage?: 'sql' | 'lucene';
   serviceNames?: string[];
+  // Extra group-by SQL expressions; ServiceName is always the first key.
+  groupBy?: string[];
   // Called when a node is clicked, e.g. to drive the service filter to focus
   // on that service and its immediate dependencies.
   onFocusService?: (serviceName: string) => void;
 }
+
+// A stable default so the layout effect does not re-run on every render when
+// the caller passes no group-by.
+const NO_GROUP_BY: string[] = [];
 
 export default function ServiceMap({
   traceId,
@@ -350,6 +400,7 @@ export default function ServiceMap({
   where,
   whereLanguage,
   serviceNames,
+  groupBy = NO_GROUP_BY,
   onFocusService,
 }: ServiceMapProps) {
   const {
@@ -364,6 +415,7 @@ export default function ServiceMap({
     where,
     whereLanguage,
     serviceNames,
+    groupBy,
   });
 
   useEffect(() => {
@@ -390,6 +442,7 @@ export default function ServiceMap({
         dateRange={dateRange}
         source={traceTableSource}
         isSingleTrace={isSingleTrace}
+        groupBy={groupBy}
         focusedService={focusedService}
         onFocusService={onFocusService}
       />
