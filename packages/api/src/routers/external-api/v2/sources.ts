@@ -412,6 +412,12 @@ function formatExternalSource(source: SourceDocument) {
  *           description: Controls whether lucene rendering uses ClickHouse text indices via hasAllTokens() against the implicit column. "auto" detects a covering index at query time, "enabled" forces text index usage, "disabled" forces a LIKE/hasToken fallback.
  *           nullable: true
  *           example: auto
+ *         mapKeyIndexMaxParts:
+ *           type: integer
+ *           minimum: 1
+ *           description: How many data parts Map attribute key discovery reads from a text index, picked around the median part size. Raise it if attribute keys are missing from filters; lower it if field loading is slow. Defaults to 20.
+ *           nullable: true
+ *           example: 20
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.
@@ -613,6 +619,12 @@ function formatExternalSource(source: SourceDocument) {
  *           description: Controls whether lucene rendering uses ClickHouse text indices via hasAllTokens() against the implicit column. "auto" detects a covering index at query time, "enabled" forces text index usage, "disabled" forces a LIKE/hasToken fallback.
  *           nullable: true
  *           example: auto
+ *         mapKeyIndexMaxParts:
+ *           type: integer
+ *           minimum: 1
+ *           description: How many data parts Map attribute key discovery reads from a text index, picked around the median part size. Raise it if attribute keys are missing from filters; lower it if field loading is slow. Defaults to 20.
+ *           nullable: true
+ *           example: 20
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.

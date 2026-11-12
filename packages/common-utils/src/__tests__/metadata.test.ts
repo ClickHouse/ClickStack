@@ -3257,6 +3257,46 @@ describe('Metadata', () => {
         expect(mockClickhouseClient.query).toHaveBeenCalledTimes(1);
       },
     );
+
+    it.each(textIndexLookups)(
+      'reads only the parts nearest the median size on the %s text index path',
+      async (_, textIndexLookup) => {
+        const md = new Metadata(mockClickhouseClient, new MetadataCache());
+        jest.spyOn(md, 'getServerVersion').mockResolvedValue([26, 3, 0, 0]);
+        jest
+          .spyOn(md, 'getMapColumnTextIndexes')
+          .mockResolvedValue(textIndexLookup);
+        (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+          json: () => Promise.resolve({ data: [{ key: 'http.method' }] }),
+        });
+        const args = {
+          databaseName: 'default',
+          tableName: 'otel_logs',
+          column: 'LogAttributes',
+          connectionId: 'test_connection',
+          dateRange: [
+            new Date('2024-01-01T00:00:00Z'),
+            new Date('2024-01-01T01:00:00Z'),
+          ] as [Date, Date],
+          timestampValueExpression: 'Timestamp',
+        };
+
+        await md.getMapKeys(args);
+        await md.getMapKeys({ ...args, mapKeyIndexMaxParts: 5 });
+
+        // A different limit is a different result, not a cache hit.
+        expect(mockClickhouseClient.query).toHaveBeenCalledTimes(2);
+        const calls = (mockClickhouseClient.query as jest.Mock).mock.calls;
+        const partsLimits = calls.map(([opts]) => {
+          const match = opts.query.match(
+            /row_number\(\) OVER \(ORDER BY rows, name\)[\s\S]+ORDER BY abs\(rn - \(cnt \+ 1\) \/ 2\), name\s+LIMIT \{(\w+):Int32\}/,
+          );
+          expect(match).not.toBeNull();
+          return opts.query_params[match[1]];
+        });
+        expect(partsLimits).toEqual([20, 5]);
+      },
+    );
   });
 
   describe('getMapValues', () => {
