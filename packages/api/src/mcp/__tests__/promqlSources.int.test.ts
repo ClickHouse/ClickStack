@@ -1,8 +1,13 @@
+import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 import * as config from '@/config';
-import { PROMETHEUS_MAX_RESPONSE_BYTES } from '@/controllers/promql';
+import {
+  clearBackendProbeCache,
+  CLICKHOUSE_PROMETHEUS_API_PREFIX,
+  PROMETHEUS_MAX_RESPONSE_BYTES,
+} from '@/controllers/promql';
 import {
   DEFAULT_DATABASE,
   dropTimeSeriesTable,
@@ -16,6 +21,7 @@ import { Source } from '@/models/source';
 import { callTool, createTestClient, getFirstText } from './mcpTestUtils';
 
 const mockFetch = jest.mocked(global.fetch);
+const { realFetch } = globalThis as unknown as { realFetch: typeof fetch };
 
 const TABLE = 'mcp_promql_sources';
 
@@ -88,6 +94,8 @@ describe('MCP PromQL sources', () => {
       username: config.CLICKHOUSE_USER,
       password: config.CLICKHOUSE_PASSWORD,
     });
+    // Pinned so these tests read labels with SQL on any server version; the
+    // HTTP API path is covered on its own below.
     promqlSource = await Source.create({
       kind: SourceKind.Promql,
       team: team._id,
@@ -95,12 +103,15 @@ describe('MCP PromQL sources', () => {
       name: 'TimeSeries metrics',
       from: { databaseName: DEFAULT_DATABASE, tableName: TABLE },
       timestampValueExpression: 'timestamp',
+      promqlBackend: 'table-function',
     });
   });
 
   afterEach(async () => {
     await client?.close();
     await server.clearDBs();
+    clearBackendProbeCache();
+    mockFetch.mockReset();
   });
 
   afterAll(async () => {
@@ -248,6 +259,128 @@ describe('MCP PromQL sources', () => {
       const output = JSON.parse(getFirstText(result));
       expect(output.partial).toBe(true);
       expect(output.error).toContain('returned more than 8 MB');
+    });
+
+    describe("through ClickHouse's prometheus_api_v1 handler", () => {
+      let autoSource: any;
+      let versionSpy: jest.SpyInstance | undefined;
+
+      const stubServerVersion = (version: [number, number, number, number]) => {
+        versionSpy = jest
+          .spyOn(Metadata.prototype, 'getServerVersion')
+          .mockResolvedValue(version);
+      };
+
+      const describeAutoSource = async () => {
+        const result = await callTool(client, 'clickstack_describe_source', {
+          sourceId: autoSource._id.toString(),
+        });
+        expect(result.isError).toBeFalsy();
+        return JSON.parse(getFirstText(result));
+      };
+
+      const labelLookupUrls = () =>
+        mockFetch.mock.calls
+          .map(([input]) => new URL(String(input)))
+          .filter(
+            url =>
+              url.pathname !==
+              `${CLICKHOUSE_PROMETHEUS_API_PREFIX}/format_query`,
+          );
+
+      beforeEach(async () => {
+        autoSource = await Source.create({
+          kind: SourceKind.Promql,
+          team: team._id,
+          connection: promqlSource.connection,
+          name: 'TimeSeries metrics (auto)',
+          from: { databaseName: DEFAULT_DATABASE, tableName: TABLE },
+          timestampValueExpression: 'timestamp',
+        });
+      });
+
+      afterEach(() => {
+        versionSpy?.mockRestore();
+        versionSpy = undefined;
+      });
+
+      it("sends the label lookups with the source's table and the connection's credentials", async () => {
+        stubServerVersion([26, 10, 0, 0]);
+        mockFetch.mockImplementation(async input => {
+          const { pathname } = new URL(String(input));
+          if (pathname.endsWith('/format_query')) {
+            return prometheusResponse('up');
+          }
+          return prometheusResponse(
+            pathname.endsWith('/label/__name__/values')
+              ? ['up']
+              : ['__name__', 'job'],
+          );
+        });
+
+        const output = await describeAutoSource();
+
+        expect(output.source).toMatchObject({
+          backend: 'clickhouse',
+          table: `${DEFAULT_DATABASE}.${TABLE}`,
+        });
+        expect(output.labelNames).toEqual(['__name__', 'job']);
+        expect(output.metricNames).toEqual(['up']);
+        const urls = labelLookupUrls();
+        expect(urls.map(u => u.pathname).sort()).toEqual([
+          `${CLICKHOUSE_PROMETHEUS_API_PREFIX}/label/__name__/values`,
+          `${CLICKHOUSE_PROMETHEUS_API_PREFIX}/labels`,
+        ]);
+        for (const url of urls) {
+          expect(url.searchParams.getAll('database')).toEqual([
+            DEFAULT_DATABASE,
+          ]);
+          expect(url.searchParams.getAll('table')).toEqual([TABLE]);
+          expect(url.searchParams.get('start')).toBeTruthy();
+          expect(url.searchParams.get('end')).toBeTruthy();
+          expect(url.searchParams.get('limit')).toBe('201');
+        }
+        for (const [input, init] of mockFetch.mock.calls) {
+          if (new URL(String(input)).pathname.endsWith('/format_query')) {
+            continue;
+          }
+          expect(init?.headers).toMatchObject({
+            'X-ClickHouse-User': config.CLICKHOUSE_USER,
+            'X-ClickHouse-Key': config.CLICKHOUSE_PASSWORD,
+            'X-ClickHouse-Query-Id': expect.stringMatching(/^hdx-mcp-/),
+          });
+        }
+      });
+
+      // 26.8's handler answers label lookups with a 400 ("not implemented").
+      it('reads labels with SQL on ClickHouse 26.8, whose handler serves only queries', async () => {
+        stubServerVersion([26, 8, 36, 3]);
+        mockFetch.mockImplementation(async () => prometheusResponse('up'));
+
+        const output = await describeAutoSource();
+
+        expect(output.labelNames).toEqual(['__name__', 'instance', 'job']);
+        expect(output.metricNames).toEqual(['http_requests_total', 'up']);
+        expect(labelLookupUrls()).toEqual([]);
+      });
+
+      // Needs ClickHouse 26.9+, whose handler serves label lookups.
+      it('lists labels from the CI ClickHouse handler', async () => {
+        mockFetch.mockImplementation(realFetch);
+
+        const output = await describeAutoSource();
+
+        expect(output.labelNames).toEqual(['__name__', 'instance', 'job']);
+        expect(output.metricNames).toEqual(['http_requests_total', 'up']);
+        expect(
+          labelLookupUrls()
+            .map(u => u.pathname)
+            .sort(),
+        ).toEqual([
+          `${CLICKHOUSE_PROMETHEUS_API_PREFIX}/label/__name__/values`,
+          `${CLICKHOUSE_PROMETHEUS_API_PREFIX}/labels`,
+        ]);
+      });
     });
 
     it('keeps promqlBackend through a describe -> rename -> save round trip', async () => {
