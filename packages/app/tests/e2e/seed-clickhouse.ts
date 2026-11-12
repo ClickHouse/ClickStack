@@ -1175,7 +1175,7 @@ async function insertPromqlMetric(
     .join('\n    UNION ALL\n    ');
 
   await client.query(`
-    INSERT INTO ${table} (metric_name, tags, time_series)
+    INSERT INTO ${table} (metric_name, tags, samples)
     ${rows}
   `);
 }
