@@ -2713,7 +2713,7 @@ export type MetadataMaterializedViews = z.infer<
 >;
 
 /**
- * How many parts Map key discovery reads from a text index. Unset uses
+ * How many parts key and value discovery reads from a text index. Unset uses
  * DEFAULT_MAP_KEY_INDEX_MAX_PARTS. A cleared form NumberInput yields `''`.
  */
 const MapKeyIndexMaxPartsSchema = z.preprocess(
