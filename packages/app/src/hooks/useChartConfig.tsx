@@ -19,6 +19,7 @@ import {
 import {
   convertDateRangeToGranularityString,
   convertGranularityToSeconds,
+  getSourceQuerySettings,
   hasPositiveSeriesLimit,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
@@ -449,7 +450,8 @@ export function useQueriedChartConfig(
         enableParallelQueries: options?.enableParallelQueries,
         metadata,
         querySettings: mergeQuerySettings(
-          source?.querySettings,
+          // The full range, before fetchDataInChunks splits it into windows.
+          getSourceQuerySettings(source, config.dateRange),
           options?.additionalQuerySettings,
         ),
       });

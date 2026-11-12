@@ -50,6 +50,15 @@ export const MIN_AUTO_GRANULARITY_OPTIONS = [
   ...MV_GRANULARITY_OPTIONS.filter(option => option.value !== '1 second'),
 ];
 
+export const FILESYSTEM_CACHE_READ_ONLY_MIN_RANGE_OPTIONS = [
+  { value: '', label: 'Never' },
+  { value: '6 hour', label: 'Longer than 6 hours' },
+  { value: '1 day', label: 'Longer than 1 day' },
+  { value: '2 day', label: 'Longer than 2 days' },
+  { value: '7 day', label: 'Longer than 7 days' },
+  { value: '30 day', label: 'Longer than 30 days' },
+];
+
 export const USE_TEXT_INDEX_OPTIONS = [
   {
     value: UseTextIndex.Auto,

@@ -15,6 +15,7 @@ import {
 import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { renderChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
+  getSourceQuerySettings,
   isFirstOrderByAscending,
   isTimestampExpressionInFirstOrderBy,
   MAX_TABLE_ROWS,
@@ -257,7 +258,8 @@ const queryFn: QueryFunction<TQueryFnData, TQueryKey, TPageParam> = async ({
   const query = await renderChartConfig(
     windowedConfig,
     metadata,
-    source?.querySettings,
+    // The full range, not the page's time window.
+    getSourceQuerySettings(source, config.dateRange),
   );
 
   // Create abort signal from timeout if provided
