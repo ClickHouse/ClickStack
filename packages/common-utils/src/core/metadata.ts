@@ -78,6 +78,10 @@ export const DEFAULT_MAP_KEY_INDEX_MAX_PARTS = 20;
 // Cap keys per dispatched query: each key is another operation for the db to fetch, and simply fetching all keys at once can be too much for the db to handle.
 export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
 
+// Tokens a text index values lookup reads per key. The dictionary is sorted,
+// so a key with more distinct values than this gets the most frequent among
+// its alphabetically first ones. Keep it above "Load more"'s 10,000 values.
+const TEXT_INDEX_TOKENS_PER_KEY = 100_000;
 // Keys per text index values query; see dispatchKeyValueQueries.
 const TEXT_INDEX_KEYS_PER_QUERY = 10;
 
@@ -1779,19 +1783,6 @@ export class Metadata {
       try {
         const sqlBranches: Array<ChSql> = [];
         for (const [columnName, info] of queryOptions.entries()) {
-          const orChain = concatChSql(
-            ' OR ',
-            // Inline keys as SQL-escaped literals, not bind params: ~100
-            // per-key params exceed the web client's URL param budget and
-            // silently switch the request to a multipart body that proxies
-            // may reject. Keys are ingest-controlled, hence SqlString.escape.
-            info.keys.map(
-              k =>
-                chSql`startsWith(token, ${{
-                  UNSAFE_RAW_SQL: SqlString.escape(`${k}${info.separator}`),
-                }})`,
-            ),
-          );
           const partsFilter = await this.partsOverlapFilter({
             databaseName,
             tableName,
@@ -1801,20 +1792,29 @@ export class Metadata {
             partSelection,
           });
           const valueSql = chSql`substring(token, position(token, ${{ String: info.separator }}) + ${{ Int32: info.separator.length }})`;
-          // `cardinality` is the token's row count in the part, so this keeps
-          // each key's most frequent values rather than the first ones read.
-          const sql = chSql`
-        SELECT * FROM (
-          SELECT ${{ String: columnName }} as column,
-            substring(token, 1, position(token, ${{ String: info.separator }}) - 1) AS key,
-            topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(${valueSql}, cardinality) AS value
+          // One branch per key, each with its own LIMIT: the read for a key
+          // stops after TEXT_INDEX_TOKENS_PER_KEY tokens, so a key with a
+          // value per row can't slow down or starve the others. `cardinality`
+          // is the token's row count in the part, so topKWeighted keeps the
+          // most frequent values among the tokens read.
+          for (const k of info.keys) {
+            // Inline keys as SQL-escaped literals, not bind params: ~100
+            // per-key params exceed the web client's URL param budget and
+            // silently switch the request to a multipart body that proxies
+            // may reject. Keys are ingest-controlled, hence SqlString.escape.
+            sqlBranches.push(chSql`
+        SELECT ${{ String: columnName }} AS column,
+          ${{ UNSAFE_RAW_SQL: SqlString.escape(k) }} AS key,
+          topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(v, cardinality) AS value
+        FROM (
+          SELECT ${valueSql} AS v, cardinality
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
-            AND (${orChain})
-            AND ${valueSql} != ''
-          GROUP BY column, key
-        )`;
-          sqlBranches.push(sql);
+            AND startsWith(token, ${{ UNSAFE_RAW_SQL: SqlString.escape(`${k}${info.separator}`) }})
+            AND v != ''
+          LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }}
+        )`);
+          }
         }
         const sql = concatChSql(' UNION ALL ', sqlBranches);
 
@@ -1824,12 +1824,10 @@ export class Metadata {
             query_params: sql.params,
             connectionId,
             clickhouse_settings: {
-              max_rows_to_read: String(
-                this.getClickHouseSettings().max_rows_to_read ??
-                  DEFAULT_METADATA_MAX_ROWS_TO_READ,
-              ),
-              read_overflow_mode: 'break',
               ...this.getClickHouseSettings(),
+              // The per-key LIMIT bounds the read. A row cap would stop the
+              // sorted dictionary read partway and leave later keys empty.
+              max_rows_to_read: '0',
             },
             abort_signal: signal,
           })
@@ -1888,14 +1886,16 @@ export class Metadata {
             maxParts: maxParts ?? undefined,
             partSelection,
           });
+          // See getMapTextIndexKeyValues for the per-column LIMIT.
           const sql = chSql`
-        SELECT * FROM (
-          SELECT ${{ String: columnName }} AS key,
-            topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(token, cardinality) AS value
+        SELECT ${{ String: columnName }} AS key,
+          topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(token, cardinality) AS value
+        FROM (
+          SELECT token, cardinality
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
             AND token != ''
-          GROUP BY key
+          LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }}
         )`;
           sqlBranches.push(sql);
         }
@@ -1907,12 +1907,9 @@ export class Metadata {
             query_params: sql.params,
             connectionId,
             clickhouse_settings: {
-              max_rows_to_read: String(
-                this.getClickHouseSettings().max_rows_to_read ??
-                  DEFAULT_METADATA_MAX_ROWS_TO_READ,
-              ),
-              read_overflow_mode: 'break',
               ...this.getClickHouseSettings(),
+              // See getMapTextIndexKeyValues.
+              max_rows_to_read: '0',
             },
             abort_signal: signal,
           })
