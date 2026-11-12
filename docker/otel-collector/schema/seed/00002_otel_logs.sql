@@ -32,11 +32,14 @@ CREATE TABLE IF NOT EXISTS ${DATABASE}.otel_logs
   INDEX idx_trace_id TraceId TYPE text(tokenizer = 'array'),
   INDEX idx_session_id __hdx_materialized_session.id TYPE text(tokenizer = 'array'),
   INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE text(tokenizer = 'array'),
-  INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array'),
+  -- Larger dictionary blocks make each part's sparse index smaller. Reading
+  -- a key's values with mergeTreeTextIndex() loads that index per part on
+  -- every read, so this cuts the per-part cost about 10x on large parts.
+  INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 4096),
   INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE text(tokenizer = 'array'),
-  INDEX idx_scope_attr_items ScopeAttributeItems TYPE text(tokenizer = 'array'),
+  INDEX idx_scope_attr_items ScopeAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 4096),
   INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array'),
-  INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array'),
+  INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 4096),
   INDEX idx_lower_body lower(Body) TYPE text(tokenizer = 'splitByNonAlpha')
 )
 ENGINE = MergeTree
