@@ -24,6 +24,21 @@ describe('MCP tool annotations', () => {
     expect(missing).toEqual([]);
   });
 
+  it('marks only tools that configure outbound notifications as open-world', async () => {
+    const client = await createTestClient(context);
+    const { tools } = await client.listTools();
+
+    const openWorld = tools
+      .filter(tool => tool.annotations?.openWorldHint)
+      .map(tool => tool.name)
+      .sort();
+
+    expect(openWorld).toEqual([
+      'clickstack_save_alert',
+      'clickstack_save_webhook',
+    ]);
+  });
+
   it('mirrors the tool title into annotations.title', async () => {
     const client = await createTestClient(context);
     const { tools } = await client.listTools();
