@@ -2,17 +2,24 @@ import type { PromqlSourceBackend } from '@hyperdx/common-utils/dist/types';
 
 import {
   clearBackendProbeCache,
+  resolveClickhouseLabelBackend,
   resolveClickhouseQueryBackend,
 } from '@/controllers/promql';
-import { connectionSupportsPrometheusHttpApi } from '@/controllers/timeseriesEngine';
+import { connectionPrometheusHttpApiSupport } from '@/controllers/timeseriesEngine';
 
 jest.mock('@/controllers/timeseriesEngine', () => ({
   ...jest.requireActual('@/controllers/timeseriesEngine'),
-  connectionSupportsPrometheusHttpApi: jest.fn(),
+  connectionPrometheusHttpApiSupport: jest.fn(),
 }));
 
 const mockFetch = jest.mocked(global.fetch);
-const mockVersionCheck = jest.mocked(connectionSupportsPrometheusHttpApi);
+const mockVersionCheck = jest.mocked(connectionPrometheusHttpApiSupport);
+
+// What the version check answers for a server on each side of the 26.6 (query)
+// and 26.9 (label lookup) cut-offs.
+const CLICKHOUSE_26_10 = { query: true, labels: true };
+const CLICKHOUSE_26_8 = { query: true, labels: false };
+const CLICKHOUSE_26_5 = { query: false, labels: false };
 
 const handlerAnswer = () =>
   new Response(JSON.stringify({ status: 'success', data: 'up' }));
@@ -46,7 +53,7 @@ describe('resolveClickhouseQueryBackend', () => {
   beforeEach(() => {
     clearBackendProbeCache();
     mockVersionCheck.mockReset();
-    mockVersionCheck.mockResolvedValue(true);
+    mockVersionCheck.mockResolvedValue(CLICKHOUSE_26_10);
     mockFetch.mockReset();
   });
 
@@ -74,7 +81,7 @@ describe('resolveClickhouseQueryBackend', () => {
     });
 
     it('keeps a server that is too old without probing the handler', async () => {
-      mockVersionCheck.mockResolvedValue(false);
+      mockVersionCheck.mockResolvedValue(CLICKHOUSE_26_5);
 
       await expect(resolveKind()).resolves.toBe('table-function');
       await expect(resolveKind()).resolves.toBe('table-function');
@@ -194,5 +201,67 @@ describe('resolveClickhouseQueryBackend', () => {
         'table-function',
       );
     });
+  });
+});
+
+describe('resolveClickhouseLabelBackend', () => {
+  const resolveLabels = (promqlBackend?: PromqlSourceBackend) =>
+    resolveClickhouseLabelBackend(
+      // @ts-expect-error mock connection carries only the fields the resolver reads
+      target(undefined, promqlBackend),
+    );
+
+  beforeEach(() => {
+    clearBackendProbeCache();
+    mockVersionCheck.mockReset();
+    mockFetch.mockReset();
+    mockFetch.mockImplementation(async () => handlerAnswer());
+  });
+
+  it.each([[undefined], ['auto' as const], ['clickhouse-http' as const]])(
+    'uses the HTTP API on 26.9+ with the handler when the setting is %s',
+    async setting => {
+      mockVersionCheck.mockResolvedValue(CLICKHOUSE_26_10);
+
+      await expect(resolveLabels(setting)).resolves.toBe('clickhouse-http');
+    },
+  );
+
+  // 26.6-26.8 answers queries over HTTP but not label lookups, so a source on
+  // the HTTP API must not lose its labels there.
+  it.each([[undefined], ['clickhouse-http' as const]])(
+    'reads labels with SQL on 26.8 even though queries use the HTTP API (setting %s)',
+    async setting => {
+      mockVersionCheck.mockResolvedValue(CLICKHOUSE_26_8);
+
+      await expect(resolveLabels(setting)).resolves.toBe('sql');
+      await expect(resolveKind(undefined, setting)).resolves.toBe(
+        'clickhouse-http',
+      );
+    },
+  );
+
+  it('reads labels with SQL when the server has no handler', async () => {
+    mockVersionCheck.mockResolvedValue(CLICKHOUSE_26_10);
+    mockFetch.mockImplementation(async () => noHandlerAnswer());
+
+    await expect(resolveLabels()).resolves.toBe('sql');
+  });
+
+  it('reads labels with SQL for a table-function source, without a probe', async () => {
+    await expect(resolveLabels('table-function')).resolves.toBe('sql');
+
+    expect(mockVersionCheck).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('shares the kept probe answer with queries', async () => {
+    mockVersionCheck.mockResolvedValue(CLICKHOUSE_26_10);
+
+    await resolveKind();
+    await expect(resolveLabels()).resolves.toBe('clickhouse-http');
+
+    expect(mockVersionCheck).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

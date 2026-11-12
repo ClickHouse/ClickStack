@@ -17,10 +17,12 @@ import {
   clickhousePrometheusRequest,
   newPromqlClickhouseClient,
   PROMETHEUS_MAX_RESOLUTION,
+  resolveClickhouseLabelBackend,
   resolveClickhouseQueryBackend,
   resolvePromqlTarget,
 } from '@/controllers/promql';
 import {
+  PROMETHEUS_MAX_RESULT_ROWS,
   queryInstantViaTableFunction,
   queryLabelNames,
   queryLabelValues,
@@ -792,18 +794,19 @@ type ClickHouseLabelLookup = (
 
 /**
  * Handles a Prometheus label lookup — `/labels` or `/label/:name/values` — from
- * whichever backend the connection points at.
+ * whichever backend the connection points at. `apiPath` is the Prometheus API
+ * path below `/api/v1`, e.g. `/labels`.
  */
 async function handleLabelLookup(
   req: express.Request,
   res: express.Response,
   {
     subject,
-    proxyPath,
+    apiPath,
     queryClickHouse,
   }: {
     subject: LabelLookupSubject;
-    proxyPath: string;
+    apiPath: string;
     queryClickHouse: ClickHouseLabelLookup;
   },
 ) {
@@ -832,24 +835,23 @@ async function handleLabelLookup(
     }
     const { connection, databaseName, tableName } = target;
 
+    const proxyParams = {
+      ...(start != null ? { start: String(start) } : {}),
+      ...(end != null ? { end: String(end) } : {}),
+      // Any non-negative integer. Pass 0 ("unlimited") on too: proxyToPrometheus
+      // sends it as an omitted key, which also clears a host-pinned `limit`.
+      ...(limit != null ? { limit: String(limit) } : {}),
+      // Restored under the name Prometheus expects
+      ...(match != null ? { 'match[]': match } : {}),
+    };
+
     // Proxy to Prometheus if endpoint is set
     if (connection.isPrometheusEndpoint) {
       backend = 'prometheus';
       const status = await proxyToPrometheus(
         connection.host,
-        proxyPath,
-        {
-          ...(start != null ? { start: String(start) } : {}),
-          ...(end != null ? { end: String(end) } : {}),
-          // `limit` is 0 or absent when validation passes (see the schema
-          // above); 0 means "unlimited" to Prometheus and must still be
-          // forwarded (`v == null` is the merge loop's own absence check),
-          // otherwise a request explicitly asking for unlimited results
-          // silently loses to a host-pinned `limit`.
-          ...(limit != null ? { limit: String(limit) } : {}),
-          // Restored under the name Prometheus expects
-          ...(match != null ? { 'match[]': match } : {}),
-        },
+        `/api/v1${apiPath}`,
+        proxyParams,
         res,
       );
       recordProxyOutcome(status, subject, backend);
@@ -857,6 +859,32 @@ async function handleLabelLookup(
     }
 
     backend = 'clickhouse';
+    if ((await resolveClickhouseLabelBackend(target)) === 'clickhouse-http') {
+      const { upstream, headers } = clickhousePrometheusRequest(connection);
+      // The handler returns every value in a single row, so the upstream's
+      // max_result_rows never applies. Cap the values themselves instead.
+      const cappedLimit = Math.min(
+        limit || PROMETHEUS_MAX_RESULT_ROWS,
+        PROMETHEUS_MAX_RESULT_ROWS,
+      );
+      const status = await proxyToPrometheus(
+        upstream,
+        `${CLICKHOUSE_PROMETHEUS_API_PREFIX}${apiPath}`,
+        {
+          ...proxyParams,
+          limit: String(cappedLimit),
+          database: databaseName,
+          table: tableName,
+        },
+        res,
+        headers,
+        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
+      );
+      recordProxyOutcome(status, subject, backend);
+      return;
+    }
+
+    // Servers before 26.9, or without the handler, or a table-function source
     const client = newPromqlClickhouseClient(connection);
 
     const startMs = start != null ? Math.floor(start * 1000) : undefined;
@@ -892,7 +920,7 @@ async function handleLabelLookup(
 router.get('/labels', (req, res) =>
   handleLabelLookup(req, res, {
     subject: 'labels',
-    proxyPath: '/api/v1/labels',
+    apiPath: '/labels',
     queryClickHouse: queryLabelNames,
   }),
 );
@@ -909,7 +937,7 @@ router.get('/label/:name/values', (req, res) => {
 
   return handleLabelLookup(req, res, {
     subject: 'label_values',
-    proxyPath: `/api/v1/label/${labelName}/values`,
+    apiPath: `/label/${labelName}/values`,
     queryClickHouse: args => queryLabelValues({ ...args, labelName }),
   });
 });
