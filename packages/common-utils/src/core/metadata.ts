@@ -1831,34 +1831,28 @@ export class Metadata {
           // may reject. Keys are ingest-controlled, hence SqlString.escape.
           const keyPrefix = (k: string) =>
             chSql`${{ UNSAFE_RAW_SQL: SqlString.escape(`${k}${info.separator}`) }}`;
-          // `cardinality` is the token's row count in the part, so
-          // topKWeighted keeps the most frequent values among the tokens read.
-          //
           // Every read of the index loads each part's sparse index, which has
           // one entry per dictionary block. With large blocks that is cheap, so
           // each key gets its own read whose LIMIT stops it early, and a key
-          // with a value per row can't slow down the others. With small blocks
+          // with a value per row can't slow down the others; `cardinality` is
+          // the token's row count in the part, so topKWeighted keeps the most
+          // frequent values among the tokens read. With small blocks
           // (ClickHouse's default 512) the sparse index is large, so all keys
-          // share one read. That read can't stop early per key, so topKWeighted
-          // sees every token and ranks by the full counts.
+          // share one read, as on main.
           if (!perKey) {
             sqlBranches.push(chSql`
-        SELECT ${{ String: columnName }} AS column,
-          key,
-          topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(v, cardinality) AS value
-        FROM (
-          SELECT substring(token, 1, position(token, ${{ String: info.separator }}) - 1) AS key,
-            ${valueSql} AS v,
-            cardinality
+          SELECT ${{ String: columnName }} AS column,
+            substring(token, 1, position(token, ${{ String: info.separator }}) - 1) AS key,
+            groupUniqArray(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(${valueSql}) AS value
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
             AND (${concatChSql(
               ' OR ',
               info.keys.map(k => chSql`startsWith(token, ${keyPrefix(k)})`),
             )})
-            AND v != ''
-        )
-        GROUP BY key`);
+            AND ${valueSql} != ''
+          GROUP BY column, key
+          `);
             continue;
           }
           for (const k of info.keys) {
@@ -1883,12 +1877,25 @@ export class Metadata {
             query: sql.sql,
             query_params: sql.params,
             connectionId,
-            clickhouse_settings: {
-              ...this.getClickHouseSettings(),
-              // A row cap would stop the sorted dictionary read partway and
-              // leave the keys that sort after it with no values.
-              max_rows_to_read: '0',
-            },
+            clickhouse_settings: perKey
+              ? {
+                  ...this.getClickHouseSettings(),
+                  // The per-key LIMIT bounds each read. A row cap would stop
+                  // the sorted dictionary read partway and leave the keys that
+                  // sort after it with no values.
+                  max_rows_to_read: '0',
+                }
+              : {
+                  // shortcut: bounds the shared read, but keys that sort after
+                  // a high-cardinality key can come back with no values; drop
+                  // it if that matters more than the read's cost.
+                  max_rows_to_read: String(
+                    this.getClickHouseSettings().max_rows_to_read ??
+                      DEFAULT_METADATA_MAX_ROWS_TO_READ,
+                  ),
+                  read_overflow_mode: 'break',
+                  ...this.getClickHouseSettings(),
+                },
             abort_signal: signal,
           })
           .then(res =>
