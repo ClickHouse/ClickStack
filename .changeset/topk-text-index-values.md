@@ -16,5 +16,5 @@ come from `topKWeighted(limit)` weighted by each token's row count, so a capped
 list holds the most common values, most common first.
 
 Each branch reads every part's text index once, so this is fastest when the
-index uses large dictionary blocks (e.g. `text_index_dictionary_block_size =
-4096`).
+index uses large dictionary blocks (e.g. `dictionary_block_size = 8192`, as the
+seed schemas now do).

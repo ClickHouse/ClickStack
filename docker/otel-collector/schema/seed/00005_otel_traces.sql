@@ -27,17 +27,17 @@ CREATE TABLE IF NOT EXISTS ${DATABASE}.otel_traces
     `SampleRate` UInt64 MATERIALIZED greatest(toUInt64OrZero(SpanAttributes['SampleRate']), 1) CODEC(T64, ZSTD(3)),
     `ResourceAttributeItems` Array(String) ALIAS arrayMap((arr) -> concat(arr.1, '=', arr.2), ResourceAttributes::Array(Tuple(String, String))),
     `SpanAttributeItems` Array(String) ALIAS arrayMap((arr) -> concat(arr.1, '=', arr.2), SpanAttributes::Array(Tuple(String, String))),
-    INDEX idx_trace_id TraceId TYPE text(tokenizer = 'array'),
-    INDEX idx_rum_session_id __hdx_materialized_rum.sessionId TYPE text(tokenizer = 'array'),
-    INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE text(tokenizer = 'array'),
-    -- Larger dictionary blocks make each part's sparse index smaller. Reading
-    -- a key's values with mergeTreeTextIndex() loads that index per part on
-    -- every read, so this cuts the per-part cost about 10x on large parts.
-    INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 4096),
-    INDEX idx_span_attr_key mapKeys(SpanAttributes) TYPE text(tokenizer = 'array'),
-    INDEX idx_span_attr_items SpanAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 4096),
+    -- Text indexes use 8,192-token dictionary blocks (the default is 512). Each
+    -- part's sparse index is 16x smaller, which makes reading filter values
+    -- with mergeTreeTextIndex() and looking up tokens much cheaper on large parts.
+    INDEX idx_trace_id TraceId TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
+    INDEX idx_rum_session_id __hdx_materialized_rum.sessionId TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
+    INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
+    INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
+    INDEX idx_span_attr_key mapKeys(SpanAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
+    INDEX idx_span_attr_items SpanAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
     INDEX idx_duration Duration TYPE minmax GRANULARITY 1,
-    INDEX idx_lower_span_name SpanName TYPE text(tokenizer = 'splitByNonAlpha', preprocessor=lower(SpanName))
+    INDEX idx_lower_span_name SpanName TYPE text(tokenizer = 'splitByNonAlpha', preprocessor=lower(SpanName), dictionary_block_size = 8192)
 )
 ENGINE = MergeTree
 PARTITION BY toDate(Timestamp)
