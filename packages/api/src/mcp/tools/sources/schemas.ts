@@ -466,6 +466,17 @@ const mcpSaveSourceSchema = z.object({
       'Log and trace sources. Rollup tables used for fast field discovery and ' +
         'value autocomplete in filters and search suggestions.',
     ),
+  mapKeyIndexMaxParts: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      'Log and trace sources. How many data parts Map attribute key discovery ' +
+        'reads from a text index, picked around the median part size. Raise it ' +
+        'if attribute keys are missing from filters; lower it if field loading ' +
+        'is slow. Omit for the default of 20.',
+    ),
 });
 
 export type McpSaveSourceInput = z.infer<typeof mcpSaveSourceSchema>;

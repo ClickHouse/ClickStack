@@ -189,6 +189,7 @@ export const LogSource = Source.discriminator<ILogSource>(
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
     },
+    mapKeyIndexMaxParts: Number,
     orderByExpression: String,
   }),
 );
@@ -240,6 +241,7 @@ export const TraceSource = Source.discriminator<ITraceSource>(
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
     },
+    mapKeyIndexMaxParts: Number,
     orderByExpression: String,
   }),
 );
