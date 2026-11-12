@@ -1,6 +1,7 @@
 import type { ErrorGroup } from './errorGroups';
 import type { NewOperation } from './operations';
 import {
+  crossedThreshold,
   HEALTH_THRESHOLDS,
   type ServiceAssessment,
   type WindowStats,
@@ -59,9 +60,10 @@ function describeError(g: ErrorGroup, window: Window): string {
 }
 
 /**
- * A plain verdict per service. Agents otherwise read every nonzero delta as a
- * trend ("error rate up 0.08pp"), so this states which moves crossed a
- * threshold and which are ordinary variance.
+ * States which moves crossed a threshold, or the raw values when none did.
+ * Agents read every nonzero delta as a trend ("error rate up 0.08pp"), but a
+ * verdict like "healthy, no action needed" stops them investigating a
+ * regression the service-wide totals hide, so this reports facts only.
  */
 export function serviceSummary(args: {
   current: WindowStats | null;
@@ -92,14 +94,13 @@ export function serviceSummary(args: {
 
   const head =
     parts.length > 0
-      ? `${assessment.status.toUpperCase()}: ${parts.join('; ')}.`
+      ? `Crossed thresholds: ${parts.join('; ')}.`
       : comparison === undefined
-        ? 'Healthy: no absolute threshold crossed (no comparison window).'
-        : `Healthy: no metric crossed a threshold vs ${args.comparisonMode}; ` +
-          'the deltas are normal variance' +
-          (changedErrors.length > 0
-            ? ', but see the new errors below.'
-            : '; report this service as steady, no action needed.');
+        ? `No absolute threshold crossed (no comparison window): error rate ${pct(current)}, p95 ${current?.p95Ms ?? 'n/a'}ms.`
+        : `No metric crossed a threshold vs ${args.comparisonMode}: ` +
+          `error rate ${pct(current)} vs ${pct(comparison)}, ` +
+          `p95 ${current?.p95Ms ?? 'n/a'}ms vs ${comparison?.p95Ms ?? 'n/a'}ms, ` +
+          `requests ${current?.requests ?? 0} vs ${comparison?.requests ?? 0}.`;
 
   const context: string[] = [];
   if (f.has('new_service'))
@@ -139,7 +140,7 @@ export function serviceSummary(args: {
           : ''),
     );
   }
-  if (args.spanKind === 'all' && assessment.status === 'healthy')
+  if (args.spanKind === 'all' && !crossedThreshold(assessment.flags))
     context.push(
       'Internal and client spans are included, which dilutes server-side ' +
         'changes; check spanKind:"server" before concluding nothing changed.',

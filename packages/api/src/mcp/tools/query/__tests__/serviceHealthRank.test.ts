@@ -2,6 +2,7 @@ import { errorGroupKey } from '@/mcp/tools/query/serviceHealth/errorGroups';
 import type { NewOperation } from '@/mcp/tools/query/serviceHealth/operations';
 import {
   assessService,
+  crossedThreshold,
   HEALTH_THRESHOLDS,
   type WindowStats,
 } from '@/mcp/tools/query/serviceHealth/rank';
@@ -28,9 +29,9 @@ const stats = (s: Partial<WindowStats> = {}): WindowStats => ({
 });
 
 describe('assessService', () => {
-  it('is healthy when nothing moved', () => {
+  it('flags nothing when nothing moved', () => {
     const a = assessService(stats(), stats(), 50);
-    expect(a.status).toBe('healthy');
+    expect(crossedThreshold(a.flags)).toBe(false);
     expect(a.flags).toEqual([]);
   });
 
@@ -38,29 +39,29 @@ describe('assessService', () => {
     // 0.5% -> 1.0%: 2x, but only +0.5pp
     const a = assessService(stats({ errors: 10 }), stats({ errors: 5 }), 50);
     expect(a.flags).not.toContain('error_rate_up');
-    expect(a.status).toBe('healthy');
+    expect(crossedThreshold(a.flags)).toBe(false);
   });
 
   it('flags error_rate_up at exactly the ratio and delta thresholds', () => {
     // 1% -> 2%: exactly 2x and +1pp
     const a = assessService(stats({ errors: 20 }), stats({ errors: 10 }), 50);
     expect(a.flags).toContain('error_rate_up');
-    expect(a.status).toBe('degraded');
+    expect(crossedThreshold(a.flags)).toBe(true);
     expect(a.deltas.errorRateDeltaPp).toBe(1);
   });
 
-  it('is critical when errors rose past the high error rate', () => {
+  it('flags both error rules when errors rose past the high error rate', () => {
     const a = assessService(stats({ errors: 80 }), stats({ errors: 5 }), 50);
     expect(a.flags).toEqual(
       expect.arrayContaining(['error_rate_up', 'high_error_rate']),
     );
-    expect(a.status).toBe('critical');
+    expect(crossedThreshold(a.flags)).toBe(true);
   });
 
-  it('marks a chronically high error rate degraded, not critical', () => {
+  it('flags a chronically high error rate without error_rate_up', () => {
     const a = assessService(stats({ errors: 80 }), stats({ errors: 80 }), 50);
     expect(a.flags).toEqual(['high_error_rate']);
-    expect(a.status).toBe('degraded');
+    expect(crossedThreshold(a.flags)).toBe(true);
   });
 
   it('needs both the ratio and the ms delta for latency_up', () => {
@@ -79,27 +80,27 @@ describe('assessService', () => {
   it('flags traffic drops and spikes', () => {
     const drop = assessService(stats({ requests: 500 }), stats(), 50);
     expect(drop.flags).toContain('traffic_drop');
-    expect(drop.status).toBe('degraded');
+    expect(crossedThreshold(drop.flags)).toBe(true);
 
     const spike = assessService(stats({ requests: 3000 }), stats(), 50);
     expect(spike.flags).toContain('traffic_spike');
-    expect(spike.status).toBe('healthy');
+    expect(crossedThreshold(spike.flags)).toBe(false);
   });
 
   it('flags new and missing services', () => {
     const fresh = assessService(stats(), null, 50);
     expect(fresh.flags).toEqual(['new_service']);
-    expect(fresh.status).toBe('healthy');
+    expect(crossedThreshold(fresh.flags)).toBe(false);
 
     const gone = assessService(null, stats(), 50);
     expect(gone.flags).toEqual(['missing_service']);
-    expect(gone.status).toBe('degraded');
+    expect(crossedThreshold(gone.flags)).toBe(true);
   });
 
   it('treats a handful of prior requests as no baseline', () => {
     const a = assessService(stats(), stats({ requests: 1, errors: 1 }), 50);
     expect(a.flags).toEqual(['new_service']);
-    expect(a.status).toBe('healthy');
+    expect(crossedThreshold(a.flags)).toBe(false);
   });
 
   it('never flags services under minRequests in both windows', () => {
@@ -110,7 +111,7 @@ describe('assessService', () => {
     );
     expect(a.flags).toEqual(['low_volume']);
     expect(a.score).toBe(0);
-    expect(a.status).toBe('healthy');
+    expect(crossedThreshold(a.flags)).toBe(false);
   });
 
   it('applies absolute rules only when comparisons are off', () => {
@@ -126,7 +127,7 @@ describe('assessService', () => {
 });
 
 describe('rankServices', () => {
-  it('sorts by status, then by score with volume as a multiplier', () => {
+  it('sorts flagged services first, then by score with volume as a multiplier', () => {
     const cur = new Map([
       ['steady', stats()],
       ['small-regression', stats({ requests: 100, errors: 10 })],
@@ -324,6 +325,49 @@ describe('buildReport', () => {
     );
     expect(svc.flags).not.toContain('new_errors');
     expect(svc.topErrors[0].status).toBe('new_operation');
+  });
+
+  it('reports facts, not a health verdict', () => {
+    const steady = reportFor(stats(), stats());
+    expect(steady).not.toHaveProperty('status');
+    expect(steady.summary).toMatch(
+      /^No metric crossed a threshold vs previous_period: error rate 0\.50% vs 0\.50%, p95 200ms vs 200ms, requests 1000 vs 1000\./,
+    );
+    const regressed = reportFor(stats({ errors: 80 }), stats());
+    expect(regressed.summary).toMatch(
+      /^Crossed thresholds: error rate 8\.00% vs 0\.50%\./,
+    );
+    for (const s of [steady.summary, regressed.summary]) {
+      expect(s).not.toMatch(/healthy|degraded|critical|no action needed/i);
+    }
+  });
+
+  it('counts flagged services instead of statuses', () => {
+    const report = buildReport({
+      ranked: rankServices(
+        new Map([
+          ['a', stats({ errors: 80 })],
+          ['b', stats()],
+        ]),
+        new Map([
+          ['a', stats()],
+          ['b', stats()],
+        ]),
+        50,
+      ),
+      current: { start: new Date(0), end: new Date(600_000) },
+      comparison: { start: new Date(-600_000), end: new Date(0) },
+      comparisonMode: 'previous_period',
+      spanKind: 'server',
+      topN: 5,
+      errorGroupBy: ['SpanName'],
+      currentErrors: new Map(),
+      comparisonErrorCounts: new Map(),
+      newOperations: new Map(),
+      spanNameKey: 'SpanName',
+    });
+    expect(report.summary.servicesFlagged).toBe(1);
+    expect(report.summary).not.toHaveProperty('statusCounts');
   });
 
   it('does not call errors new when the service has no baseline', () => {
