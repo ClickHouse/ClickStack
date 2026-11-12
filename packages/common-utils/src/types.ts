@@ -28,6 +28,17 @@ export enum UseTextIndex {
 
 export const UseTextIndexSchema = z.nativeEnum(UseTextIndex);
 
+/** Which data parts, by row count, text index key and value lookups read. */
+export enum MapKeyIndexPartSelection {
+  Median = 'median',
+  Smallest = 'smallest',
+  Largest = 'largest',
+}
+
+export const MapKeyIndexPartSelectionSchema = z.nativeEnum(
+  MapKeyIndexPartSelection,
+);
+
 // --------------------------
 //  UI
 // --------------------------
@@ -2865,6 +2876,7 @@ export const LogSourceSchema = BaseSourceSchema.extend({
   materializedViews: z.array(MaterializedViewConfigurationSchema).optional(),
   metadataMaterializedViews: MetadataMaterializedViewsSchema.optional(),
   mapKeyIndexMaxParts: MapKeyIndexMaxPartsSchema,
+  mapKeyIndexPartSelection: MapKeyIndexPartSelectionSchema.optional(),
   orderByExpression: z.string().optional(),
   useTextIndexForImplicitColumn: UseTextIndexSchema.optional(),
 });
@@ -2913,6 +2925,7 @@ export const TraceSourceSchema = BaseSourceSchema.extend({
   materializedViews: z.array(MaterializedViewConfigurationSchema).optional(),
   metadataMaterializedViews: MetadataMaterializedViewsSchema.optional(),
   mapKeyIndexMaxParts: MapKeyIndexMaxPartsSchema,
+  mapKeyIndexPartSelection: MapKeyIndexPartSelectionSchema.optional(),
   orderByExpression: z.string().optional(),
   useTextIndexForImplicitColumn: UseTextIndexSchema.optional(),
 });

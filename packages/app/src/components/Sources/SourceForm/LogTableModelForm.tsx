@@ -21,7 +21,10 @@ import {
 import { ExpressionFormRow } from './ExpressionFormRow';
 import { FormRow } from './FormRow';
 import { HighlightedAttributeExpressionsFormRow } from './HighlightedAttributes';
-import { MapKeyIndexMaxPartsFormRow } from './MapKeyIndexMaxPartsFormRow';
+import {
+  MapKeyIndexMaxPartsFormRow,
+  MapKeyIndexPartSelectionFormRow,
+} from './MapKeyIndexMaxPartsFormRow';
 import {
   MaterializedViewsFormSection,
   MetadataMaterializedViewsFormSection,
@@ -305,6 +308,7 @@ export function LogTableModelForm(props: TableModelProps) {
         </FormRow>
         <UseTextIndexFormRow control={control} />
         <MapKeyIndexMaxPartsFormRow control={control} />
+        <MapKeyIndexPartSelectionFormRow control={control} />
         <Separator size="xs" />
         <HighlightedAttributeExpressionsFormRow
           {...props}

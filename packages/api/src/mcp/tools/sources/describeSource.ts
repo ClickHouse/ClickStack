@@ -310,6 +310,10 @@ async function describeSourceSchema(
               'mapKeyIndexMaxParts' in source
                 ? source.mapKeyIndexMaxParts
                 : undefined,
+            mapKeyIndexPartSelection:
+              'mapKeyIndexPartSelection' in source
+                ? source.mapKeyIndexPartSelection
+                : undefined,
             dateRange,
             timestampValueExpression,
             signal,

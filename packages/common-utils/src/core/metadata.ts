@@ -38,7 +38,12 @@ import type {
   MetadataMaterializedViews,
   TSource,
 } from '@/types';
-import { isLogSource, isTraceSource, SourceKind } from '@/types';
+import {
+  isLogSource,
+  isTraceSource,
+  MapKeyIndexPartSelection,
+  SourceKind,
+} from '@/types';
 
 import {
   ClickHouseVersion,
@@ -65,8 +70,9 @@ import {
 // Between 1e6 - 5e6 is a good range.
 export const DEFAULT_METADATA_MAX_ROWS_TO_READ = 3e6;
 const DEFAULT_MAX_KEYS = 1000;
-// shortcut: keys found only in the smallest or largest parts of the range can
-// be missed; raise it per source (mapKeyIndexMaxParts) if keys go missing.
+// shortcut: keys found only in parts outside the selection can be missed; raise
+// it per source (mapKeyIndexMaxParts) or pick other parts
+// (mapKeyIndexPartSelection) if keys go missing.
 export const DEFAULT_MAP_KEY_INDEX_MAX_PARTS = 20;
 
 // Cap keys per dispatched query: each key is another operation for the db to fetch, and simply fetching all keys at once can be too much for the db to handle.
@@ -900,13 +906,16 @@ export class Metadata {
     dateRange,
     timestampValueExpression,
     maxParts,
+    partSelection = MapKeyIndexPartSelection.Median,
   }: {
     databaseName: string;
     tableName: string;
     dateRange?: [Date, Date];
     timestampValueExpression?: string;
-    /** Keep only the `maxParts` overlapping parts closest to the median row count. */
+    /** Keep only `maxParts` overlapping parts, chosen by `partSelection`. */
     maxParts?: number;
+    /** Which parts by row count; only applies with `maxParts`. */
+    partSelection?: MapKeyIndexPartSelection;
   }): Promise<ChSql> {
     if (!dateRange || !timestampValueExpression) return chSql`1`;
     const startTime = chSql`fromUnixTimestamp64Milli(${{ Int64: dateRange[0].getTime() }})`;
@@ -919,8 +928,13 @@ export class Metadata {
     if (maxParts == null) {
       return chSql`part_name IN (SELECT name ${overlappingParts})`;
     }
-    // Rank by size and pick from the middle out: tiny unmerged parts hold few
-    // keys and the largest merged parts have the biggest dictionaries.
+    // Rank by size. Median picks from the middle out: tiny unmerged parts
+    // hold few keys and the largest merged parts have the biggest dictionaries.
+    const order = {
+      [MapKeyIndexPartSelection.Median]: 'abs(rn - (cnt + 1) / 2), name',
+      [MapKeyIndexPartSelection.Smallest]: 'rn',
+      [MapKeyIndexPartSelection.Largest]: 'rn DESC',
+    }[partSelection];
     return chSql`part_name IN (
       SELECT name FROM (
         SELECT name,
@@ -928,7 +942,7 @@ export class Metadata {
           count() OVER () AS cnt
         ${overlappingParts}
       )
-      ORDER BY abs(rn - (cnt + 1) / 2), name
+      ORDER BY ${{ UNSAFE_RAW_SQL: order }}
       LIMIT ${{ Int32: maxParts }}
     )`;
   }
@@ -1095,6 +1109,7 @@ export class Metadata {
     timestampValueExpression,
     conditionSql,
     mapKeyIndexMaxParts = DEFAULT_MAP_KEY_INDEX_MAX_PARTS,
+    mapKeyIndexPartSelection = MapKeyIndexPartSelection.Median,
     signal,
   }: {
     databaseName: string;
@@ -1109,6 +1124,7 @@ export class Metadata {
     conditionSql?: string;
     /** Parts the text index paths read; see `partsOverlapFilter`. */
     mapKeyIndexMaxParts?: number;
+    mapKeyIndexPartSelection?: MapKeyIndexPartSelection;
     signal?: AbortSignal;
   }) {
     inlineNonNegativeInt(maxKeys, 'maxKeys');
@@ -1132,10 +1148,10 @@ export class Metadata {
         ? `${alignedDateRange[0].getTime()}.${alignedDateRange[1].getTime()}.${timestampValueExpression}`
         : '';
     const unscopedCacheKey = metricName
-      ? `${connectionId}.${databaseName}.${tableName}.${column}.${metricName}.${dateRangeCacheSuffix}.${maxKeys}.${mapKeyIndexMaxParts}.keys`
+      ? `${connectionId}.${databaseName}.${tableName}.${column}.${metricName}.${dateRangeCacheSuffix}.${maxKeys}.${mapKeyIndexMaxParts}.${mapKeyIndexPartSelection}.keys`
       : alignedDateRange
-        ? `${connectionId}.${databaseName}.${tableName}.${column}.${alignedCacheSuffix}.${maxKeys}.${mapKeyIndexMaxParts}.keys`
-        : `${connectionId}.${databaseName}.${tableName}.${column}.${dateRangeCacheSuffix}.${maxKeys}.${mapKeyIndexMaxParts}.keys`;
+        ? `${connectionId}.${databaseName}.${tableName}.${column}.${alignedCacheSuffix}.${maxKeys}.${mapKeyIndexMaxParts}.${mapKeyIndexPartSelection}.keys`
+        : `${connectionId}.${databaseName}.${tableName}.${column}.${dateRangeCacheSuffix}.${maxKeys}.${mapKeyIndexMaxParts}.${mapKeyIndexPartSelection}.keys`;
     const cacheKey = conditionSql
       ? `${unscopedCacheKey}.${objectHash(conditionSql)}.condition`
       : unscopedCacheKey;
@@ -1160,6 +1176,7 @@ export class Metadata {
           timestampValueExpression,
           conditionSql,
           mapKeyIndexMaxParts,
+          mapKeyIndexPartSelection,
           cacheKey,
           signal,
         }),
@@ -1180,6 +1197,7 @@ export class Metadata {
     timestampValueExpression,
     conditionSql,
     mapKeyIndexMaxParts,
+    mapKeyIndexPartSelection,
     cacheKey,
     signal,
   }: {
@@ -1195,6 +1213,7 @@ export class Metadata {
     timestampValueExpression?: string;
     conditionSql?: string;
     mapKeyIndexMaxParts: number;
+    mapKeyIndexPartSelection: MapKeyIndexPartSelection;
     cacheKey: string;
     signal?: AbortSignal;
   }): Promise<string[]> {
@@ -1231,6 +1250,7 @@ export class Metadata {
         dateRange,
         timestampValueExpression,
         maxParts: mapKeyIndexMaxParts,
+        partSelection: mapKeyIndexPartSelection,
       });
       const index = textIndexInfo.key.indexName;
       // `cardinality` is the token's row count in the part, not a distinct count.
@@ -1277,6 +1297,7 @@ export class Metadata {
         dateRange,
         timestampValueExpression,
         maxParts: mapKeyIndexMaxParts,
+        partSelection: mapKeyIndexPartSelection,
       });
       const index = textIndexInfo.kv.indexName;
       const separator = textIndexInfo.kv.separator;
@@ -1993,6 +2014,7 @@ export class Metadata {
     metricName,
     metadataMVs,
     mapKeyIndexMaxParts,
+    mapKeyIndexPartSelection,
     dateRange,
     timestampValueExpression,
     condition,
@@ -2067,6 +2089,7 @@ export class Metadata {
           metricName,
           metadataMVs,
           mapKeyIndexMaxParts,
+          mapKeyIndexPartSelection,
           dateRange,
           timestampValueExpression,
           conditionSql,
@@ -3498,6 +3521,7 @@ export type TableConnection = {
   metricName?: string;
   metadataMVs?: MetadataMaterializedViews;
   mapKeyIndexMaxParts?: number;
+  mapKeyIndexPartSelection?: MapKeyIndexPartSelection;
   // Bounds Map key discovery; without it Map keys are skipped. #3037
   timestampValueExpression?: string;
 };
@@ -3544,6 +3568,10 @@ export function tcFromSource(source?: TSource): TableConnection {
     mapKeyIndexMaxParts:
       source && (isLogSource(source) || isTraceSource(source))
         ? source.mapKeyIndexMaxParts
+        : undefined,
+    mapKeyIndexPartSelection:
+      source && (isLogSource(source) || isTraceSource(source))
+        ? source.mapKeyIndexPartSelection
         : undefined,
     timestampValueExpression: source?.timestampValueExpression,
   };
