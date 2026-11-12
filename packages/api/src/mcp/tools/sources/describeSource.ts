@@ -228,6 +228,12 @@ async function describeSourceSchema(
     'metadataMaterializedViews' in source
       ? source.metadataMaterializedViews
       : undefined;
+  const mapKeyIndexMaxParts =
+    'mapKeyIndexMaxParts' in source ? source.mapKeyIndexMaxParts : undefined;
+  const mapKeyIndexPartSelection =
+    'mapKeyIndexPartSelection' in source
+      ? source.mapKeyIndexPartSelection
+      : undefined;
 
   const now = new Date();
   const dateRange: [Date, Date] = [
@@ -306,14 +312,8 @@ async function describeSourceSchema(
             maxKeys: 50,
             connectionId,
             metadataMVs,
-            mapKeyIndexMaxParts:
-              'mapKeyIndexMaxParts' in source
-                ? source.mapKeyIndexMaxParts
-                : undefined,
-            mapKeyIndexPartSelection:
-              'mapKeyIndexPartSelection' in source
-                ? source.mapKeyIndexPartSelection
-                : undefined,
+            mapKeyIndexMaxParts,
+            mapKeyIndexPartSelection,
             dateRange,
             timestampValueExpression,
             signal,
@@ -360,6 +360,8 @@ async function describeSourceSchema(
         maxValuesPerKey: MAX_LC_VALUES,
         connectionId,
         metadataMVs,
+        mapKeyIndexMaxParts,
+        mapKeyIndexPartSelection,
         dateRange,
         timestampValueExpression,
         signal,
@@ -407,6 +409,8 @@ async function describeSourceSchema(
         maxValuesPerKey: MAX_MAP_KEY_VALUES,
         connectionId,
         metadataMVs,
+        mapKeyIndexMaxParts,
+        mapKeyIndexPartSelection,
         dateRange,
         timestampValueExpression,
         signal,

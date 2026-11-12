@@ -271,6 +271,8 @@ function useFacets({
           tableName: tableConnection.tableName,
           connectionId: tableConnection.connectionId,
           metadataMVs: tableConnection.metadataMVs,
+          mapKeyIndexMaxParts: tableConnection.mapKeyIndexMaxParts,
+          mapKeyIndexPartSelection: tableConnection.mapKeyIndexPartSelection,
           keyExpressions: [sqlKey],
           maxValuesPerKey: SINGLE_KEY_VALUES_LIMIT,
           dateRange,

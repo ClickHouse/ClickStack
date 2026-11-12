@@ -577,12 +577,22 @@ export function useMultipleGetKeyValues(
         const source = chartConfig.source
           ? sources?.find(s => s.id === chartConfig.source)
           : undefined;
+        const isLogOrTrace =
+          !!source && (isLogSource(source) || isTraceSource(source));
         const metadataMVs =
           usableMVsOverride ??
-          (source && (isLogSource(source) || isTraceSource(source))
-            ? source.metadataMaterializedViews
-            : undefined);
-        return { chartConfig, source, metadataMVs };
+          (isLogOrTrace ? source.metadataMaterializedViews : undefined);
+        return {
+          chartConfig,
+          source,
+          metadataMVs,
+          mapKeyIndexMaxParts: isLogOrTrace
+            ? source.mapKeyIndexMaxParts
+            : undefined,
+          mapKeyIndexPartSelection: isLogOrTrace
+            ? source.mapKeyIndexPartSelection
+            : undefined,
+        };
       });
 
       if (mode === 'exact') {
@@ -606,18 +616,26 @@ export function useMultipleGetKeyValues(
       }
 
       // mode === 'all'
-      const streams = lookups.map(({ chartConfig, metadataMVs }) =>
-        metadata.streamAllKeyValues({
-          databaseName: chartConfig.from.databaseName,
-          tableName: chartConfig.from.tableName,
-          keyExpressions: limitedKeys,
-          maxValuesPerKey: limit,
-          connectionId: chartConfig.connection,
+      const streams = lookups.map(
+        ({
+          chartConfig,
           metadataMVs,
-          dateRange: chartConfig.dateRange,
-          timestampValueExpression: chartConfig.timestampValueExpression,
-          signal,
-        }),
+          mapKeyIndexMaxParts,
+          mapKeyIndexPartSelection,
+        }) =>
+          metadata.streamAllKeyValues({
+            databaseName: chartConfig.from.databaseName,
+            tableName: chartConfig.from.tableName,
+            keyExpressions: limitedKeys,
+            maxValuesPerKey: limit,
+            connectionId: chartConfig.connection,
+            metadataMVs,
+            mapKeyIndexMaxParts,
+            mapKeyIndexPartSelection,
+            dateRange: chartConfig.dateRange,
+            timestampValueExpression: chartConfig.timestampValueExpression,
+            signal,
+          }),
       );
       for await (const keyValues of mergeStreams(streams)) {
         yield keyValues.map(({ key, value }) => ({

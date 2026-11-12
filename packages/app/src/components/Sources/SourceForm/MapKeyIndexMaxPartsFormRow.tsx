@@ -16,7 +16,7 @@ export function MapKeyIndexMaxPartsFormRow({
   return (
     <FormRow
       label="Map key index parts"
-      helpText={`How many data parts are read from a Map key text index to discover attribute keys; "Map key index part size" picks which ones. Raise it if keys are missing from filters; lower it if fields load slowly. Defaults to ${DEFAULT_MAP_KEY_INDEX_MAX_PARTS}.`}
+      helpText={`How many data parts are read from text indexes to discover attribute keys and filter values; "Map key index part size" picks which ones. Raise it if keys or values are missing from filters; lower it if they load slowly. Defaults to ${DEFAULT_MAP_KEY_INDEX_MAX_PARTS}.`}
     >
       <Controller
         control={control}
@@ -46,7 +46,7 @@ export function MapKeyIndexPartSelectionFormRow({
   return (
     <FormRow
       label="Map key index part size"
-      helpText='Which data parts, by row count, are read from a Map key text index. "Median" balances coverage and cost; "Smallest" reads the newest unmerged parts, which is cheap and shows new keys first; "Largest" reads the most merged data, which covers the most keys but reads the biggest indexes.'
+      helpText='Which data parts, by row count, are read from text indexes for attribute keys and filter values. "Median" balances coverage and cost; "Smallest" reads the newest unmerged parts, which is cheap and shows new keys first; "Largest" reads the most merged data, which covers the most keys but reads the biggest indexes.'
     >
       <SelectControlled
         control={control}
