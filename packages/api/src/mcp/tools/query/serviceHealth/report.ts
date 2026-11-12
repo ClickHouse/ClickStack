@@ -141,10 +141,10 @@ const iso = (w: Window) => ({
 });
 
 const USAGE =
-  'Services with new or growing errors (new_errors) come first, then ' +
-  'services with a threshold flag, then the rest; each group is ordered by ' +
-  'score (how far error rate, p95 and traffic moved the wrong way, weighted ' +
-  'by volume). Threshold flags: ' +
+  'Services with a threshold flag come first, then the rest. Within each ' +
+  'group, services with new or growing errors (new_errors) come first, ' +
+  'then by score (how far error rate, p95 and traffic moved the wrong way, ' +
+  'weighted by volume). Threshold flags: ' +
   `error_rate_up: error rate >= ${HEALTH_THRESHOLDS.errorRateRatio}x the comparison AND ` +
   `>= ${HEALTH_THRESHOLDS.errorRateMinDeltaPp} percentage point higher. ` +
   `high_error_rate: error rate >= ${HEALTH_THRESHOLDS.highErrorRate * 100}% (may be chronic; check comparison). ` +
@@ -208,11 +208,23 @@ export function buildReport(args: {
         )
       : [];
   const hasNewErrors = (r: RankedService) => changedErrors(r).length > 0;
-  // A service with a new or growing error group goes first: its aggregate
-  // rates may be flat, but it has the most novel signal.
+  // Within the flagged and unflagged groups, a service with a new or growing
+  // error group goes first: its aggregate rates may be flat, but it has the
+  // most novel signal. Flagged services stay ahead so topN never drops one
+  // that servicesFlagged counts.
   const shown = args.ranked
-    .map((r, i) => ({ r, i, novel: hasNewErrors(r) }))
-    .sort((a, b) => Number(b.novel) - Number(a.novel) || a.i - b.i)
+    .map((r, i) => ({
+      r,
+      i,
+      novel: hasNewErrors(r),
+      flagged: crossedThreshold(r.assessment.flags),
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.flagged) - Number(a.flagged) ||
+        Number(b.novel) - Number(a.novel) ||
+        a.i - b.i,
+    )
     .slice(0, args.topN);
 
   const services = shown.map(({ r, novel }, i) => ({

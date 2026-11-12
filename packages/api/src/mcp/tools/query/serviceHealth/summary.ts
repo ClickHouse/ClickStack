@@ -21,6 +21,7 @@ type ErrorPattern = 'ongoing' | 'spread' | 'burst';
 
 const pct = (s: WindowStats | null) =>
   s && s.requests > 0 ? `${((s.errors / s.requests) * 100).toFixed(2)}%` : '0%';
+const fmtMs = (v: number | null | undefined) => (v == null ? 'n/a' : `${v}ms`);
 const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16);
 
 export function errorTiming(g: ErrorGroup, window: Window) {
@@ -96,10 +97,10 @@ export function serviceSummary(args: {
     parts.length > 0
       ? `Crossed thresholds: ${parts.join('; ')}.`
       : comparison === undefined
-        ? `No absolute threshold crossed (no comparison window): error rate ${pct(current)}, p95 ${current?.p95Ms ?? 'n/a'}ms.`
+        ? `No absolute threshold crossed (no comparison window): error rate ${pct(current)}, p95 ${fmtMs(current?.p95Ms)}.`
         : `No metric crossed a threshold vs ${args.comparisonMode}: ` +
           `error rate ${pct(current)} vs ${pct(comparison)}, ` +
-          `p95 ${current?.p95Ms ?? 'n/a'}ms vs ${comparison?.p95Ms ?? 'n/a'}ms, ` +
+          `p95 ${fmtMs(current?.p95Ms)} vs ${fmtMs(comparison?.p95Ms)}, ` +
           `requests ${current?.requests ?? 0} vs ${comparison?.requests ?? 0}.`;
 
   const context: string[] = [];

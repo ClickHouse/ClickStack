@@ -281,6 +281,45 @@ describe('buildReport', () => {
     expect(report.services[0].flags).toContain('new_errors');
   });
 
+  it('keeps a flagged service ahead of an unflagged one with new errors', () => {
+    const report = buildReport({
+      ranked: rankServices(
+        new Map([
+          ['slow', stats({ p95Ms: 600 })],
+          ['quiet', stats()],
+        ]),
+        new Map([
+          ['slow', stats()],
+          ['quiet', stats()],
+        ]),
+        50,
+      ),
+      current: { start: new Date(0), end: new Date(600_000) },
+      comparison: { start: new Date(-600_000), end: new Date(0) },
+      comparisonMode: 'previous_period',
+      spanKind: 'server',
+      topN: 1,
+      errorGroupBy: ['SpanName', 'StatusMessage'],
+      currentErrors: new Map([
+        [
+          'quiet',
+          [
+            {
+              service: 'quiet',
+              group: { SpanName: 'POST /pay', StatusMessage: 'unavailable' },
+              count: 8,
+            },
+          ],
+        ],
+      ]),
+      comparisonErrorCounts: new Map(),
+      newOperations: new Map(),
+      spanNameKey: 'SpanName',
+    });
+    expect(report.services.map(s => s.service)).toEqual(['slow']);
+    expect(report.summary.servicesFlagged).toBe(1);
+  });
+
   const reportFor = (
     cur: WindowStats,
     cmp: WindowStats,
@@ -405,6 +444,35 @@ describe('errorTiming', () => {
 
   it('calls a short spike that ended a burst', () => {
     expect(errorTiming(group('17:20', '17:21'), window).pattern).toBe('burst');
+  });
+
+  it('states absolute values when comparisons are off', () => {
+    expect(
+      serviceSummary({
+        current: stats(),
+        comparison: undefined,
+        assessment: assessService(stats(), undefined, 50),
+        changedErrors: [],
+        newOperations: [],
+        window,
+        comparisonMode: 'none',
+      }),
+    ).toBe(
+      'No absolute threshold crossed (no comparison window): error rate 0.50%, p95 200ms.',
+    );
+  });
+
+  it('prints n/a, not "n/ams", for a missing p95', () => {
+    const summary = serviceSummary({
+      current: stats(),
+      comparison: stats({ p95Ms: null }),
+      assessment: assessService(stats(), stats({ p95Ms: null }), 50),
+      changedErrors: [],
+      newOperations: [],
+      window,
+      comparisonMode: 'yesterday',
+    });
+    expect(summary).toMatch(/p95 200ms vs n\/a,/);
   });
 
   it('only calls bursts transient in the summary', () => {
