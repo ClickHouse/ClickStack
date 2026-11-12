@@ -22,6 +22,7 @@ import {
   resolvePromqlTarget,
 } from '@/controllers/promql';
 import {
+  PROMETHEUS_MAX_RESULT_ROWS,
   queryInstantViaTableFunction,
   queryLabelNames,
   queryLabelValues,
@@ -860,10 +861,21 @@ async function handleLabelLookup(
     backend = 'clickhouse';
     if ((await resolveClickhouseLabelBackend(target)) === 'clickhouse-http') {
       const { upstream, headers } = clickhousePrometheusRequest(connection);
+      // The handler returns every value in a single row, so the upstream's
+      // max_result_rows never applies. Cap the values themselves instead.
+      const cappedLimit = Math.min(
+        limit || PROMETHEUS_MAX_RESULT_ROWS,
+        PROMETHEUS_MAX_RESULT_ROWS,
+      );
       const status = await proxyToPrometheus(
         upstream,
         `${CLICKHOUSE_PROMETHEUS_API_PREFIX}${apiPath}`,
-        { ...proxyParams, database: databaseName, table: tableName },
+        {
+          ...proxyParams,
+          limit: String(cappedLimit),
+          database: databaseName,
+          table: tableName,
+        },
         res,
         headers,
         CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,

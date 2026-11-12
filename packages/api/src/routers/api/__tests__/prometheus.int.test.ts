@@ -17,6 +17,7 @@ import {
   clickhousePrometheusUpstream,
   joinPrometheusUpstreamUrl,
 } from '@/controllers/promql';
+import { PROMETHEUS_MAX_RESULT_ROWS } from '@/controllers/timeseriesEngine';
 import {
   DEFAULT_DATABASE,
   dropTimeSeriesTable,
@@ -2280,6 +2281,35 @@ describe('prometheus router', () => {
           'X-ClickHouse-Key': config.CLICKHOUSE_PASSWORD,
           'X-ClickHouse-Query-Id': expect.stringMatching(/^hdx-dashboard-/),
         });
+      },
+    );
+
+    // The handler returns all values in one row, which max_result_rows can't cap.
+    it.each([
+      ['no limit', ''],
+      ['limit=0', '&limit=0'],
+      ['a limit over the cap', `&limit=${PROMETHEUS_MAX_RESULT_ROWS + 1}`],
+    ])(
+      'caps the values the handler returns when the request has %s',
+      async (_case, limitQuery) => {
+        stubServerVersion([26, 10, 0, 0]);
+        const { agent, team } = await getLoggedInAgent(server);
+        const source = await seedClickHouseSource(team._id);
+        mockFetch
+          .mockResolvedValueOnce(handlerProbeResponse())
+          .mockResolvedValueOnce(
+            fakeUpstreamResponse({ status: 'success', data: [] }),
+          );
+
+        await agent
+          .get('/v1/prometheus/label/job/values')
+          .query(`sourceId=${source._id.toString()}${limitQuery}`)
+          .expect(200);
+
+        const url = new URL(String(mockFetch.mock.calls[1][0]));
+        expect(url.searchParams.getAll('limit')).toEqual([
+          String(PROMETHEUS_MAX_RESULT_ROWS),
+        ]);
       },
     );
 
