@@ -38,7 +38,11 @@ export default function ServiceMapGroupByInput({
   const { errors } = useFormState({ control, name: 'groupBy' });
 
   return (
-    <Box flex={1} miw="min(320px, 100%)" data-testid="service-map-group-by-input">
+    <Box
+      flex={1}
+      miw="min(320px, 100%)"
+      data-testid="service-map-group-by-input"
+    >
       <SQLInlineEditorControlled
         tableConnection={tableConnection}
         sourceId={sourceId}
