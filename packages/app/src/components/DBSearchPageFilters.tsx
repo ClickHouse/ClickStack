@@ -1259,6 +1259,11 @@ const DBSearchPageFiltersComponent = ({
     () => (columns ? new Set(columns.map(c => c.name)) : new Set<string>()),
     [columns],
   );
+  // Same JSON columns as `jsonColumns` above, as a Set for key escaping.
+  const jsonColumnSet = useMemo(
+    () => new Set(jsonColumns ?? []),
+    [jsonColumns],
+  );
 
   const [showMoreFields, setShowMoreFields] = useState(false);
   const {
@@ -1581,6 +1586,7 @@ const DBSearchPageFiltersComponent = ({
                 sqlKey: toQuotedClickHouseKeyExpression(
                   child.key,
                   knownColumns,
+                  jsonColumnSet,
                 ),
               }))}
               selectedValues={group.children.reduce((acc, child) => {
@@ -1647,6 +1653,7 @@ const DBSearchPageFiltersComponent = ({
             const facetSqlKey = toQuotedClickHouseKeyExpression(
               facet.key,
               knownColumns,
+              jsonColumnSet,
             );
             return (
               <FilterGroup
@@ -1737,6 +1744,7 @@ const DBSearchPageFiltersComponent = ({
       setFilterRange,
       tableMetadata,
       knownColumns,
+      jsonColumnSet,
       extraFacetKeys,
     ],
   );
