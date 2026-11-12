@@ -2798,6 +2798,15 @@ export type MetadataMaterializedViews = z.infer<
   typeof MetadataMaterializedViewsSchema
 >;
 
+/**
+ * How many parts Map key discovery reads from a text index. Unset uses
+ * DEFAULT_MAP_KEY_INDEX_MAX_PARTS. A cleared form NumberInput yields `''`.
+ */
+const MapKeyIndexMaxPartsSchema = z.preprocess(
+  v => (v === '' || v === null ? undefined : v),
+  z.number().int().min(1).optional(),
+);
+
 // Log source form schema
 export const LogSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Log),
@@ -2855,6 +2864,7 @@ export const LogSourceSchema = BaseSourceSchema.extend({
     HighlightedAttributeExpressionsSchema.optional(),
   materializedViews: z.array(MaterializedViewConfigurationSchema).optional(),
   metadataMaterializedViews: MetadataMaterializedViewsSchema.optional(),
+  mapKeyIndexMaxParts: MapKeyIndexMaxPartsSchema,
   orderByExpression: z.string().optional(),
   useTextIndexForImplicitColumn: UseTextIndexSchema.optional(),
 });
@@ -2902,6 +2912,7 @@ export const TraceSourceSchema = BaseSourceSchema.extend({
     HighlightedAttributeExpressionsSchema.optional(),
   materializedViews: z.array(MaterializedViewConfigurationSchema).optional(),
   metadataMaterializedViews: MetadataMaterializedViewsSchema.optional(),
+  mapKeyIndexMaxParts: MapKeyIndexMaxPartsSchema,
   orderByExpression: z.string().optional(),
   useTextIndexForImplicitColumn: UseTextIndexSchema.optional(),
 });

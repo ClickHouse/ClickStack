@@ -306,6 +306,10 @@ async function describeSourceSchema(
             maxKeys: 50,
             connectionId,
             metadataMVs,
+            mapKeyIndexMaxParts:
+              'mapKeyIndexMaxParts' in source
+                ? source.mapKeyIndexMaxParts
+                : undefined,
             dateRange,
             timestampValueExpression,
             signal,
