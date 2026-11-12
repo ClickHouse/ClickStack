@@ -1429,6 +1429,62 @@ describe('Metadata', () => {
       },
     );
 
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'reads only the parts nearest the median size from the %s text index',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+        });
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+          mapKeyIndexMaxParts: 5,
+        });
+
+        const partsLimits = (mockClickhouseClient.query as jest.Mock).mock.calls
+          .filter(([opts]) => opts.query.includes('mergeTreeTextIndex('))
+          .map(([opts]) => {
+            const match = opts.query.match(
+              /ORDER BY abs\(rn - \(cnt \+ 1\) \/ 2\), name\s+LIMIT \{(\w+):Int32\}/,
+            );
+            expect(match).not.toBeNull();
+            return opts.query_params[match[1]];
+          });
+        expect(partsLimits).toEqual([20, 5]);
+      },
+    );
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'orders the %s text index parts by the configured part selection',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+          mapKeyIndexPartSelection: MapKeyIndexPartSelection.Largest,
+        });
+
+        const textIndexCall = (
+          mockClickhouseClient.query as jest.Mock
+        ).mock.calls.find(([opts]) =>
+          opts.query.includes('mergeTreeTextIndex('),
+        );
+        expect(textIndexCall[0].query).toMatch(
+          /\)\s+ORDER BY rn DESC\s+LIMIT \{\w+:Int32\}/,
+        );
+      },
+    );
+
     it('routes ServiceName and SeverityText through getMetadataMVKeyValues (KV rollup MV path)', async () => {
       setupDefaultLogsSchema();
 
