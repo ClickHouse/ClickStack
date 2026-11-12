@@ -11,8 +11,9 @@ export type ToolBehaviorAnnotations = Required<
   >
 >;
 
-// Every tool reads or writes only the calling team's own ClickStack metadata
-// (MongoDB) and telemetry (ClickHouse), so none of them is open-world.
+// Tools read or write only the calling team's own ClickStack metadata
+// (MongoDB) and telemetry (ClickHouse), so they are closed-world. The
+// exception is OPEN_WORLD_UPSERT_TOOL.
 
 export const READ_ONLY_TOOL: ToolBehaviorAnnotations = {
   readOnlyHint: true,
@@ -30,6 +31,15 @@ export const UPSERT_TOOL: ToolBehaviorAnnotations = {
   destructiveHint: true,
   idempotentHint: false,
   openWorldHint: false,
+};
+
+/**
+ * Upserts whose saved object makes ClickStack send HTTP requests to
+ * third-party endpoints (webhooks, and the alerts that notify them).
+ */
+export const OPEN_WORLD_UPSERT_TOOL: ToolBehaviorAnnotations = {
+  ...UPSERT_TOOL,
+  openWorldHint: true,
 };
 
 /**
