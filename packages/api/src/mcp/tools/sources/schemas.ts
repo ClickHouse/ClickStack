@@ -473,9 +473,18 @@ const mcpSaveSourceSchema = z.object({
     .optional()
     .describe(
       'Log and trace sources. How many data parts Map attribute key discovery ' +
-        'reads from a text index, picked around the median part size. Raise it ' +
+        'reads from a text index, chosen by mapKeyIndexPartSelection. Raise it ' +
         'if attribute keys are missing from filters; lower it if field loading ' +
         'is slow. Omit for the default of 20.',
+    ),
+  mapKeyIndexPartSelection: z
+    .enum(['median', 'smallest', 'largest'])
+    .optional()
+    .describe(
+      'Log and trace sources. Which data parts, by row count, Map attribute ' +
+        'key discovery reads from a text index: "median" (used when unset) ' +
+        'balances coverage and cost, "smallest" reads the newest unmerged ' +
+        'parts, "largest" reads the most merged data.',
     ),
 });
 

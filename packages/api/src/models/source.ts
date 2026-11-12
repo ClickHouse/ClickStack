@@ -1,6 +1,7 @@
 import {
   BaseSourceSchema,
   LogSourceSchema,
+  MapKeyIndexPartSelection,
   MetricsDataType,
   MetricSourceSchema,
   PROMQL_SOURCE_BACKENDS,
@@ -190,6 +191,10 @@ export const LogSource = Source.discriminator<ILogSource>(
       default: undefined,
     },
     mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
+    },
     orderByExpression: String,
   }),
 );
@@ -242,6 +247,10 @@ export const TraceSource = Source.discriminator<ITraceSource>(
       default: undefined,
     },
     mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
+    },
     orderByExpression: String,
   }),
 );

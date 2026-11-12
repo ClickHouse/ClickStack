@@ -415,9 +415,15 @@ function formatExternalSource(source: SourceDocument) {
  *         mapKeyIndexMaxParts:
  *           type: integer
  *           minimum: 1
- *           description: How many data parts Map attribute key discovery reads from a text index, picked around the median part size. Raise it if attribute keys are missing from filters; lower it if field loading is slow. Defaults to 20.
+ *           description: How many data parts Map attribute key discovery reads from a text index, chosen by mapKeyIndexPartSelection. Raise it if attribute keys are missing from filters; lower it if field loading is slow. Defaults to 20.
  *           nullable: true
  *           example: 20
+ *         mapKeyIndexPartSelection:
+ *           type: string
+ *           enum: [median, smallest, largest]
+ *           description: Which data parts, by row count, Map attribute key discovery reads from a text index. "median" (the default) balances coverage and cost, "smallest" reads the newest unmerged parts, "largest" reads the most merged data.
+ *           nullable: true
+ *           example: median
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.
@@ -622,9 +628,15 @@ function formatExternalSource(source: SourceDocument) {
  *         mapKeyIndexMaxParts:
  *           type: integer
  *           minimum: 1
- *           description: How many data parts Map attribute key discovery reads from a text index, picked around the median part size. Raise it if attribute keys are missing from filters; lower it if field loading is slow. Defaults to 20.
+ *           description: How many data parts Map attribute key discovery reads from a text index, chosen by mapKeyIndexPartSelection. Raise it if attribute keys are missing from filters; lower it if field loading is slow. Defaults to 20.
  *           nullable: true
  *           example: 20
+ *         mapKeyIndexPartSelection:
+ *           type: string
+ *           enum: [median, smallest, largest]
+ *           description: Which data parts, by row count, Map attribute key discovery reads from a text index. "median" (the default) balances coverage and cost, "smallest" reads the newest unmerged parts, "largest" reads the most merged data.
+ *           nullable: true
+ *           example: median
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.
