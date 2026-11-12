@@ -127,6 +127,10 @@ function DBServiceMapPage() {
   // useResolvedSourceParam will show a notification to the user.
   const source = paramSource ?? defaultSource;
 
+  const groupBy = useMemo(
+    () => parseServiceMapGroupBy(searchedConfig.groupBy),
+    [searchedConfig.groupBy],
+  );
   const { control, handleSubmit, setValue } =
     useForm<ServiceMapSearchFormValues>({
       values: {
@@ -134,13 +138,11 @@ function DBServiceMapPage() {
         where: searchedConfig.where ?? '',
         whereLanguage:
           searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
-        groupBy: searchedConfig.groupBy ?? '',
+        // Seeded from the parsed list so the editor shows exactly what the map
+        // is grouped by, even for a hand-edited URL with too many expressions.
+        groupBy: groupBy.join(', '),
       },
     });
-  const groupBy = useMemo(
-    () => parseServiceMapGroupBy(searchedConfig.groupBy),
-    [searchedConfig.groupBy],
-  );
 
   const watchedSource = useWatch({ control, name: 'source' });
   const [isSourceSchemaPreviewOpen, setIsSourceSchemaPreviewOpen] =
@@ -219,9 +221,11 @@ function DBServiceMapPage() {
     [setSearchedConfig],
   );
 
+  // The time range is applied together with the form values, so an invalid
+  // group-by leaves the URL untouched instead of moving the time window.
   const onSubmit = useCallback(() => {
-    onSearch(displayedTimeInputValue);
     handleSubmit(({ where, whereLanguage, groupBy }) => {
+      onSearch(displayedTimeInputValue);
       setSearchedConfig(prev => ({
         ...prev,
         where,

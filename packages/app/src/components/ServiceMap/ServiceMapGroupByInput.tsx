@@ -51,7 +51,7 @@ export default function ServiceMapGroupByInput({
         rules={{ validate: validateGroupBy }}
         label="Group by"
         placeholder="ResourceAttributes['k8s.pod.name']"
-        tooltipText="Split services by up to 3 resource attributes, e.g. pod, node or version. Span attributes describe each call, so they split callers by the callee's values."
+        tooltipText={`Split services by up to ${MAX_SERVICE_MAP_GROUP_BY} resource attributes, e.g. pod, node or version. Span attributes describe each call, so they split callers by the callee's values.`}
         onSubmit={onSubmit}
         disableKeywordAutocomplete
         dateRange={dateRange}

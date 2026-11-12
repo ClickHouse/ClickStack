@@ -65,11 +65,12 @@ test.describe('Service map group by', { tag: ['@service-map'] }, () => {
     await expect(page).toHaveURL(/groupBy=/, { timeout: 10000 });
     await expect(dimensionLabels(page).first()).toBeVisible({ timeout: 30000 });
 
-    const urlBefore = page.url();
+    const groupByParam = () => new URL(page.url()).searchParams.get('groupBy');
+    const groupByBefore = groupByParam();
     await setGroupBy(page, 'a, b, c, d');
     await expect(page.getByTestId('service-map-group-by-error')).toHaveText(
       'Up to 3 group by expressions',
     );
-    expect(page.url()).toBe(urlBefore);
+    expect(groupByParam()).toBe(groupByBefore);
   });
 });

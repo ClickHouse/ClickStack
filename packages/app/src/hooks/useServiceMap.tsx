@@ -11,8 +11,8 @@ import { useClickhouseClient } from '@/clickhouse';
 import { useMetadataWithSettings } from './useMetadata';
 
 // Upper bound on the extra group-by expressions a map can be split by, beyond
-// the implicit ServiceName key. Enforced in the UI and again here so a
-// hand-edited URL cannot exceed it.
+// the implicit ServiceName key. Enforced where the URL param is parsed and in
+// the editor's validation, so a hand-edited URL cannot exceed it.
 export const MAX_SERVICE_MAP_GROUP_BY = 3;
 
 export type SpanAggregationRow = {
@@ -385,7 +385,7 @@ export default function useServiceMap({
 }) {
   const client = useClickhouseClient();
   const metadata = useMetadataWithSettings();
-  const dimensions = (groupBy ?? []).slice(0, MAX_SERVICE_MAP_GROUP_BY);
+  const dimensions = groupBy ?? [];
 
   return useQuery({
     queryKey: [
