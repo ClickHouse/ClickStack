@@ -11,7 +11,7 @@ capped at `max_rows_to_read` for the whole query. One key with a value per row
 (request IDs, UUIDs) slowed every other key down, and because the index is read
 in sorted order, the cap left keys that sort after it with no values. These
 lookups now run in parallel queries of at most 10 keys, each key in its own
-branch that reads at most 100,000 tokens, with no whole-query row cap. Values
+branch that reads at most 20,000 tokens, with no whole-query row cap. Values
 come from `topKWeighted(limit)` weighted by each token's row count, so a capped
 list holds the most common values, most common first.
 

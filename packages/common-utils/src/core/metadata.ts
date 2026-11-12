@@ -81,7 +81,7 @@ export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
 // Tokens a text index values lookup reads per key. The dictionary is sorted,
 // so a key with more distinct values than this gets the most frequent among
 // its alphabetically first ones. Keep it above "Load more"'s 10,000 values.
-const TEXT_INDEX_TOKENS_PER_KEY = 100_000;
+const TEXT_INDEX_TOKENS_PER_KEY = 20_000;
 // Keys per text index values query; see dispatchKeyValueQueries.
 const TEXT_INDEX_KEYS_PER_QUERY = 10;
 
