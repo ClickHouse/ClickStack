@@ -1,9 +1,9 @@
 import { useCallback, useEffect } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { NumberFormat } from '@hyperdx/common-utils/dist/types';
 import {
   Button,
-  Divider,
   Drawer,
   Group,
   SegmentedControl,
@@ -81,7 +81,7 @@ export default function SeriesNumberFormatDrawer({
         {isUsingCustomFormat ? (
           <>
             <NumberFormatForm control={control} setValue={setValue} />
-            <Divider />
+            <Separator size="xs" />
           </>
         ) : (
           <Text size="xs">

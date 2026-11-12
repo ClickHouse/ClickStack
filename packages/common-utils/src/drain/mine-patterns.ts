@@ -14,8 +14,12 @@ import { TemplateMiner } from './template-miner';
 /** Number of random rows to sample for pattern learning. */
 export const DENOISE_SAMPLE_SIZE = 10_000;
 
-/** Patterns matching more than this fraction of sampled events are "noisy". */
-export const DENOISE_NOISE_THRESHOLD = 0.1;
+/**
+ * Patterns matching more than this fraction of sampled events are "noisy".
+ * Drain splits one logical pattern across clusters (by token count and
+ * first token), so dominant patterns often sit well below 10% each.
+ */
+export const DENOISE_NOISE_THRESHOLD = 0.05;
 
 // ─── Body normalization ──────────────────────────────────────────────────────
 
