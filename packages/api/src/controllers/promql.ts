@@ -263,7 +263,9 @@ export type PromqlLabelCatalog = {
 /**
  * Lists the label names and metric names a PromQL source holds in
  * [startMs, endMs], at most `limit` of each. Returns `limit + 1` entries when
- * there are more, so callers can tell the list was cut.
+ * there are more, so callers can tell the list was cut. A ClickHouse source
+ * reads them through the Prometheus HTTP API where resolveClickhouseLabelBackend
+ * allows it, and with SQL otherwise.
  */
 export async function getPromqlLabelCatalog({
   teamId,
@@ -277,6 +279,7 @@ export async function getPromqlLabelCatalog({
   source: {
     connection: { toString(): string };
     from: { databaseName: string; tableName: string };
+    promqlBackend?: PromqlSourceBackend;
   };
   startMs: number;
   endMs: number;
@@ -292,29 +295,51 @@ export async function getPromqlLabelCatalog({
     throw new Error('Connection not found');
   }
 
-  if (connection.isPrometheusEndpoint) {
-    const params = {
-      start: String(startMs / 1000),
-      end: String(endMs / 1000),
-      limit: String(limit + 1),
-    };
-    const [labelNames, metricNames] = await Promise.all([
-      fetchPrometheusData(
-        connection.host,
-        '/api/v1/labels',
-        params,
-        labelListSchema,
-        signal,
-      ),
-      fetchPrometheusData(
-        connection.host,
-        '/api/v1/label/__name__/values',
-        params,
-        labelListSchema,
-        signal,
-      ),
+  const params = {
+    start: String(startMs / 1000),
+    end: String(endMs / 1000),
+    limit: String(limit + 1),
+  };
+  const fetchCatalog = (fetchLabels: (path: string) => Promise<string[]>) =>
+    Promise.all([
+      fetchLabels('/labels'),
+      fetchLabels('/label/__name__/values'),
     ]);
+
+  if (connection.isPrometheusEndpoint) {
+    const [labelNames, metricNames] = await fetchCatalog(path =>
+      fetchPrometheusData(
+        connection.host,
+        `/api/v1${path}`,
+        params,
+        labelListSchema,
+        signal,
+      ),
+    );
     return { backend: 'prometheus', labelNames, metricNames };
+  }
+
+  const { databaseName, tableName } = source.from;
+  const labelBackend = await resolveClickhouseLabelBackend({
+    connection,
+    databaseName,
+    tableName,
+    promqlBackend: source.promqlBackend,
+  });
+  if (labelBackend === 'clickhouse-http') {
+    const [labelNames, metricNames] = await fetchCatalog(path => {
+      const { upstream, headers } = clickhousePrometheusRequest(connection);
+      return fetchPrometheusData(
+        upstream,
+        `${CLICKHOUSE_PROMETHEUS_API_PREFIX}${path}`,
+        { ...params, database: databaseName, table: tableName },
+        labelListSchema,
+        signal,
+        headers,
+        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
+      );
+    });
+    return { backend: 'clickhouse', labelNames, metricNames };
   }
 
   const args = {
@@ -325,8 +350,8 @@ export async function getPromqlLabelCatalog({
       requestTimeout: PROMETHEUS_FETCH_TIMEOUT_MS,
     }),
     connectionId: connection.id,
-    databaseName: source.from.databaseName,
-    tableName: source.from.tableName,
+    databaseName,
+    tableName,
     startMs,
     endMs,
     limit: limit + 1,
