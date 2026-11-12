@@ -1,4 +1,8 @@
-import { SourceKind, UseTextIndex } from '@hyperdx/common-utils/dist/types';
+import {
+  MapKeyIndexPartSelection,
+  SourceKind,
+  UseTextIndex,
+} from '@hyperdx/common-utils/dist/types';
 
 import {
   MV_AGGREGATE_FUNCTIONS,
@@ -63,4 +67,10 @@ export const USE_TEXT_INDEX_OPTIONS = [
     value: UseTextIndex.Disabled,
     label: 'Force disable',
   },
+];
+
+export const MAP_KEY_INDEX_PART_SELECTION_OPTIONS = [
+  { value: MapKeyIndexPartSelection.Median, label: 'Median (default)' },
+  { value: MapKeyIndexPartSelection.Smallest, label: 'Smallest' },
+  { value: MapKeyIndexPartSelection.Largest, label: 'Largest' },
 ];

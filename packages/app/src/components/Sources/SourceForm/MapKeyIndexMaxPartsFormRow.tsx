@@ -3,6 +3,9 @@ import { DEFAULT_MAP_KEY_INDEX_MAX_PARTS } from '@hyperdx/common-utils/dist/core
 import { TSource } from '@hyperdx/common-utils/dist/types';
 import { NumberInput } from '@mantine/core';
 
+import SelectControlled from '@/components/SelectControlled';
+
+import { MAP_KEY_INDEX_PART_SELECTION_OPTIONS } from './constants';
 import { FormRow } from './FormRow';
 
 export function MapKeyIndexMaxPartsFormRow({
@@ -13,7 +16,7 @@ export function MapKeyIndexMaxPartsFormRow({
   return (
     <FormRow
       label="Map key index parts"
-      helpText={`How many data parts are read from a Map key text index to discover attribute keys, picked around the median part size. Raise it if keys are missing from filters; lower it if fields load slowly. Defaults to ${DEFAULT_MAP_KEY_INDEX_MAX_PARTS}.`}
+      helpText={`How many data parts are read from a Map key text index to discover attribute keys; "Map key index part size" picks which ones. Raise it if keys are missing from filters; lower it if fields load slowly. Defaults to ${DEFAULT_MAP_KEY_INDEX_MAX_PARTS}.`}
     >
       <Controller
         control={control}
@@ -30,6 +33,27 @@ export function MapKeyIndexMaxPartsFormRow({
             error={fieldState.error?.message}
           />
         )}
+      />
+    </FormRow>
+  );
+}
+
+export function MapKeyIndexPartSelectionFormRow({
+  control,
+}: {
+  control: Control<TSource>;
+}) {
+  return (
+    <FormRow
+      label="Map key index part size"
+      helpText='Which data parts, by row count, are read from a Map key text index. "Median" balances coverage and cost; "Smallest" reads the newest unmerged parts, which is cheap and shows new keys first; "Largest" reads the most merged data, which covers the most keys but reads the biggest indexes.'
+    >
+      <SelectControlled
+        control={control}
+        name="mapKeyIndexPartSelection"
+        data={MAP_KEY_INDEX_PART_SELECTION_OPTIONS}
+        placeholder={MAP_KEY_INDEX_PART_SELECTION_OPTIONS[0].label}
+        allowDeselect={false}
       />
     </FormRow>
   );

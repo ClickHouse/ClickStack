@@ -15,7 +15,12 @@ import {
 } from '@/core/renderChartConfig';
 import { isBuilderChartConfig } from '@/guards';
 import { TextIndexInfoLookup } from '@/queryParser';
-import { BuilderChartConfigWithDateRange, SourceKind, TSource } from '@/types';
+import {
+  BuilderChartConfigWithDateRange,
+  MapKeyIndexPartSelection,
+  SourceKind,
+  TSource,
+} from '@/types';
 
 // Mock ClickhouseClient
 const mockClickhouseClient = {
@@ -3295,6 +3300,50 @@ describe('Metadata', () => {
           return opts.query_params[match[1]];
         });
         expect(partsLimits).toEqual([20, 5]);
+      },
+    );
+
+    it.each(textIndexLookups)(
+      'orders the parts by the configured part selection on the %s text index path',
+      async (_, textIndexLookup) => {
+        const md = new Metadata(mockClickhouseClient, new MetadataCache());
+        jest.spyOn(md, 'getServerVersion').mockResolvedValue([26, 3, 0, 0]);
+        jest
+          .spyOn(md, 'getMapColumnTextIndexes')
+          .mockResolvedValue(textIndexLookup);
+        (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+          json: () => Promise.resolve({ data: [{ key: 'http.method' }] }),
+        });
+        const args = {
+          databaseName: 'default',
+          tableName: 'otel_logs',
+          column: 'LogAttributes',
+          connectionId: 'test_connection',
+          dateRange: [
+            new Date('2024-01-01T00:00:00Z'),
+            new Date('2024-01-01T01:00:00Z'),
+          ] as [Date, Date],
+          timestampValueExpression: 'Timestamp',
+        };
+
+        for (const mapKeyIndexPartSelection of [
+          MapKeyIndexPartSelection.Smallest,
+          MapKeyIndexPartSelection.Largest,
+          MapKeyIndexPartSelection.Median,
+        ]) {
+          await md.getMapKeys({ ...args, mapKeyIndexPartSelection });
+        }
+
+        // Each selection is a different result, not a cache hit.
+        const orders = (mockClickhouseClient.query as jest.Mock).mock.calls.map(
+          ([opts]) =>
+            opts.query.match(/\)\s+ORDER BY (.+)\s+LIMIT \{\w+:Int32\}/)?.[1],
+        );
+        expect(orders).toEqual([
+          'rn',
+          'rn DESC',
+          'abs(rn - (cnt + 1) / 2), name',
+        ]);
       },
     );
   });
