@@ -1582,7 +1582,7 @@ describe('Metadata', () => {
 
     it.each([
       [8192, [10, 10, 5]],
-      [512, [1]],
+      [512, [1, 1, 1]],
     ])(
       'batches Map text index values by dictionary block size (%d)',
       async (blockSize, expectedBranchCounts) => {
