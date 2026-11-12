@@ -286,6 +286,51 @@ describe('External API v2 Sources CRUD', () => {
         .expect(400);
     });
 
+    it('should round-trip promqlBackend on a promql source', async () => {
+      const body = {
+        kind: SourceKind.Promql,
+        name: 'Prometheus Metrics',
+        from: { databaseName: 'default', tableName: 'default' },
+        timestampValueExpression: 'timestamp',
+        connection: connection._id.toString(),
+        promqlBackend: 'clickhouse-http',
+      };
+
+      const created = await authRequest('post', BASE_URL)
+        .send(body)
+        .expect(200);
+      expect(created.body.data.promqlBackend).toBe('clickhouse-http');
+
+      const updated = await authRequest(
+        'put',
+        `${BASE_URL}/${created.body.data.id}`,
+      )
+        .send({ ...body, promqlBackend: 'table-function' })
+        .expect(200);
+      expect(updated.body.data.promqlBackend).toBe('table-function');
+
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      expect(fetched.body.data.promqlBackend).toBe('table-function');
+    });
+
+    it('should return 400 for a promqlBackend that is not a known backend', async () => {
+      await authRequest('post', BASE_URL)
+        .send({
+          kind: SourceKind.Promql,
+          name: 'Prometheus Metrics',
+          from: { databaseName: 'default', tableName: 'default' },
+          timestampValueExpression: 'timestamp',
+          connection: connection._id.toString(),
+          promqlBackend: 'http',
+        })
+        .expect(400);
+
+      expect(await Source.findOne({ team: team._id })).toBeNull();
+    });
+
     it('should return 400 when connection is not a valid id', async () => {
       await authRequest('post', BASE_URL)
         .send({ ...logSourceBody(), connection: 'my-connection-name' })

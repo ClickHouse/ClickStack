@@ -3,9 +3,15 @@ import {
   buildQueryId,
 } from '@hyperdx/common-utils/dist/clickhouse';
 import { getCurrentQueryAttribution } from '@hyperdx/common-utils/dist/clickhouse/node';
+import { MetadataCache } from '@hyperdx/common-utils/dist/core/metadata';
 import type { PromqlQuery } from '@hyperdx/common-utils/dist/core/promqlChart';
 import { parseJSON } from '@hyperdx/common-utils/dist/core/utils';
-import { SourceKind, type SQLInterval } from '@hyperdx/common-utils/dist/types';
+import {
+  type PromqlSourceBackend,
+  SourceKind,
+  type SQLInterval,
+} from '@hyperdx/common-utils/dist/types';
+import { trace } from '@opentelemetry/api';
 import { z } from 'zod';
 
 import { ClickhouseClient } from '@/clickhouse';
@@ -161,10 +167,23 @@ const SERVER_ERROR_TYPES = new Set(['timeout', 'canceled', 'unavailable']);
 const labelListSchema = z.array(z.string());
 
 /**
+ * What a user is told when a source set to the Prometheus HTTP API reaches a
+ * ClickHouse server that does not serve it. Without it they would see a bare
+ * 404 from a path they never chose.
+ */
+export const CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE =
+  "This ClickHouse connection does not serve the Prometheus HTTP API. Enable the prometheus_api_v1 HTTP handler on the server, or set the source's PromQL backend to Auto.";
+
+/**
  * GETs a Prometheus API path from a Prometheus-compatible endpoint and returns
  * the response's `data`, checked against `dataSchema`. Errors name only the
  * origin and path: the host may carry credentials in its userinfo or query
  * string.
+ *
+ * `handlerMissingMessage` is for ClickHouse's own Prometheus API: a 404 there
+ * means the handler is not configured (the handler itself answers failures
+ * with a 400), which is reported with this message as a user error instead of
+ * by its status.
  */
 async function fetchPrometheusData<T extends z.ZodTypeAny>(
   host: string,
@@ -173,6 +192,7 @@ async function fetchPrometheusData<T extends z.ZodTypeAny>(
   dataSchema: T,
   signal?: AbortSignal,
   headers?: Record<string, string>,
+  handlerMissingMessage?: string,
 ): Promise<z.infer<T>> {
   const request = buildPrometheusRequest(host, path, params, headers);
   const { redactedTarget } = request;
@@ -191,6 +211,11 @@ async function fetchPrometheusData<T extends z.ZodTypeAny>(
         : `Failed to reach Prometheus at ${redactedTarget}`,
       'server',
     );
+  }
+
+  if (handlerMissingMessage && resp.status === 404) {
+    await resp.body?.cancel().catch(() => {});
+    throw new PromQLQueryError(handlerMissingMessage, 'user');
   }
 
   let text: string;
@@ -319,6 +344,8 @@ type PromqlTarget = {
   tableName: string;
   /** The source's scrape interval floor, e.g. "1 minute". */
   minAutoGranularity?: SQLInterval;
+  /** How the source is evaluated on ClickHouse; unset means `auto`. */
+  promqlBackend?: PromqlSourceBackend;
 };
 
 /**
@@ -356,6 +383,7 @@ export async function resolvePromqlTarget(
     databaseName: source.from.databaseName,
     tableName: source.from.tableName,
     minAutoGranularity: source.minAutoGranularity,
+    promqlBackend: source.promqlBackend,
   };
 }
 
@@ -442,33 +470,50 @@ export function newPromqlClickhouseClient(connection: {
   });
 }
 
-/**
- * Whether a ClickHouse connection answers PromQL over HTTP. Two conditions,
- * cheapest first: the server is new enough (26.6+), and the prometheus_api_v1
- * handler is actually configured — a self-managed server needs an
- * `<http_handlers>` rule for that, which a stock install lacks. The handler
- * answers every request, error or not, with Prometheus JSON (`{status, ...}`);
- * a server without it answers a plain-text 404. `format_query` is used as the
- * probe because it is the one endpoint that needs no table.
- *
- * Probed on every request, like the version check, so a handler enabled or
- * removed on the server is reflected immediately.
- */
 const PROBE_TIMEOUT_MS = 5_000;
 
-async function clickhouseServesPrometheusHttpApi(
+// How long a probe answer is kept. A server's version and handler config
+// change rarely, and a stale answer only costs errors until the entry expires.
+const BACKEND_PROBE_TTL_MS = 5 * 60_000;
+
+let backendProbeCache = new MetadataCache();
+
+/** Forgets every kept probe answer. For tests. */
+export function clearBackendProbeCache(): void {
+  backendProbeCache = new MetadataCache();
+}
+
+/** The probe could not tell, so its outcome must not be kept. */
+class InconclusiveProbeError extends Error {}
+
+/**
+ * Asks a ClickHouse connection whether it answers PromQL over HTTP. Two
+ * conditions, cheapest first: the server is new enough (26.6+), and the
+ * prometheus_api_v1 handler is actually configured — a self-managed server
+ * needs an `<http_handlers>` rule for that, which a stock install lacks. The
+ * handler answers every request, error or not, with Prometheus JSON
+ * (`{status, ...}`); a server without it answers a plain-text 404.
+ * `format_query` is used as the probe because it is the one endpoint that
+ * needs no table.
+ *
+ * Resolves only with a definitive answer. Rejects with
+ * InconclusiveProbeError when the server could not be asked or answered with
+ * something that says nothing about the handler (a timeout, a proxy's 502, a
+ * rejected login), so a blip is never kept as "no".
+ */
+async function probePrometheusHttpApi(
   client: ClickhouseClient,
   connection: { id: string; host: string; username: string; password?: string },
 ): Promise<boolean> {
-  if (
-    !(await connectionSupportsPrometheusHttpApi({
-      client,
-      connectionId: connection.id,
-    }))
-  ) {
-    return false;
-  }
+  const supported = await connectionSupportsPrometheusHttpApi({
+    client,
+    connectionId: connection.id,
+  });
+  if (supported === undefined) throw new InconclusiveProbeError();
+  if (!supported) return false;
 
+  let status: number;
+  let text: string;
   try {
     const { url, headers } = buildPrometheusRequest(
       connection.host,
@@ -480,10 +525,71 @@ async function clickhouseServesPrometheusHttpApi(
       headers,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return typeof JSON.parse(await resp.text())?.status === 'string';
+    status = resp.status;
+    text = await resp.text();
   } catch {
+    throw new InconclusiveProbeError();
+  }
+
+  if (typeof parseJSON(text)?.status === 'string') return true;
+  if (status === 404) return false;
+  throw new InconclusiveProbeError();
+}
+
+/**
+ * Whether a ClickHouse connection answers PromQL over HTTP, keeping a
+ * definitive answer for BACKEND_PROBE_TTL_MS so each query does not pay for a
+ * `SELECT version()` and a probe request first. Keyed on the host as well as
+ * the connection, so editing a connection's host drops its answer. Concurrent
+ * callers share one probe. An inconclusive probe is answered "no" for this
+ * request only.
+ */
+async function clickhouseServesPrometheusHttpApi(
+  client: ClickhouseClient,
+  connection: { id: string; host: string; username: string; password?: string },
+): Promise<boolean> {
+  const key = `${connection.id}|${connection.host}`;
+  const span = trace.getActiveSpan();
+
+  const kept = backendProbeCache.get<boolean>(key);
+  if (kept !== undefined) {
+    span?.setAttribute('hyperdx.promql.backend_probe', 'cached');
+    return kept;
+  }
+
+  try {
+    const served = await backendProbeCache.getOrFetch(
+      key,
+      () => probePrometheusHttpApi(client, connection),
+      { ttlMs: BACKEND_PROBE_TTL_MS },
+    );
+    span?.setAttribute('hyperdx.promql.backend_probe', 'live');
+    return served;
+  } catch {
+    span?.setAttribute('hyperdx.promql.backend_probe', 'inconclusive');
     return false;
   }
+}
+
+/**
+ * Whether a connection serves PromQL over ClickHouse's HTTP API right now,
+ * for callers that want to pin a source to it (see the onboarding flow). Reads
+ * the same kept answer the queries do. Only a definitive yes is true: a
+ * Prometheus endpoint, an old server, a missing handler and a server that
+ * could not be asked all answer false.
+ */
+export async function connectionServesPrometheusHttpApi(connection: {
+  id: string;
+  host: string;
+  username: string;
+  password?: string;
+  isPrometheusEndpoint?: boolean;
+}): Promise<boolean> {
+  if (connection.isPrometheusEndpoint) return false;
+  return clickhouseServesPrometheusHttpApi(
+    newPromqlClickhouseClient(connection),
+    connection,
+  );
 }
 
 type ClickhouseQueryBackend =
@@ -509,16 +615,28 @@ type PromqlQueryBackend =
 /**
  * How to evaluate PromQL on a ClickHouse-backed target. The Prometheus HTTP
  * API is the only surface ClickHouse holds forward-compatible while TimeSeries
- * is in preview, so it is preferred wherever the server has it (26.6+); the
- * table function is the fallback.
+ * is in preview, so under `auto` it is preferred wherever the server has it
+ * (26.6+) and the table function is the fallback. A source set to either one
+ * is taken at its word, with no probe.
  */
 export async function resolveClickhouseQueryBackend({
   connection,
   databaseName,
   tableName,
+  promqlBackend = 'auto',
 }: PromqlTarget): Promise<ClickhouseQueryBackend> {
   const client = newPromqlClickhouseClient(connection);
-  if (await clickhouseServesPrometheusHttpApi(client, connection)) {
+  const span = trace.getActiveSpan();
+  span?.setAttribute('hyperdx.promql.backend_setting', promqlBackend);
+
+  let useHttpApi: boolean;
+  if (promqlBackend === 'auto') {
+    useHttpApi = await clickhouseServesPrometheusHttpApi(client, connection);
+  } else {
+    span?.setAttribute('hyperdx.promql.backend_probe', 'skipped');
+    useHttpApi = promqlBackend === 'clickhouse-http';
+  }
+  if (useHttpApi) {
     return {
       kind: 'clickhouse-http',
       connection: {
@@ -615,6 +733,7 @@ async function evaluatePromqlQuery(
         promqlQueryDataSchema,
         signal,
         headers,
+        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
       );
     }
     case 'table-function':

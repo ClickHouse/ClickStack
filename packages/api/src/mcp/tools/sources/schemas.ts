@@ -1,4 +1,7 @@
-import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import {
+  PromqlSourceBackendSchema,
+  SourceKind,
+} from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
 
 import { sanitizeMetricTables } from './metricKinds';
@@ -439,6 +442,16 @@ const mcpSaveSourceSchema = z.object({
         'sources also use it as the scrape interval for $__rate_interval. Omit ' +
         'for no minimum.',
     ),
+
+  // ── PromQL ──
+  promqlBackend: PromqlSourceBackendSchema.optional().describe(
+    'Promql sources on a ClickHouse connection. How PromQL is evaluated: ' +
+      '"clickhouse-http" uses ClickHouse\'s Prometheus HTTP API (ClickHouse ' +
+      '26.6+ with the prometheus_api_v1 handler configured), "table-function" ' +
+      'uses the prometheusQuery table functions, and "auto" (the default when ' +
+      'omitted) probes the server and prefers the HTTP API. Ignored when the ' +
+      'connection is a Prometheus endpoint.',
+  ),
 
   // ── Materialized views (advanced; granularities use "<n> <unit>" form) ──
   materializedViews: materializedViewsSchema

@@ -12,6 +12,7 @@ import z from 'zod';
 
 import {
   buildPrometheusRequest,
+  CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
   CLICKHOUSE_PROMETHEUS_API_PREFIX,
   clickhousePrometheusRequest,
   newPromqlClickhouseClient,
@@ -205,12 +206,17 @@ const CALLER_SETTABLE_PARAM_KEYS = new Set([
 // Prometheus's native response shape (`{status, data}` / `{status, errorType,
 // error}`) is already what HyperDX clients expect, so we forward the status code
 // as-is — but never the content-type, which is always relabelled (see below).
+//
+// `handlerMissingMessage` is for ClickHouse's own Prometheus API: a 404 means
+// the server has no such handler, and is answered with a 400 carrying this
+// message instead.
 async function proxyToPrometheus(
   upstreamHost: string,
   path: string,
   params: Record<string, string | string[] | undefined>,
   res: express.Response,
   headers?: Record<string, string>,
+  handlerMissingMessage?: string,
 ): Promise<number> {
   // For a key in CALLER_SETTABLE_PARAM_KEYS, the request always wins
   // outright, including repeatable ones like `match[]` -- so a Connection
@@ -284,6 +290,19 @@ async function proxyToPrometheus(
       error: `Failed to reach Prometheus at ${redactedTarget} (${detail})`,
     });
     return 502;
+  }
+
+  // A server without the handler answers 404 for any path under it, while the
+  // handler answers every failure (a missing table, a bad query) with a 400
+  // and Prometheus JSON, so the status alone tells them apart.
+  if (handlerMissingMessage && upstreamResp.status === 404) {
+    await upstreamResp.body?.cancel().catch(() => {});
+    res.status(400).json({
+      status: 'error',
+      errorType: 'bad_data',
+      error: handlerMissingMessage,
+    });
+    return 400;
   }
 
   res.status(upstreamResp.status);
@@ -420,6 +439,7 @@ const queryRangeHandler: express.RequestHandler = async (req, res) => {
         { ...params, database: databaseName, table: tableName },
         res,
         headers,
+        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
       );
       recordProxyOutcome(status, 'query_range', backend);
       return;
@@ -515,6 +535,7 @@ const queryHandler: express.RequestHandler = async (req, res) => {
         { ...params, database: databaseName, table: tableName },
         res,
         headers,
+        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
       );
       recordProxyOutcome(status, 'query', backend);
       return;

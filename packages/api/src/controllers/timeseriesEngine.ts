@@ -452,9 +452,9 @@ export async function queryInstantViaTableFunction({
 
 /**
  * Whether the connection's ClickHouse is new enough for the Prometheus HTTP
- * API. `SELECT version()` runs each call (throwaway cache) so an upgraded
- * server is picked up without a restart; an unknown version is treated as
- * old, matching the other version-gated features.
+ * API, or `undefined` when its version could not be read. `SELECT version()`
+ * runs each call (throwaway cache); callers that keep the answer decide how
+ * long to.
  */
 export async function connectionSupportsPrometheusHttpApi({
   client,
@@ -462,9 +462,8 @@ export async function connectionSupportsPrometheusHttpApi({
 }: {
   client: ClickhouseClient;
   connectionId: string;
-}): Promise<boolean> {
+}): Promise<boolean | undefined> {
   const metadata = new Metadata(client, new MetadataCache());
-  return supportsPrometheusHttpApi(
-    await metadata.getServerVersion({ connectionId }),
-  );
+  const version = await metadata.getServerVersion({ connectionId });
+  return version == null ? undefined : supportsPrometheusHttpApi(version);
 }

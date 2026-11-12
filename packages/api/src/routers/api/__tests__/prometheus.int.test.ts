@@ -3,11 +3,16 @@ import {
   QUERY_ATTRIBUTION_HEADER,
 } from '@hyperdx/common-utils/dist/clickhouse';
 import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
-import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import {
+  type PromqlSourceBackend,
+  SourceKind,
+} from '@hyperdx/common-utils/dist/types';
 import { Types } from 'mongoose';
 
 import * as config from '@/config';
 import {
+  clearBackendProbeCache,
+  CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
   CLICKHOUSE_PROMETHEUS_API_PREFIX,
   clickhousePrometheusUpstream,
   joinPrometheusUpstreamUrl,
@@ -74,6 +79,7 @@ describe('prometheus router', () => {
 
   afterEach(async () => {
     await server.clearDBs();
+    clearBackendProbeCache();
     mockFetch.mockReset();
     mockFetch.mockResolvedValue(fakeUpstreamResponse({}));
   });
@@ -88,7 +94,13 @@ describe('prometheus router', () => {
       name = 'PromQL',
       databaseName = DEFAULT_DATABASE,
       tableName = 'metrics_ts',
-    }: { name?: string; databaseName?: string; tableName?: string } = {},
+      promqlBackend,
+    }: {
+      name?: string;
+      databaseName?: string;
+      tableName?: string;
+      promqlBackend?: PromqlSourceBackend;
+    } = {},
   ) =>
     Source.create({
       kind: SourceKind.Promql,
@@ -97,6 +109,7 @@ describe('prometheus router', () => {
       name,
       from: { databaseName, tableName },
       timestampValueExpression: 'timestamp',
+      promqlBackend,
     });
 
   const seedPrometheusSource = async (
@@ -116,7 +129,11 @@ describe('prometheus router', () => {
 
   const seedClickHouseSource = async (
     teamId: Types.ObjectId,
-    from?: { databaseName?: string; tableName?: string },
+    from?: {
+      databaseName?: string;
+      tableName?: string;
+      promqlBackend?: PromqlSourceBackend;
+    },
   ) => {
     const connection = await Connection.create({
       team: teamId,
@@ -928,6 +945,144 @@ describe('prometheus router', () => {
       expect(res.body.error).toMatch(/no_such_table_for_fallback/);
     });
 
+    describe('on a source that sets its PromQL backend', () => {
+      const range = {
+        query: 'up',
+        start: '1700000000',
+        end: '1700000060',
+        step: '60s',
+      };
+
+      it('proxies to the handler without probing when set to clickhouse-http', async () => {
+        const { agent, team } = await getLoggedInAgent(server);
+        const source = await seedClickHouseSource(team._id, {
+          promqlBackend: 'clickhouse-http',
+        });
+        mockFetch.mockResolvedValueOnce(
+          fakeUpstreamResponse({
+            status: 'success',
+            data: { resultType: 'matrix', result: [] },
+          }),
+        );
+
+        await agent
+          .get('/v1/prometheus/query_range')
+          .query({ ...range, sourceId: source._id.toString() })
+          .expect(200);
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(String(mockFetch.mock.calls[0][0])).toContain(
+          `${CLICKHOUSE_PROMETHEUS_API_PREFIX}/query_range`,
+        );
+      });
+
+      it('evaluates through prometheusQueryRange() without probing when set to table-function', async () => {
+        const { agent, team } = await getLoggedInAgent(server);
+        // The CI server does serve the handler, so only the setting can have
+        // sent this query down the table-function path.
+        const source = await seedClickHouseSource(team._id, {
+          tableName: 'no_such_table_for_pinned',
+          promqlBackend: 'table-function',
+        });
+
+        const res = await agent
+          .get('/v1/prometheus/query_range')
+          .query({ ...range, sourceId: source._id.toString() })
+          .expect(400);
+
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(res.body.error).toMatch(/no_such_table_for_pinned/);
+      });
+
+      it('says so when clickhouse-http reaches a server without the handler', async () => {
+        const { agent, team } = await getLoggedInAgent(server);
+        const source = await seedClickHouseSource(team._id, {
+          promqlBackend: 'clickhouse-http',
+        });
+        mockFetch.mockResolvedValueOnce(
+          new Response('There is no handle /prometheus/api/v1/query_range', {
+            status: 404,
+          }),
+        );
+
+        const res = await agent
+          .get('/v1/prometheus/query_range')
+          .query({ ...range, sourceId: source._id.toString() })
+          .expect(400);
+
+        expect(res.body).toEqual({
+          status: 'error',
+          errorType: 'bad_data',
+          error: CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
+        });
+        expect(res.headers['x-content-type-options']).toBe('nosniff');
+      });
+
+      it('says so for an instant query too', async () => {
+        const { agent, team } = await getLoggedInAgent(server);
+        const source = await seedClickHouseSource(team._id, {
+          promqlBackend: 'clickhouse-http',
+        });
+        mockFetch.mockResolvedValueOnce(
+          new Response('There is no handle /prometheus/api/v1/query', {
+            status: 404,
+          }),
+        );
+
+        const res = await agent
+          .get('/v1/prometheus/query')
+          .query({ query: 'up', sourceId: source._id.toString() })
+          .expect(400);
+
+        expect(res.body.error).toBe(CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE);
+      });
+
+      it("passes the handler's own failure through unchanged", async () => {
+        const { agent, team } = await getLoggedInAgent(server);
+        const source = await seedClickHouseSource(team._id, {
+          promqlBackend: 'clickhouse-http',
+        });
+        const handlerError = {
+          status: 'error',
+          errorType: 'bad_data',
+          error: 'Table default.metrics_ts does not exist',
+        };
+        mockFetch.mockResolvedValueOnce(
+          fakeUpstreamResponse(handlerError, 400),
+        );
+
+        const res = await agent
+          .get('/v1/prometheus/query_range')
+          .query({ ...range, sourceId: source._id.toString() })
+          .expect(400);
+
+        expect(res.body).toEqual(handlerError);
+      });
+
+      it('does not rewrite a 404 from a Prometheus endpoint', async () => {
+        const { agent, team } = await getLoggedInAgent(server);
+        const source = await seedPrometheusSource(team._id);
+        mockFetch.mockResolvedValueOnce(
+          new Response('page not found', { status: 404 }),
+        );
+
+        // The proxy labels every body as JSON, so read this one raw.
+        const res = await agent
+          .get('/v1/prometheus/query_range')
+          .query({ ...range, sourceId: source._id.toString() })
+          .buffer(true)
+          .parse((upstream, done) => {
+            let body = '';
+            upstream.setEncoding('utf8');
+            upstream.on('data', chunk => (body += chunk));
+            upstream.on('end', () => done(null, body));
+          })
+          .expect(404);
+
+        expect(res.body).toBe('page not found');
+      });
+    });
+
     // The one place the proxy meets a real prometheus_api_v1 handler: the CI
     // ClickHouse (26.8, docker/clickhouse/local/config.xml) serves it, so the
     // stubbed fetch is swapped for the real one and the answer has to be
@@ -1325,6 +1480,33 @@ describe('prometheus router', () => {
       expect(init?.headers).toMatchObject({
         'X-ClickHouse-User': config.CLICKHOUSE_USER,
       });
+    });
+
+    it('probes the handler once across queries on the same connection', async () => {
+      const { agent, team } = await getLoggedInAgent(server);
+      const source = await seedClickHouseSource(team._id);
+      const answer = () =>
+        fakeUpstreamResponse({
+          status: 'success',
+          data: { resultType: 'vector', result: [] },
+        });
+      mockFetch
+        .mockResolvedValueOnce(handlerProbeResponse())
+        .mockResolvedValueOnce(answer())
+        .mockResolvedValueOnce(answer());
+
+      for (let i = 0; i < 2; i++) {
+        await agent
+          .get('/v1/prometheus/query')
+          .query({ query: 'up', sourceId: source._id.toString() })
+          .expect(200);
+      }
+
+      const urls = mockFetch.mock.calls.map(([url]) => String(url));
+      expect(urls.filter(url => url.includes('/format_query'))).toHaveLength(1);
+      expect(
+        urls.filter(url => url.includes('/prometheus/api/v1/query?')),
+      ).toHaveLength(2);
     });
   });
 

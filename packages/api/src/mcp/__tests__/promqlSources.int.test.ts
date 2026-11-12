@@ -249,6 +249,66 @@ describe('MCP PromQL sources', () => {
       expect(output.partial).toBe(true);
       expect(output.error).toContain('returned more than 8 MB');
     });
+
+    it('keeps promqlBackend through a describe -> rename -> save round trip', async () => {
+      const pinned = await Source.create({
+        kind: SourceKind.Promql,
+        team: team._id,
+        connection: promqlSource.connection,
+        name: 'Rename Me',
+        from: { databaseName: DEFAULT_DATABASE, tableName: TABLE },
+        timestampValueExpression: 'timestamp',
+        promqlBackend: 'clickhouse-http',
+      });
+
+      const described = await callTool(client, 'clickstack_describe_source', {
+        sourceId: pinned._id.toString(),
+      });
+      const sourceConfig = JSON.parse(getFirstText(described)).source.config;
+      expect(sourceConfig.promqlBackend).toBe('clickhouse-http');
+
+      const result = await callTool(client, 'clickstack_save_source', {
+        ...sourceConfig,
+        id: pinned._id.toString(),
+        name: 'Renamed',
+      });
+      expect(result.isError).toBeFalsy();
+
+      const stored = await Source.findById(pinned._id);
+      expect(stored?.name).toBe('Renamed');
+      expect(stored?.get('promqlBackend')).toBe('clickhouse-http');
+    });
+
+    it('sets promqlBackend when saving a new PromQL source', async () => {
+      const result = await callTool(client, 'clickstack_save_source', {
+        kind: 'promql',
+        name: 'Pinned PromQL',
+        connection: promqlSource.connection.toString(),
+        databaseName: DEFAULT_DATABASE,
+        tableName: TABLE,
+        timestampValueExpression: 'timestamp',
+        promqlBackend: 'table-function',
+      });
+
+      expect(result.isError).toBeFalsy();
+      const stored = await Source.findOne({ name: 'Pinned PromQL' });
+      expect(stored?.get('promqlBackend')).toBe('table-function');
+    });
+
+    it('rejects a promqlBackend that is not one of the known backends', async () => {
+      const result = await callTool(client, 'clickstack_save_source', {
+        kind: 'promql',
+        name: 'Bad PromQL',
+        connection: promqlSource.connection.toString(),
+        databaseName: DEFAULT_DATABASE,
+        tableName: TABLE,
+        timestampValueExpression: 'timestamp',
+        promqlBackend: 'http',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(await Source.findOne({ name: 'Bad PromQL' })).toBeNull();
+    });
   });
 
   describe('with PromQL disabled', () => {
