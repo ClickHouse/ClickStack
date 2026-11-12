@@ -24,6 +24,7 @@ import {
   extractSettingsClauseFromEnd,
   getFirstTimestampValueExpression,
   hasPositiveSeriesLimit,
+  isRoundedTimestampPart,
   joinQuerySettings,
   optimizeTimestampValueExpression,
   parseToStartOfFunction,
@@ -1057,15 +1058,12 @@ export async function timeFilterExpr({
       const isDateType = /^Date(?:32)?$/i.test(columnType) || isToDateExpr;
 
       // toStartOf* and Date filters must stay inclusive — strict < on a rounded value drops a whole interval
+      const rounded = isRoundedTimestampPart(col, columnType);
       const startOp =
-        dateRangeStartInclusive ||
-        toStartOf ||
-        isDateType ||
-        flooredPrecision != null
+        dateRangeStartInclusive || rounded || flooredPrecision != null
           ? '>='
           : '>';
-      const endOp =
-        dateRangeEndInclusive || toStartOf || isDateType ? '<=' : '<';
+      const endOp = dateRangeEndInclusive || rounded ? '<=' : '<';
 
       if (isDateType) {
         return chSql`(${unsafeTimestampValueExpression} ${startOp} toDate(${startTimeCond}) AND ${unsafeTimestampValueExpression} ${endOp} toDate(${endTimeCond}))`;
