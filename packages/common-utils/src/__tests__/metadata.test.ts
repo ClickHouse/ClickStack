@@ -1577,9 +1577,9 @@ describe('Metadata', () => {
 
     it.each([
       [8192, [10, 10, 5]],
-      [512, [1, 1, 1]],
+      [512, [1]],
     ])(
-      'splits Map text index values into queries of at most 10 keys (dictionary blocks of %d)',
+      'batches Map text index values by dictionary block size (%d)',
       async (blockSize, expectedBranchCounts) => {
         setupDefaultLogsSchema();
         withDictionaryBlockSize(blockSize);
