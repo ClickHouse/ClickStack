@@ -422,6 +422,23 @@ function HyperJsonMenu({
   );
 }
 
+// Positions in `keyPath` whose parent value in `rowData` is an array, i.e. the
+// segments that are array indexes and not object keys.
+export function getArrayIndexPositions(
+  rowData: unknown,
+  keyPath: string[],
+): Set<number> {
+  const positions = new Set<number>();
+  let node: any = rowData;
+  keyPath.forEach((segment, i) => {
+    if (Array.isArray(node)) {
+      positions.add(i);
+    }
+    node = node?.[segment];
+  });
+  return positions;
+}
+
 export function DBRowJsonViewer({
   data,
   jsonColumns,
@@ -495,7 +512,12 @@ export function DBRowJsonViewer({
   const getLineActions = useCallback<GetLineActions>(
     ({ keyPath, value, isInParsedJson, parsedJsonRootPath }) => {
       const actions: LineAction[] = [];
-      const fieldPath = mergePath(keyPath, jsonColumns, mapColumns);
+      const fieldPath = mergePath(
+        keyPath,
+        jsonColumns,
+        mapColumns,
+        getArrayIndexPositions(rowData, keyPath),
+      );
       const isJsonColumn =
         keyPath.length > 0 && jsonColumns?.includes(keyPath[0]);
 

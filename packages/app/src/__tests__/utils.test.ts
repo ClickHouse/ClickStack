@@ -1373,6 +1373,40 @@ describe('mergePath', () => {
         'BodyJson.`service`.`name`',
       );
     });
+
+    // Without array positions a numeric segment is a JSON object key, as
+    // before: facet keys come from the JSON schema, where `1` is a real key.
+    it('keeps a numeric segment as a quoted key when no array positions are given', () => {
+      expect(mergePath(['Body', 'events', '0', 'id'], ['Body'])).toBe(
+        'Body.`events`.`0`.`id`',
+      );
+    });
+
+    // The row viewer knows which segments index into an array. A JSON array
+    // element is addressed with a 1-based subscript; the quoted key
+    // (`.`0``) matches nothing, so the filter silently returns no rows.
+    it('emits a 1-based subscript for segments marked as array positions', () => {
+      expect(
+        mergePath(
+          ['message', 'events', '0', 'detail', 'parameters', '1', 'value'],
+          ['message'],
+          [],
+          new Set([2, 5]),
+        ),
+      ).toBe('message.`events`[1].`detail`.`parameters`[2].`value`');
+    });
+
+    it('chains subscripts for nested arrays', () => {
+      expect(
+        mergePath(['m', 'grid', '0', '1', 'x'], ['m'], [], new Set([2, 3])),
+      ).toBe('m.`grid`[1][2].`x`');
+    });
+
+    it('keeps a numeric object key quoted when it is not marked as an array position', () => {
+      expect(mergePath(['m', 'counts', '200', 'n'], ['m'], [], new Set())).toBe(
+        'm.`counts`.`200`.`n`',
+      );
+    });
   });
 
   describe('Map column (HDX-4369)', () => {
