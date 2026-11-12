@@ -43,6 +43,15 @@ export function serviceMapErrorCountSql(): string {
 
 const dimensionAlias = (index: number) => `dim${index}`;
 
+/**
+ * SQL for one group-by expression as the map compares and displays it: a
+ * non-nullable String, so a NULL or missing attribute reads as ''. The search
+ * links reuse it so a node's pinned value matches what the map grouped on.
+ */
+export function dimensionValueSql(expression: string): string {
+  return `ifNull(toString(${expression}), '')`;
+}
+
 export async function getServiceMapQuery({
   source,
   dateRange,
@@ -118,11 +127,11 @@ export async function getServiceMapQuery({
         valueExpression: source.statusCodeExpression ?? 'StatusCode',
         alias: 'statusCode',
       },
-      // Extra group-by keys. toString() gives every dimension the same
-      // non-nullable type so the LEFT JOIN below yields '' (not NULL) for an
-      // unmatched client, matching how serviceName behaves.
+      // Extra group-by keys, as non-nullable Strings so both sides of the LEFT
+      // JOIN below compare as '' (never NULL) for an unmatched client or a
+      // missing attribute, matching how serviceName behaves.
       ...groupBy.map((expression, i) => ({
-        valueExpression: `toString(${expression})`,
+        valueExpression: dimensionValueSql(expression),
         alias: dimensionAlias(i),
       })),
       // Carry the raw span duration through so we can aggregate latency.

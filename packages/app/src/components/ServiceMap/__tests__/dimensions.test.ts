@@ -45,18 +45,20 @@ describe('buildServiceMapDimensionsWhere', () => {
     expect(buildServiceMapDimensionsWhere([], [])).toBe('');
   });
 
-  it('pins each raw expression to its escaped value', () => {
+  it('pins each expression, normalized like the map query, to its escaped value', () => {
     expect(
       buildServiceMapDimensionsWhere(
         ["ResourceAttributes['k8s.pod.name']", "SpanAttributes['http.route']"],
         ['api-pod-0', "/users/'quoted'"],
       ),
     ).toBe(
-      " AND ResourceAttributes['k8s.pod.name'] = 'api-pod-0' AND SpanAttributes['http.route'] = '/users/\\'quoted\\''",
+      " AND ifNull(toString(ResourceAttributes['k8s.pod.name']), '') = 'api-pod-0' AND ifNull(toString(SpanAttributes['http.route']), '') = '/users/\\'quoted\\''",
     );
   });
 
-  it('matches an empty value literally', () => {
-    expect(buildServiceMapDimensionsWhere(['x'], [''])).toBe(" AND x = ''");
+  it('matches an empty value literally and keeps operator expressions grouped', () => {
+    expect(buildServiceMapDimensionsWhere(['a OR b'], [''])).toBe(
+      " AND ifNull(toString(a OR b), '') = ''",
+    );
   });
 });

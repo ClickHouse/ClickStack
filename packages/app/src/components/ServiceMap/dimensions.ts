@@ -1,7 +1,10 @@
 import SqlString from 'sqlstring';
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
 
-import { MAX_SERVICE_MAP_GROUP_BY } from '@/hooks/useServiceMap';
+import {
+  dimensionValueSql,
+  MAX_SERVICE_MAP_GROUP_BY,
+} from '@/hooks/useServiceMap';
 
 const EMPTY_DIMENSION_LABEL = '(none)';
 
@@ -30,7 +33,9 @@ export function formatServiceMapDimensions(
 
 /**
  * SQL fragment, starting with " AND ", that pins a search to one node's
- * dimension values. Empty when the map has no extra dimensions.
+ * dimension values. Each expression is normalized exactly like the map query
+ * does, so array, numeric and NULL values match the node they were grouped
+ * under. Empty when the map has no extra dimensions.
  */
 export function buildServiceMapDimensionsWhere(
   groupBy: string[],
@@ -39,7 +44,7 @@ export function buildServiceMapDimensionsWhere(
   return groupBy
     .map((expression, i) =>
       SqlString.format(' AND ? = ?', [
-        SqlString.raw(expression),
+        SqlString.raw(dimensionValueSql(expression)),
         dimensions[i] ?? '',
       ]),
     )

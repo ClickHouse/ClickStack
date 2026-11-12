@@ -325,6 +325,24 @@ describe('aggregateServiceMapData', () => {
       expect(result.get(pod1)!.incomingRequests.totalRequests).toBe(40);
     });
 
+    it('keeps a caller node whose dimensions match no server node', () => {
+      // A span-level expression is evaluated on the client span, i.e. with the
+      // callee's value, so the caller side of an edge can name a node that
+      // receives no traffic itself. It is still drawn so the edge has a source.
+      const result = aggregateServiceMapData([
+        dimNodeRow('web', ['/home'], 20),
+        dimNodeRow('api', ['GetUser'], 5),
+        dimEdgeRow('api', ['GetUser'], 'web', ['GetUser'], 5),
+      ]);
+
+      const caller = result.get(serviceMapNodeKey('web', ['GetUser']))!;
+      expect(caller.incomingRequests.totalRequests).toBe(0);
+      expect(caller.outgoingRequests).toBe(5);
+      expect(
+        result.get(serviceMapNodeKey('web', ['/home']))!.outgoingRequests,
+      ).toBe(0);
+    });
+
     it('draws an edge between two pods of the same service', () => {
       const result = aggregateServiceMapData([
         dimNodeRow('api', ['api-pod-1'], 10),
@@ -463,7 +481,7 @@ describe('getServiceMapQuery', () => {
     });
   });
 
-  it('selects each dimension as toString(expr) and keys both sides of the join by it', async () => {
+  it('selects each dimension as a non-nullable string and keys both sides of the join by it', async () => {
     const sql = await render([
       "ResourceAttributes['k8s.pod.name']",
       "SpanAttributes['http.route']",
@@ -474,11 +492,13 @@ describe('getServiceMapQuery', () => {
       expect(config).toMatchObject({
         select: expect.arrayContaining([
           {
-            valueExpression: "toString(ResourceAttributes['k8s.pod.name'])",
+            valueExpression:
+              "ifNull(toString(ResourceAttributes['k8s.pod.name']), '')",
             alias: 'dim0',
           },
           {
-            valueExpression: "toString(SpanAttributes['http.route'])",
+            valueExpression:
+              "ifNull(toString(SpanAttributes['http.route']), '')",
             alias: 'dim1',
           },
         ]),

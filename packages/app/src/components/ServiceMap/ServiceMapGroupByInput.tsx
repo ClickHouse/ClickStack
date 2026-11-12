@@ -38,10 +38,7 @@ export default function ServiceMapGroupByInput({
   const { errors } = useFormState({ control, name: 'groupBy' });
 
   return (
-    <Box
-      style={{ flexGrow: 1, minWidth: 'min(320px, 100%)' }}
-      data-testid="service-map-group-by-input"
-    >
+    <Box flex={1} miw="min(320px, 100%)" data-testid="service-map-group-by-input">
       <SQLInlineEditorControlled
         tableConnection={tableConnection}
         sourceId={sourceId}
@@ -50,6 +47,7 @@ export default function ServiceMapGroupByInput({
         rules={{ validate: validateGroupBy }}
         label="Group by"
         placeholder="ResourceAttributes['k8s.pod.name']"
+        tooltipText="Split services by up to 3 resource attributes, e.g. pod, node or version. Span attributes describe each call, so they split callers by the callee's values."
         onSubmit={onSubmit}
         disableKeywordAutocomplete
         dateRange={dateRange}
