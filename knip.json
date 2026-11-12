@@ -33,6 +33,9 @@
       "ignoreDependencies": ["@stryker-mutator/core"],
       "ignoreBinaries": ["stryker"]
     },
+    "packages/cli": {
+      "ignoreBinaries": ["claude"]
+    },
     "packages/hdx-eval": {
       "project": ["src/**/*.ts"],
       "ignoreDependencies": ["tsx"],

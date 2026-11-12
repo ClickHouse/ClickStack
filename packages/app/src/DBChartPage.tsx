@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { parseAsJson, parseAsString, useQueryState } from 'nuqs';
 import { useForm } from 'react-hook-form';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { Badge } from '@clickhouse/click-ui';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import { SavedChartConfig, SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   Alert,
@@ -202,7 +202,7 @@ function AIAssistant({
           </form>
         )}
       </Collapse>
-      <Divider />
+      <Separator size="xs" />
     </Box>
   );
 }

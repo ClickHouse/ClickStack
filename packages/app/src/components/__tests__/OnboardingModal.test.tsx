@@ -39,7 +39,10 @@ const mockConnectionsResult = {
   data: [{ id: 'conn-1', name: 'Default', host: 'http://localhost:8123' }],
 };
 const mockUpdateConnectionMutation = { mutateAsync: jest.fn() };
+const mockFetchHttpApiSupport = jest.fn();
 jest.mock('@/connection', () => ({
+  fetchPrometheusHttpApiSupport: (...args: unknown[]) =>
+    mockFetchHttpApiSupport(...args),
   useConnections: () => mockConnectionsResult,
   useCreateConnection: () => ({ mutate: jest.fn() }),
   useUpdateConnection: () => mockUpdateConnectionMutation,
@@ -93,6 +96,7 @@ describe('OnboardingModal auto-detection', () => {
       }),
     );
     mockUpdateSource.mockResolvedValue(undefined);
+    mockFetchHttpApiSupport.mockResolvedValue(false);
     mockMetadata.getOtelTables.mockResolvedValue(OTEL_LOGS_ONLY);
     mockMetadata.getTimeSeriesTables.mockResolvedValue([
       { databaseName: 'default', tableName: 'metrics_ts' },
@@ -118,6 +122,29 @@ describe('OnboardingModal auto-detection', () => {
     });
   });
 
+  it('pins the PromQL source to the HTTP API when the server serves it', async () => {
+    mockFetchHttpApiSupport.mockResolvedValue(true);
+
+    renderWithMantine(<OnboardingModal />);
+
+    await screen.findByText('Automatically detected and created 2 sources.');
+    expect(mockFetchHttpApiSupport).toHaveBeenCalledWith('conn-1');
+    expect(mockCreateSource).toHaveBeenLastCalledWith({
+      source: expect.objectContaining({
+        kind: SourceKind.Promql,
+        promqlBackend: 'clickhouse-http',
+      }),
+    });
+  });
+
+  it('leaves the PromQL backend unset when the server does not serve the HTTP API', async () => {
+    renderWithMantine(<OnboardingModal />);
+
+    await screen.findByText('Automatically detected and created 2 sources.');
+    const [{ source }] = mockCreateSource.mock.lastCall;
+    expect(source).not.toHaveProperty('promqlBackend');
+  });
+
   it('skips PromQL detection when PromQL is disabled', async () => {
     mockConfig.IS_PROMQL_ENABLED = false;
 
@@ -125,6 +152,7 @@ describe('OnboardingModal auto-detection', () => {
 
     await screen.findByText('Automatically detected and created 1 source.');
     expect(mockMetadata.getTimeSeriesTables).not.toHaveBeenCalled();
+    expect(mockFetchHttpApiSupport).not.toHaveBeenCalled();
     expect(createdKinds()).toEqual([SourceKind.Log]);
   });
 

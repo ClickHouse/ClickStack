@@ -38,21 +38,34 @@ The MCP server uses the **Streamable HTTP** transport with Bearer token
 authentication. In the examples below, replace `<your-hyperdx-url>` with your
 instance URL (e.g. `http://localhost:8080`).
 
-### Claude Code
+### Install with the CLI (recommended)
+
+This asks for a personal access key or an organization API key with hidden
+input, checks it, and adds the server to Claude Code, Codex, Cursor and VS Code.
+The key stays out of your shell history and agent chats.
 
 ```bash
-claude mcp add --transport http clickstack <your-hyperdx-url>/api/mcp \
-  --header "Authorization: Bearer <your-personal-access-key>"
+npx @hyperdx/cli mcp install --app-url <your-hyperdx-url>
+```
+
+### Claude Code
+
+`read -rs` waits for you to paste the key and press Enter, without echoing it,
+so the key isn't saved in your shell history:
+
+```bash
+read -rs CLICKSTACK_ACCESS_KEY
+claude mcp add --scope user --transport http clickstack <your-hyperdx-url>/api/mcp \
+  --header "Authorization: Bearer $CLICKSTACK_ACCESS_KEY"
 ```
 
 ### Codex CLI
 
 The Codex CLI reads the bearer token from an environment variable rather than a
-`--header` flag. Export your personal access key, then register the server with
-`--bearer-token-env-var`:
+`--header` flag, so the variable must be set wherever Codex runs:
 
 ```bash
-export CLICKSTACK_ACCESS_KEY="<your-personal-access-key>"
+read -rs CLICKSTACK_ACCESS_KEY && export CLICKSTACK_ACCESS_KEY
 codex mcp add clickstack --url <your-hyperdx-url>/api/mcp \
   --bearer-token-env-var CLICKSTACK_ACCESS_KEY
 ```

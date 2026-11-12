@@ -11,6 +11,7 @@ import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import { useServiceDashboardExpressions } from '@/serviceDashboard';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState from './charts/ChartErrorState';
 import DBSqlRowTableWithSideBar from './DBSqlRowTableWithSidebar';
 
@@ -33,35 +34,36 @@ export default function SlowestEventsTile({
 }) {
   const { expressions } = useServiceDashboardExpressions({ source });
 
-  const { data, isLoading, isError, error } = useQueriedChartConfig(
-    {
-      source: source.id,
-      ...pick(source, ['timestampValueExpression', 'connection', 'from']),
-      ...pickSampleWeightExpressionProps(source),
-      where: '',
-      whereLanguage: 'sql',
-      select: [
-        // Separate the aggregations from the conversion to ms so that AggregatingMergeTree MVs can be used
-        {
-          alias: 'p95_duration_ns',
-          aggFn: 'quantile',
-          valueExpression: expressions?.duration ?? 'Duration',
-          level: 0.95,
-        },
-        {
-          alias: 'p95',
-          valueExpression: `p95_duration_ns / ${expressions?.durationDivisorForMillis}`,
-        },
-      ],
-      dateRange,
-      filters: extraFilters,
-    },
-    {
-      placeholderData: (prev: any) => prev,
-      queryKey: [queryKeyPrefix, source],
-      enabled: enabled && !!expressions,
-    },
-  );
+  const { data, isLoading, isPlaceholderData, isError, error } =
+    useQueriedChartConfig(
+      {
+        source: source.id,
+        ...pick(source, ['timestampValueExpression', 'connection', 'from']),
+        ...pickSampleWeightExpressionProps(source),
+        where: '',
+        whereLanguage: 'sql',
+        select: [
+          // Separate the aggregations from the conversion to ms so that AggregatingMergeTree MVs can be used
+          {
+            alias: 'p95_duration_ns',
+            aggFn: 'quantile',
+            valueExpression: expressions?.duration ?? 'Duration',
+            level: 0.95,
+          },
+          {
+            alias: 'p95',
+            valueExpression: `p95_duration_ns / ${expressions?.durationDivisorForMillis}`,
+          },
+        ],
+        dateRange,
+        filters: extraFilters,
+      },
+      {
+        placeholderData: (prev: any) => prev,
+        queryKey: [queryKeyPrefix, source],
+        enabled: enabled && !!expressions,
+      },
+    );
 
   const p95 = data?.data?.[0]?.['p95'];
   const roundedP95 = Math.round(p95 ?? 0);
@@ -77,15 +79,11 @@ export default function SlowestEventsTile({
         ]}
       >
         {isLoading && !data ? (
-          <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-            Loading Chart Data...
-          </div>
+          <ChartEmptyState isLoading />
         ) : isError ? (
           <ChartErrorState error={error} />
         ) : data?.data.length === 0 ? (
-          <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-            No data found within time range.
-          </div>
+          <ChartEmptyState isLoading={isPlaceholderData} />
         ) : (
           source &&
           expressions && (

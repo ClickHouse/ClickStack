@@ -6,4 +6,6 @@ export interface TableModelProps {
   setValue: UseFormSetValue<TSource>;
   // Set when editing an existing source
   sourceId?: string;
+  // The selected connection is a Prometheus-compatible endpoint, not ClickHouse
+  isPrometheusEndpoint?: boolean;
 }

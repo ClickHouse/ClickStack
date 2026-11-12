@@ -3,6 +3,7 @@ import {
   LogSourceSchema,
   MetricsDataType,
   MetricSourceSchema,
+  PROMQL_SOURCE_BACKENDS,
   PromqlSourceSchema,
   QuerySettings,
   SessionSourceSchema,
@@ -307,5 +308,6 @@ export const PromqlSource = Source.discriminator<IPromqlSource>(
   SourceKind.Promql,
   new Schema<Extract<ISource, { kind: SourceKind.Promql }>>({
     minAutoGranularity: minAutoGranularityField,
+    promqlBackend: { type: String, enum: PROMQL_SOURCE_BACKENDS },
   }),
 );

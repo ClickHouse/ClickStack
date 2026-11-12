@@ -1,4 +1,7 @@
-import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import {
+  PromqlSourceBackendSchema,
+  SourceKind,
+} from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
 
 import { sanitizeMetricTables } from './metricKinds';
@@ -28,26 +31,31 @@ const KIND_DESCRIPTION =
 // Advanced nested config, modeled loosely (SourceSchemaNoId does the strict
 // validation) so it round-trips through describe_source -> save_source.
 // Granularity fields use the internal "<n> <unit>" form (e.g. "5 minute").
-const highlightedAttributeExpressionsSchema = z.array(
-  z.object({
-    sqlExpression: z
-      .string()
-      .describe(
-        "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
-      ),
-    luceneExpression: z
-      .string()
-      .optional()
-      .describe(
-        'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
-          'When set, it is used when searching for this attribute value.',
-      ),
-    alias: z
-      .string()
-      .optional()
-      .describe('Display name for the attribute (rendered as AS <alias>).'),
-  }),
-);
+//
+// A factory, not a shared constant: zod-to-json-schema emits a reused schema
+// instance as a bare `$ref` to its first use, and MCP directory validators
+// flag that property as untyped.
+const highlightedAttributeExpressionsSchema = () =>
+  z.array(
+    z.object({
+      sqlExpression: z
+        .string()
+        .describe(
+          "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
+        ),
+      luceneExpression: z
+        .string()
+        .optional()
+        .describe(
+          'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
+            'When set, it is used when searching for this attribute value.',
+        ),
+      alias: z
+        .string()
+        .optional()
+        .describe('Display name for the attribute (rendered as AS <alias>).'),
+    }),
+  );
 
 const aggregatedColumnSchema = z.object({
   sourceColumn: z
@@ -377,13 +385,13 @@ const mcpSaveSourceSchema = z.object({
     ),
 
   // ── Highlighted attribute expressions (advanced) ──
-  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Trace-level attributes displayed in the trace ' +
         'view for the selected trace.',
     ),
-  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Row-level attributes displayed in the row side ' +
@@ -434,6 +442,16 @@ const mcpSaveSourceSchema = z.object({
         'sources also use it as the scrape interval for $__rate_interval. Omit ' +
         'for no minimum.',
     ),
+
+  // ── PromQL ──
+  promqlBackend: PromqlSourceBackendSchema.optional().describe(
+    'Promql sources on a ClickHouse connection. How PromQL is evaluated: ' +
+      '"clickhouse-http" uses ClickHouse\'s Prometheus HTTP API (ClickHouse ' +
+      '26.6+ with the prometheus_api_v1 handler configured), "table-function" ' +
+      'uses the prometheusQuery table functions, and "auto" (the default when ' +
+      'omitted) probes the server and prefers the HTTP API. Ignored when the ' +
+      'connection is a Prometheus endpoint.',
+  ),
 
   // ── Materialized views (advanced; granularities use "<n> <unit>" form) ──
   materializedViews: materializedViewsSchema

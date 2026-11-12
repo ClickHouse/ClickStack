@@ -1,10 +1,9 @@
 import ReactMarkdown from 'react-markdown';
-import { Badge } from '@clickhouse/click-ui';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import {
   Anchor,
   Card,
   Center,
-  Divider,
   Drawer,
   Group,
   Loader,
@@ -168,7 +167,7 @@ export const WhatsNewDrawer = ({
                   </Anchor>
                 )}
 
-                <Divider />
+                <Separator size="xs" />
               </Stack>
             ))}
 

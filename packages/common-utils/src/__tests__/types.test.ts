@@ -951,6 +951,43 @@ describe('PromqlSourceSchema.minAutoGranularity', () => {
   });
 });
 
+describe('PromqlSourceSchema.promqlBackend', () => {
+  const base = {
+    id: 'source-1',
+    kind: 'promql' as const,
+    name: 'Prometheus',
+    connection: 'conn-1',
+    from: { databaseName: 'default', tableName: 'metrics_ts' },
+    timestampValueExpression: 'timestamp',
+  };
+  const parse = (promqlBackend: unknown) =>
+    PromqlSourceSchema.safeParse({ ...base, promqlBackend });
+
+  it.each(['auto', 'clickhouse-http', 'table-function'])(
+    'accepts %s',
+    value => {
+      const result = parse(value);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.promqlBackend).toBe(value);
+      }
+    },
+  );
+
+  it('accepts an absent setting', () => {
+    const result = parse(undefined);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.promqlBackend).toBeUndefined();
+    }
+  });
+
+  it('rejects anything else', () => {
+    expect(parse('http').success).toBe(false);
+    expect(parse('').success).toBe(false);
+  });
+});
+
 describe('MetricFormulaSchema', () => {
   it('parses an expression-only formula', () => {
     const result = MetricFormulaSchema.safeParse({

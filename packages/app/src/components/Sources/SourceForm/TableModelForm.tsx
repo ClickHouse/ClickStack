@@ -19,11 +19,13 @@ export function TableModelForm({
   setValue,
   kind,
   sourceId,
+  isPrometheusEndpoint,
 }: {
   control: Control<TSource>;
   setValue: UseFormSetValue<TSource>;
   kind: SourceKind;
   sourceId?: string;
+  isPrometheusEndpoint?: boolean;
 }) {
   switch (kind) {
     case SourceKind.Log:
@@ -41,6 +43,12 @@ export function TableModelForm({
         />
       );
     case SourceKind.Promql:
-      return <PromqlTableModelForm control={control} setValue={setValue} />;
+      return (
+        <PromqlTableModelForm
+          control={control}
+          setValue={setValue}
+          isPrometheusEndpoint={isPrometheusEndpoint}
+        />
+      );
   }
 }

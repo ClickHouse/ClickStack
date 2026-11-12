@@ -192,6 +192,15 @@ describe('timeseriesEngine controller', () => {
         ).toEqual(['api']);
       });
 
+      it('reads a quoted metric name', async () => {
+        expect(
+          await labelValues({
+            labelName: 'job',
+            match: ['{"recent_metric", "job"="api"}'],
+          }),
+        ).toEqual(['api']);
+      });
+
       // Prometheus unions the selectors rather than intersecting them.
       it('unions the series matched by each selector', async () => {
         expect(
@@ -200,6 +209,17 @@ describe('timeseriesEngine controller', () => {
             match: ['recent_metric{job="api"}', 'old_metric'],
           }),
         ).toEqual(['api', 'batch']);
+      });
+
+      // A selector without a metric name can match any metric, so naming
+      // `old_metric` in another selector mustn't narrow the lookup to it.
+      it('keeps the series of a selector without a metric name', async () => {
+        expect(
+          await labelValues({
+            labelName: 'job',
+            match: ['{job="web"}', 'old_metric'],
+          }),
+        ).toEqual(['batch', 'web']);
       });
 
       it('scopes metric names to the selector', async () => {
@@ -485,13 +505,10 @@ describe('timeseriesEngine controller', () => {
   });
 
   // Schema version 8 (the default from ClickHouse 26.10) moved min_time and
-  // max_time out of the tags table into a separate time ranges table. Older
-  // servers don't know the `version` setting, so these run only where the
-  // table can be created.
+  // max_time out of the tags table into a separate time ranges table.
   describe('table of schema version 8 (time ranges table)', () => {
     const V8_TABLE = 'test_ts_label_values_v8';
     const V8_NO_RANGES_TABLE = 'test_ts_label_values_v8_no_ranges';
-    let supported = true;
 
     const v8LabelValues = (
       args: Partial<Parameters<typeof queryLabelValues>[0]> & {
@@ -500,23 +517,18 @@ describe('timeseriesEngine controller', () => {
     ) => labelValues({ tableName: V8_TABLE, ...args });
 
     beforeAll(async () => {
-      try {
-        await seedTimeSeriesTagsTable({
-          table: V8_TABLE,
-          series: SERIES,
-          withSamples: true,
-          timeRanges: true,
-        });
-        await seedTimeSeriesTagsTable({
-          table: V8_NO_RANGES_TABLE,
-          series: SERIES,
-          storeTimeBounds: false,
-          timeRanges: true,
-        });
-      } catch (e) {
-        if (!/Unknown setting 'version'/.test(String(e))) throw e;
-        supported = false;
-      }
+      await seedTimeSeriesTagsTable({
+        table: V8_TABLE,
+        series: SERIES,
+        withSamples: true,
+        timeRanges: true,
+      });
+      await seedTimeSeriesTagsTable({
+        table: V8_NO_RANGES_TABLE,
+        series: SERIES,
+        storeTimeBounds: false,
+        timeRanges: true,
+      });
     });
 
     afterAll(async () => {
@@ -526,7 +538,6 @@ describe('timeseriesEngine controller', () => {
     });
 
     it('scopes label values to the window through the time ranges table', async () => {
-      if (!supported) return;
       expect(
         await v8LabelValues({
           labelName: 'job',
@@ -537,7 +548,6 @@ describe('timeseriesEngine controller', () => {
     });
 
     it('applies lone bounds against the time ranges', async () => {
-      if (!supported) return;
       expect(
         await v8LabelValues({
           labelName: '__name__',
@@ -553,7 +563,6 @@ describe('timeseriesEngine controller', () => {
     });
 
     it('returns nothing for a window no series covers', async () => {
-      if (!supported) return;
       expect(
         await v8LabelValues({
           labelName: '__name__',
@@ -564,7 +573,6 @@ describe('timeseriesEngine controller', () => {
     });
 
     it('evaluates match[] and narrows it by the window', async () => {
-      if (!supported) return;
       expect(
         await v8LabelValues({
           labelName: 'job',
@@ -582,7 +590,6 @@ describe('timeseriesEngine controller', () => {
     });
 
     it('scopes label names to the window and the selector', async () => {
-      if (!supported) return;
       const names = (
         args: Partial<Parameters<typeof queryLabelNames>[0]> = {},
       ) =>
@@ -607,7 +614,6 @@ describe('timeseriesEngine controller', () => {
     });
 
     it('rejects match[] without a time ranges table, and ignores the bounds', async () => {
-      if (!supported) return;
       await expect(
         labelValues({
           tableName: V8_NO_RANGES_TABLE,

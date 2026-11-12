@@ -2833,6 +2833,22 @@ export const MinAutoGranularitySchema = z.preprocess(
   SQLIntervalSchema.optional(),
 );
 
+/**
+ * How a PromQL source on a ClickHouse connection is evaluated: through the
+ * Prometheus HTTP API (`clickhouse-http`, which needs ClickHouse 26.6+ with the
+ * `prometheus_api_v1` handler configured) or through the `prometheusQuery`
+ * table functions (`table-function`). `auto`, which is also what an unset
+ * value means, probes the server on first use and prefers the HTTP API. A
+ * connection that is itself a Prometheus endpoint ignores it.
+ */
+export const PROMQL_SOURCE_BACKENDS = [
+  'auto',
+  'clickhouse-http',
+  'table-function',
+] as const;
+export const PromqlSourceBackendSchema = z.enum(PROMQL_SOURCE_BACKENDS);
+export type PromqlSourceBackend = z.infer<typeof PromqlSourceBackendSchema>;
+
 // Metric source form schema
 export const MetricSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Metric),
@@ -2860,6 +2876,7 @@ export const MetricSourceSchema = BaseSourceSchema.extend({
 export const PromqlSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Promql),
   minAutoGranularity: MinAutoGranularitySchema,
+  promqlBackend: PromqlSourceBackendSchema.optional(),
 });
 
 // Union of all source form schemas for validation
@@ -3397,6 +3414,56 @@ export const RotateAccessKeyApiResponseSchema = z.object({
 
 export type RotateAccessKeyApiResponse = z.infer<
   typeof RotateAccessKeyApiResponseSchema
+>;
+
+// Team-owned bearer keys for external API v2 and MCP. They outlive the admin
+// who created them; the plaintext `key` is only returned on create.
+export const OrgApiKeyExpirySchema = z.enum(['30d', '1y', 'never']);
+export type OrgApiKeyExpiry = z.infer<typeof OrgApiKeyExpirySchema>;
+
+const OrgApiKeyDescriptionSchema = z.string().trim().min(1).max(100);
+
+export const CreateOrgApiKeyRequestSchema = z.object({
+  description: OrgApiKeyDescriptionSchema,
+  expiry: OrgApiKeyExpirySchema,
+});
+export type CreateOrgApiKeyRequest = z.infer<
+  typeof CreateOrgApiKeyRequestSchema
+>;
+
+export const UpdateOrgApiKeyRequestSchema = z.object({
+  description: OrgApiKeyDescriptionSchema,
+});
+export type UpdateOrgApiKeyRequest = z.infer<
+  typeof UpdateOrgApiKeyRequestSchema
+>;
+
+export const OrgApiKeyApiResponseSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string().nullable(),
+  lastUsedAt: z.string().nullable(),
+  // Null once the creating user has been removed from the team.
+  createdBy: z
+    .object({
+      id: z.string(),
+      name: z.string().optional(),
+      email: z.string(),
+    })
+    .nullable(),
+});
+export type OrgApiKeyApiResponse = z.infer<typeof OrgApiKeyApiResponseSchema>;
+
+export const OrgApiKeysApiResponseSchema = z.object({
+  data: z.array(OrgApiKeyApiResponseSchema),
+});
+export type OrgApiKeysApiResponse = z.infer<typeof OrgApiKeysApiResponseSchema>;
+
+export const CreateOrgApiKeyApiResponseSchema =
+  OrgApiKeyApiResponseSchema.extend({ key: z.string() });
+export type CreateOrgApiKeyApiResponse = z.infer<
+  typeof CreateOrgApiKeyApiResponseSchema
 >;
 
 // IaC (Terraform) export

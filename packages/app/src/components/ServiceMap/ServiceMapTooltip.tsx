@@ -1,7 +1,8 @@
 import { useCallback } from 'react';
 import SqlString from 'sqlstring';
+import { Separator } from '@clickhouse/click-ui';
 import { TTraceSource } from '@hyperdx/common-utils/dist/types';
-import { Button, Divider, Group, Stack, Text } from '@mantine/core';
+import { Button, Group, Stack, Text } from '@mantine/core';
 import {
   IconActivity,
   IconClock,
@@ -103,7 +104,7 @@ export default function ServiceMapTooltip({
       >
         {serviceName}
       </Text>
-      <Divider color="var(--color-border)" />
+      <Separator size="xs" />
       <Button
         onClick={handleRequestsClick}
         variant="subtle"
@@ -152,7 +153,7 @@ export default function ServiceMapTooltip({
       ) : null}
       {onFocus ? (
         <>
-          <Divider color="var(--color-border)" />
+          <Separator size="xs" />
           <Button
             onClick={onFocus}
             variant="secondary"

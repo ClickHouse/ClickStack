@@ -53,6 +53,26 @@ export function useConnections() {
   });
 }
 
+/**
+ * Whether the server behind a connection answers PromQL over ClickHouse's
+ * Prometheus HTTP API. False when it does not, and also when it could not be
+ * asked, so a caller pins to the HTTP API only on a definitive yes.
+ */
+export async function fetchPrometheusHttpApiSupport(
+  connectionId: string,
+): Promise<boolean> {
+  // A local-mode connection lives in the browser; the API has no record of it.
+  if (IS_LOCAL_MODE) return false;
+  try {
+    const { supported } = await hdxServer(
+      `connections/${connectionId}/prometheus-http-api`,
+    ).json<{ supported: boolean }>();
+    return supported === true;
+  } catch {
+    return false;
+  }
+}
+
 export function useCreateConnection() {
   const queryClient = useQueryClient();
 
