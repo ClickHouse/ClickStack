@@ -83,7 +83,8 @@ export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
 // so a key with more distinct values than this gets the most frequent among
 // its alphabetically first ones. Keep it above "Load more"'s 10,000 values.
 const TEXT_INDEX_TOKENS_PER_KEY = 20_000;
-// Keys per text index values query; see dispatchKeyValueQueries.
+// Keys per text index values query when each key gets its own read, and
+// columns per plain-column text index query; see dispatchKeyValueQueries.
 const TEXT_INDEX_KEYS_PER_QUERY = 10;
 // Smallest dictionary block size that gets one read per key; see
 // getMapTextIndexKeyValues.
@@ -1792,6 +1793,7 @@ export class Metadata {
     tableName,
     connectionId,
     queryOptions,
+    perKey,
     maxParts,
     partSelection,
     dateRange,
@@ -1799,6 +1801,8 @@ export class Metadata {
     signal,
   }: TableConnection & {
     queryOptions: TextIndexMapColumnQueryOptions;
+    /** One read per key instead of one per column; see the comment below. */
+    perKey: boolean;
     /** null reads every part in the time range. */
     maxParts: number | null;
     partSelection: MapKeyIndexPartSelection;
@@ -1807,7 +1811,7 @@ export class Metadata {
     signal?: AbortSignal;
   }): Promise<KeyValues[] | undefined> {
     const queryOptionsHash = objectHash(queryOptions);
-    const cacheKey = `${databaseName}.${tableName}.${connectionId}.${dateRange[0].toString()}.${dateRange[1].toString()}.${queryOptionsHash}.${maxParts}.${partSelection}.${timestampValueExpression}.getMapTextIndexKeyValues`;
+    const cacheKey = `${databaseName}.${tableName}.${connectionId}.${dateRange[0].toString()}.${dateRange[1].toString()}.${queryOptionsHash}.${perKey}.${maxParts}.${partSelection}.${timestampValueExpression}.getMapTextIndexKeyValues`;
     return this.cache.getOrFetch(cacheKey, async () => {
       try {
         const sqlBranches: Array<ChSql> = [];
@@ -1837,13 +1841,7 @@ export class Metadata {
           // (ClickHouse's default 512) the sparse index is large, so all keys
           // share one read. That read can't stop early per key, so topKWeighted
           // sees every token and ranks by the full counts.
-          const blockSize = await this.getTextIndexDictionaryBlockSize({
-            databaseName,
-            tableName,
-            connectionId,
-            indexName: info.indexName,
-          });
-          if (blockSize < PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE) {
+          if (!perKey) {
             sqlBranches.push(chSql`
         SELECT ${{ String: columnName }} AS column,
           key,
@@ -3124,9 +3122,22 @@ export class Metadata {
 
     // fire all the kv fetch queries
     const promises: Array<Promise<KeyValues[] | undefined>> = [];
-    // Text index lookups run in small parallel batches, so a slow,
-    // high-cardinality key holds up only its own batch's values.
+    // Map columns whose index has large dictionary blocks read each key
+    // separately, in small parallel batches, so a slow, high-cardinality key
+    // holds up only its own batch's values. The rest share one read of all
+    // their keys; see getMapTextIndexKeyValues.
+    const sharedReadOptions: TextIndexMapColumnQueryOptions = new Map();
     for (const [column, options] of mapTextIndexQueryOptions) {
+      const blockSize = await this.getTextIndexDictionaryBlockSize({
+        databaseName,
+        tableName,
+        connectionId,
+        indexName: options.indexName,
+      });
+      if (blockSize < PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE) {
+        sharedReadOptions.set(column, options);
+        continue;
+      }
       for (const keys of chunk(options.keys, TEXT_INDEX_KEYS_PER_QUERY)) {
         promises.push(
           this.getMapTextIndexKeyValues({
@@ -3134,6 +3145,7 @@ export class Metadata {
             tableName,
             connectionId,
             queryOptions: new Map([[column, { ...options, keys }]]),
+            perKey: true,
             maxParts: mapKeyIndexMaxParts,
             partSelection: mapKeyIndexPartSelection,
             dateRange,
@@ -3142,6 +3154,22 @@ export class Metadata {
           }),
         );
       }
+    }
+    if (sharedReadOptions.size > 0) {
+      promises.push(
+        this.getMapTextIndexKeyValues({
+          databaseName,
+          tableName,
+          connectionId,
+          queryOptions: sharedReadOptions,
+          perKey: false,
+          maxParts: mapKeyIndexMaxParts,
+          partSelection: mapKeyIndexPartSelection,
+          dateRange,
+          timestampValueExpression,
+          signal,
+        }),
+      );
     }
     for (const entries of chunk(
       [...nativeTextIndexQueryOptions],
