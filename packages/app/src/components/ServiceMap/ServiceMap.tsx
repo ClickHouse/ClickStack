@@ -40,9 +40,9 @@ import {
   ServiceMapMetricMax,
 } from './ServiceMapMetricContext';
 import ServiceMapNode, { ServiceMapNodeData } from './ServiceMapNode';
+import { useServiceMapSizeGate } from './useServiceMapSizeGate';
 import {
   getServiceMetricValue,
-  isServiceMapTooLarge,
   MAX_SERVICE_MAP_NODES,
   SERVICE_MAP_METRIC_LABEL,
   SERVICE_MAP_METRICS,
@@ -124,15 +124,7 @@ function ServiceMapPresentation({
   const { fitView } = useReactFlow();
   const colorScheme = useResolvedColorScheme();
   const [metric, setMetric] = useState<ServiceMapMetric>('errorRate');
-  // The dataset the user chose to render despite its size. Keyed by identity
-  // so a new query result is gated again.
-  const [showAnywayFor, setShowAnywayFor] = useState<
-    Map<string, ServiceAggregation> | undefined
-  >();
-  const tooLarge = isServiceMapTooLarge(
-    services?.size ?? 0,
-    showAnywayFor === services,
-  );
+  const { tooLarge, showAnyway } = useServiceMapSizeGate(services);
 
   // Fit the data to the viewport whenever input service information changes
   useEffect(() => {
@@ -290,7 +282,7 @@ function ServiceMapPresentation({
             variant="secondary"
             size="sm"
             mt="sm"
-            onClick={() => setShowAnywayFor(services)}
+            onClick={showAnyway}
             data-testid="service-map-show-anyway"
           >
             Show anyway
