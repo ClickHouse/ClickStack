@@ -2647,6 +2647,15 @@ export const BaseSourceSchema = z.object({
   }),
   disabled: z.boolean().optional(),
   querySettings: QuerySettingsSchema.optional(),
+  /**
+   * Queries whose selected time range is longer than this read the ClickHouse
+   * filesystem cache without filling it, so long scans don't evict hot data.
+   * Unset turns it off. '' (the form's "Never" option) is treated as unset.
+   */
+  filesystemCacheReadOnlyMinRange: z.preprocess(
+    v => (v === '' ? undefined : v),
+    SQLIntervalSchema.optional(),
+  ),
   timestampValueExpression: RequiredTimestampColumnSchema,
 });
 

@@ -15,6 +15,7 @@ import {
   getDistributedTableArgs,
   getFirstOrderingItem,
   getPercentileAggFnLevel,
+  getSourceQuerySettings,
   hasNonEmptyOrderBy,
   hasPositiveSeriesLimit,
   isFirstOrderByAscending,
@@ -3097,6 +3098,57 @@ describe('utils', () => {
       expect(
         joinQuerySettings([{ setting: 'setting_name', value: 'Infinity' }]),
       ).toEqual("setting_name = 'Infinity'");
+    });
+  });
+  describe('getSourceQuerySettings', () => {
+    const cacheSetting = {
+      setting: 'read_from_filesystem_cache_if_exists_otherwise_bypass_cache',
+      value: '1',
+    };
+    const base = [{ setting: 'max_threads', value: '4' }];
+    const rangeOfDays = (days: number): [Date, Date] => [
+      new Date(0),
+      new Date(days * 24 * 60 * 60 * 1000),
+    ];
+
+    const twoDays = { filesystemCacheReadOnlyMinRange: '2 day' };
+
+    it('never adds the setting when the source has no threshold', () => {
+      expect(
+        getSourceQuerySettings({ querySettings: base }, rangeOfDays(30)),
+      ).toEqual(base);
+      expect(getSourceQuerySettings({}, rangeOfDays(30))).toBeUndefined();
+    });
+
+    it('adds the setting only for ranges longer than the threshold', () => {
+      expect(
+        getSourceQuerySettings(
+          { ...twoDays, querySettings: base },
+          rangeOfDays(2),
+        ),
+      ).toEqual(base);
+      expect(
+        getSourceQuerySettings(
+          { ...twoDays, querySettings: base },
+          rangeOfDays(3),
+        ),
+      ).toEqual([...base, cacheSetting]);
+      expect(getSourceQuerySettings(twoDays, rangeOfDays(3))).toEqual([
+        cacheSetting,
+      ]);
+    });
+
+    it('keeps a value the source sets explicitly, and skips without a range', () => {
+      const explicit = [{ ...cacheSetting, value: '0' }];
+      expect(
+        getSourceQuerySettings(
+          { ...twoDays, querySettings: explicit },
+          rangeOfDays(30),
+        ),
+      ).toEqual(explicit);
+      expect(
+        getSourceQuerySettings({ ...twoDays, querySettings: base }, undefined),
+      ).toEqual(base);
     });
   });
   describe('parseTokenizerFromTextIndex', () => {

@@ -111,6 +111,11 @@ const sourceBaseSchema = new Schema<MongooseSourceBase>(
         message: '{PATH} exceeds the limit of 10',
       },
     },
+    // Mirrors the '' -> undefined preprocess in BaseSourceSchema.
+    filesystemCacheReadOnlyMinRange: {
+      type: String,
+      set: (v: string | null | undefined) => (v === '' ? undefined : v),
+    },
   },
   {
     discriminatorKey: 'kind',

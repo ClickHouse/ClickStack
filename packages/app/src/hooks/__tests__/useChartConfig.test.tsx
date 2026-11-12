@@ -25,6 +25,7 @@ import {
   useQueriedChartConfig,
 } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
+import * as sourceModule from '@/source';
 
 // Mock DEFAULT_TIME_WINDOWS_SECONDS to remove the 15m window
 jest.mock('@/utils/searchWindows', () => {
@@ -1670,6 +1671,45 @@ describe('useChartConfig', () => {
       });
       expect(result.current.isLoading).toBe(false);
       expect(result.current.isPending).toBe(false);
+    });
+
+    it('applies the filesystem cache setting to every chunk based on the full range', async () => {
+      // 3 days, split into windows that are each shorter than the 2-day threshold.
+      const config = createMockChartConfig({
+        dateRange: [
+          new Date('2025-10-01 00:00:00Z'),
+          new Date('2025-10-04 00:00:00Z'),
+        ],
+        granularity: '1 hour',
+      });
+      mockClickhouseClient.queryChartConfig.mockResolvedValue(
+        createMockQueryResponse([]),
+      );
+      const useSourceSpy = jest
+        .spyOn(sourceModule, 'useSource')
+        .mockReturnValue({
+          data: { filesystemCacheReadOnlyMinRange: '2 day' },
+          isLoading: false,
+        } as any);
+
+      const { result } = renderHook(
+        () => useQueriedChartConfig(config, { enableQueryChunking: true }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.isFetching).toBe(false));
+      useSourceSpy.mockRestore();
+
+      const calls = mockClickhouseClient.queryChartConfig.mock.calls;
+      expect(calls.length).toBeGreaterThan(1);
+      for (const [{ querySettings }] of calls) {
+        expect(querySettings).toEqual([
+          {
+            setting:
+              'read_from_filesystem_cache_if_exists_otherwise_bypass_cache',
+            value: '1',
+          },
+        ]);
+      }
     });
 
     it('pins the series-limit ranking to the newest window on each chunk', async () => {

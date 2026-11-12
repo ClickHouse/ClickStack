@@ -1430,6 +1430,39 @@ export function joinQuerySettings(
   return formattedPairs.join(', ');
 }
 
+const FILESYSTEM_CACHE_READ_ONLY_SETTING =
+  'read_from_filesystem_cache_if_exists_otherwise_bypass_cache';
+
+/**
+ * The source's query settings for a query over `dateRange`. Pass the full
+ * selected range, not a chunk window, so every chunk of a windowed query gets
+ * the same settings. A value the source sets explicitly wins.
+ */
+export function getSourceQuerySettings(
+  source:
+    | Pick<TSource, 'querySettings' | 'filesystemCacheReadOnlyMinRange'>
+    | undefined,
+  dateRange: [Date, Date] | undefined,
+): QuerySettings | undefined {
+  const querySettings = source?.querySettings;
+  const minRange = source?.filesystemCacheReadOnlyMinRange;
+  if (
+    dateRange == null ||
+    minRange == null ||
+    querySettings?.some(
+      ({ setting }) => setting === FILESYSTEM_CACHE_READ_ONLY_SETTING,
+    ) ||
+    dateRange[1].getTime() - dateRange[0].getTime() <=
+      convertGranularityToSeconds(minRange) * 1000
+  ) {
+    return querySettings;
+  }
+  return [
+    ...(querySettings ?? []),
+    { setting: FILESYSTEM_CACHE_READ_ONLY_SETTING, value: '1' },
+  ];
+}
+
 // A discriminated union type for different tokenizers above
 export type TextIndexTokenizer =
   | { type: 'splitByNonAlpha' }

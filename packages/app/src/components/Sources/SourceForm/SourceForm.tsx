@@ -40,6 +40,7 @@ import {
   AutocompleteControlled,
   InputControlled,
 } from '@/components/InputControlled';
+import SelectControlled from '@/components/SelectControlled';
 import {
   IS_METRICS_ENABLED,
   IS_PROMQL_ENABLED,
@@ -62,6 +63,7 @@ import {
 
 import {
   DEFAULT_DATABASE,
+  FILESYSTEM_CACHE_READ_ONLY_MIN_RANGE_OPTIONS,
   PROMETHEUS_PLACEHOLDER,
   SOURCE_KIND_LABELS,
 } from './constants';
@@ -745,6 +747,20 @@ export function TableSourceForm({
             <IconCirclePlus size={14} className="me-2" />
             Add Setting
           </Button>
+        </FormRow>
+        <FormRow
+          label="Skip filesystem cache writes"
+          helpText="Queries over a selected time range longer than this set read_from_filesystem_cache_if_exists_otherwise_bypass_cache = 1, so long scans read the filesystem cache but don't fill it and evict recent data. A value set in Query Settings takes precedence."
+        >
+          <SelectControlled
+            control={control}
+            name="filesystemCacheReadOnlyMinRange"
+            data={FILESYSTEM_CACHE_READ_ONLY_MIN_RANGE_OPTIONS}
+            allowDeselect={false}
+            // Unset matches no option ('' is "Never"'s value), so the
+            // placeholder covers it.
+            placeholder={FILESYSTEM_CACHE_READ_ONLY_MIN_RANGE_OPTIONS[0].label}
+          />
         </FormRow>
       </Stack>
       <TableModelForm
