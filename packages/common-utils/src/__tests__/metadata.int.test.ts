@@ -697,7 +697,7 @@ describe('Metadata Integration Tests', () => {
             ResourceAttributeItems Array(String) MATERIALIZED
               arrayMap(x -> concat(x.1, '=', x.2), CAST(ResourceAttributes, 'Array(Tuple(String, String))'))
               CODEC(ZSTD(1)),
-            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1
+            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
           )
           ENGINE = MergeTree()
           ORDER BY (Timestamp)
@@ -712,7 +712,7 @@ describe('Metadata Integration Tests', () => {
             LogAttributeItems Array(String) MATERIALIZED
               arrayMap((x) -> concat(x.1, '=', x.2), LogAttributes::Array(Tuple(String, String)))
               CODEC(ZSTD(1)),
-            INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1
+            INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
           )
           ENGINE = MergeTree()
           ORDER BY (Timestamp)
@@ -904,6 +904,41 @@ describe('Metadata Integration Tests', () => {
       expect(podNames).toBeDefined();
       expect(podNames!.value).toEqual(
         expect.arrayContaining([podNameA, podNameB]),
+      );
+    });
+
+    it('keeps the most frequent text index values when maxValuesPerKey truncates the list', async () => {
+      if (!textIndexSupported) {
+        console.warn(
+          'Skipping: ClickHouse < 26.3 does not support mergeTreeTextIndex()',
+        );
+        return;
+      }
+      // The index dictionary is sorted, so 'a-rare' is read first.
+      const freqKey = `freq.${tag}`;
+      const timestamp = testTime.toISOString().replace('T', ' ').slice(0, 23);
+      await client.command({
+        query: `INSERT INTO default.otel_logs (Timestamp, ResourceAttributes)
+          SELECT '${timestamp}', map('${freqKey}', if(number = 0, 'a-rare', 'z-common'))
+          FROM numbers(4)`,
+      });
+
+      const result = await metadata.getAllKeyValues({
+        ...commonArgs,
+        keyExpressions: [
+          `ResourceAttributes['${freqKey}']`,
+          `ResourceAttributes['${mapKey}']`,
+        ],
+        maxValuesPerKey: 1,
+      });
+
+      // UNION ALL branches can arrive in any order.
+      expect(result).toHaveLength(2);
+      expect(result).toEqual(
+        expect.arrayContaining([
+          { key: `ResourceAttributes['${freqKey}']`, value: ['z-common'] },
+          { key: `ResourceAttributes['${mapKey}']`, value: [podNameA] },
+        ]),
       );
     });
 
@@ -1622,14 +1657,14 @@ describe('Metadata Integration Tests', () => {
     {
       path: 'key',
       tableName: 'test_map_keys_key_text_index_order',
-      indexDefinition: `INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array') GRANULARITY 1`,
+      indexDefinition: `INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1`,
     },
     {
       path: 'kv',
       tableName: 'test_map_keys_kv_text_index_order',
       indexDefinition: `LogAttributeItems Array(String) MATERIALIZED
           arrayMap(x -> concat(x.1, '=', x.2), CAST(LogAttributes, 'Array(Tuple(String, String))')),
-        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1`,
+        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1`,
     },
   ])(
     'getMapKeys - $path text index ordering',
@@ -1719,4 +1754,92 @@ describe('Metadata Integration Tests', () => {
       });
     },
   );
+
+  describe('getAllKeyValues - values repeated across parts', () => {
+    // mergeTreeTextIndex returns one row per part and token, so a token cap
+    // stops before the later parts' values. Each part holds the same SHARED
+    // values plus OWN values no other part has.
+    const tableName = 'test_text_index_values_across_parts';
+    const PARTS = 25;
+    const SHARED = 1000;
+    const OWN = 100;
+    const dateRange = (): [Date, Date] => [
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 1000),
+    ];
+    let textIndexSupported = false;
+
+    beforeAll(async () => {
+      const probe = new Metadata(hdxClient, new MetadataCache());
+      textIndexSupported = supportsMergeTreeTextIndex(
+        await probe.getServerVersion({ connectionId: 'test_connection' }),
+      );
+      if (!textIndexSupported) return;
+
+      await client.command({
+        query: `CREATE OR REPLACE TABLE default.${tableName} (
+            Timestamp DateTime64(9),
+            ResourceAttributes Map(LowCardinality(String), String),
+            ResourceAttributeItems Array(String) MATERIALIZED
+              arrayMap(x -> concat(x.1, '=', x.2), CAST(ResourceAttributes, 'Array(Tuple(String, String))')),
+            Tags Array(String),
+            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1,
+            INDEX idx_tags Tags TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
+          )
+          ENGINE = MergeTree()
+          PARTITION BY toDate(Timestamp)
+          ORDER BY Timestamp
+        `,
+      });
+      await client.command({
+        query: `SYSTEM STOP MERGES default.${tableName}`,
+      });
+      for (let i = 0; i < PARTS; i++) {
+        await client.command({
+          query: `INSERT INTO default.${tableName} (Timestamp, ResourceAttributes, Tags)
+            SELECT now64(9) - INTERVAL 10 MINUTE, map('pod', v), [v]
+            FROM (
+              SELECT if(number < ${SHARED}, concat('shared-', toString(number)), concat('own-${i}-', toString(number))) AS v
+              FROM numbers(${SHARED + OWN})
+            )`,
+        });
+      }
+    });
+
+    afterAll(async () => {
+      await client.command({
+        query: `DROP TABLE IF EXISTS default.${tableName}`,
+      });
+    });
+
+    it.each([
+      ['Map key=value', "ResourceAttributes['pod']"],
+      ['plain-column', 'Tags'],
+    ])(
+      'returns every distinct value from the %s text index for "Load more"',
+      async (_, keyExpression) => {
+        if (!textIndexSupported) {
+          console.warn(
+            'Skipping: ClickHouse < 26.3 does not support mergeTreeTextIndex()',
+          );
+          return;
+        }
+
+        // "Load more" passes null: every part, no token cap.
+        const metadata = new Metadata(hdxClient, new MetadataCache());
+        const result = await metadata.getAllKeyValues({
+          databaseName: 'default',
+          tableName,
+          keyExpressions: [keyExpression],
+          maxValuesPerKey: 10000,
+          mapKeyIndexMaxParts: null,
+          connectionId: 'test_connection',
+          dateRange: dateRange(),
+          timestampValueExpression: 'Timestamp',
+        });
+        expect(result).toHaveLength(1);
+        expect(result[0].value).toHaveLength(SHARED + OWN * PARTS);
+      },
+    );
+  });
 });

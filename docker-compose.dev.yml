@@ -45,6 +45,8 @@ services:
       #   HYPERDX_OTEL_EXPORTER_LOGS_TTL / _TRACES_TTL / _METRICS_TTL / _SESSIONS_TTL
       # Apply TTL changes to already-existing tables too (default false):
       #   HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL: 'true'
+      # Leave text index dictionary block sizes alone (default: set 8192 on 26.6+):
+      #   HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE: 'false'
       ENABLE_PROMQL: 'true'
     volumes:
       - ./docker/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml

@@ -2,6 +2,7 @@ import { ColumnMeta } from '@/clickhouse';
 import { ClickhouseClient } from '@/clickhouse/node';
 import {
   COLUMNS_CACHE_TTL_MS,
+  DEFAULT_METADATA_MAX_ROWS_TO_READ,
   GET_ALL_KEY_VALUES_CHUNK_SIZE,
   Metadata,
   MetadataCache,
@@ -1380,8 +1381,8 @@ describe('Metadata', () => {
       const sql = calls[calls.length - 1][0].query as string;
 
       expect(sql).toContain('mergeTreeTextIndex(');
-      expect(sql).toContain('groupUniqArray(');
-      expect(sql).toContain('GROUP BY key');
+      expect(sql).toContain('topKWeighted(');
+      expect(sql).toContain('LIMIT 20000');
       expect(sql).not.toContain('startsWith(token,');
     });
 
@@ -1400,8 +1401,127 @@ describe('Metadata', () => {
       expect(sql).toContain('mergeTreeTextIndex(');
       expect(sql).toContain('startsWith(token,');
       expect(sql).toContain('substring(token, position(token,');
-      expect(sql).toContain('GROUP BY column, key');
+      expect(sql).toContain("startsWith(token, 'requestId=')");
     });
+
+    const withDictionaryBlockSize = (size: number) =>
+      jest.spyOn(metadata, 'getSkipIndices').mockResolvedValue([
+        {
+          name: 'idx_log_attr_items',
+          type: 'text',
+          typeFull: `text(tokenizer = 'array', dictionary_block_size = ${size})`,
+          expression: 'LogAttributes',
+          granularity: 100000000,
+        },
+      ]);
+
+    it('reads each Map key in its own capped branch when the index has large dictionary blocks', async () => {
+      setupDefaultLogsSchema();
+      withDictionaryBlockSize(8192);
+
+      await metadata.getAllKeyValues({
+        ...baseArgs,
+        keyExpressions: [
+          "LogAttributes['requestId']",
+          "LogAttributes['region']",
+        ],
+      });
+
+      const call = (mockClickhouseClient.query as jest.Mock).mock.calls.find(
+        ([opts]) => (opts.query as string).includes('startsWith(token,'),
+      )![0];
+      const branches = (call.query as string).split('UNION ALL');
+      expect(branches).toHaveLength(2);
+      expect(branches[0]).toContain("startsWith(token, 'requestId=')");
+      expect(branches[0]).toContain("'requestId' AS key");
+      expect(branches[1]).toContain("startsWith(token, 'region=')");
+      for (const branch of branches) {
+        expect(branch).toContain('LIMIT 20000');
+      }
+      expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
+      expect(call.clickhouse_settings.read_overflow_mode).toBeUndefined();
+    });
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'caps the %s text index read per key, and drops the cap when every part is read',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+        withDictionaryBlockSize(8192);
+
+        for (const mapKeyIndexMaxParts of [5, null]) {
+          await metadata.getAllKeyValues({
+            ...baseArgs,
+            keyExpressions: [keyExpression],
+            mapKeyIndexMaxParts,
+          });
+        }
+
+        const tokenLimits = (mockClickhouseClient.query as jest.Mock).mock.calls
+          .map(([opts]) => opts.query as string)
+          .filter(q => q.includes('mergeTreeTextIndex('))
+          .map(q => q.match(/LIMIT (\d+)/)?.[1]);
+        expect(tokenLimits).toEqual(['20000', undefined]);
+      },
+    );
+
+    it('reads all Map keys in one pass when the index has small dictionary blocks', async () => {
+      setupDefaultLogsSchema();
+      withDictionaryBlockSize(512);
+
+      await metadata.getAllKeyValues({
+        ...baseArgs,
+        keyExpressions: [
+          "LogAttributes['requestId']",
+          "LogAttributes['region']",
+        ],
+      });
+
+      const call = (mockClickhouseClient.query as jest.Mock).mock.calls.find(
+        ([opts]) => (opts.query as string).includes('startsWith(token,'),
+      )![0];
+      const sql = call.query as string;
+      expect(sql).not.toContain('UNION ALL');
+      expect(sql).toContain(
+        "startsWith(token, 'requestId=') OR startsWith(token, 'region=')",
+      );
+      expect(sql).toContain('groupUniqArray(');
+      expect(sql).toContain('GROUP BY column, key');
+      expect(call.clickhouse_settings).toMatchObject({
+        max_rows_to_read: String(DEFAULT_METADATA_MAX_ROWS_TO_READ),
+        read_overflow_mode: 'break',
+      });
+    });
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'reads the %s text index without a row cap, even when one is configured',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+        // Small-block Map indexes keep the cap; see the one-pass test.
+        withDictionaryBlockSize(8192);
+        jest
+          .spyOn(metadata, 'getClickHouseSettings')
+          .mockReturnValue({ max_rows_to_read: '1000' });
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+        });
+
+        const calls = (mockClickhouseClient.query as jest.Mock).mock.calls;
+        const textIndexCall = calls.find(([opts]) =>
+          opts.query.includes('mergeTreeTextIndex('),
+        );
+        expect(textIndexCall[0].clickhouse_settings).toMatchObject({
+          max_rows_to_read: '0',
+        });
+      },
+    );
 
     it.each([
       ['map KV', "LogAttributes['requestId']"],
@@ -1482,6 +1602,36 @@ describe('Metadata', () => {
         expect(textIndexCall[0].query).toMatch(
           /\)\s+ORDER BY rn DESC\s+LIMIT \{\w+:Int32\}/,
         );
+      },
+    );
+
+    it.each([
+      [8192, [10, 10, 5]],
+      // The per-key threshold is 2048.
+      [2048, [10, 10, 5]],
+      [1024, [1, 1, 1]],
+      [512, [1, 1, 1]],
+    ])(
+      'batches Map text index values by dictionary block size (%d)',
+      async (blockSize, expectedBranchCounts) => {
+        setupDefaultLogsSchema();
+        withDictionaryBlockSize(blockSize);
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: Array.from(
+            { length: 25 },
+            (_, i) => `LogAttributes['key${i}']`,
+          ),
+        });
+
+        const branchCounts = (
+          mockClickhouseClient.query as jest.Mock
+        ).mock.calls
+          .map(([opts]) => opts.query as string)
+          .filter(q => q.includes('startsWith(token,'))
+          .map(q => q.split('UNION ALL').length);
+        expect(branchCounts).toEqual(expectedBranchCounts);
       },
     );
 
@@ -1805,34 +1955,38 @@ describe('Metadata', () => {
     // via text index or raw scan.
     describe('maxValuesPerKey threading', () => {
       // Pick a value that (a) isn't ambient in the test setup (like 20,
-      // dates, or granularity numbers) and (b) is easy to spot in a param
-      // dump when a test fails. Int32 chSql params render as numbers, so
-      // assertions compare against the numeric literal.
+      // dates, or granularity numbers) and (b) is easy to spot in the SQL or a
+      // param dump when a test fails.
       const MAX_VALUES = 7777;
 
-      it('threads maxValuesPerKey into the map text-index query', async () => {
-        setupDefaultLogsSchema();
+      it.each([
+        [8192, 'topKWeighted'],
+        [512, 'groupUniqArray'],
+      ])(
+        'threads maxValuesPerKey into the map text-index query (dictionary blocks of %d)',
+        async (blockSize, aggregate) => {
+          setupDefaultLogsSchema();
+          withDictionaryBlockSize(blockSize);
 
-        await metadata.getAllKeyValues({
-          ...baseArgs,
-          keyExpressions: ["LogAttributes['requestId']"],
-          maxValuesPerKey: MAX_VALUES,
-        });
+          await metadata.getAllKeyValues({
+            ...baseArgs,
+            keyExpressions: ["LogAttributes['requestId']"],
+            maxValuesPerKey: MAX_VALUES,
+          });
 
-        const mapTextIndexCall = (
-          mockClickhouseClient.query as jest.Mock
-        ).mock.calls.find(
-          (c: any[]) =>
-            typeof c[0].query === 'string' &&
-            c[0].query.includes('startsWith(token,'),
-        );
-        expect(mapTextIndexCall).toBeDefined();
-        const params = mapTextIndexCall![0].query_params as Record<
-          string,
-          unknown
-        >;
-        expect(Object.values(params)).toContain(MAX_VALUES);
-      });
+          const mapTextIndexCall = (
+            mockClickhouseClient.query as jest.Mock
+          ).mock.calls.find(
+            (c: any[]) =>
+              typeof c[0].query === 'string' &&
+              c[0].query.includes('startsWith(token,'),
+          );
+          expect(mapTextIndexCall).toBeDefined();
+          expect(mapTextIndexCall![0].query).toContain(
+            `${aggregate}(${MAX_VALUES})(`,
+          );
+        },
+      );
 
       it('threads maxValuesPerKey into the native text-index query', async () => {
         setupDefaultLogsSchema();
@@ -1852,11 +2006,9 @@ describe('Metadata', () => {
             !c[0].query.includes('startsWith(token,'),
         );
         expect(nativeTextIndexCall).toBeDefined();
-        const params = nativeTextIndexCall![0].query_params as Record<
-          string,
-          unknown
-        >;
-        expect(Object.values(params)).toContain(MAX_VALUES);
+        expect(nativeTextIndexCall![0].query).toContain(
+          `topKWeighted(${MAX_VALUES})(token, cardinality)`,
+        );
       });
 
       it('threads maxValuesPerKey into the raw-table getKeyValues fallback', async () => {
@@ -2064,6 +2216,52 @@ describe('Metadata', () => {
         key: 'requestId',
         value: ['r1'],
       };
+
+      it("looks up every Map column's dictionary block size at once", async () => {
+        setupDefaultLogsSchema();
+        const kvIndex = (mapColumn: string, indexName: string) => ({
+          kv: {
+            columnName: mapColumn,
+            mapColumn,
+            indexName,
+            separator: '=',
+            useHasAny: false,
+          },
+        });
+        jest.spyOn(metadata, 'getMapColumnTextIndexes').mockResolvedValue(
+          new Map([
+            ['LogAttributes', kvIndex('LogAttributes', 'idx_log_attr_items')],
+            [
+              'ResourceAttributes',
+              kvIndex('ResourceAttributes', 'idx_res_attr_items'),
+            ],
+          ]),
+        );
+        let releaseSettings: () => void = () => {};
+        const settings = jest
+          .spyOn(metadata, 'getMergeTreeSettings')
+          .mockReturnValue(
+            new Promise(resolve => {
+              releaseSettings = () => resolve(undefined);
+            }),
+          );
+
+        const result = metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [
+            "LogAttributes['requestId']",
+            "ResourceAttributes['service.name']",
+          ],
+        });
+        // Both lookups start before either finishes.
+        for (let i = 0; i < 50 && settings.mock.calls.length < 2; i++) {
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        expect(settings).toHaveBeenCalledTimes(2);
+
+        releaseSettings();
+        await result;
+      });
 
       it('yields each query as it finishes, without waiting for the slowest', async () => {
         setupDefaultLogsSchema();

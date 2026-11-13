@@ -53,7 +53,7 @@ ENGINE = MergeTree
 PARTITION BY toDate(Timestamp)
 ORDER BY (toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp)
 TTL toDateTime(Timestamp) + toIntervalDay(30)
-SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1, text_index_dictionary_block_size = 8192;
 
 -- Distributed table over the e2e logs table whose DDL declares a column
 -- (\`ColumnMissingFromShard\`) that its underlying MergeTree table does NOT have.
@@ -129,7 +129,7 @@ ENGINE = MergeTree
 PARTITION BY toDate(Timestamp)
 ORDER BY (ServiceName, SpanName, toDateTime(Timestamp))
 TTL toDate(Timestamp) + toIntervalDay(30)
-SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1, text_index_dictionary_block_size = 8192;
 
 CREATE TABLE ${DATABASE}.e2e_hyperdx_sessions
 (

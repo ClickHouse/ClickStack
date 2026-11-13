@@ -15,6 +15,7 @@ import {
   getDistributedTableArgs,
   getFirstOrderingItem,
   getPercentileAggFnLevel,
+  getTextIndexDictionaryBlockSize,
   hasNonEmptyOrderBy,
   hasPositiveSeriesLimit,
   isFirstOrderByAscending,
@@ -3618,6 +3619,55 @@ describe('utils', () => {
     it('returns other select items unchanged', () => {
       const select = { aggFn: 'quantile', level: 0.5, valueExpression: 'x' };
       expect(resolvePercentileAggFn(select)).toBe(select);
+    });
+  });
+
+  describe('getTextIndexDictionaryBlockSize', () => {
+    const engineFull =
+      'MergeTree ORDER BY Timestamp SETTINGS index_granularity = 8192, text_index_dictionary_block_size = 4096';
+
+    it.each([
+      [
+        'the index argument first',
+        {
+          typeFull: "text(tokenizer = 'array', dictionary_block_size = 8192)",
+          engineFull,
+          serverMergeTreeSettings: new Map([
+            ['text_index_dictionary_block_size', '1024'],
+          ]),
+        },
+        8192,
+      ],
+      [
+        'the table setting next',
+        {
+          typeFull: "text(tokenizer = 'array')",
+          engineFull,
+          serverMergeTreeSettings: new Map([
+            ['text_index_dictionary_block_size', '1024'],
+          ]),
+        },
+        4096,
+      ],
+      [
+        'the server setting next',
+        {
+          typeFull: "text(tokenizer = 'array')",
+          engineFull: 'MergeTree ORDER BY Timestamp',
+          serverMergeTreeSettings: new Map([
+            ['text_index_dictionary_block_size', '1024'],
+          ]),
+        },
+        1024,
+      ],
+      ['512 when nothing is known', {}, 512],
+      [
+        '512 for a value that is not a positive integer',
+        { typeFull: "text(tokenizer = 'array', dictionary_block_size = 0)" },
+        512,
+      ],
+    ])('uses %s', (_, input, expected) => {
+      expect(getTextIndexDictionaryBlockSize(input)).toBe(expected);
     });
   });
 });

@@ -1,0 +1,27 @@
+---
+'@hyperdx/common-utils': patch
+---
+
+perf: read large-block Map text index values per key, most frequent first
+
+"All values" lookups on Map key=value text indexes with large dictionary blocks
+(2048 or more, e.g. `text_index_dictionary_block_size = 8192`, which the
+collector's migration now sets on ClickHouse 26.6+)
+now read each key separately, in parallel queries of at most 10 keys, and stop
+after 20,000 tokens per key, so a key with a value per row (request IDs, UUIDs)
+can't hold up the others. Values come from `topKWeighted(limit)` weighted by
+each token's row count, so a capped list holds the most common values, most
+common first. These reads no longer apply `max_rows_to_read`: the index is read
+in sorted token order, so the cap left every key that sorts after a
+high-cardinality key with no values.
+
+Indexes with smaller blocks, including ClickHouse's default of 512, keep the
+previous query shape (one read for all of a query's keys, the alphabetically
+first values, and the `max_rows_to_read` cap), now in parallel queries of at
+most 10 keys, so the cap's cut-off affects at most 9 other keys. Every read loads
+each part's sparse index, which is large with small blocks, so one read per key
+would multiply that cost. The block size comes from the index definition, then
+the table's `text_index_dictionary_block_size`, then the server's.
+
+Text indexes on plain columns now return the most frequent values with
+`topKWeighted`, in parallel queries of at most 10 columns, without the row cap.
