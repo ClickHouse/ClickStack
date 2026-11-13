@@ -57,6 +57,17 @@ describe('templateToRegex', () => {
     const ts = toJsRegex(templateToRegex('a b c', withPunctuation));
     expect(ts.test('a\x1eb\x85c')).toBe(false);
     expect(ts.test('a\ufeffb c')).toBe(true);
+    // So a Drain3 token can hold a BOM, as in a body that starts with one.
+    const bomTemplate = '\ufeffGET api <*>';
+    expect(
+      toJsRegex(templateToRegex(bomTemplate, python)).test('\ufeffGET /api/x'),
+    ).toBe(true);
+    expect(
+      parsePatternPredicate(
+        buildPatternPredicate('Body', bomTemplate, python)!,
+        python,
+      )?.template,
+    ).toBe(bomTemplate);
 
     const predicate = buildPatternPredicate('Body', 'a b c', python)!;
     expect(parsePatternPredicate(predicate, python)?.template).toBe('a b c');
@@ -138,6 +149,17 @@ describe('parsePatternPredicate', () => {
     expect(parsePatternPredicate(predicate)).toEqual({
       valueExpression: 'Body',
       template: 'Sending <*> rows',
+    });
+  });
+
+  it('reads back tokens that hold quotes, backslashes and regex syntax', () => {
+    // Without delimiters a token keeps its punctuation.
+    const expr = "JSONExtractString(Body, 'msg')";
+    const template = "it's C:\\tmp\\a.txt (ok) <*>";
+    const predicate = buildPatternPredicate(expr, template)!;
+    expect(parsePatternPredicate(predicate)).toEqual({
+      valueExpression: expr,
+      template,
     });
   });
 
