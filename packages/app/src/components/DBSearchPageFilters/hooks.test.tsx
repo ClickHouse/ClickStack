@@ -807,6 +807,9 @@ describe('useFetchFacets', () => {
       });
 
       expect(getAllKeyValues).toHaveBeenCalledTimes(1);
+      expect(getAllKeyValues).toHaveBeenCalledWith(
+        expect.objectContaining({ mapKeyIndexMaxParts: null }),
+      );
       expect(getKeyValuesWithMVs).not.toHaveBeenCalled();
       expect(result.current.data.keyValues).toEqual([
         { key: 'ServiceName', value: ['api', 'web'] },

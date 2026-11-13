@@ -17,3 +17,4 @@ discovery: the 20 parts closest to the median size by default, or as set by the
 source's "Map key index parts" (`mapKeyIndexMaxParts`) and "Map key index part
 size" (`mapKeyIndexPartSelection`) settings, which now cover values as well as
 keys.
+"Load more" on a single filter key still reads every part in the time range.
