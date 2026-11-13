@@ -29,9 +29,6 @@ CREATE TABLE IF NOT EXISTS ${DATABASE}.otel_logs
   `ResourceAttributeItems` Array(String) ALIAS arrayMap((arr) -> concat(arr.1, '=', arr.2), ResourceAttributes::Array(Tuple(String, String))),
   `ScopeAttributeItems` Array(String) ALIAS arrayMap((arr) -> concat(arr.1, '=', arr.2), ScopeAttributes::Array(Tuple(String, String))),
   `LogAttributeItems` Array(String) ALIAS arrayMap((arr) -> concat(arr.1, '=', arr.2), LogAttributes::Array(Tuple(String, String))),
-  -- Text indexes use 8,192-token dictionary blocks (the default is 512). Each
-  -- part's sparse index is 16x smaller, which makes reading filter values
-  -- with mergeTreeTextIndex() and looking up tokens much cheaper on large parts.
   INDEX idx_trace_id TraceId TYPE text(tokenizer = 'array'),
   INDEX idx_session_id __hdx_materialized_session.id TYPE text(tokenizer = 'array'),
   INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE text(tokenizer = 'array'),
