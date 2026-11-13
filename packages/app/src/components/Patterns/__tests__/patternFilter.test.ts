@@ -73,10 +73,35 @@ describe('pattern filters', () => {
     expect(isPatternFilter({ type: 'sql', condition })).toBe(false);
   });
 
+  it('reads back a value expression with quotes', () => {
+    const expr = "JSONExtractString(Body, 'message')";
+    const filter = buildPatternFilter(expr, 'user <*> logged in', 'exclude')!;
+    expect(parsePatternFilter(filter)).toMatchObject({
+      valueExpression: expr,
+      template: 'user <*> logged in',
+      action: 'exclude',
+    });
+  });
+
+  it('builds no filter for a template with punctuation inside a token', () => {
+    // The miner splits on punctuation, so its templates never have any.
+    expect(buildPatternFilter('Body', "O'Malley C:\\x (a|b)", 'include')).toBe(
+      null,
+    );
+  });
+
   it('flips a pattern between include and exclude instead of keeping both', () => {
     expect(
       withPatternFilter([facet, include('a <*>')], exclude('a <*>')),
     ).toEqual([facet, exclude('a <*>')]);
+    expect(
+      withPatternFilter([facet, exclude('a <*>')], include('a <*>')),
+    ).toEqual([facet, include('a <*>')]);
+  });
+
+  it('replaces an include on another column too', () => {
+    const other = buildPatternFilter('Message', 'b <*>', 'include')!;
+    expect(withPatternFilter([include('a <*>')], other)).toEqual([other]);
   });
 
   it('keeps one include and stacks excludes', () => {

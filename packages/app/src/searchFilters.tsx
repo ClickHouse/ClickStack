@@ -111,7 +111,9 @@ export const useSearchPageFilterState = ({
    * Filters this state can't represent (e.g. pattern filters) that should
    * survive its updates instead of being dropped. "Clear all" and
    * retainFiltersByColumns (a source change) still drop them, since they
-   * can't be checked against the new source's columns.
+   * can't be checked against the new source's columns. Match only filters
+   * the facet state drops (not IN, NOT IN or BETWEEN), or they'd be emitted
+   * twice.
    */
   isPreservedFilter?: (filter: Filter) => boolean;
 }) => {
