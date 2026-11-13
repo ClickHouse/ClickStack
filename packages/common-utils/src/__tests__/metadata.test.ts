@@ -3146,6 +3146,39 @@ describe('Metadata', () => {
 
       expect(mockClickhouseClient.query).toHaveBeenCalledTimes(2);
     });
+
+    it('shares one scan between concurrent callers when no text index or rollup applies', async () => {
+      const md = buildMetadata();
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      jest
+        .spyOn(md, 'getMapColumnTextIndexes')
+        .mockResolvedValue(new Map() as TextIndexInfoLookup);
+      jest.spyOn(md, 'getColumn').mockResolvedValue({
+        name: 'LogAttributes',
+        type: 'Map(String, String)',
+        default_type: '',
+        default_expression: '',
+        comment: '',
+        codec_expression: '',
+        ttl_expression: '',
+      });
+      (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+        json: () => Promise.resolve({ data: [{ keysArr: ['raw.key'] }] }),
+      });
+
+      const {
+        timestampValueExpression: _timestampValueExpression,
+        metadataMVs: _metadataMVs,
+        ...scanArgs
+      } = baseArgs;
+      const results = await Promise.all([
+        md.getMapKeys(scanArgs),
+        md.getMapKeys(scanArgs),
+      ]);
+
+      expect(results).toEqual([['raw.key'], ['raw.key']]);
+      expect(mockClickhouseClient.query).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('getMapKeys (text index paths)', () => {
