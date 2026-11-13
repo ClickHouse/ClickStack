@@ -869,10 +869,18 @@ export function formatResponseForTimeChart({
   }
 
   const logLevelColorOrder = getLogLevelColorOrder();
+  // Series are otherwise ordered by first appearance in the response, which
+  // ClickHouse does not keep stable between runs. Colors are assigned by
+  // position, so tie-break by key to keep each series' color stable.
   let sortedLineData = Object.values(lineDataMap).sort((a, b) => {
     return (
       logLevelColorOrder.findIndex(color => color === a.color) -
-      logLevelColorOrder.findIndex(color => color === b.color)
+        logLevelColorOrder.findIndex(color => color === b.color) ||
+      (a.currentPeriodKey < b.currentPeriodKey
+        ? -1
+        : a.currentPeriodKey > b.currentPeriodKey
+          ? 1
+          : 0)
     );
   });
 
