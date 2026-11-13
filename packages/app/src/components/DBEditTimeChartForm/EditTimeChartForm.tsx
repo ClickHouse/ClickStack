@@ -17,10 +17,17 @@ import {
   displayTypeSupportsRawSqlAlerts,
   isTimeSeriesDisplayType,
 } from '@hyperdx/common-utils/dist/core/utils';
+import { getBlockingRequiredFilters } from '@hyperdx/common-utils/dist/dashboardFilterValues';
 import {
   displayTypeRequiresSource,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import {
+  getConfigReferenceVariables,
+  isSourceVariableReferenceAccepted,
+  parseVariableReference,
+  resolveConfigReferences,
+} from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   BroadcastFilter,
   ChartConfigWithDateRange,
@@ -72,6 +79,7 @@ import {
   convertFormStateToSavedChartConfig,
   convertSavedChartConfigToFormState,
   getAllowedSourceKinds,
+  getInterchangeableSourceKind,
   isPromqlDisplayType,
   isRawSqlDisplayType,
   isStringSelectDisplayType,
@@ -89,6 +97,9 @@ import { getStoredLanguage } from '@/components/SearchInput/SearchWhereInput';
 import {
   firstSourceItemValue,
   useFilteredSortedSourceItems,
+  useReferenceVariableValues,
+  useResolvedReference,
+  useSourceVariableDeclarations,
 } from '@/components/sourceSelectUtils';
 import { IS_PROMQL_ENABLED } from '@/config';
 import HDXMarkdownChart from '@/HDXMarkdownChart';
@@ -243,7 +254,6 @@ export default function EditTimeChartForm({
   isAlertRequired = false,
   showSaveToDashboard,
 }: EditTimeChartFormProps) {
-  const alertsEnabled = enableAlerts ?? dashboardId != null;
   const formValue: ChartEditorFormState = useMemo(
     () => convertSavedChartConfigToFormState(chartConfig),
     [chartConfig],
@@ -346,12 +356,53 @@ export default function EditTimeChartForm({
     [configType, displayType, heatmapMode],
   );
 
+  // The form keeps a data source variable reference as written; everything
+  // that queries uses the source the variable currently selects.
+  const sourceVariableName = parseVariableReference(sourceId);
+  const resolvedSourceId = useResolvedReference(sourceId);
+  const resolvedConnection = useResolvedReference(connection);
+  const sourceVariableDeclarations = useSourceVariableDeclarations();
+
+  const referenceVariableValues = useReferenceVariableValues();
+  // Only raw SQL tiles store a connection of their own
+  const referenceVariableNames = useMemo(
+    () =>
+      getConfigReferenceVariables({
+        source: sourceId,
+        connection: isRawSqlInput ? connection : undefined,
+      }),
+    [sourceId, connection, isRawSqlInput],
+  );
+  const usesReferenceVariable = referenceVariableNames.length > 0;
+
+  // An alert must query one fixed source and connection, not the viewer's
+  // current selection.
+  const alertsEnabled =
+    (enableAlerts ?? dashboardId != null) && !usesReferenceVariable;
+
   // A source selection that current mode can't query counts as no source,
   // so that nothing downstream builds a query from it.
   const { data: tableSource } = useSource({
-    id: sourceId,
+    id: resolvedSourceId,
     kinds: allowedSourceKinds,
   });
+
+  // Saving reads only the source's kind. With no source selected, a variable
+  // whose kinds charts all treat alike still determines it.
+  const sourceKind = useMemo(() => {
+    if (tableSource) return tableSource.kind;
+    if (sourceVariableName == null || resolvedSourceId != null) return;
+    const kinds = sourceVariableDeclarations
+      .find(variable => variable.name === sourceVariableName)
+      ?.allowedSourceKinds.filter(kind => allowedSourceKinds.includes(kind));
+    return kinds && getInterchangeableSourceKind(kinds);
+  }, [
+    tableSource,
+    sourceVariableName,
+    resolvedSourceId,
+    sourceVariableDeclarations,
+    allowedSourceKinds,
+  ]);
 
   const databaseName = tableSource?.from.databaseName;
   const tableName = tableSource?.from.tableName;
@@ -379,6 +430,10 @@ export default function EditTimeChartForm({
       setValue('alert', undefined);
     }
   }, [configType, displayType, previousDisplayType, setValue]);
+
+  useEffect(() => {
+    if (usesReferenceVariable) setValue('alert', undefined);
+  }, [usesReferenceVariable, setValue]);
 
   const showGeneratedSql =
     TABS_WITH_GENERATED_SQL.has(activeTab) && !isPromqlInput;
@@ -534,6 +589,7 @@ export default function EditTimeChartForm({
       variables,
       unsatisfiedRequiredFilters,
       applySelections: resolvedApplyFilters,
+      referenceVariableNames,
     });
   }, [
     queriedConfig,
@@ -541,6 +597,7 @@ export default function EditTimeChartForm({
     variables,
     unsatisfiedRequiredFilters,
     resolvedApplyFilters,
+    referenceVariableNames,
   ]);
 
   // Attach the dashboard's filters and variables so that the preview queries
@@ -554,6 +611,28 @@ export default function EditTimeChartForm({
       variables: previewDashboardFilters?.variables,
     };
   }, [queriedConfig, previewDashboardFilters]);
+
+  // With no selection for a variable it references the tile has nothing to
+  // query, so there may be no queried config to compute the block from.
+  const missingRequiredFilterNames = useMemo(() => {
+    if (previewDashboardFilters) {
+      return previewDashboardFilters.missingRequiredFilterNames;
+    }
+    const unresolved = referenceVariableNames.filter(
+      name => !referenceVariableValues.get(name),
+    );
+    return unresolved.length > 0
+      ? getBlockingRequiredFilters(unsatisfiedRequiredFilters ?? [], {
+          referenceVariableNames: unresolved,
+          consumesBroadcastFilters: false,
+        }).map(filter => filter.name)
+      : undefined;
+  }, [
+    previewDashboardFilters,
+    referenceVariableNames,
+    referenceVariableValues,
+    unsatisfiedRequiredFilters,
+  ]);
 
   const dbTimeChartConfig = useMemo(
     () => computeDbTimeChartConfig(previewConfig, alert),
@@ -584,10 +663,19 @@ export default function EditTimeChartForm({
       const errors = validateChartForm(form, tableSource, setError, {
         // An inline alert has no tile to inherit a name from.
         requireAlertDisplayName: alertsEnabled && dashboardId == null,
+        sourceKind,
+        missingSourceMessage:
+          sourceVariableName != null
+            ? `Select a source for $${sourceVariableName} in the filter bar to save this tile`
+            : undefined,
       });
       if (errors.length > 0) return { errors, config: null };
 
-      const savedConfig = convertFormStateToSavedChartConfig(form, tableSource);
+      const savedConfig = convertFormStateToSavedChartConfig(
+        form,
+        tableSource,
+        sourceKind,
+      );
       if (!savedConfig) {
         console.error(
           'convertFormStateToSavedChartConfig returned undefined after validation passed. ' +
@@ -621,6 +709,8 @@ export default function EditTimeChartForm({
     },
     [
       tableSource,
+      sourceKind,
+      sourceVariableName,
       setError,
       alertsEnabled,
       dashboardId,
@@ -646,11 +736,19 @@ export default function EditTimeChartForm({
           return;
         }
 
-        const queriedConfig = convertFormStateToChartConfig(
+        // A raw SQL tile's connection may be a variable reference; the
+        // source is already resolved through `tableSource`.
+        const convertedQueriedConfig = convertFormStateToChartConfig(
           form,
           dateRange,
           tableSource,
         );
+        const queriedConfig =
+          convertedQueriedConfig &&
+          resolveConfigReferences(
+            convertedQueriedConfig,
+            referenceVariableValues,
+          );
 
         if (config && queriedConfig) {
           const isRawSqlChart =
@@ -670,6 +768,7 @@ export default function EditTimeChartForm({
       setQueriedConfigAndSource,
       tableSource,
       dateRange,
+      referenceVariableValues,
     ],
   );
 
@@ -784,7 +883,7 @@ export default function EditTimeChartForm({
   const allowedSourceItems = useFilteredSortedSourceItems({
     sources,
     allowedSourceKinds,
-    connectionId: configType === 'sql' ? connection : undefined,
+    connectionId: configType === 'sql' ? resolvedConnection : undefined,
     groupBySection: true,
   });
 
@@ -817,6 +916,17 @@ export default function EditTimeChartForm({
     // should be filled in. Raw SQL source is optional, so leave it.
     if (!sourceId && configType === 'sql') return;
 
+    // Kept on the same terms the picker offers it
+    if (
+      isSourceVariableReferenceAccepted(
+        sourceId,
+        sourceVariableDeclarations,
+        allowedSourceKinds,
+      )
+    ) {
+      return;
+    }
+
     // If the currently selected source is still allowed, keep it.
     const selected = sources.find(s => s.id === sourceId);
     if (
@@ -846,6 +956,7 @@ export default function EditTimeChartForm({
     setValue,
     sourceId,
     sources,
+    sourceVariableDeclarations,
   ]);
 
   useEffect(() => {
@@ -1388,16 +1499,14 @@ export default function EditTimeChartForm({
           dateRange={dateRange}
           activeTab={activeTab}
           alert={alert}
-          sourceId={sourceId}
+          sourceId={resolvedSourceId}
           onTimeRangeSelect={onTimeRangeSelect}
           chartConfigForExplanations={chartConfigForExplanations}
           showGeneratedSql={showGeneratedSql}
           showSampleEvents={showSampleEvents}
           showGeneratedPromql={isPromqlInput}
           dbTimeChartConfig={dbTimeChartConfig}
-          missingRequiredFilterNames={
-            previewDashboardFilters?.missingRequiredFilterNames
-          }
+          missingRequiredFilterNames={missingRequiredFilterNames}
           setValue={(name, value) => setValue(name, value)}
           setDisplayType={type =>
             setValue('displayType', type, { shouldDirty: true })

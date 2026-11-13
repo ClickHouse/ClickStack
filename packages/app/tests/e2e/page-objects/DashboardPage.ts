@@ -632,6 +632,12 @@ export class DashboardPage {
     return new HeatmapComponent(this.page, this.getTile(tileIndex));
   }
 
+  getTileTimeChart(tileIndex = 0): Locator {
+    return this.getTile(tileIndex)
+      .locator('.recharts-responsive-container')
+      .first();
+  }
+
   /**
    * Hover over a tile to reveal action buttons
    */

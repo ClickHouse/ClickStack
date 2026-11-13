@@ -33,6 +33,7 @@ import {
   displayTypeRequiresSource,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   type DashboardFilter,
   type DashboardTemplate,
@@ -390,11 +391,25 @@ function resolveAppliesToSources(
   return { ids: slots.filter(Boolean), slots };
 }
 
+/**
+ * A data source variable reference (`$name`) is portable as written, so
+ * import neither maps it nor asks the user to.
+ */
+const isVariableRef = (name: string | undefined) =>
+  parseVariableReference(name) != null;
+
+const sourceVariableRefs = (names: string[] | undefined) =>
+  names?.filter(isVariableRef) ?? [];
+
+const mappableSourceNames = (names: string[] | undefined) =>
+  names?.filter(name => !isVariableRef(name));
+
 /** Whether the filter names a single source that import must map. */
 const isSourceBackedTemplateFilter = (
   filter: DashboardFilter,
 ): filter is QueryExpressionDashboardFilter | PromqlLabelDashboardFilter =>
-  isQueryExpressionFilter(filter) || isPrometheusLabelFilter(filter);
+  (isQueryExpressionFilter(filter) || isPrometheusLabelFilter(filter)) &&
+  !isVariableRef(filter.source);
 
 /** Returns the filter if it names a source, or `undefined` if it doesn't. */
 const sourceBackedTemplateFilter = (filter: DashboardFilter | undefined) =>
@@ -487,6 +502,7 @@ export function buildMappingFormSchema(
         // meaningful source even when the template names one.
         if (
           config.source &&
+          !isVariableRef(config.source) &&
           displayTypeRequiresSource(config.displayType) &&
           !data.tileSourceMappings[idx]
         ) {
@@ -523,7 +539,10 @@ export function buildMappingFormSchema(
           const mappedSourceIds = data.filterAdhocSourceMappings?.[idx]?.filter(
             id => !!id,
           );
-          if (!mappedSourceIds?.length) {
+          if (
+            !mappedSourceIds?.length &&
+            sourceVariableRefs(filter.sources).length === 0
+          ) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ['filterAdhocSourceMappings', idx],
@@ -624,7 +643,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
     const tileSourceMappings = input.tiles.map(tile => {
       const config = tile.config as SavedChartConfig;
-      if (!config.source) return '';
+      if (!config.source || isVariableRef(config.source)) return '';
       const match = sources.find(
         source => source.name.toLowerCase() === config.source!.toLowerCase(),
       );
@@ -1042,15 +1061,24 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
       // Zip the source mappings with the input filters
       const zippedFilters = input.filters?.map((filter, idx) => {
-        const appliesTo = data.filterAppliesToSourceMappings?.[idx]?.filter(
-          id => !!id?.length,
-        );
-        const appliesToSourceIds = appliesTo?.length ? appliesTo : undefined;
+        // Data source variable references carry over unmapped
+        const appliesTo = [
+          ...sourceVariableRefs(
+            appliesToTemplateFilter(filter)?.appliesToSourceIds,
+          ),
+          ...(data.filterAppliesToSourceMappings?.[idx]?.filter(
+            id => !!id?.length,
+          ) ?? []),
+        ];
+        const appliesToSourceIds = appliesTo.length ? appliesTo : undefined;
         if (isAdhocFilter(filter)) {
           return {
             ...filter,
-            sources:
-              data.filterAdhocSourceMappings?.[idx]?.filter(id => !!id) ?? [],
+            sources: [
+              ...sourceVariableRefs(filter.sources),
+              ...(data.filterAdhocSourceMappings?.[idx]?.filter(id => !!id) ??
+                []),
+            ],
             appliesToSourceIds,
           };
         }
@@ -1145,7 +1173,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
               return (
                 <Fragment key={tile.id}>
                   {/** Mapping for the tile's source, if one exists (they're optional for raw sql tiles) */}
-                  {tile.config.source && (
+                  {tile.config.source && !isVariableRef(tile.config.source) && (
                     <Table.Tr>
                       <Table.Td>{tile.config.name}</Table.Td>
                       <Table.Td>Data source</Table.Td>
@@ -1228,8 +1256,12 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
             {/** Map filter sources */}
             {input.filters?.map((filter, i) => {
-              const appliesToSourceIds =
-                appliesToTemplateFilter(filter)?.appliesToSourceIds;
+              const appliesToSourceIds = mappableSourceNames(
+                appliesToTemplateFilter(filter)?.appliesToSourceIds,
+              );
+              const adhocSourceNames = isAdhocFilter(filter)
+                ? mappableSourceNames(filter.sources)
+                : undefined;
               return (
                 <Fragment key={filter.id}>
                   {isSourceBackedTemplateFilter(filter) && (
@@ -1256,11 +1288,11 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                       <Table.Td />
                     </Table.Tr>
                   )}
-                  {isAdhocFilter(filter) && (
+                  {isAdhocFilter(filter) && !!adhocSourceNames?.length && (
                     <Table.Tr>
                       <Table.Td>{filter.name} (Filter)</Table.Td>
                       <Table.Td>Data sources</Table.Td>
-                      <Table.Td>{filter.sources.join(', ')}</Table.Td>
+                      <Table.Td>{adhocSourceNames.join(', ')}</Table.Td>
                       <Table.Td>
                         <SourceMultiSelectControlled
                           control={control}
