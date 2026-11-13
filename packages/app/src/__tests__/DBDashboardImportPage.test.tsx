@@ -666,3 +666,57 @@ describe('Dashboard import - ad hoc filter sources', () => {
     expect(issuesFor(['src-logs'])).toBeUndefined();
   });
 });
+
+describe('Dashboard import - data source variables', () => {
+  const sourceVariableTemplate = DashboardTemplateSchema.parse({
+    version: '0.1.0',
+    name: 'Source Variables',
+    tiles: [builderTile('tile-line', 'line', '$logs', 0)],
+    filters: [
+      {
+        id: 'ds',
+        type: 'DATA_SOURCE',
+        name: 'Logs source',
+        variableName: 'logs',
+        allowedSourceKinds: [SourceKind.Log],
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+      {
+        id: 'svc',
+        type: 'QUERY_EXPRESSION',
+        name: 'Service',
+        expression: 'ServiceName',
+        source: '$logs',
+      },
+      {
+        id: 'adhoc',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['$logs', 'Traces'],
+        isVariableEnabled: true,
+      },
+    ],
+  });
+
+  it('keeps references as written without asking for a mapping', async () => {
+    renderWithMantine(<Mapping input={sourceVariableTemplate} />);
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    expect(screen.queryByText('$logs')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(payload.tiles[0].config.source).toBe('$logs');
+    expect(payload.filters[1].source).toBe('$logs');
+    expect(payload.filters[2].sources).toEqual(['$logs', 'src-traces']);
+  });
+});

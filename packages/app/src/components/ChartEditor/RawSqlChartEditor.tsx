@@ -41,6 +41,7 @@ import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from '@/components/SourceSchemaPreview';
 import { SourceSelectControlled } from '@/components/SourceSelect';
+import { useResolvedReference } from '@/components/sourceSelectUtils';
 import { SQLEditorControlled } from '@/components/SQLEditor/SQLEditor';
 import { type SQLCompletion } from '@/components/SQLEditor/utils';
 import { IS_LOCAL_MODE } from '@/config';
@@ -148,7 +149,9 @@ export default function RawSqlChartEditor({
 
   const displayType = useWatch({ control, name: 'displayType' });
   const connection = useWatch({ control, name: 'connection' });
-  const source = useWatch({ control, name: 'source' });
+  // A data source variable reference syncs and expands macros as the source
+  // it currently selects.
+  const source = useResolvedReference(useWatch({ control, name: 'source' }));
   const sqlTemplate = useWatch({ control, name: 'sqlTemplate' });
   const chartName = useWatch({ control, name: 'name' });
   const sourceObject = sources?.find(s => s.id === source);
@@ -293,6 +296,7 @@ export default function RawSqlChartEditor({
             name="source"
             data-testid="source-selector"
             allowedSourceKinds={allowedSourceKinds}
+            allowSourceVariables
             connectionId={connection}
             size="xs"
             clearable

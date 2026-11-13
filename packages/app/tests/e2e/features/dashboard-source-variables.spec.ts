@@ -1,8 +1,10 @@
 /**
  * A `DATA_SOURCE` dashboard filter is a single-select variable whose value is
- * a source, picked from the filter bar.
+ * a source. Tiles and other filters reference it as `$name` in place of a
+ * source, block until it has a selection, and cannot carry alerts.
  */
 import { DashboardPage } from '../page-objects/DashboardPage';
+import { SERVICES } from '../seed-clickhouse';
 import { expect, test } from '../utils/base-test';
 import {
   DEFAULT_LOGS_SOURCE_NAME,
@@ -20,9 +22,17 @@ test.describe(
       await dashboardPage.goto();
     });
 
-    test('picks a source of the allowed kinds from the filter bar', async ({
+    test('drives tiles and filters from the selected source', async ({
       page,
     }) => {
+      const editor = dashboardPage.chartEditor;
+      const reloadWithoutFilterState = async () => {
+        const url = new URL(page.url());
+        url.search = '';
+        await page.goto(url.toString());
+        await dashboardPage.waitForLoaded();
+      };
+
       await test.step('Create a data source variable limited to logs', async () => {
         await dashboardPage.createNewDashboard();
         await dashboardPage.openEditFiltersModal();
@@ -34,7 +44,21 @@ test.describe(
         await expect(
           dashboardPage.getFilterItemByName('Logs source'),
         ).toContainText('($logs)');
+      });
+
+      await test.step('A queried filter can read from the variable', async () => {
+        await dashboardPage.addFilterToDashboard(
+          'Service',
+          '$logs',
+          'ServiceName',
+        );
+        await expect(
+          dashboardPage.getFilterItemByName('Service'),
+        ).toContainText('$logs');
         await dashboardPage.closeFiltersModal();
+        await expect(
+          dashboardPage.getFilterPendingVariableWarning('Service'),
+        ).toBeVisible();
       });
 
       await test.step('The variable offers only allowed kinds', async () => {
@@ -48,20 +72,76 @@ test.describe(
         await page.keyboard.press('Escape');
       });
 
-      await test.step('A saved selection is the initial value', async () => {
+      await test.step('A tile can be saved on the variable before it has a value', async () => {
+        await dashboardPage.addTile();
+        await expect(editor.nameInput).toBeVisible();
+        await editor.waitForDataToLoad();
+        await expect(editor.alertButton).toBeVisible();
+        await editor.setChartName('Variable tile');
+        await editor.selectSource('$logs');
+        await expect(editor.alertButton).toHaveCount(0);
+        await editor.save();
+        await expect(dashboardPage.getTiles()).toHaveCount(1);
+        await expect(
+          dashboardPage.getTileMissingRequiredFilters(0),
+        ).toContainText('Logs source');
+      });
+
+      await test.step('A selection loads the tile and the filter', async () => {
         await dashboardPage.selectReferenceFilterValue(
           'Logs source',
           DEFAULT_LOGS_SOURCE_NAME,
         );
+        await expect(
+          dashboardPage.getTileMissingRequiredFilters(0),
+        ).toHaveCount(0);
+        await expect(dashboardPage.getTileTimeChart(0)).toBeVisible();
+        await expect(
+          dashboardPage.getFilterPendingVariableWarning('Service'),
+        ).toHaveCount(0);
+        await dashboardPage.openFilterDropdown('Service');
+        await expect(dashboardPage.getFilterOption(SERVICES[0])).toBeVisible();
+        await page.keyboard.press('Escape');
+      });
+
+      await test.step('The editor keeps the reference', async () => {
+        await dashboardPage.editTile(0);
+        await expect(editor.source).toHaveValue('$logs');
+        await expect(editor.alertButton).toHaveCount(0);
+        await editor.save();
+      });
+
+      await test.step('A saved selection is the initial value', async () => {
         await dashboardPage.saveQueryAndFiltersAsDefault();
-        const url = new URL(page.url());
-        url.search = '';
-        await page.goto(url.toString());
-        await dashboardPage.waitForLoaded();
+        await reloadWithoutFilterState();
 
         await expect(
           dashboardPage.getFilterSelectByName('Logs source'),
         ).toHaveValue(DEFAULT_LOGS_SOURCE_NAME);
+        await expect(
+          dashboardPage.getTileMissingRequiredFilters(0),
+        ).toHaveCount(0);
+      });
+
+      await test.step('A selection the variable no longer offers stops applying', async () => {
+        await dashboardPage.openEditFiltersModal();
+        await dashboardPage.openEditFilterForm('Logs source');
+        const kindsInput = page.getByTestId(
+          'filter-allowed-source-kinds-input',
+        );
+        await kindsInput.click();
+        await dashboardPage.getFilterOption('Traces').click();
+        await dashboardPage.getFilterOption('Logs').click();
+        await dashboardPage.getFilterNameInput().click();
+        await page.getByTestId('save-filter-button').click();
+        await dashboardPage.closeFiltersModal();
+
+        await expect(
+          dashboardPage.getFilterSelectByName('Logs source'),
+        ).toHaveValue('');
+        await expect(
+          dashboardPage.getTileMissingRequiredFilters(0),
+        ).toContainText('Logs source');
       });
     });
   },

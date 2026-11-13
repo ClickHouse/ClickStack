@@ -31,6 +31,7 @@ import {
   isMetricSource,
   isRangeThresholdType,
   isTraceSource,
+  NON_PROMQL_SOURCE_KINDS,
   PromqlChartConfig,
   PromqlHeatmapMode,
   PromqlSavedChartConfig,
@@ -83,6 +84,32 @@ export function buildRawSqlCompletions({
   ];
 }
 
+/**
+ * Groups kinds that charts treat alike: validation and normalization only ask
+ * whether a source is a metric source and whether it supports formulas, and
+ * PromQL sources only serve PromQL charts.
+ */
+function chartSourceKindClass(kind: SourceKind): string {
+  if (kind === SourceKind.Promql) return 'promql';
+  if (kind === SourceKind.Metric) return 'metric';
+  return isFormulaSourceKind(kind) ? 'events' : 'session';
+}
+
+/**
+ * A kind that stands for all of `kinds` when charts treat them alike, so a
+ * chart built for one is valid on the others. Undefined when they differ.
+ */
+export function getInterchangeableSourceKind(
+  kinds: readonly SourceKind[],
+): SourceKind | undefined {
+  const [first] = kinds;
+  if (first == null) return undefined;
+  const firstClass = chartSourceKindClass(first);
+  return kinds.every(kind => chartSourceKindClass(kind) === firstClass)
+    ? first
+    : undefined;
+}
+
 function normalizeChartConfig<
   C extends Pick<
     BuilderSavedChartConfig,
@@ -98,15 +125,15 @@ function normalizeChartConfig<
     | 'heatmap'
     | 'where'
   >,
->(config: C, source: TSource): C {
-  const isMetricSource = source.kind === SourceKind.Metric;
+>(config: C, sourceKind: SourceKind): C {
+  const isMetricSource = sourceKind === SourceKind.Metric;
   // Formulas (HDX-5080) render on metric and event (log/trace) sources, and
   // only on the display types the formula query paths support (time series /
   // table / number). Strip them elsewhere so a source or display-type switch
   // can't persist a config the renderer would reject. The form state keeps
   // them, so switching back restores the formula rows.
   const keepFormulas =
-    isFormulaSourceKind(source.kind) &&
+    isFormulaSourceKind(sourceKind) &&
     (config.formulas?.length ?? 0) > 0 &&
     isFormulaDisplayType(config.displayType);
   return {
@@ -208,10 +235,6 @@ export const isPromqlDisplayType = (
   displayType === DisplayType.Number ||
   displayType === DisplayType.Heatmap;
 
-const NON_PROMQL_SOURCE_KINDS = Object.values(SourceKind).filter(
-  kind => kind !== SourceKind.Promql,
-);
-
 /**
  * Search and event patterns list raw rows out of the source's `from` table. A
  * metric source keeps its rows in `metricTables` and leaves `from.tableName`
@@ -240,7 +263,7 @@ export function getAllowedSourceKinds({
   if (isStringSelectDisplayType(displayType)) {
     return ROW_LISTING_SOURCE_KINDS;
   }
-  return NON_PROMQL_SOURCE_KINDS;
+  return [...NON_PROMQL_SOURCE_KINDS];
 }
 
 const isCustomOrderByDisplayType = (
@@ -255,9 +278,14 @@ const isCustomOrderByDisplayType = (
 // ChartEditorControls and the server-side surfaces cannot drift.
 export { isFormulaDisplayType, isFormulaSourceKind };
 
+/**
+ * `sourceKind` stands in for `source` when there is no source to read it from,
+ * as for a data source variable with no selection.
+ */
 export function convertFormStateToSavedChartConfig(
   form: ChartEditorFormState,
   source: TSource | undefined,
+  sourceKind: SourceKind | undefined = source?.kind,
 ): SavedChartConfig | undefined {
   if (form.configType === 'promql' && isPromqlDisplayType(form.displayType)) {
     const promqlConfig: PromqlSavedChartConfig = {
@@ -280,7 +308,7 @@ export function convertFormStateToSavedChartConfig(
         // 'alert', // TODO: Support alerts on PromQL (HDX-4636)
       ]),
       promqlExpression: formPromqlExpressions(form),
-      source: source?.id ?? form.source ?? '',
+      source: form.source || (source?.id ?? ''),
       legendTemplate: form.legendTemplate?.trim() || undefined,
       heatmap: formPromqlHeatmap(form),
     };
@@ -331,12 +359,12 @@ export function convertFormStateToSavedChartConfig(
       heatmap: formBuilderHeatmap(form),
       select: [],
       where: form.where ?? '',
-      source: source?.id ?? form.source ?? '',
+      source: form.source || (source?.id ?? ''),
     };
     return config;
   }
 
-  if (source) {
+  if (sourceKind) {
     // Merge the series and select fields back together, and prevent the series field from being submitted
     const config: BuilderSavedChartConfig = {
       ...omit(form, [
@@ -354,10 +382,10 @@ export function convertFormStateToSavedChartConfig(
           : ''
         : form.series,
       where: form.where ?? '',
-      source: source.id,
+      source: form.source || (source?.id ?? ''),
     };
 
-    return normalizeChartConfig(config, source);
+    return normalizeChartConfig(config, sourceKind);
   }
 }
 
@@ -416,7 +444,7 @@ export function convertFormStateToChartConfig(
       ]),
       sqlTemplate: form.sqlTemplate ?? '',
       connection: form.connection ?? '',
-      source: form.source || undefined,
+      source: source?.id ?? (form.source || undefined),
       from: source?.from,
       implicitColumnExpression:
         source && (isLogSource(source) || isTraceSource(source))
@@ -489,7 +517,7 @@ export function convertFormStateToChartConfig(
         : mergedSelect,
     };
 
-    return structuredClone(normalizeChartConfig(newConfig, source));
+    return structuredClone(normalizeChartConfig(newConfig, source.kind));
   }
 }
 
@@ -612,6 +640,8 @@ export const validateChartForm = (
   setError: UseFormSetError<ChartEditorFormState>,
   {
     requireAlertDisplayName = false,
+    sourceKind = source?.kind,
+    missingSourceMessage = 'Source is required',
   }: {
     /**
      * Whether the alert must carry a name. Set for inline alerts, which have
@@ -619,6 +649,13 @@ export const validateChartForm = (
      * name the alert after whatever the chart happens to be called.
      */
     requireAlertDisplayName?: boolean;
+    /**
+     * Stands in for `source` when there is no source to read the kind from,
+     * as for a data source variable with no selection.
+     */
+    sourceKind?: SourceKind;
+    /** Replaces the generic error for a chart with no usable source. */
+    missingSourceMessage?: string;
   } = {},
 ) => {
   const errors: { path: Path<ChartEditorFormState>; message: string }[] = [];
@@ -642,9 +679,9 @@ export const validateChartForm = (
   if (
     !isRawSqlChart &&
     form.displayType !== DisplayType.Markdown &&
-    (!form.source || !source)
+    (!form.source || !sourceKind)
   ) {
-    errors.push({ path: `source`, message: 'Source is required' });
+    errors.push({ path: `source`, message: missingSourceMessage });
   }
 
   // Validate that valueExpressions are specified for each series.
@@ -653,7 +690,7 @@ export const validateChartForm = (
   if (
     !isRawSqlChart &&
     Array.isArray(form.series) &&
-    source?.kind !== SourceKind.Metric &&
+    sourceKind !== SourceKind.Metric &&
     form.displayType !== DisplayType.Markdown &&
     !isStringSelectDisplayType(form.displayType)
   ) {
@@ -669,7 +706,7 @@ export const validateChartForm = (
 
   // Validate metric names for metric sources
   if (
-    source?.kind === SourceKind.Metric &&
+    sourceKind === SourceKind.Metric &&
     Array.isArray(form.series) &&
     form.displayType !== DisplayType.Markdown &&
     form.displayType !== DisplayType.Search &&
@@ -691,7 +728,7 @@ export const validateChartForm = (
   // source kind + display type).
   if (
     !isRawSqlChart &&
-    isFormulaSourceKind(source?.kind) &&
+    isFormulaSourceKind(sourceKind) &&
     isFormulaDisplayType(form.displayType) &&
     Array.isArray(form.formulas)
   ) {
@@ -789,7 +826,7 @@ export const validateChartForm = (
     !isRawSqlChart &&
     Array.isArray(form.series) &&
     form.displayType === DisplayType.Number &&
-    !(form.formulas?.length && isFormulaSourceKind(source?.kind)) &&
+    !(form.formulas?.length && isFormulaSourceKind(sourceKind)) &&
     form.series.length > (form.seriesReturnType === 'ratio' ? 2 : 1)
   ) {
     errors.push({

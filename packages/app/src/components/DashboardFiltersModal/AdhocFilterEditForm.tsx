@@ -4,6 +4,10 @@ import { Separator } from '@clickhouse/click-ui';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { getAdhocFilterSourceKinds } from '@hyperdx/common-utils/dist/filters';
 import {
+  isSourceVariableReferenceAccepted,
+  parseVariableReference,
+} from '@hyperdx/common-utils/dist/referenceVariables';
+import {
   AdhocFilterSourceType,
   DashboardFilter,
   SourceKind,
@@ -13,6 +17,7 @@ import { Box, SegmentedControl } from '@mantine/core';
 import { CheckBoxControlled } from '@/components/InputControlled';
 import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
 import { SourceMultiSelectControlled } from '@/components/SourceMultiSelect';
+import { useSourceVariableDeclarations } from '@/components/sourceSelectUtils';
 import { IS_PROMQL_ENABLED } from '@/config';
 import { useSources } from '@/source';
 
@@ -40,6 +45,7 @@ export const AdhocFilterEditForm = ({
   otherFilters,
 }: AdhocFilterEditFormProps) => {
   const { data: allSources } = useSources();
+  const sourceVariables = useSourceVariableDeclarations();
   const [sourceType, isBroadcastEnabled, sourceIds] = useWatch({
     control,
     name: ['sourceType', 'isBroadcastEnabled', 'sources'],
@@ -62,6 +68,13 @@ export const AdhocFilterEditForm = ({
   // hold after switching from another filter type.
   const validateSourceKinds = (ids: string[] | undefined) => {
     const hasOtherKind = ids?.some(id => {
+      if (parseVariableReference(id) != null) {
+        return !isSourceVariableReferenceAccepted(
+          id,
+          sourceVariables,
+          allowedSourceKinds,
+        );
+      }
       const source = allSources?.find(s => s.id === id);
       return source && !allowedSourceKinds.includes(source.kind);
     });
@@ -111,6 +124,7 @@ export const AdhocFilterEditForm = ({
           comboboxProps={{ withinPortal: true }}
           placeholder="Select sources"
           allowedSourceKinds={allowedSourceKinds}
+          allowSourceVariables
           rules={{
             validate: (value: string[] | undefined) =>
               !value?.length
@@ -164,6 +178,7 @@ export const AdhocFilterEditForm = ({
               comboboxProps={{ withinPortal: true }}
               placeholder="Same as data sources"
               allowedSourceKinds={allowedSourceKinds}
+              allowSourceVariables
               rules={{ validate: validateSourceKinds }}
             />
           </CustomInputWrapper>

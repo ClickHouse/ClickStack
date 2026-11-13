@@ -19,6 +19,7 @@ import {
   convertFormStateToSavedChartConfig,
   convertSavedChartConfigToFormState,
   getAllowedSourceKinds,
+  getInterchangeableSourceKind,
   promqlExpressionPlaceholder,
   validateChartForm,
 } from '@/components/ChartEditor/utils';
@@ -2704,4 +2705,87 @@ describe('promqlExpressionPlaceholder', () => {
       promqlExpressionPlaceholder(DisplayType.Number, 'distribution'),
     );
   });
+});
+
+describe('data source variable references', () => {
+  it('saves the reference rather than the source it resolves to', () => {
+    const form: ChartEditorFormState = {
+      displayType: DisplayType.Line,
+      source: '$logs',
+      series: [seriesItem],
+    };
+    expect(convertFormStateToSavedChartConfig(form, logSource)).toMatchObject({
+      source: '$logs',
+    });
+  });
+
+  it('queries the resolved source for a raw SQL chart', () => {
+    const form: ChartEditorFormState = {
+      configType: 'sql',
+      displayType: DisplayType.Table,
+      source: '$logs',
+      connection: 'conn-1',
+      sqlTemplate: 'SELECT 1',
+      series: [],
+    };
+    expect(convertFormStateToSavedChartConfig(form, logSource)).toMatchObject({
+      source: '$logs',
+    });
+    expect(
+      convertFormStateToChartConfig(form, dateRange, logSource),
+    ).toMatchObject({ source: logSource.id });
+  });
+
+  it('saves a reference with no selected source when its kind is known', () => {
+    const form: ChartEditorFormState = {
+      displayType: DisplayType.Line,
+      source: '$logs',
+      series: [
+        { ...seriesItem, metricName: 'cpu', metricType: MetricsDataType.Gauge },
+      ],
+    };
+    const saved = convertFormStateToSavedChartConfig(
+      form,
+      undefined,
+      SourceKind.Log,
+    );
+    expect(saved).toMatchObject({ source: '$logs' });
+    expect(saved).toMatchObject({
+      select: [expect.not.objectContaining({ metricName: 'cpu' })],
+    });
+  });
+
+  it('validates a reference with no selected source by its kind', () => {
+    const form: ChartEditorFormState = {
+      displayType: DisplayType.Line,
+      source: '$logs',
+      series: [seriesItem],
+    };
+    expect(
+      validateChartForm(form, undefined, jest.fn(), {
+        sourceKind: SourceKind.Log,
+      }),
+    ).toEqual([]);
+    expect(
+      validateChartForm(form, undefined, jest.fn(), {
+        missingSourceMessage: 'Select a source for $logs',
+      }),
+    ).toEqual([{ path: 'source', message: 'Select a source for $logs' }]);
+  });
+});
+
+describe('getInterchangeableSourceKind', () => {
+  it.each<[SourceKind[], SourceKind | undefined]>([
+    [[SourceKind.Log], SourceKind.Log],
+    [[SourceKind.Log, SourceKind.Trace], SourceKind.Log],
+    [[SourceKind.Log, SourceKind.Metric], undefined],
+    [[SourceKind.Log, SourceKind.Session], undefined],
+    [[SourceKind.Session, SourceKind.Promql], undefined],
+    [[], undefined],
+  ])(
+    'returns a stand-in for %p only when charts treat them alike',
+    (kinds, expected) => {
+      expect(getInterchangeableSourceKind(kinds)).toBe(expected);
+    },
+  );
 });

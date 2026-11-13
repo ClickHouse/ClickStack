@@ -227,9 +227,12 @@ export function resolveTilePreviewFilters({
   variables,
   unsatisfiedRequiredFilters,
   applySelections,
+  referenceVariableNames,
 }: {
   config: ChartConfigWithDateRange;
   sourceId: string | undefined;
+  /** The data source and connection variables the tile's stored config references. */
+  referenceVariableNames?: readonly string[];
   filters: BroadcastFilter[] | undefined;
   variables: ChartVariable[] | undefined;
   unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
@@ -265,6 +268,7 @@ export function resolveTilePreviewFilters({
       sourceId,
       unsatisfiedRequiredFilters,
       referencedVariables: previewVariables,
+      referenceVariableNames,
     }),
   };
 }

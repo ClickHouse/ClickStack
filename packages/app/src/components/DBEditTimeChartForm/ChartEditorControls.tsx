@@ -211,6 +211,7 @@ export function ChartEditorControls({
             name="source"
             data-testid="source-selector"
             allowedSourceKinds={allowedSourceKinds}
+            allowSourceVariables
             onSchemaPreview={() => setIsSourceSchemaPreviewOpen(true)}
             isSchemaPreviewEnabled={isSourceSchemaPreviewEnabled(tableSource)}
           />

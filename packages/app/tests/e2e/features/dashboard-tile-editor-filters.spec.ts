@@ -120,7 +120,7 @@ test.describe(
           dashboardPage.chartEditor.previewMissingRequiredFilters();
         await expect(placeholder).toBeVisible({ timeout: 20000 });
         await expect(placeholder).toContainText(
-          'Missing required filters: Service',
+          'Missing required filters or variables: Service',
         );
       });
 

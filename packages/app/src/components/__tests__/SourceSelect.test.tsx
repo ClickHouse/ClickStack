@@ -1,6 +1,10 @@
 import React from 'react';
 import { useForm } from 'react-hook-form';
-import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import {
+  DataSourceDashboardFilter,
+  SourceKind,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -8,6 +12,7 @@ import {
   SourceManagementMenu,
   SourceSelectControlled,
 } from '@/components/SourceSelect';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { useSources } from '@/source';
 
 jest.mock('@/source', () => ({
@@ -263,5 +268,66 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
     expect(await screen.findByText('Apple Traces')).toBeInTheDocument();
     expect(screen.getByText('Zebra Logs')).toBeInTheDocument();
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
+  });
+});
+
+describe('SourceSelectControlled (data source variables)', () => {
+  const SOURCES = [makeSource('logs', 'Logs', SourceKind.Log)];
+  const sourceVariable = (
+    variableName: string,
+    allowedSourceKinds: SourceKind[],
+    connection?: string,
+  ): DataSourceDashboardFilter => ({
+    id: variableName,
+    type: 'DATA_SOURCE',
+    name: variableName,
+    variableName,
+    allowedSourceKinds,
+    connection,
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  });
+  const VARIABLES = [
+    sourceVariable('logs_source', [SourceKind.Log]),
+    sourceVariable('any_source', [SourceKind.Log, SourceKind.Promql]),
+  ];
+
+  function VariableHarness({
+    allowSourceVariables,
+  }: {
+    allowSourceVariables?: boolean;
+  }) {
+    const { control } = useForm();
+    return (
+      <ReferenceVariablesProvider filters={VARIABLES} values={new Map()}>
+        <SourceSelectControlled
+          control={control}
+          name="source"
+          allowedSourceKinds={[SourceKind.Log, SourceKind.Trace]}
+          allowSourceVariables={allowSourceVariables}
+        />
+      </ReferenceVariablesProvider>
+    );
+  }
+
+  it('offers only variables whose every kind the picker allows', async () => {
+    asMock(useSources).mockReturnValue({ data: SOURCES });
+    renderWithMantine(<VariableHarness allowSourceVariables />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Variables')).toBeInTheDocument();
+    expect(screen.getByText('$logs_source')).toBeInTheDocument();
+    expect(screen.queryByText('$any_source')).not.toBeInTheDocument();
+  });
+
+  it('offers no variables unless the picker opts in', async () => {
+    asMock(useSources).mockReturnValue({ data: SOURCES });
+    renderWithMantine(<VariableHarness />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Logs')).toBeInTheDocument();
+    expect(screen.queryByText('$logs_source')).not.toBeInTheDocument();
   });
 });

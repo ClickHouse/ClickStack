@@ -1,6 +1,18 @@
-import { useMemo } from 'react';
-import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
-import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import { createContext, use, useMemo } from 'react';
+import {
+  getSourceVariableDeclarations,
+  isSourceVariableAccepted,
+  parseVariableReference,
+  ReferenceVariableValues,
+  resolveVariableReference,
+  SourceVariableDeclaration,
+  toVariableReference,
+} from '@hyperdx/common-utils/dist/referenceVariables';
+import {
+  DashboardFilter,
+  SourceKind,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 import { ComboboxItem, OptionsFilter } from '@mantine/core';
 import {
   IconChartLine,
@@ -26,6 +38,97 @@ export function getSourceOptionIcon(
 ): React.ReactNode {
   if (parseVariableReference(value) != null) return VARIABLE_ICON;
   return SOURCE_KIND_ICONS[(value && sourceKindMap.get(value)) ?? ''];
+}
+
+type ReferenceVariablesContextValue = {
+  sourceVariables: SourceVariableDeclaration[];
+  values: ReferenceVariableValues;
+};
+
+const ReferenceVariablesContext = createContext<ReferenceVariablesContextValue>(
+  { sourceVariables: [], values: new Map() },
+);
+
+/**
+ * Offers the data source variables `filters` declare to the pickers below it
+ * that opt in, and their selections to `useResolvedReference`.
+ */
+export function ReferenceVariablesProvider({
+  filters,
+  values,
+  children,
+}: {
+  filters: DashboardFilter[];
+  values: ReferenceVariableValues;
+  children: React.ReactNode;
+}) {
+  const value = useMemo(
+    () => ({
+      sourceVariables: getSourceVariableDeclarations(filters),
+      values,
+    }),
+    [filters, values],
+  );
+  return (
+    <ReferenceVariablesContext value={value}>
+      {children}
+    </ReferenceVariablesContext>
+  );
+}
+
+/**
+ * The ID a source field currently queries: an ID as is, or the selection of
+ * the variable it references.
+ */
+export function useResolvedReference(
+  value: string | undefined,
+): string | undefined {
+  const { values } = use(ReferenceVariablesContext);
+  return resolveVariableReference(value, values);
+}
+
+export function useReferenceVariableValues(): ReferenceVariableValues {
+  return use(ReferenceVariablesContext).values;
+}
+
+export function useSourceVariableDeclarations(): SourceVariableDeclaration[] {
+  return use(ReferenceVariablesContext).sourceVariables;
+}
+
+const toVariableItem = (name: string): ComboboxItem => {
+  const reference = toVariableReference(name);
+  return { value: reference, label: reference };
+};
+
+/**
+ * A source picker's items, preceded by a "Variables" group of the data source
+ * variables it can offer. A variable is offered only if every kind it can
+ * resolve to is allowed, so no selection can produce an unusable source.
+ */
+export function useWithSourceVariableItems(
+  sourceItems: ComboboxItem[] | SourceSelectGroup[],
+  {
+    enabled,
+    allowedSourceKinds,
+  }: {
+    enabled: boolean;
+    allowedSourceKinds?: SourceKind[];
+  },
+): (ComboboxItem | SourceSelectGroup)[] {
+  const { sourceVariables } = use(ReferenceVariablesContext);
+  return useMemo(() => {
+    if (!enabled) return sourceItems;
+    const items = sourceVariables
+      .filter(
+        variable =>
+          !allowedSourceKinds ||
+          isSourceVariableAccepted(variable, allowedSourceKinds),
+      )
+      .map(variable => toVariableItem(variable.name));
+    return items.length > 0
+      ? [{ group: 'Variables', items }, ...sourceItems]
+      : sourceItems;
+  }, [enabled, sourceVariables, allowedSourceKinds, sourceItems]);
 }
 
 /** Header for sources that have no section assigned. Internal to this module. */
