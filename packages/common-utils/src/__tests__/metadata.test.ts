@@ -1382,8 +1382,7 @@ describe('Metadata', () => {
 
       expect(sql).toContain('mergeTreeTextIndex(');
       expect(sql).toContain('topKWeighted(');
-      // 20,000 tokens for each of the default 20 parts.
-      expect(sql).toContain('LIMIT 400000');
+      expect(sql).toContain('LIMIT 20000');
       expect(sql).not.toContain('startsWith(token,');
     });
 
@@ -1437,8 +1436,7 @@ describe('Metadata', () => {
       expect(branches[0]).toContain("'requestId' AS key");
       expect(branches[1]).toContain("startsWith(token, 'region=')");
       for (const branch of branches) {
-        // 20,000 tokens for each of the default 20 parts.
-        expect(branch).toContain('LIMIT 400000');
+        expect(branch).toContain('LIMIT 20000');
       }
       expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
       expect(call.clickhouse_settings.read_overflow_mode).toBeUndefined();
@@ -1448,7 +1446,7 @@ describe('Metadata', () => {
       ['map KV', "LogAttributes['requestId']"],
       ['native', 'TraceId'],
     ])(
-      'scales the %s text index token cap by the parts read, and drops it when every part is read',
+      'caps the %s text index read per key, and drops the cap when every part is read',
       async (_, keyExpression) => {
         setupDefaultLogsSchema();
         withDictionaryBlockSize(8192);
@@ -1465,7 +1463,7 @@ describe('Metadata', () => {
           .map(([opts]) => opts.query as string)
           .filter(q => q.includes('mergeTreeTextIndex('))
           .map(q => q.match(/LIMIT (\d+)/)?.[1]);
-        expect(tokenLimits).toEqual(['100000', undefined]);
+        expect(tokenLimits).toEqual(['20000', undefined]);
       },
     );
 
