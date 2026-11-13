@@ -1438,6 +1438,32 @@ describe('Metadata', () => {
       ['map KV', "LogAttributes['requestId']"],
       ['native', 'TraceId'],
     ])(
+      'reads every part in the time range from the %s text index when the part limit is null',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+          mapKeyIndexMaxParts: null,
+        });
+
+        const textIndexCall = (
+          mockClickhouseClient.query as jest.Mock
+        ).mock.calls.find(([opts]) =>
+          opts.query.includes('mergeTreeTextIndex('),
+        );
+        expect(textIndexCall[0].query).toMatch(
+          /part_name IN \(SELECT name\s+FROM system\.parts/,
+        );
+        expect(textIndexCall[0].query).not.toContain('row_number()');
+      },
+    );
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
       'orders the %s text index parts by the configured part selection',
       async (_, keyExpression) => {
         setupDefaultLogsSchema();

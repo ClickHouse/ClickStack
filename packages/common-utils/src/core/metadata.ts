@@ -112,8 +112,11 @@ type AllKeyValuesQuery = {
   maxValuesPerKey?: number;
   connectionId: string;
   metadataMVs?: MetadataMaterializedViews;
-  /** Parts the text index paths read; see `partsOverlapFilter`. */
-  mapKeyIndexMaxParts?: number;
+  /**
+   * Parts the text index paths read; see `partsOverlapFilter`. Unset uses the
+   * default; null reads every part in the time range.
+   */
+  mapKeyIndexMaxParts?: number | null;
   mapKeyIndexPartSelection?: MapKeyIndexPartSelection;
   dateRange: [Date, Date];
   timestampValueExpression: string;
@@ -1754,7 +1757,8 @@ export class Metadata {
     signal,
   }: TableConnection & {
     queryOptions: TextIndexMapColumnQueryOptions;
-    maxParts: number;
+    /** null reads every part in the time range. */
+    maxParts: number | null;
     partSelection: MapKeyIndexPartSelection;
     dateRange: [Date, Date];
     timestampValueExpression: string;
@@ -1784,7 +1788,7 @@ export class Metadata {
             tableName,
             dateRange,
             timestampValueExpression,
-            maxParts,
+            maxParts: maxParts ?? undefined,
             partSelection,
           });
           const valueSql = chSql`substring(token, position(token, ${{ String: info.separator }}) + ${{ Int32: info.separator.length }})`;
@@ -1852,7 +1856,8 @@ export class Metadata {
     signal,
   }: TableConnection & {
     queryOptions: TextIndexColumnQueryOptions;
-    maxParts: number;
+    /** null reads every part in the time range. */
+    maxParts: number | null;
     partSelection: MapKeyIndexPartSelection;
     dateRange: [Date, Date];
     timestampValueExpression: string;
@@ -1869,7 +1874,7 @@ export class Metadata {
             tableName,
             dateRange,
             timestampValueExpression,
-            maxParts,
+            maxParts: maxParts ?? undefined,
             partSelection,
           });
           const sql = chSql`
