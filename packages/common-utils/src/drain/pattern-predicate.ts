@@ -102,12 +102,18 @@ export function buildPatternPredicate(
   return `match(${valueExpression}, '${escapeSqlString(templateToRegex(template, options))}')`;
 }
 
+// The compact regex: tokens joined by single spaces, at most one space at
+// each end, and one run of non-spaces per wildcard.
+const COMPACT_START = '^ ?';
+const COMPACT_END = ' ?$';
+const COMPACT_WILDCARD = '[^ ]+';
+
 // Regex over a value whose separator runs were replaced by single spaces.
 function compactRegex(template: string): string {
   const body = tokensOf(template)
-    .map(t => (t === PATTERN_WILDCARD ? '[^ ]+' : escapeRe2Literal(t)))
+    .map(t => (t === PATTERN_WILDCARD ? COMPACT_WILDCARD : escapeRe2Literal(t)))
     .join(' ');
-  return `^ ?${body} ?$`;
+  return `${COMPACT_START}${body}${COMPACT_END}`;
 }
 
 /**
@@ -115,6 +121,11 @@ function compactRegex(template: string): string {
  * in the value become single spaces first, so the separator class appears
  * once instead of between every token. For conditions that are stored or
  * shared, such as search filters kept in the URL.
+ *
+ * The two forms agree as long as no template token contains a separator,
+ * which holds for templates mined with the same options. As in
+ * buildPatternPredicate, `valueExpression` goes into the SQL as is: pass a
+ * column expression, never user input.
  */
 export function buildCompactPatternPredicate(
   valueExpression: string,
@@ -145,13 +156,18 @@ function parseCompactPredicate(
     return null;
   }
   const regex = unescapeSql(regexLiteral);
-  if (!regex.startsWith('^ ?') || !regex.endsWith(' ?$')) return null;
-  const inner = regex.slice('^ ?'.length, regex.length - ' ?$'.length);
-  // The wildcard `[^ ]+` itself contains a space, so match tokens rather
-  // than splitting on spaces.
+  if (!regex.startsWith(COMPACT_START) || !regex.endsWith(COMPACT_END)) {
+    return null;
+  }
+  const inner = regex.slice(
+    COMPACT_START.length,
+    regex.length - COMPACT_END.length,
+  );
+  // COMPACT_WILDCARD itself contains a space, so match tokens rather than
+  // splitting on spaces.
   const template = (inner.match(/\[\^ \]\+|[^ ]+/g) ?? [])
     .map(part =>
-      part === '[^ ]+' ? PATTERN_WILDCARD : unescapeRe2Literal(part),
+      part === COMPACT_WILDCARD ? PATTERN_WILDCARD : unescapeRe2Literal(part),
     )
     .join(' ');
   return compactRegex(template) === regex

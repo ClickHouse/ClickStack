@@ -136,6 +136,14 @@ describe('templateToRegex', () => {
   });
 });
 
+// The option sets the equivalence and round-trip tests run under.
+const OPTION_SETS: (PatternRegexOptions | undefined)[] = [
+  withPunctuation,
+  undefined,
+  { extraDelimiters: ['/', ':', '-', ']', '\\', '^'] },
+  { extraDelimiters: PUNCTUATION, whitespace: 'python' },
+];
+
 describe('buildCompactPatternPredicate', () => {
   it('matches exactly what the full predicate matches', () => {
     const values = [
@@ -144,6 +152,10 @@ describe('buildCompactPatternPredicate', () => {
       '',
       ' \t ',
       'GET api v1 users 9 404',
+      // Separators outside ASCII, and ones only one whitespace set has.
+      'GET\u00a0api\u2003v1\x0busers\u3000 9 404 3ms',
+      'GET api\ufeffv1 users 9 404 3ms',
+      'GET api v1 users 9\x1e404\x853ms',
     ];
     const templates = [
       ...mineClusters().map(c => c.template),
@@ -151,7 +163,7 @@ describe('buildCompactPatternPredicate', () => {
       '<*>',
       '',
     ];
-    for (const options of [withPunctuation, undefined]) {
+    for (const options of OPTION_SETS) {
       for (const template of templates) {
         const full = toJsRegex(templateToRegex(template, options));
         const compact = buildCompactPatternPredicate(
@@ -198,12 +210,17 @@ describe('parsePatternPredicate', () => {
     ["JSONExtractString(Body, 'message')", 'user <*> action login status ok'],
     ['Body', '<*>'],
   ])('reads back what either builder built (%s)', (expr, template) => {
-    for (const build of [buildPatternPredicate, buildCompactPatternPredicate]) {
-      const predicate = build(expr, template, withPunctuation)!;
-      expect(parsePatternPredicate(predicate, withPunctuation)).toEqual({
-        valueExpression: expr,
-        template,
-      });
+    for (const options of OPTION_SETS) {
+      for (const build of [
+        buildPatternPredicate,
+        buildCompactPatternPredicate,
+      ]) {
+        const predicate = build(expr, template, options)!;
+        expect(parsePatternPredicate(predicate, options)).toEqual({
+          valueExpression: expr,
+          template,
+        });
+      }
     }
   });
 
@@ -225,6 +242,19 @@ describe('parsePatternPredicate', () => {
         withPunctuation,
       ),
     ).toBeNull();
+    // The real separator class with a hand-written regex: only the round trip
+    // through compactRegex rejects it.
+    const compact = buildCompactPatternPredicate(
+      'Body',
+      'timed out',
+      withPunctuation,
+    )!;
+    const handWritten = compact.replace(
+      "'^ ?timed out ?$'",
+      "'^ ?timed.* out ?$'",
+    );
+    expect(handWritten).not.toBe(compact);
+    expect(parsePatternPredicate(handWritten, withPunctuation)).toBeNull();
     expect(
       parsePatternPredicate(
         buildPatternPredicate('Body', 'Sending <*> rows')!,
