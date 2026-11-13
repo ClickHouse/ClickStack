@@ -15,5 +15,7 @@ made searches for a common value 10-30% faster.
 
 Because it's an `ALTER`, existing installs get it too: new parts use 8,192-token
 blocks, and existing parts keep theirs until they're merged. A table that
-already sets `text_index_dictionary_block_size` is left alone. ClickHouse
-26.2–26.5 doesn't have the setting, so those servers keep 512-token blocks.
+already sets `text_index_dictionary_block_size` is left alone, and operators who
+manage these tables themselves can turn the change off with
+`HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE=false`. ClickHouse 26.2–26.5
+doesn't have the setting, so those servers keep 512-token blocks.
