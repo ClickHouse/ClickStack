@@ -6,8 +6,8 @@ import {
   getPendingFilterValuesVariables,
   isAdhocFilter,
   isFilterGlobalRequirement,
+  isFilterReferenceableVariable,
   isFilterRequired,
-  isFilterVariableEnabled,
   isQueryExpressionFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
@@ -73,11 +73,9 @@ export const getFilterEffect = (filter: DashboardFilter): FilterEffect => {
     );
   }
 
-  // An ad hoc filter's variable name can't be referenced.
-  const variableName =
-    isFilterVariableEnabled(filter) && !isAdhocFilter(filter)
-      ? getFilterVariableName(filter)
-      : undefined;
+  const variableName = isFilterReferenceableVariable(filter)
+    ? getFilterVariableName(filter)
+    : undefined;
   if (variableName) {
     parts.push(
       `${parts.length > 0 ? 'a' : 'A'}vailable as variable ($${variableName})`,
