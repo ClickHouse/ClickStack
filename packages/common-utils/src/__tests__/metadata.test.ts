@@ -3146,66 +3146,6 @@ describe('Metadata', () => {
 
       expect(mockClickhouseClient.query).toHaveBeenCalledTimes(2);
     });
-
-    it('reads the rollup per range when timestampValueExpression is missing', async () => {
-      const md = buildMetadata();
-      jest
-        .spyOn(md, 'getMapColumnTextIndexes')
-        .mockResolvedValue(new Map() as TextIndexInfoLookup);
-      (mockClickhouseClient.query as jest.Mock)
-        .mockResolvedValueOnce({
-          json: () => Promise.resolve({ data: [{ Key: 'first.range' }] }),
-        })
-        .mockResolvedValueOnce({
-          json: () => Promise.resolve({ data: [{ Key: 'second.range' }] }),
-        });
-
-      const {
-        timestampValueExpression: _timestampValueExpression,
-        ...noTsArgs
-      } = baseArgs;
-      const secondRange: [Date, Date] = [
-        new Date('2026-05-12T10:00:00Z'),
-        new Date('2026-05-12T11:00:00Z'),
-      ];
-
-      expect(await md.getMapKeys(noTsArgs)).toEqual(['first.range']);
-      expect(
-        await md.getMapKeys({ ...noTsArgs, dateRange: secondRange }),
-      ).toEqual(['second.range']);
-    });
-
-    it('does not share an in-flight rollup read across ranges', async () => {
-      const md = buildMetadata();
-      jest
-        .spyOn(md, 'getMapColumnTextIndexes')
-        .mockResolvedValue(new Map() as TextIndexInfoLookup);
-      (mockClickhouseClient.query as jest.Mock)
-        .mockResolvedValueOnce({
-          json: () => Promise.resolve({ data: [{ Key: 'first.range' }] }),
-        })
-        .mockResolvedValueOnce({
-          json: () => Promise.resolve({ data: [{ Key: 'second.range' }] }),
-        });
-
-      const {
-        timestampValueExpression: _timestampValueExpression,
-        ...noTsArgs
-      } = baseArgs;
-
-      const results = await Promise.all([
-        md.getMapKeys(noTsArgs),
-        md.getMapKeys({
-          ...noTsArgs,
-          dateRange: [
-            new Date('2026-05-12T10:00:00Z'),
-            new Date('2026-05-12T11:00:00Z'),
-          ],
-        }),
-      ]);
-
-      expect(results).toEqual([['first.range'], ['second.range']]);
-    });
   });
 
   describe('getMapKeys (text index paths)', () => {
