@@ -13,6 +13,7 @@ import {
   parseKeyPath,
   TableConnection,
   TableMetadata,
+  tcFromSource,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   FilterState,
@@ -533,15 +534,12 @@ export function useMultipleGetKeyValues(
   // Resolved here, not in the stream, so editing a source's part settings
   // changes the query key instead of serving cached facets.
   const partSettings = chartConfigsArr.map(chartConfig => {
-    const source = chartConfig.source
-      ? sources?.find(s => s.id === chartConfig.source)
-      : undefined;
-    return source && (isLogSource(source) || isTraceSource(source))
-      ? {
-          mapKeyIndexMaxParts: source.mapKeyIndexMaxParts,
-          mapKeyIndexPartSelection: source.mapKeyIndexPartSelection,
-        }
-      : {};
+    const { mapKeyIndexMaxParts, mapKeyIndexPartSelection } = tcFromSource(
+      chartConfig.source
+        ? sources?.find(s => s.id === chartConfig.source)
+        : undefined,
+    );
+    return { mapKeyIndexMaxParts, mapKeyIndexPartSelection };
   });
 
   const query = useStreamingQuery<Facet>({
