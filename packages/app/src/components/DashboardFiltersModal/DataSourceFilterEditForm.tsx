@@ -4,6 +4,7 @@ import { Alert, Group, MultiSelect } from '@mantine/core';
 import { IconAlertTriangle } from '@tabler/icons-react';
 
 import { getInterchangeableSourceKind } from '@/components/ChartEditor/utils';
+import { ConnectionSelectControlled } from '@/components/ConnectionSelect';
 import { SOURCE_KIND_LABELS } from '@/components/Sources/SourceForm/constants';
 import { SOURCE_KIND_ICONS } from '@/components/sourceSelectUtils';
 import { IS_PROMQL_ENABLED } from '@/config';
@@ -63,6 +64,20 @@ export const DataSourceFilterEditForm = ({
               )}
             />
           )}
+        />
+      </CustomInputWrapper>
+
+      <CustomInputWrapper
+        label="Connection"
+        tooltipText="Limits the offered sources to one connection, which can be a connection variable."
+      >
+        <ConnectionSelectControlled
+          control={control}
+          name="connection"
+          allowConnectionVariables
+          clearable
+          placeholder="Any connection"
+          data-testid="filter-data-source-connection-input"
         />
       </CustomInputWrapper>
 

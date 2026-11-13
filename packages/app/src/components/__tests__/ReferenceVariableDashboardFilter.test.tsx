@@ -5,10 +5,21 @@ import {
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-import { DataSourceDashboardFilter } from '@/components/ReferenceVariableDashboardFilter';
+import {
+  ConnectionDashboardFilter,
+  DataSourceDashboardFilter,
+} from '@/components/ReferenceVariableDashboardFilter';
 
 jest.mock('@/source', () => ({
   useSources: () => ({ data: mockSources }),
+}));
+jest.mock('@/connection', () => ({
+  useConnections: () => ({
+    data: [
+      { id: 'conn-b', name: 'Secondary' },
+      { id: 'conn-a', name: 'Primary' },
+    ],
+  }),
 }));
 
 // Mantine's Combobox calls scrollIntoView when its dropdown opens; jsdom lacks it.
@@ -104,5 +115,35 @@ describe('DataSourceDashboardFilter', () => {
     expect(
       screen.getByTestId('dashboard-filter-pending-variable-Logs source'),
     ).toBeInTheDocument();
+  });
+});
+
+describe('ConnectionDashboardFilter', () => {
+  it('offers the connections and reports the picked one', async () => {
+    const onChange = jest.fn();
+    renderWithMantine(
+      <ConnectionDashboardFilter
+        filter={{
+          id: 'c',
+          type: 'CONNECTION',
+          name: 'Cluster',
+          variableName: 'conn',
+          minSelections: 1,
+          maxSelections: 1,
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        }}
+        value={undefined}
+        onChange={onChange}
+        effect={{ hasEffect: true, tooltip: '' }}
+        requiredTooltip="Required"
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByTestId('dashboard-filter-select-Cluster'),
+    );
+    await userEvent.click(await screen.findByText('Secondary'));
+    expect(onChange).toHaveBeenCalledWith('conn-b');
   });
 });

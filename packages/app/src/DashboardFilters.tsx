@@ -10,6 +10,7 @@ import {
   isFilterRequired,
   isFilterVariableEnabled,
   isQueryExpressionFilter,
+  isReferenceVariableFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import { ReferenceVariableValues } from '@hyperdx/common-utils/dist/referenceVariables';
@@ -30,7 +31,10 @@ import {
   getPendingVariablesTooltip,
 } from './components/DashboardFilterLabel';
 import { FilterLinkToggle } from './components/FilterLinkToggle';
-import { DataSourceDashboardFilter } from './components/ReferenceVariableDashboardFilter';
+import {
+  ConnectionDashboardFilter,
+  DataSourceDashboardFilter,
+} from './components/ReferenceVariableDashboardFilter';
 import { VirtualMultiSelect } from './components/VirtualMultiSelect/VirtualMultiSelect';
 import { useDashboardFilterValues } from './hooks/useDashboardFilterValues';
 
@@ -237,20 +241,28 @@ const DashboardFilters = ({
       {filters.map(filter => {
         const unresolvedVariables =
           unresolvedReferenceVariablesByFilterId?.get(filter.id) ?? [];
-        if (isDataSourceFilter(filter)) {
-          return (
+        if (isReferenceVariableFilter(filter)) {
+          const referenceProps = {
+            value: referenceVariableValues?.get(
+              getFilterVariableName(filter) ?? '',
+            ),
+            onChange: (value: string | undefined) =>
+              onSetFilterValue(filter.id, value ? [value] : []),
+            effect: getFilterEffect(filter),
+            requiredTooltip: getRequiredFilterTooltip(filter),
+          };
+          return isDataSourceFilter(filter) ? (
             <DataSourceDashboardFilter
               key={filter.id}
               filter={filter}
               pendingVariables={unresolvedVariables}
-              value={referenceVariableValues?.get(
-                getFilterVariableName(filter) ?? '',
-              )}
-              onChange={value =>
-                onSetFilterValue(filter.id, value ? [value] : [])
-              }
-              effect={getFilterEffect(filter)}
-              requiredTooltip={getRequiredFilterTooltip(filter)}
+              {...referenceProps}
+            />
+          ) : (
+            <ConnectionDashboardFilter
+              key={filter.id}
+              filter={filter}
+              {...referenceProps}
             />
           );
         }

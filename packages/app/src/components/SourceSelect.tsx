@@ -163,6 +163,7 @@ function SourceSelectControlledComponent({
   connectionId,
   isSourceAllowed,
   allowSourceVariables = false,
+  variableConnection,
   comboboxProps,
   ...props
 }: {
@@ -178,6 +179,11 @@ function SourceSelectControlledComponent({
   isSourceAllowed?: (source: TSource) => boolean;
   /** Whether to offer the dashboard's data source variables. */
   allowSourceVariables?: boolean;
+  /**
+   * The connection data source variables must be limited to, as stored (it
+   * may be a connection variable reference). Defaults to `connectionId`.
+   */
+  variableConnection?: string;
 } & UseControllerProps<any> &
   SelectProps) {
   const { data } = useSources();
@@ -221,6 +227,7 @@ function SourceSelectControlledComponent({
   const items = useWithSourceVariableItems(sourceItems, {
     enabled: allowSourceVariables,
     allowedSourceKinds,
+    connection: variableConnection ?? connectionId,
   });
 
   const hasSelection = !!selectedSourceId;

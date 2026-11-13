@@ -322,6 +322,36 @@ describe('SourceSelectControlled (data source variables)', () => {
     expect(screen.queryByText('$any_source')).not.toBeInTheDocument();
   });
 
+  it('offers only variables unlimited or limited to its connection', async () => {
+    asMock(useSources).mockReturnValue({ data: SOURCES });
+    function ConnectionHarness() {
+      const { control } = useForm();
+      return (
+        <ReferenceVariablesProvider
+          filters={[
+            sourceVariable('any', [SourceKind.Log]),
+            sourceVariable('mine', [SourceKind.Log], '$conn'),
+            sourceVariable('other', [SourceKind.Log], 'conn-b'),
+          ]}
+          values={new Map()}
+        >
+          <SourceSelectControlled
+            control={control}
+            name="source"
+            allowSourceVariables
+            variableConnection="$conn"
+          />
+        </ReferenceVariablesProvider>
+      );
+    }
+    renderWithMantine(<ConnectionHarness />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('$any')).toBeInTheDocument();
+    expect(screen.getByText('$mine')).toBeInTheDocument();
+    expect(screen.queryByText('$other')).not.toBeInTheDocument();
+  });
+
   it('offers no variables unless the picker opts in', async () => {
     asMock(useSources).mockReturnValue({ data: SOURCES });
     renderWithMantine(<VariableHarness />);

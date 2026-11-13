@@ -1,7 +1,10 @@
 import { useCallback, useMemo } from 'react';
-import { DataSourceDashboardFilter as DataSourceFilter } from '@hyperdx/common-utils/dist/types';
+import {
+  ConnectionDashboardFilter as ConnectionFilter,
+  DataSourceDashboardFilter as DataSourceFilter,
+} from '@hyperdx/common-utils/dist/types';
 import { ComboboxItem, Group, Select, Stack } from '@mantine/core';
-import { IconStack } from '@tabler/icons-react';
+import { IconServer, IconStack } from '@tabler/icons-react';
 
 import {
   getSourceOptionIcon,
@@ -10,6 +13,7 @@ import {
   useFilteredSortedSourceItems,
   useSourceKindMap,
 } from '@/components/sourceSelectUtils';
+import { useConnectionItems } from '@/hooks/useConnectionItems';
 import { useSources } from '@/source';
 
 import {
@@ -27,8 +31,8 @@ type ReferenceVariableFilterProps = {
 };
 
 /**
- * The filter bar control for a reference variable: a single picker over the
- * IDs the variable can select.
+ * The filter bar control shared by data source and connection variables: a
+ * single picker over the IDs the variable can select.
  */
 function ReferenceVariableSelect({
   name,
@@ -140,6 +144,26 @@ export const DataSourceDashboardFilter = ({
       pendingVariables={pendingVariables}
       placeholder="Select a source"
       renderIcon={renderIcon}
+    />
+  );
+};
+
+const renderConnectionIcon = () => <IconServer size={16} />;
+
+/** A connection variable's picker. */
+export const ConnectionDashboardFilter = ({
+  filter,
+  ...props
+}: ReferenceVariableFilterProps & { filter: ConnectionFilter }) => {
+  const items = useConnectionItems({ sorted: true });
+
+  return (
+    <ReferenceVariableSelect
+      {...props}
+      name={filter.name}
+      items={items}
+      placeholder="Select a connection"
+      renderIcon={renderConnectionIcon}
     />
   );
 };

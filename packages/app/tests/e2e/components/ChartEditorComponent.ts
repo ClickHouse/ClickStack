@@ -446,6 +446,19 @@ export class ChartEditorComponent {
     }
   }
 
+  /** The raw SQL editor's connection picker input. */
+  get connection(): Locator {
+    return this.editorForm().getByTestId('connection-selector');
+  }
+
+  /** Pick the raw SQL editor's connection, by option label. */
+  async selectConnection(connectionName: string) {
+    await this.connection.click();
+    await this.page
+      .getByRole('option', { name: connectionName, exact: true })
+      .click();
+  }
+
   /** Open the Data Source dropdown. */
   async openSourcePicker() {
     await this.sourceSelector.click();
