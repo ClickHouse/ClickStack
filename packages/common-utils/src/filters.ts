@@ -23,6 +23,7 @@ import {
 } from '@/types';
 import {
   escapePromqlStringValue,
+  formatVariableValues,
   getVariableReferences,
   substituteVariables,
 } from '@/variables';
@@ -966,15 +967,55 @@ export function isAdhocFilterValue(
 export const isAdhocComparableDataType = (type: string): boolean =>
   !/\bDateTime/.test(type);
 
+/** A condition with the values of every condition it was merged with. */
+type GroupedAdhocCondition = {
+  condition: AdhocFilterCondition;
+  values: string[];
+};
+
+/**
+ * Merge the conditions using `operator` that share a key into the first of
+ * them, so their values can be OR'd. Other conditions keep one value each.
+ */
+const groupAdhocConditionsByKey = (
+  conditions: AdhocFilterCondition[],
+  operator: AdhocFilterOperator,
+): GroupedAdhocCondition[] => {
+  const valuesByKey = new Map<string, string[]>();
+  const grouped: GroupedAdhocCondition[] = [];
+  for (const condition of conditions) {
+    const existing =
+      condition.operator === operator
+        ? valuesByKey.get(condition.key)
+        : undefined;
+    if (existing) {
+      existing.push(condition.value);
+      continue;
+    }
+    const values = [condition.value];
+    if (condition.operator === operator) valuesByKey.set(condition.key, values);
+    grouped.push({ condition, values });
+  }
+  return grouped;
+};
+
+const unsupportedOperatorError = (
+  operator: AdhocFilterOperator,
+  sourceType: AdhocFilterSourceType,
+) =>
+  new Error(
+    `Ad hoc filter operator '${operator}' is not supported for ${sourceType === 'sql' ? 'SQL' : 'PromQL'}`,
+  );
+
 const renderAdhocConditionSql = ({
-  key,
-  operator,
-  value,
-}: AdhocFilterCondition): string => {
+  condition: { key, operator, value },
+  values,
+}: GroupedAdhocCondition): string => {
   // Stringified like broadcast filter selections, so Map/JSON/Dynamic values
   // compare as strings.
   const target = `toString(${key})`;
-  const literal = `'${escapeSqlString(value)}'`;
+  const toLiteral = (v: string) => `'${escapeSqlString(v)}'`;
+  const literal = toLiteral(value);
   switch (operator) {
     case '=':
     case '!=':
@@ -985,6 +1026,10 @@ const renderAdhocConditionSql = ({
       return `match(${target}, ${literal})`;
     case '!~':
       return `NOT match(${target}, ${literal})`;
+    case 'IN':
+      return `${target} IN (${values.map(toLiteral).join(', ')})`;
+    case '=|':
+      throw unsupportedOperatorError(operator, 'sql');
     default:
       operator satisfies never;
       throw new Error(`Unknown ad hoc filter operator '${operator}'`);
@@ -992,16 +1037,21 @@ const renderAdhocConditionSql = ({
 };
 
 /**
- * Render the conditions of a SQL ad hoc filter as filters, one per condition.
- * Keys are SQL expressions and are used verbatim.
+ * Render the conditions of a SQL ad hoc filter as filters, one per condition,
+ * except that `IN` conditions sharing a key become one. Keys are SQL
+ * expressions and are used verbatim. Conditions SQL can't express are skipped;
+ * callers report them using `isAdhocConditionSupported`.
  */
 export function adhocConditionsToFilters(
   conditions: AdhocFilterCondition[],
 ): ConditionFilter[] {
-  return conditions.map(
-    (condition): ConditionFilter => ({
+  const supported = conditions.filter(condition =>
+    isAdhocConditionSupported('sql', condition),
+  );
+  return groupAdhocConditionsByKey(supported, 'IN').map(
+    (grouped): ConditionFilter => ({
       type: 'sql',
-      condition: renderAdhocConditionSql(condition),
+      condition: renderAdhocConditionSql(grouped),
     }),
   );
 }
@@ -1062,10 +1112,9 @@ export function mergeAdhocConditions(
 const LEGACY_LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 const renderAdhocMatcherPromql = ({
-  key,
-  operator,
-  value,
-}: AdhocFilterCondition): string => {
+  condition: { key, operator, value },
+  values,
+}: GroupedAdhocCondition): string => {
   // Label names outside the legacy charset must be quoted (Prometheus 3).
   const label = LEGACY_LABEL_NAME.test(key)
     ? key
@@ -1076,11 +1125,14 @@ const renderAdhocMatcherPromql = ({
     case '=~':
     case '!~':
       return `${label}${operator}"${escapePromqlStringValue(value)}"`;
+    case '=|': {
+      const pattern = formatVariableValues({ values }, 'regex');
+      return `${label}=~"${escapePromqlStringValue(pattern)}"`;
+    }
     case 'LIKE':
     case 'NOT LIKE':
-      throw new Error(
-        `Ad hoc filter operator '${operator}' is not supported for PromQL`,
-      );
+    case 'IN':
+      throw unsupportedOperatorError(operator, 'promql');
     default:
       operator satisfies never;
       throw new Error(`Unknown ad hoc filter operator '${operator}'`);
@@ -1089,7 +1141,8 @@ const renderAdhocMatcherPromql = ({
 
 /**
  * Whether an ad hoc filter of `sourceType` can apply `condition`. A filter
- * switched from SQL to PromQL keeps its conditions, and PromQL has no LIKE.
+ * switched between SQL and PromQL keeps its conditions, and PromQL has no LIKE
+ * or IN, nor SQL a `=|`.
  */
 export function isAdhocConditionSupported(
   sourceType: AdhocFilterSourceType,
@@ -1108,20 +1161,22 @@ export function isAdhocConditionSupported(
 
 /**
  * Render the conditions of a PromQL ad hoc filter as label matchers, one per
- * condition. Conditions PromQL can't express are skipped; callers report them
+ * condition, except that `=|` conditions sharing a label become one regex
+ * matcher. Conditions PromQL can't express are skipped; callers report them
  * using `isAdhocConditionSupported`.
  */
 export function adhocConditionsToPromqlFilters(
   conditions: AdhocFilterCondition[],
 ): PromqlConditionFilter[] {
-  return conditions
-    .filter(condition => isAdhocConditionSupported('promql', condition))
-    .map(
-      (condition): PromqlConditionFilter => ({
-        type: 'promql',
-        condition: renderAdhocMatcherPromql(condition),
-      }),
-    );
+  const supported = conditions.filter(condition =>
+    isAdhocConditionSupported('promql', condition),
+  );
+  return groupAdhocConditionsByKey(supported, '=|').map(
+    (grouped): PromqlConditionFilter => ({
+      type: 'promql',
+      condition: renderAdhocMatcherPromql(grouped),
+    }),
+  );
 }
 
 function isPromqlFilter(
@@ -1211,6 +1266,7 @@ export type DashboardVariableDeclaration = Pick<
 
 /** Minimal projection of fields necessary to extract the variables a dashboard declares. */
 export type FilterForVariableDeclaration = {
+  type?: DashboardFilterKind;
   name: string;
   expression?: string;
   variableName?: string;
@@ -1230,6 +1286,8 @@ export function getDashboardVariableFilters<
 
   for (const filter of filters ?? []) {
     if (!isFilterVariableEnabled(filter)) continue;
+    // Their variable name only keys their conditions; it isn't referenceable.
+    if (filter.type === 'ADHOC') continue;
 
     // There shouldn't be any duplicate names, but if there are then the first one wins.
     const name = getFilterVariableName(filter);

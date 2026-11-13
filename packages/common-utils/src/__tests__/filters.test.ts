@@ -802,6 +802,7 @@ describe('filters', () => {
           {
             id: 'conds',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Conditions',
             sourceType: 'sql',
             sources: ['logs'],
@@ -826,6 +827,7 @@ describe('filters', () => {
           {
             id: 'conds',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Conditions',
             sourceType: 'promql',
             sources: ['metrics'],
@@ -1680,14 +1682,12 @@ describe('filters', () => {
         name: 'Conditions',
         sourceType: 'sql',
         sources: ['logs', 'traces'],
+        isBroadcastEnabled: true,
         isVariableEnabled: true,
       };
       expect(getFilterBroadcastTarget(adhoc)).toEqual({
         appliesToSourceIds: ['logs', 'traces'],
       });
-      expect(
-        getFilterBroadcastTarget({ ...adhoc, isBroadcastEnabled: false }),
-      ).toBeUndefined();
     });
 
     it('returns undefined when broadcasting is off', () => {
@@ -1825,8 +1825,35 @@ describe('filters', () => {
       ['!~', "NOT match(toString(ServiceName), 'api')"],
       ['LIKE', "toString(ServiceName) LIKE 'api'"],
       ['NOT LIKE', "toString(ServiceName) NOT LIKE 'api'"],
+      ['IN', "toString(ServiceName) IN ('api')"],
     ])('renders %s', (operator, condition) => {
       expect(conditionFor(operator)).toEqual([{ type: 'sql', condition }]);
+    });
+
+    it('ORs IN conditions sharing a key, at the first one', () => {
+      expect(
+        adhocConditionsToFilters([
+          { key: 'SeverityText', operator: '=', value: 'error' },
+          { key: 'ServiceName', operator: 'IN', value: 'api' },
+          { key: 'Env', operator: 'IN', value: 'prod' },
+          { key: 'ServiceName', operator: 'IN', value: "it's" },
+          { key: 'ServiceName', operator: '!=', value: 'web' },
+        ]).map(filter => filter.condition),
+      ).toEqual([
+        "toString(SeverityText) = 'error'",
+        "toString(ServiceName) IN ('api', 'it''s')",
+        "toString(Env) IN ('prod')",
+        "toString(ServiceName) != 'web'",
+      ]);
+    });
+
+    it('skips =| rather than throwing', () => {
+      expect(
+        adhocConditionsToFilters([
+          { key: 'ServiceName', operator: '=|', value: 'api' },
+          { key: 'Env', operator: '=', value: 'prod' },
+        ]),
+      ).toEqual([{ type: 'sql', condition: "toString(Env) = 'prod'" }]);
     });
 
     it('passes LIKE patterns through as written', () => {
@@ -2004,11 +2031,22 @@ describe('filters', () => {
       ['!=', 'service!="api"'],
       ['=~', 'service=~"api"'],
       ['!~', 'service!~"api"'],
+      ['=|', 'service=~"api"'],
     ])('renders %s', (operator, matcher) => {
       expect(matcherFor(operator)).toEqual([matcher]);
     });
 
-    it.each<AdhocFilterOperator>(['LIKE', 'NOT LIKE'])(
+    it('ORs =| conditions sharing a label into one escaped regex', () => {
+      expect(
+        adhocConditionsToPromqlFilters([
+          { key: 'service', operator: '=|', value: 'api' },
+          { key: 'job', operator: '=|', value: 'node' },
+          { key: 'service', operator: '=|', value: 'a.b\\c' },
+        ]).map(filter => filter.condition),
+      ).toEqual(['service=~"(api|a\\\\.b\\\\\\\\c)"', 'job=~"node"']);
+    });
+
+    it.each<AdhocFilterOperator>(['LIKE', 'NOT LIKE', 'IN'])(
       'skips %s rather than throwing',
       operator => {
         expect(
@@ -2059,6 +2097,10 @@ describe('filters', () => {
       ['promql', 'NOT LIKE', false],
       ['promql', '=~', true],
       ['promql', '!=', true],
+      ['sql', 'IN', true],
+      ['sql', '=|', false],
+      ['promql', '=|', true],
+      ['promql', 'IN', false],
     ])('%s supports %s: %s', (sourceType, operator, expected) => {
       expect(
         isAdhocConditionSupported(sourceType, {
@@ -2223,6 +2265,19 @@ describe('filters', () => {
           filter({ id: 'unset', name: 'Env', expression: 'Env' }),
         ]),
       ).toEqual([]);
+    });
+
+    it('skips ad hoc filters, whose name is not referenceable', () => {
+      const adhoc: AdhocDashboardFilter = {
+        id: 'a1',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['logs'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      };
+      expect(getDashboardVariableFilters([adhoc])).toEqual([]);
     });
 
     it('skips a filter whose display name derives nothing usable', () => {

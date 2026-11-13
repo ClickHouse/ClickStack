@@ -181,6 +181,7 @@ describe('useAdhocFilterOptions', () => {
   ): AdhocDashboardFilter => ({
     id: 'f',
     type: 'ADHOC',
+    isBroadcastEnabled: true,
     name: 'Conditions',
     sourceType,
     sources,

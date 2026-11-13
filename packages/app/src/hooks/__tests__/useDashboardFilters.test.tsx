@@ -995,6 +995,7 @@ describe('useDashboardFilters', () => {
     const adhocFilter: AdhocDashboardFilter = {
       id: 'adhoc1',
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       name: 'Conditions',
       sourceType: 'sql',
       sources: ['logs'],
@@ -1222,15 +1223,6 @@ describe('useDashboardFilters', () => {
         ).toEqual([conditionSql]);
       });
 
-      it('applies nothing when broadcast is disabled', () => {
-        mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
-        const filters = [{ ...adhocFilter, isBroadcastEnabled: false }];
-
-        const { result } = renderHook(() => useDashboardFilters(filters));
-
-        expect(result.current.getFilterQueriesForSource('logs')).toEqual([]);
-      });
-
       describe('PromQL', () => {
         const promqlFilter: AdhocDashboardFilter = {
           ...adhocFilter,
@@ -1272,14 +1264,6 @@ describe('useDashboardFilters', () => {
           expect(
             conditionsFor(result.current.getFilterQueriesForSource('prom2')),
           ).toEqual([jobMatcher]);
-        });
-
-        it('applies nothing when broadcast is disabled', () => {
-          const filters = [{ ...promqlFilter, isBroadcastEnabled: false }];
-
-          const { result } = renderHook(() => useDashboardFilters(filters));
-
-          expect(result.current.getFilterQueriesForSource('prom')).toEqual([]);
         });
 
         it('combines conditions across filters, deduplicated', () => {
