@@ -1430,6 +1430,19 @@ function DBSearchPageContent() {
         : new Set<string>(),
     [inputSourceColumns],
   );
+  // Native JSON columns, so dotted filter keys under them are written as JSON
+  // access (`toString(`col`.`a`)`) and not as Map brackets (`col['a']`).
+  const jsonColumns = useMemo(
+    () =>
+      inputSourceColumns
+        ? new Set(
+            inputSourceColumns
+              .filter(c => c.type === 'JSON' || c.type.startsWith('JSON('))
+              .map(c => c.name),
+          )
+        : new Set<string>(),
+    [inputSourceColumns],
+  );
 
   const watchedSource = useWatch({
     control,
@@ -1468,6 +1481,7 @@ function DBSearchPageContent() {
     onFilterChange: handleSetFilters,
     dateTimeColumns,
     knownColumns,
+    jsonColumns,
   });
 
   useEffect(() => {

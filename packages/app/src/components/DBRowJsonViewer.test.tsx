@@ -3,7 +3,11 @@ import { fireEvent, screen, within } from '@testing-library/react';
 
 import { useMaterializedAliasColumnsOption } from '@/hooks/useMaterializedAliasColumnsOption';
 
-import { buildJSONExtractQuery, DBRowJsonViewer } from './DBRowJsonViewer';
+import {
+  buildJSONExtractQuery,
+  DBRowJsonViewer,
+  getArrayIndexPositions,
+} from './DBRowJsonViewer';
 import { RowSidePanelContext } from './DBRowSidePanel';
 
 // Mock Next.js router
@@ -444,5 +448,44 @@ describe('DBRowJsonViewer', () => {
         buildJSONExtractQuery(['SomeArray', '0', 'id'], ['SomeArray', '0']),
       ).toBe("JSONExtractString(SomeArray[1], 'id')");
     });
+  });
+});
+
+describe('getArrayIndexPositions', () => {
+  const row = {
+    message: {
+      events: [
+        { detail: { parameters: [{ name: 'a' }, { name: 'b', value: 'x' }] } },
+      ],
+      counts: { '200': { n: 1 } },
+    },
+  };
+
+  it('marks the path positions whose parent is an array', () => {
+    expect(
+      Array.from(
+        getArrayIndexPositions(row, [
+          'message',
+          'events',
+          '0',
+          'detail',
+          'parameters',
+          '1',
+          'value',
+        ]),
+      ),
+    ).toEqual([2, 5]);
+  });
+
+  it('does not mark numeric keys of a plain object', () => {
+    expect(
+      Array.from(
+        getArrayIndexPositions(row, ['message', 'counts', '200', 'n']),
+      ),
+    ).toEqual([]);
+  });
+
+  it('returns an empty set for a missing path', () => {
+    expect(getArrayIndexPositions(row, ['nope', '0']).size).toBe(0);
   });
 });

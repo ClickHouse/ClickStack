@@ -297,15 +297,46 @@ function quoteIdentifierIfNeeded(id: string): string {
  * `knownColumns` is the set of real top-level column names on the table. Only
  * keys matching a known column or accessing a map key of a known column will
  * be quoted.
+ *
+ * `jsonColumns` is the subset of those columns that are native JSON columns. A
+ * dotted key under one of them is a JSON sub-path, not a Map key, so it is
+ * written as a `toString(`col`.`a`.`b`)` JSON access (the form the row panel
+ * produces) instead of the Map form `col['a.b']`, which ClickHouse rejects for
+ * a JSON column ("First argument for function 'arrayElement' must be array").
  */
 export function toQuotedClickHouseKeyExpression(
   key: string,
   knownColumns: Set<string>,
+  jsonColumns?: Set<string>,
 ): string {
   // A whole-key match against a real column wins: quote the entire name as one
   // identifier (handles flat columns whose name contains dots/hyphens/etc.).
   if (knownColumns.has(key)) {
     return quoteIdentifierIfNeeded(key);
+  }
+
+  if (
+    jsonColumns &&
+    jsonColumns.size > 0 &&
+    !key.includes("['") &&
+    !key.includes('["') &&
+    !key.includes('`') &&
+    !isSqlFunctionCallExpression(key)
+  ) {
+    const dotIdx = key.indexOf('.');
+    const root = dotIdx > 0 ? key.slice(0, dotIdx) : '';
+    if (root && jsonColumns.has(root) && dotIdx < key.length - 1) {
+      // A segment may end in array subscripts (`events[1]`), which belong to
+      // the path and must stay outside the quoted name.
+      const path = key
+        .slice(dotIdx + 1)
+        .split('.')
+        .map(segment => {
+          const [, name, subscripts] = /^(.*?)((?:\[\d+\])*)$/.exec(segment)!;
+          return `${SqlString.escapeId(name, true)}${subscripts}`;
+        });
+      return `toString(${SqlString.escapeId(root, true)}.${path.join('.')})`;
+    }
   }
 
   // Normalize dot-form (ResourceAttributes.host.name) to map access form (ResourceAttributes['host.name'])
