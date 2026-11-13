@@ -552,6 +552,7 @@ const fireChannelEvent = async ({
       message: alert.message,
       name: alert.name,
       displayName: alert.displayName,
+      note: alert.note,
       tags: alert.tags,
       savedSearchId: savedSearch?.id,
       silenced: alert.silenced,

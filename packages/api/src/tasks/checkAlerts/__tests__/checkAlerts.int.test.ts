@@ -4875,6 +4875,7 @@ describe('checkAlerts', () => {
           description: 'generic webhook description',
           body: JSON.stringify({
             text: '{{link}} | {{title}}',
+            note: '{{note}}',
           }),
           headers: {
             // @ts-expect-error type mismatch due to mongoose typing
@@ -4958,6 +4959,7 @@ describe('checkAlerts', () => {
           threshold: 1,
           dashboardId: dashboard.id,
           tileId: '17quud',
+          note: 'Check the api pods',
         },
         {
           taskType: AlertTaskType.TILE,
@@ -5027,6 +5029,7 @@ describe('checkAlerts', () => {
         redirect: 'manual',
         body: JSON.stringify({
           text: `http://app:8080/dashboards/${dashboard.id}?from=1700170200000&granularity=5+minute&to=1700174700000&highlightedTileId=17quud | 🚨 Alert for "My Dashboard - Logs Count" - 3 meets or exceeds 1`,
+          note: 'Check the api pods',
         }),
         // Idempotency-Key is always injected last (cannot be overridden by user headers)
         // and is a stable objectHash of {eventId, startTime, endTime, state}.
