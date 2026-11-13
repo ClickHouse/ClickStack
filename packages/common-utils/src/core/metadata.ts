@@ -79,10 +79,19 @@ export const DEFAULT_MAP_KEY_INDEX_MAX_PARTS = 20;
 // Cap keys per dispatched query: each key is another operation for the db to fetch, and simply fetching all keys at once can be too much for the db to handle.
 export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
 
-// Tokens a text index values lookup reads per key. The dictionary is sorted,
-// so a key with more distinct values than this gets the most frequent among
-// its alphabetically first ones. Keep it above "Load more"'s 10,000 values.
+// Distinct values a text index values lookup reads per key. The dictionary is
+// sorted, so a key with more than this gets the most frequent among its
+// alphabetically first ones. Keep it above "Load more"'s 10,000 values.
 const TEXT_INDEX_TOKENS_PER_KEY = 20_000;
+
+// mergeTreeTextIndex returns one row per part and token, so a value in every
+// part read takes maxParts rows; scaling the LIMIT by maxParts keeps room for
+// TEXT_INDEX_TOKENS_PER_KEY distinct values. A read of every part ("Load
+// more") isn't capped.
+const textIndexTokenLimit = (maxParts: number | null): ChSql =>
+  maxParts == null
+    ? chSql``
+    : chSql`LIMIT ${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(TEXT_INDEX_TOKENS_PER_KEY * maxParts, 'maxParts') }}`;
 // Keys or columns per text index values query; see dispatchKeyValueQueries.
 const TEXT_INDEX_KEYS_PER_QUERY = 10;
 // Smallest dictionary block size that gets one read per key; see
@@ -1865,7 +1874,7 @@ export class Metadata {
           WHERE ${partsFilter}
             AND startsWith(token, ${keyPrefix(k)})
             AND v != ''
-          LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }}
+          ${textIndexTokenLimit(maxParts)}
         )`);
           }
         }
@@ -1961,7 +1970,7 @@ export class Metadata {
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
             AND token != ''
-          LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }}
+          ${textIndexTokenLimit(maxParts)}
         )`;
           sqlBranches.push(sql);
         }
