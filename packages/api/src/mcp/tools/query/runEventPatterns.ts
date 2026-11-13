@@ -6,7 +6,11 @@ import {
   type Granularity,
   splitAndTrimWithBracket,
 } from '@hyperdx/common-utils/dist/core/utils';
-import { minePatterns } from '@hyperdx/common-utils/dist/drain';
+import {
+  buildPatternPredicate,
+  MAX_PREDICATE_TEMPLATE_LENGTH,
+  minePatterns,
+} from '@hyperdx/common-utils/dist/drain';
 import type {
   ChartConfigWithDateRange,
   ChartVariable,
@@ -34,8 +38,6 @@ import {
 } from './helpers';
 import {
   andSql,
-  buildPatternPredicate,
-  MAX_PREDICATE_TEMPLATE_LENGTH,
   PATTERN_MATCH_SEMANTICS,
   userWhereAsSql,
 } from './patternDrilldown';
