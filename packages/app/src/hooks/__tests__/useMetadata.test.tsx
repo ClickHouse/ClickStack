@@ -454,6 +454,34 @@ describe('useGetKeyValues', () => {
     ).toEqual([{ kvRollupTable: 'logs_kv' }, { kvRollupTable: 'traces_kv' }]);
   });
 
+  it("refetches 'all' mode values when the source's part settings change", async () => {
+    const defaultSources = jest.mocked(useSources)();
+    const withParts = (mapKeyIndexMaxParts: number) =>
+      jest.mocked(useSources).mockReturnValue({
+        data: [{ id: 'logs', kind: 'log', mapKeyIndexMaxParts }],
+        isLoading: false,
+      } as any);
+    const streamAllKeyValues = mockLookups.all([], []);
+
+    try {
+      withParts(20);
+      const { result, rerender } = renderValues({
+        mode: 'all',
+        chartConfigs: [logsConfig],
+      });
+      await waitForSettled(result);
+
+      withParts(5);
+      rerender();
+      await waitFor(() => expect(streamAllKeyValues).toHaveBeenCalledTimes(2));
+      expect(
+        streamAllKeyValues.mock.calls.map(([args]) => args.mapKeyIndexMaxParts),
+      ).toEqual([20, 5]);
+    } finally {
+      jest.mocked(useSources).mockReturnValue(defaultSources);
+    }
+  });
+
   it("passes limit to 'all' mode lookups as maxValuesPerKey", async () => {
     const streamAllKeyValues = mockLookups.all([]);
 

@@ -530,12 +530,27 @@ export function useMultipleGetKeyValues(
       ? { retry, structuralSharing, refetchOnWindowFocus: true }
       : {};
 
+  // Resolved here, not in the stream, so editing a source's part settings
+  // changes the query key instead of serving cached facets.
+  const partSettings = chartConfigsArr.map(chartConfig => {
+    const source = chartConfig.source
+      ? sources?.find(s => s.id === chartConfig.source)
+      : undefined;
+    return source && (isLogSource(source) || isTraceSource(source))
+      ? {
+          mapKeyIndexMaxParts: source.mapKeyIndexMaxParts,
+          mapKeyIndexPartSelection: source.mapKeyIndexPartSelection,
+        }
+      : {};
+  });
+
   const query = useStreamingQuery<Facet>({
     queryKey: [
       'useMetadata.useGetKeyValues',
       mode,
       metadataMVsOverride,
       ...chartConfigsArr.map(cc => ({ ...cc })),
+      partSettings,
       ...keys,
       // Serialized: react-query hashes keys with JSON.stringify, which would
       // flatten every distinct Set selection to `{}`.
@@ -573,26 +588,16 @@ export function useMultipleGetKeyValues(
         },
       );
 
-      const lookups = chartConfigsArr.map(chartConfig => {
+      const lookups = chartConfigsArr.map((chartConfig, i) => {
         const source = chartConfig.source
           ? sources?.find(s => s.id === chartConfig.source)
           : undefined;
-        const isLogOrTrace =
-          !!source && (isLogSource(source) || isTraceSource(source));
         const metadataMVs =
           usableMVsOverride ??
-          (isLogOrTrace ? source.metadataMaterializedViews : undefined);
-        return {
-          chartConfig,
-          source,
-          metadataMVs,
-          mapKeyIndexMaxParts: isLogOrTrace
-            ? source.mapKeyIndexMaxParts
-            : undefined,
-          mapKeyIndexPartSelection: isLogOrTrace
-            ? source.mapKeyIndexPartSelection
-            : undefined,
-        };
+          (source && (isLogSource(source) || isTraceSource(source))
+            ? source.metadataMaterializedViews
+            : undefined);
+        return { chartConfig, source, metadataMVs, ...partSettings[i] };
       });
 
       if (mode === 'exact') {
