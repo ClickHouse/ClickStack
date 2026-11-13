@@ -4027,4 +4027,83 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       expect(getFirstText(patchResult)).toContain('savedFilterValues');
     });
   });
+
+  describe('ad hoc filters', () => {
+    const adhocFilter = () => ({
+      type: 'ADHOC' as const,
+      name: 'Conditions',
+      sourceType: 'sql' as const,
+      sources: [ctx.traceSource._id.toString()],
+      variableName: 'conditions',
+    });
+    const adhocValue = {
+      type: 'adhoc' as const,
+      name: 'conditions',
+      conditions: [
+        { key: 'ServiceName', operator: 'IN' as const, value: 'api' },
+        { key: 'ServiceName', operator: 'IN' as const, value: 'web' },
+      ],
+    };
+    const parse = (result: Awaited<ReturnType<typeof callTool>>) =>
+      JSON.parse(getFirstText(result));
+
+    it('round-trips an ad hoc filter and its saved conditions through save, get and save', async () => {
+      const created = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Ad hoc',
+        tiles: [],
+        filters: [adhocFilter()],
+        savedFilterValues: [adhocValue],
+      });
+      expect(created.isError).toBeFalsy();
+      const { id, warnings } = parse(created);
+      expect(warnings ?? []).toEqual([]);
+
+      const read = parse(
+        await callTool(ctx.client!, 'clickstack_get_dashboard', { id }),
+      );
+      expect(read.filters).toEqual([
+        {
+          ...adhocFilter(),
+          id: expect.any(String),
+          isBroadcastEnabled: true,
+          isVariableEnabled: true,
+        },
+      ]);
+      expect(read.savedFilterValues).toEqual([adhocValue]);
+
+      const storedBefore = await Dashboard.findById(id).lean();
+      const saved = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id,
+        name: 'Ad hoc',
+        tiles: [],
+        filters: read.filters,
+        savedFilterValues: read.savedFilterValues,
+      });
+      expect(saved.isError).toBeFalsy();
+      const storedAfter = await Dashboard.findById(id).lean();
+      expect(storedAfter?.filters).toEqual(storedBefore?.filters);
+      expect(storedAfter?.savedFilterValues).toEqual([adhocValue]);
+    });
+
+    it('warns about saved conditions that no ad hoc filter, or not its source type, can apply', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Bad defaults',
+        tiles: [],
+        filters: [adhocFilter()],
+        savedFilterValues: [
+          { ...adhocValue, name: 'conditons' },
+          {
+            ...adhocValue,
+            conditions: [{ key: 'job', operator: '=|', value: 'api' }],
+          },
+        ],
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parse(result).warnings).toEqual([
+        expect.stringContaining('"conditons"'),
+        expect.stringContaining('=|'),
+      ]);
+    });
+  });
 });

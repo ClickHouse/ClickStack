@@ -63,11 +63,32 @@ describe('MCP Dashboard Tools - PromQL tiles and label filters', () => {
     isVariableEnabled: true as const,
   });
 
+  const storedAdhocFilter = (sourceType: 'sql' | 'promql') => ({
+    id: `${sourceType}-adhoc`,
+    type: 'ADHOC' as const,
+    name: `${sourceType} conditions`,
+    sourceType,
+    sources: [
+      sourceType === 'promql' ? promqlSourceId : ctx.traceSource._id.toString(),
+    ],
+    isBroadcastEnabled: true as const,
+    isVariableEnabled: true as const,
+    variableName: `${sourceType}_conditions`,
+  });
+
   const createStoredDashboard = () =>
     new Dashboard({
       name: 'PromQL dashboard',
       tiles: [storedPromqlTile(), storedMarkdownTile],
       filters: [storedLabelFilter()],
+      team: ctx.team._id,
+    }).save();
+
+  const createStoredAdhocDashboard = () =>
+    new Dashboard({
+      name: 'Ad hoc dashboard',
+      tiles: [],
+      filters: [storedAdhocFilter('sql'), storedAdhocFilter('promql')],
       team: ctx.team._id,
     }).save();
 
@@ -242,6 +263,63 @@ describe('MCP Dashboard Tools - PromQL tiles and label filters', () => {
       expect(parseOutput(saved).filters).toEqual(filters);
     });
 
+    it('round-trips a PromQL ad hoc filter', async () => {
+      const { sources, sourceType, name, variableName } =
+        storedAdhocFilter('promql');
+      const created = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Ad hoc',
+        tiles: [],
+        filters: [{ type: 'ADHOC', name, sourceType, sources, variableName }],
+        savedFilterValues: [
+          {
+            type: 'adhoc',
+            name: variableName,
+            conditions: [{ key: 'job', operator: '=|', value: 'api' }],
+          },
+        ],
+      });
+      expect(created.isError).toBeFalsy();
+      const { id, filters, warnings } = parseOutput(created);
+      expect(warnings ?? []).toEqual([]);
+      expect(filters).toEqual([
+        { ...storedAdhocFilter('promql'), id: expect.any(String) },
+      ]);
+
+      const saved = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id,
+        name: 'Ad hoc',
+        tiles: [],
+        filters,
+      });
+      expect(saved.isError).toBeFalsy();
+      expect(parseOutput(saved).filters).toEqual(filters);
+    });
+
+    it.each([
+      ['a sql filter over a promql source', 'sql', () => promqlSourceId],
+      [
+        'a promql filter over a trace source',
+        'promql',
+        () => ctx.traceSource._id.toString(),
+      ],
+    ] as const)('rejects %s', async (_label, sourceType, sourceId) => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Wrong kind',
+        tiles: [],
+        filters: [
+          {
+            type: 'ADHOC',
+            name: 'Conditions',
+            sourceType,
+            sources: [sourceId()],
+          },
+        ],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain(sourceId());
+    });
+
     it('rejects a PromQL tile on a source that is not a promql source', async () => {
       const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
         name: 'Wrong source',
@@ -413,6 +491,53 @@ describe('MCP Dashboard Tools - PromQL tiles and label filters', () => {
         expect.objectContaining(storedLabelFilter()),
       ]);
       expect(stored?.tiles).toHaveLength(2);
+    });
+
+    it('hides PromQL ad hoc filters from clickstack_get_dashboard', async () => {
+      const dashboard = await createStoredAdhocDashboard();
+
+      const result = await callTool(ctx.client!, 'clickstack_get_dashboard', {
+        id: dashboard._id.toString(),
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parseOutput(result).filters).toEqual([storedAdhocFilter('sql')]);
+    });
+
+    it('keeps hidden PromQL ad hoc filters when clickstack_save_dashboard updates the dashboard', async () => {
+      const dashboard = await createStoredAdhocDashboard();
+
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id: dashboard._id.toString(),
+        name: 'Ad hoc dashboard',
+        tiles: [],
+        filters: [{ ...storedAdhocFilter('sql'), name: 'Renamed' }],
+      });
+
+      expect(result.isError).toBeFalsy();
+      const stored = await Dashboard.findById(dashboard._id).lean();
+      expect(stored?.filters).toEqual([
+        { ...storedAdhocFilter('sql'), name: 'Renamed' },
+        storedAdhocFilter('promql'),
+      ]);
+    });
+
+    it('rejects a PromQL ad hoc filter', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'PromQL off',
+        tiles: [],
+        filters: [
+          {
+            type: 'ADHOC',
+            name: 'Labels',
+            sourceType: 'promql',
+            sources: [promqlSourceId],
+          },
+        ],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(await Dashboard.countDocuments({ team: ctx.team._id })).toBe(0);
     });
 
     it('rejects a PromQL tile', async () => {
