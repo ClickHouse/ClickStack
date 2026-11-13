@@ -87,7 +87,7 @@ const TEXT_INDEX_TOKENS_PER_KEY = 20_000;
 const TEXT_INDEX_KEYS_PER_QUERY = 10;
 // Smallest dictionary block size that gets one read per key; see
 // getMapTextIndexKeyValues.
-const PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE = 4096;
+const PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE = 2048;
 
 /**
  * The index read could not be scoped to the requested date range, so it was
