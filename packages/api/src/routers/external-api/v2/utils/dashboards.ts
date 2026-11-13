@@ -14,6 +14,8 @@ import {
   validateDashboardTileContainerRefs,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import {
+  getAdhocFilterSourceKinds,
+  isAdhocFilter,
   isPrometheusLabelFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
@@ -55,8 +57,8 @@ import { getConnectionsByTeam } from '@/controllers/connection';
 import { getSources } from '@/controllers/sources';
 import Dashboard, { DashboardDocument } from '@/models/dashboard';
 import {
-  getExternalCompatibleFilters,
-  getExternalCompatibleFilterValues,
+  getMcpCompatibleFilters,
+  getMcpCompatibleFilterValues,
   translateExternalChartToTileConfig,
   translateExternalFilterToFilter,
   translateFilterToExternalFilter,
@@ -773,10 +775,13 @@ export function convertToExternalDashboard(
   dashboard: DashboardDocument,
   {
     hidePromql = false,
+    hideAdhoc = false,
   }: {
     // MCP hides PromQL tiles and PROMETHEUS_LABEL filters while PromQL is
     // disabled on the deployment.
     hidePromql?: boolean;
+    // MCP doesn't expose ad hoc filters or their saved conditions yet.
+    hideAdhoc?: boolean;
   } = {},
 ): ExternalDashboard {
   const containers = dashboard.containers ?? [];
@@ -798,14 +803,17 @@ export function convertToExternalDashboard(
         convertTileToExternalChart(tile, containerById, dashboardId),
       ),
     tags: dashboard.tags || [],
-    filters: getExternalCompatibleFilters(dashboard.filters)
+    filters: (hideAdhoc
+      ? getMcpCompatibleFilters(dashboard.filters)
+      : (dashboard.filters ?? [])
+    )
       .filter(filter => !(hidePromql && isPrometheusLabelFilter(filter)))
       .map(translateFilterToExternalFilter),
     savedQuery: dashboard.savedQuery ?? null,
     savedQueryLanguage: dashboard.savedQueryLanguage ?? null,
-    savedFilterValues: getExternalCompatibleFilterValues(
-      dashboard.savedFilterValues,
-    ),
+    savedFilterValues: hideAdhoc
+      ? getMcpCompatibleFilterValues(dashboard.savedFilterValues)
+      : (dashboard.savedFilterValues ?? []),
     // Mongoose persists missing arrays as []. Only emit containers when
     // the user actually saved one or more, so dashboards without the
     // organization layer round-trip with the field absent.
@@ -1279,6 +1287,39 @@ function getTileOnClick(tile: ExternalDashboardTileWithId) {
   return tile.config.onClick;
 }
 
+/** Source IDs a filter reads from or applies to. */
+function getFilterSourceIds(
+  filter: ExternalDashboardFilter | ExternalDashboardFilterWithId,
+): string[] {
+  if (isStaticListFilter(filter)) return [];
+  if (isAdhocFilter(filter)) {
+    return [...filter.sources, ...(filter.appliesToSourceIds ?? [])];
+  }
+  return [filter.sourceId];
+}
+
+/**
+ * Returns an error message if an ad hoc filter reads from or applies to a
+ * source of a kind its `sourceType` can't query, or null if none does.
+ */
+function getAdhocFilterSourceKindError(
+  sources: SourceForValidation[],
+  filters: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[],
+): string | null {
+  const kindById = new Map(sources.map(s => [s._id.toString(), s.kind]));
+  const invalid = new Set(
+    filters.filter(isAdhocFilter).flatMap(filter => {
+      const kinds = getAdhocFilterSourceKinds(filter.sourceType);
+      return getFilterSourceIds(filter).filter(id => {
+        const kind = kindById.get(id);
+        return kind !== undefined && !kinds.includes(kind);
+      });
+    }),
+  );
+  if (invalid.size === 0) return null;
+  return `ADHOC filters with sourceType "sql" require Log, Trace, or Session sources, and with sourceType "promql" require PromQL sources. The following source IDs are not a supported kind: ${[...invalid].join(', ')}`;
+}
+
 /** Returns source IDs referenced in tiles/filters that do not exist for the team */
 function getMissingSources(
   sources: SourceForValidation[],
@@ -1307,13 +1348,8 @@ function getMissingSources(
     }
   }
 
-  if (filters?.length) {
-    for (const filter of filters) {
-      // Every variant but the static one names a source.
-      if (!isStaticListFilter(filter)) {
-        sourceIds.add(filter.sourceId);
-      }
-    }
+  for (const filter of filters ?? []) {
+    for (const sourceId of getFilterSourceIds(filter)) sourceIds.add(sourceId);
   }
 
   const existingSourceIds = new Set(
@@ -1831,6 +1867,12 @@ export async function validateDashboardTiles(
     'PROMETHEUS_LABEL filters',
   );
   if (promqlLabelFilterError != null) return promqlLabelFilterError;
+
+  const adhocFilterError = getAdhocFilterSourceKindError(
+    sources,
+    filters ?? [],
+  );
+  if (adhocFilterError != null) return adhocFilterError;
 
   if (missingOnClickDashboards.length > 0) {
     return `Could not find the following onClick dashboard IDs: ${missingOnClickDashboards.join(', ')}`;

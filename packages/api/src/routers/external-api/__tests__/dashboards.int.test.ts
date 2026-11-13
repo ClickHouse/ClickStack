@@ -8456,9 +8456,16 @@ describe('External API v2 Dashboards - new format', () => {
       conditions: [{ key: 'ServiceName', operator: '=', value: 'api' }],
     };
 
-    it('hides ad hoc filters and their saved values from GET', async () => {
+    const promqlAdhocFilter = () => ({
+      ...adhocFilter(),
+      sourceType: 'promql' as const,
+      sources: [promqlSource._id.toString()],
+    });
+
+    it('returns ad hoc filters and their saved values from GET', async () => {
+      const filter = adhocFilter();
       const dashboard = await createTestDashboard({
-        filters: [adhocFilter()],
+        filters: [filter],
         savedFilterValues: [adhocValue],
       });
 
@@ -8467,25 +8474,163 @@ describe('External API v2 Dashboards - new format', () => {
         `${BASE_URL}/${dashboard._id}`,
       ).expect(200);
 
-      expect(response.body.data.filters).toEqual([]);
-      expect(response.body.data.savedFilterValues).toEqual([]);
+      expect(response.body.data.filters).toEqual([filter]);
+      expect(response.body.data.savedFilterValues).toEqual([adhocValue]);
     });
 
-    it('rejects an ad hoc filter in a POST', async () => {
+    it('creates SQL and PromQL ad hoc filters with saved conditions', async () => {
+      const promqlValue = {
+        type: 'adhoc' as const,
+        name: 'prom',
+        conditions: [{ key: 'job', operator: '=|', value: 'api' }],
+      };
+      const response = await authRequest('post', BASE_URL)
+        .send(
+          createMockDashboard(traceSource._id.toString(), {
+            filters: [
+              omit(
+                { ...adhocFilter(), appliesToSourceIds: [traceSource._id] },
+                'id',
+              ),
+              // The mode flags default when omitted.
+              omit(
+                { ...promqlAdhocFilter(), name: 'Prom', variableName: 'prom' },
+                'id',
+                'isBroadcastEnabled',
+                'isVariableEnabled',
+              ),
+            ],
+            savedFilterValues: [adhocValue, promqlValue],
+          }),
+        )
+        .expect(200);
+
+      expect(response.body.data.filters).toEqual([
+        {
+          ...adhocFilter(),
+          id: expect.any(String),
+          appliesToSourceIds: [traceSource._id.toString()],
+        },
+        {
+          ...promqlAdhocFilter(),
+          id: expect.any(String),
+          name: 'Prom',
+          variableName: 'prom',
+        },
+      ]);
+      expect(response.body.data.savedFilterValues).toEqual([
+        adhocValue,
+        promqlValue,
+      ]);
+
+      const stored = await Dashboard.findById(response.body.data.id).lean();
+      expect(stored?.filters?.[1]).toMatchObject({
+        type: 'ADHOC',
+        sourceType: 'promql',
+        sources: [promqlSource._id.toString()],
+        isBroadcastEnabled: true,
+      });
+    });
+
+    it('round-trips a GET response through PUT', async () => {
+      const dashboard = await createTestDashboard({
+        filters: [adhocFilter()],
+        savedFilterValues: [adhocValue],
+      });
+      const { data } = (
+        await authRequest('get', `${BASE_URL}/${dashboard._id}`).expect(200)
+      ).body;
+
+      const response = await authRequest('put', `${BASE_URL}/${dashboard._id}`)
+        .send(omit(data, 'id'))
+        .expect(200);
+
+      expect(response.body.data.filters).toEqual(data.filters);
+      expect(response.body.data.savedFilterValues).toEqual(
+        data.savedFilterValues,
+      );
+    });
+
+    it.each([
+      ['broadcast disabled', { isBroadcastEnabled: false }],
+      ['variables disabled', { isVariableEnabled: false }],
+      ['no sources', { sources: [] }],
+      ['an invalid source ID', { sources: ['not-an-id'] }],
+      ['an unknown source type', { sourceType: 'lucene' }],
+      ['a selection limit', { maxSelections: 1 }],
+      ['the external sourceId field', { sourceId: new ObjectId().toString() }],
+    ])('rejects an ad hoc filter with %s', async (_label, overrides) => {
       await authRequest('post', BASE_URL)
         .send(
           createMockDashboard(traceSource._id.toString(), {
-            filters: [omit(adhocFilter(), 'id')],
+            filters: [omit({ ...adhocFilter(), ...overrides }, 'id')],
           }),
         )
         .expect(400);
     });
 
-    it('rejects ad hoc saved values in a POST', async () => {
+    it('rejects an ad hoc filter over a missing source', async () => {
+      const missing = new ObjectId().toString();
+      const response = await authRequest('post', BASE_URL)
+        .send(
+          createMockDashboard(traceSource._id.toString(), {
+            filters: [omit({ ...adhocFilter(), sources: [missing] }, 'id')],
+          }),
+        )
+        .expect(400);
+
+      expect(response.body.message).toContain(missing);
+    });
+
+    it.each([
+      ['a SQL filter over a PromQL source', () => adhocFilter(), 'promql'],
+      ['a SQL filter over a Metric source', () => adhocFilter(), 'metric'],
+      ['a PromQL filter over a Trace source', promqlAdhocFilter, 'trace'],
+    ] as const)('rejects %s', async (_label, makeFilter, kind) => {
+      const sourceId = {
+        promql: promqlSource,
+        metric: metricSource,
+        trace: traceSource,
+      }[kind]._id.toString();
+      const response = await authRequest('post', BASE_URL)
+        .send(
+          createMockDashboard(traceSource._id.toString(), {
+            filters: [omit({ ...makeFilter(), sources: [sourceId] }, 'id')],
+          }),
+        )
+        .expect(400);
+
+      expect(response.body.message).toContain(sourceId);
+    });
+
+    it('rejects an ad hoc filter applying to a source of the wrong kind', async () => {
       await authRequest('post', BASE_URL)
         .send(
           createMockDashboard(traceSource._id.toString(), {
-            savedFilterValues: [adhocValue],
+            filters: [
+              omit(
+                {
+                  ...adhocFilter(),
+                  appliesToSourceIds: [promqlSource._id.toString()],
+                },
+                'id',
+              ),
+            ],
+          }),
+        )
+        .expect(400);
+    });
+
+    it('rejects ad hoc saved values with an unknown operator', async () => {
+      await authRequest('post', BASE_URL)
+        .send(
+          createMockDashboard(traceSource._id.toString(), {
+            savedFilterValues: [
+              {
+                ...adhocValue,
+                conditions: [{ key: 'a', operator: '>', value: '1' }],
+              },
+            ],
           }),
         )
         .expect(400);

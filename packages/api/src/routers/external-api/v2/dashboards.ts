@@ -57,11 +57,12 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *     SavedFilterValue:
  *       description: >
  *         A single saved dashboard filter selection. Either a rendered SQL
- *         condition, or a selection addressed by the name of the dashboard
- *         variable it belongs to.
+ *         condition, a selection addressed by the name of the dashboard
+ *         variable it belongs to, or the conditions of an ADHOC filter.
  *       oneOf:
  *         - $ref: '#/components/schemas/SqlSavedFilterValue'
  *         - $ref: '#/components/schemas/VariableSavedFilterValue'
+ *         - $ref: '#/components/schemas/AdhocSavedFilterValue'
  *     SqlSavedFilterValue:
  *       type: object
  *       required: [condition]
@@ -102,6 +103,54 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             type: string
  *             maxLength: 10000
  *           example: ["hdx-oss-dev-api"]
+ *     AdhocSavedFilterValue:
+ *       type: object
+ *       required: [type, name, conditions]
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [adhoc]
+ *           description: Filter type.
+ *           example: "adhoc"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           maxLength: 1024
+ *           description: The variableName of the ADHOC filter these conditions belong to.
+ *           example: "conditions"
+ *         conditions:
+ *           type: array
+ *           maxItems: 100
+ *           description: The filter's conditions.
+ *           items:
+ *             $ref: '#/components/schemas/AdhocFilterCondition'
+ *     AdhocFilterCondition:
+ *       type: object
+ *       description: >
+ *         One "key operator value" condition. Conditions are AND'd, except that
+ *         IN (sql) and =| (promql) conditions sharing a key are OR'd into one.
+ *       required: [key, operator, value]
+ *       properties:
+ *         key:
+ *           type: string
+ *           minLength: 1
+ *           maxLength: 10000
+ *           description: A SQL expression (column or map access) for sql filters, or a label name for promql filters.
+ *           example: "ServiceName"
+ *         operator:
+ *           type: string
+ *           enum: ["=", "!=", "=~", "!~", "LIKE", "NOT LIKE", "IN", "=|"]
+ *           description: >
+ *             Comparison operator. =~ and !~ match a regular expression. LIKE,
+ *             NOT LIKE, and IN apply to sql filters only, and =| to promql
+ *             filters only; a condition its filter's sourceType can't express
+ *             is not applied.
+ *           example: "="
+ *         value:
+ *           type: string
+ *           maxLength: 10000
+ *           description: Value, pattern, or regular expression to compare against.
+ *           example: "api"
  *     MetricDataType:
  *       type: string
  *       enum: [sum, gauge, histogram, summary, exponential histogram]
@@ -2368,12 +2417,14 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *         - $ref: '#/components/schemas/QueryExpressionFilterInput'
  *         - $ref: '#/components/schemas/StaticListFilterInput'
  *         - $ref: '#/components/schemas/PrometheusLabelFilterInput'
+ *         - $ref: '#/components/schemas/AdhocFilterInput'
  *       discriminator:
  *         propertyName: type
  *         mapping:
  *           QUERY_EXPRESSION: '#/components/schemas/QueryExpressionFilterInput'
  *           STATIC_LIST: '#/components/schemas/StaticListFilterInput'
  *           PROMETHEUS_LABEL: '#/components/schemas/PrometheusLabelFilterInput'
+ *           ADHOC: '#/components/schemas/AdhocFilterInput'
  *
  *     QueryExpressionFilterInput:
  *       type: object
@@ -2683,6 +2734,92 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             the filter single-select. Omit the field for the default multi-select
  *             behavior.
  *           example: 1
+ *
+ *     AdhocFilterInput:
+ *       type: object
+ *       description: |
+ *         A filter holding free-form "key operator value" conditions, with keys
+ *         and values suggested from its sources: columns and map keys for sql
+ *         sources, labels for promql sources. Its conditions are always
+ *         broadcast to the tiles it applies to: as WHERE conditions on builder
+ *         tiles and raw sql tiles using the $__filters macro, or as label
+ *         matchers on PromQL tiles. Its conditions are saved in
+ *         savedFilterValues as an "adhoc" entry. Ad hoc filters are a preview
+ *         feature.
+ *       required:
+ *         - type
+ *         - name
+ *         - sourceType
+ *         - sources
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [ADHOC]
+ *           description: Discriminator. Must be "ADHOC".
+ *           example: "ADHOC"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name for the dashboard filter
+ *           example: "Conditions"
+ *         sourceType:
+ *           type: string
+ *           enum: [sql, promql]
+ *           description: |
+ *             The kind of sources the filter reads keys from and applies to: Log,
+ *             Trace, or Session sources for sql, PromQL sources for promql.
+ *           example: "sql"
+ *         sources:
+ *           type: array
+ *           minItems: 1
+ *           items:
+ *             type: string
+ *           description: IDs of the sources whose keys and values the filter suggests, all of sourceType.
+ *           example: ["65f5e4a3b9e77c001a111111"]
+ *         where:
+ *           type: string
+ *           description: |
+ *             Optional condition narrowing the rows keys and values are suggested
+ *             from. sql filters only; never applied to tiles. May reference the
+ *             dashboard's variables.
+ *           example: "ServiceName:api"
+ *         whereLanguage:
+ *           type: string
+ *           enum: [sql, lucene]
+ *           description: Language of the where condition
+ *           example: "lucene"
+ *         appliesToSourceIds:
+ *           type: array
+ *           items:
+ *             type: string
+ *           description: |
+ *             IDs of the sources whose tiles the conditions apply to, all of
+ *             sourceType. Omit or send an empty array to apply to the tiles of
+ *             the filter's sources.
+ *           example: ["65f5e4a3b9e77c001a111111"]
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true or omitted.
+ *           example: true
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true or omitted.
+ *           example: true
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: |
+ *             Unique name the filter's conditions are saved under, in
+ *             savedFilterValues and the dashboard URL. Tiles can't reference it
+ *             as a variable. Defaults to the display name with whitespace
+ *             replaced by underscores and remaining illegal characters removed.
+ *             Must be unique across a dashboard's variable-enabled filters.
+ *           example: "conditions"
  *
  *     Filter:
  *       allOf:

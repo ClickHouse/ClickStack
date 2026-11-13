@@ -240,32 +240,22 @@ export function translateExternalChartToTileConfig(
   };
 }
 
-/** Filter types the external API and MCP don't expose yet. */
-type InternalOnlyDashboardFilter = Extract<DashboardFilter, { type: 'ADHOC' }>;
-export type ExternalCompatibleDashboardFilter = Exclude<
-  DashboardFilter,
-  InternalOnlyDashboardFilter
->;
-
-/** The filters the external API and MCP may read. */
-export function getExternalCompatibleFilters(
+/** The filters MCP may read; it doesn't expose ad hoc filters yet. */
+export function getMcpCompatibleFilters(
   filters: DashboardFilter[] | undefined,
-): ExternalCompatibleDashboardFilter[] {
-  return (filters ?? []).filter(
-    (filter): filter is ExternalCompatibleDashboardFilter =>
-      !isAdhocFilter(filter),
-  );
+): DashboardFilter[] {
+  return (filters ?? []).filter(filter => !isAdhocFilter(filter));
 }
 
-/** Saved filter values the external API and MCP may read. */
-export function getExternalCompatibleFilterValues(
+/** Saved filter values MCP may read; it doesn't expose ad hoc filters yet. */
+export function getMcpCompatibleFilterValues(
   values: IDashboard['savedFilterValues'],
 ): NonNullable<IDashboard['savedFilterValues']> {
   return (values ?? []).filter(value => !isAdhocFilterValue(value));
 }
 
 export function translateFilterToExternalFilter(
-  filter: ExternalCompatibleDashboardFilter,
+  filter: DashboardFilter,
 ): ExternalDashboardFilterWithId {
   // Omitted from responses unless the filter is required, so a GET response
   // can be PUT back verbatim.
@@ -276,6 +266,9 @@ export function translateFilterToExternalFilter(
   switch (filter.type) {
     case 'STATIC_LIST':
       return omit(filter, ...omittedKeys);
+
+    case 'ADHOC':
+      return filter;
 
     case 'PROMETHEUS_LABEL':
       return {
@@ -309,6 +302,7 @@ export function translateExternalFilterToFilter(
 ): DashboardFilter {
   switch (filter.type) {
     case 'STATIC_LIST':
+    case 'ADHOC':
       return filter;
 
     case 'PROMETHEUS_LABEL':

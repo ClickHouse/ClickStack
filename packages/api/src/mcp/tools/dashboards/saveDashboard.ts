@@ -236,6 +236,7 @@ async function createDashboard({
 
   const externalDashboard = convertToExternalDashboard(newDashboard, {
     hidePromql: !promqlEnabled,
+    hideAdhoc: true,
   });
   return {
     content: [
@@ -452,6 +453,7 @@ async function updateDashboard({
 
   const externalDashboard = convertToExternalDashboard(updatedDashboard, {
     hidePromql: !promqlEnabled,
+    hideAdhoc: true,
   });
   return {
     content: [

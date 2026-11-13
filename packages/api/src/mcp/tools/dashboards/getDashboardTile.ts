@@ -51,6 +51,7 @@ export function registerGetDashboardTile({
 
       const externalDashboard = convertToExternalDashboard(dashboard, {
         hidePromql: !isPromqlEnabled(context),
+        hideAdhoc: true,
       });
       const tile = externalDashboard.tiles.find(t => t.id === tileId);
       if (!tile) {
