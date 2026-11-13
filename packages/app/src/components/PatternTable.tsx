@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import {
   BuilderChartConfigWithDateRange,
@@ -102,24 +102,20 @@ export default function PatternTable({
     ) as Pattern[];
   }, [groupedResults]);
 
-  const patternsById = useMemo(
-    () => new Map(sortedGroupedResults.map(p => [p.id, p])),
-    [sortedGroupedResults],
-  );
-  const renderRowActions = useCallback(
-    (row: Record<string, unknown>) => {
-      const pattern =
-        typeof row.id === 'string' ? patternsById.get(row.id) : undefined;
-      if (pattern == null || onPatternFilter == null) return null;
-      return (
-        <PatternRowActions
-          template={pattern.template}
-          valueExpression={effectiveBodyValueExpression}
-          onFilter={onPatternFilter}
-        />
-      );
-    },
-    [patternsById, effectiveBodyValueExpression, onPatternFilter],
+  // The rows are the patterns. One without a template gets no buttons.
+  const renderRowActions = useMemo(
+    () =>
+      onPatternFilter == null
+        ? undefined
+        : (row: Record<string, unknown>) =>
+            typeof row.template === 'string' ? (
+              <PatternRowActions
+                template={row.template}
+                valueExpression={effectiveBodyValueExpression}
+                onFilter={onPatternFilter}
+              />
+            ) : null,
+    [effectiveBodyValueExpression, onPatternFilter],
   );
 
   return (
@@ -192,7 +188,7 @@ export default function PatternTable({
             }}
             config={patternQueryConfig}
             showExpandButton={false}
-            rowActions={onPatternFilter ? renderRowActions : undefined}
+            rowActions={renderRowActions}
           />
           {selectedPattern && source && (
             <PatternSidePanel

@@ -175,6 +175,32 @@ describe('ActiveFilterPills', () => {
     expect(onRemovePatternFilter).toHaveBeenCalledWith(patternFilter);
   });
 
+  it('counts pattern pills toward MAX_VISIBLE_PILLS after the facet pills', () => {
+    const values = new Set<string | boolean>(
+      Array.from({ length: 7 }, (_, i) => `val${i}`),
+    );
+    const patternFilters = ['first <*>', 'second <*>'].map(template => ({
+      condition: `NOT match(Body, '${template}')`,
+      valueExpression: 'Body',
+      template,
+      action: 'exclude' as const,
+    }));
+    renderWithMantine(
+      <ActiveFilterPills
+        searchFilters={makeSearchFilters({
+          field: { included: values, excluded: new Set<string | boolean>() },
+        })}
+        chartConfig={CHART_CONFIG}
+        patternFilters={patternFilters}
+      />,
+    );
+    // Seven facet pills and the first pattern pill fill the eight slots.
+    expect(screen.getAllByTestId('active-filter-pill-pattern')).toHaveLength(1);
+    fireEvent.click(screen.getByText('+1 more'));
+    expect(screen.getAllByTestId('active-filter-pill-pattern')).toHaveLength(2);
+    expect(screen.getByText('Show less')).toBeInTheDocument();
+  });
+
   it('calls setFilterValue when removing an included pill', () => {
     const searchFilters = makeSearchFilters({
       status: {

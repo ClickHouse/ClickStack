@@ -29,12 +29,20 @@ describe('PatternRowActions', () => {
     ).toEqual([
       [
         expect.objectContaining({
+          valueExpression: 'Body',
           template: 'GetCartAsync called with userId <*>',
           action: 'include',
         }),
         'include',
       ],
-      [expect.objectContaining({ action: 'exclude' }), 'exclude'],
+      [
+        expect.objectContaining({
+          valueExpression: 'Body',
+          template: 'GetCartAsync called with userId <*>',
+          action: 'exclude',
+        }),
+        'exclude',
+      ],
     ]);
   });
 

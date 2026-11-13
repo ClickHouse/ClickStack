@@ -270,12 +270,19 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
     clearTimeout(confirmTimerRef.current);
   }, [confirmClear, clearAllFilters]);
 
-  if (pills.length + patternFilters.length === 0) {
+  const totalCount = pills.length + patternFilters.length;
+  if (totalCount === 0) {
     return null;
   }
 
-  const visiblePills = expanded ? pills : pills.slice(0, MAX_VISIBLE_PILLS);
-  const hiddenCount = pills.length - MAX_VISIBLE_PILLS;
+  // The cap covers facet and pattern pills together, facet pills first.
+  const visibleCount = expanded ? totalCount : MAX_VISIBLE_PILLS;
+  const visiblePills = pills.slice(0, visibleCount);
+  const visiblePatternFilters = patternFilters.slice(
+    0,
+    Math.max(visibleCount - pills.length, 0),
+  );
+  const hiddenCount = totalCount - MAX_VISIBLE_PILLS;
 
   return (
     <Flex gap={4} px="sm" wrap="wrap" align="center" {...flexProps}>
@@ -296,7 +303,7 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
           />
         );
       })}
-      {patternFilters.map(filter => (
+      {visiblePatternFilters.map(filter => (
         <FilterPill
           key={filter.condition}
           field="Pattern"
@@ -329,7 +336,7 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
           Show less
         </Text>
       )}
-      {pills.length + patternFilters.length >= 2 && (
+      {totalCount >= 2 && (
         <Text
           size="xxs"
           c={confirmClear ? 'red.4' : 'dimmed'}

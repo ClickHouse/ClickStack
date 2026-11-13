@@ -116,8 +116,11 @@ type SampleLog = {
 export type Pattern = {
   id: string;
   pattern: string;
-  /** The cluster's Drain template, which `pattern` reconstructs for display. */
-  template: string;
+  /**
+   * The cluster's Drain template, which `pattern` reconstructs for display.
+   * Missing when the miner returned none for the cluster.
+   */
+  template?: string;
   count: number;
   samples: SampleLog[];
 };

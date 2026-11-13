@@ -1,6 +1,8 @@
+import { escapeSqlString } from '@hyperdx/common-utils/dist/core/utils';
 import {
   buildCompactPatternPredicate,
   parsePatternPredicate,
+  type PatternRegexOptions,
 } from '@hyperdx/common-utils/dist/drain';
 import type { ConditionFilter, Filter } from '@hyperdx/common-utils/dist/types';
 
@@ -15,10 +17,19 @@ export type PatternFilter = {
   action: PatternFilterAction;
 };
 
-// The templates come from the app's miner, so the regex must split on the
-// same delimiters.
-const options = { extraDelimiters: DRAIN_EXTRA_DELIMITERS };
+// The templates come from the app's miner (Python Drain3), so the regex must
+// split where it did.
+const options: PatternRegexOptions = {
+  extraDelimiters: DRAIN_EXTRA_DELIMITERS,
+  whitespace: 'python',
+};
 const NOT = 'NOT ';
+
+// The miner strips ANSI escape codes before mining (usePatterns), so the
+// filter strips the ones logs carry first: CSI sequences such as colors.
+const ANSI_CSI = '\\x{1B}\\[[0-?]*[ -/]*[@-~]';
+const STRIP_ANSI_START = 'replaceRegexpAll(';
+const STRIP_ANSI_END = `, '${escapeSqlString(ANSI_CSI)}', '')`;
 
 /**
  * A search filter that keeps (include) or drops (exclude) every event whose
@@ -31,7 +42,7 @@ export function buildPatternFilter(
 ): ConditionFilter | null {
   // The compact form: filters live in the URL, and people stack many.
   const predicate = buildCompactPatternPredicate(
-    valueExpression,
+    `${STRIP_ANSI_START}${valueExpression}${STRIP_ANSI_END}`,
     template,
     options,
   );
@@ -51,9 +62,20 @@ export function parsePatternFilter(filter: Filter): PatternFilter | null {
     options,
   );
   if (parsed == null) return null;
+  const { valueExpression, template } = parsed;
+  if (
+    !valueExpression.startsWith(STRIP_ANSI_START) ||
+    !valueExpression.endsWith(STRIP_ANSI_END)
+  ) {
+    return null;
+  }
   return {
     condition: filter.condition,
-    ...parsed,
+    valueExpression: valueExpression.slice(
+      STRIP_ANSI_START.length,
+      -STRIP_ANSI_END.length,
+    ),
+    template,
     action: excluded ? 'exclude' : 'include',
   };
 }
