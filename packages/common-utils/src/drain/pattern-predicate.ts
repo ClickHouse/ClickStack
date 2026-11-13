@@ -77,7 +77,9 @@ export function templateToRegex(
 ): string {
   const separators = separatorClass(options);
   const separator = `[${separators}]`;
-  const tokens = template.split(/\s+/).filter(t => t.length > 0);
+  // Drain3 keeps a BOM inside a token, where JS `\s` would split.
+  const split = options?.whitespace === 'python' ? /[^\S\u{FEFF}]+/u : /\s+/;
+  const tokens = template.split(split).filter(t => t.length > 0);
   const body = tokens
     .map(t =>
       t === PATTERN_WILDCARD ? `[^${separators}]+` : escapeRe2Literal(t),
