@@ -389,6 +389,7 @@ export const RawLogTable = memo(
     selectionResetKey,
     onSelectedRowsChange,
     getRowWhere,
+    rowActions,
     variant = 'default',
     onRemoveColumn,
   }: {
@@ -432,6 +433,8 @@ export const RawLogTable = memo(
     sortOrder?: SortingState;
     onSortingChange?: (v: SortingState | null) => void;
     getRowWhere?: (row: Record<string, any>) => RowWhereResult;
+    /** Hover buttons for a row, shown instead of the row copy buttons. */
+    rowActions?: (row: Record<string, unknown>) => React.ReactNode;
     variant?: DBRowTableVariant;
     onRemoveColumn?: (column: string) => void;
   }) => {
@@ -1336,7 +1339,12 @@ export const RawLogTable = memo(
                               );
                             })}
                           {/* Row-level copy buttons */}
-                          {getRowWhere && (
+                          {rowActions && (
+                            <div className={styles.rowButtons}>
+                              {rowActions(row.original)}
+                            </div>
+                          )}
+                          {getRowWhere && !rowActions && (
                             <DBRowTableRowButtons
                               row={row.original}
                               getRowWhere={getRowWhere}

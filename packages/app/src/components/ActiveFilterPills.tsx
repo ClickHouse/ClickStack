@@ -3,6 +3,8 @@ import type { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist
 import { Flex, FlexProps, Text } from '@mantine/core';
 
 import { FilterPill, FilterValueEditor } from '@/components/FilterPill';
+import type { PatternFilter } from '@/components/Patterns/patternFilter';
+import { simplifyPattern } from '@/components/Patterns/simplifyPattern';
 import { useGetKeyValues } from '@/hooks/useMetadata';
 import type { FilterStateHook } from '@/searchFilters';
 import { useFormatTime } from '@/useFormatTime';
@@ -14,6 +16,7 @@ const VALUE_EDIT_LIMIT = 50;
 // Stable identity so a caller that omits the prop doesn't invalidate the
 // flattenFilters useMemo on every render.
 const EMPTY_DATE_TIME_COLUMNS: ReadonlyMap<string, string> = new Map();
+const NO_PATTERN_FILTERS: PatternFilter[] = [];
 
 type FormatTime = ReturnType<typeof useFormatTime>;
 
@@ -153,9 +156,14 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
   invalidFieldReason,
   chartConfig,
   dateTimeColumns = EMPTY_DATE_TIME_COLUMNS,
+  patternFilters = NO_PATTERN_FILTERS,
+  onRemovePatternFilter,
   ...flexProps
 }: {
   searchFilters: FilterStateHook;
+  /** Filters added from the Event Patterns view, shown after the others. */
+  patternFilters?: PatternFilter[];
+  onRemovePatternFilter?: (filter: PatternFilter) => void;
   /**
    * Map of DateTime/Date column name → ClickHouse type. Their pill values are
    * formatted to the user's locale/timezone for display, matching the results
@@ -262,7 +270,7 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
     clearTimeout(confirmTimerRef.current);
   }, [confirmClear, clearAllFilters]);
 
-  if (pills.length === 0) {
+  if (pills.length + patternFilters.length === 0) {
     return null;
   }
 
@@ -288,6 +296,17 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
           />
         );
       })}
+      {patternFilters.map(filter => (
+        <FilterPill
+          key={filter.condition}
+          field="Pattern"
+          operator={filter.action === 'exclude' ? '!=' : '='}
+          value={simplifyPattern(filter.template)}
+          isExcluded={filter.action === 'exclude'}
+          onRemove={() => onRemovePatternFilter?.(filter)}
+          data-testid="active-filter-pill-pattern"
+        />
+      ))}
       {!expanded && hiddenCount > 0 && (
         <Text
           size="xxs"
@@ -310,7 +329,7 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
           Show less
         </Text>
       )}
-      {pills.length >= 2 && (
+      {pills.length + patternFilters.length >= 2 && (
         <Text
           size="xxs"
           c={confirmClear ? 'red.4' : 'dimmed'}

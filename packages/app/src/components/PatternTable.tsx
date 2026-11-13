@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import {
   BuilderChartConfigWithDateRange,
+  ConditionFilter,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
@@ -17,6 +18,8 @@ import {
   buildPatternColumnExpression,
   PatternColumnSelector,
 } from './Patterns/PatternColumnSelector';
+import type { PatternFilterAction } from './Patterns/patternFilter';
+import { PatternRowActions } from './Patterns/PatternRowActions';
 import PatternSidePanel from './PatternSidePanel';
 
 const emptyMap = new Map();
@@ -30,6 +33,7 @@ export default function PatternTable({
   draftPatternColumn: externalDraftPatternColumn,
   onDraftPatternColumnChange: externalOnDraftPatternColumnChange,
   onSubmit: externalOnSubmit,
+  onPatternFilter,
   source,
 }: {
   config: BuilderChartConfigWithDateRange;
@@ -39,6 +43,10 @@ export default function PatternTable({
   draftPatternColumn?: string;
   onDraftPatternColumnChange?: (value: string) => void;
   onSubmit?: () => void;
+  onPatternFilter?: (
+    filter: ConditionFilter,
+    action: PatternFilterAction,
+  ) => void;
   totalCountQueryKeyPrefix: string;
   source?: TSource;
 }) {
@@ -93,6 +101,26 @@ export default function PatternTable({
       (a, b) => b.count - a.count,
     ) as Pattern[];
   }, [groupedResults]);
+
+  const patternsById = useMemo(
+    () => new Map(sortedGroupedResults.map(p => [p.id, p])),
+    [sortedGroupedResults],
+  );
+  const renderRowActions = useCallback(
+    (row: Record<string, unknown>) => {
+      const pattern =
+        typeof row.id === 'string' ? patternsById.get(row.id) : undefined;
+      if (pattern == null || onPatternFilter == null) return null;
+      return (
+        <PatternRowActions
+          template={pattern.template}
+          valueExpression={effectiveBodyValueExpression}
+          onFilter={onPatternFilter}
+        />
+      );
+    },
+    [patternsById, effectiveBodyValueExpression, onPatternFilter],
+  );
 
   return (
     <>
@@ -164,6 +192,7 @@ export default function PatternTable({
             }}
             config={patternQueryConfig}
             showExpandButton={false}
+            rowActions={onPatternFilter ? renderRowActions : undefined}
           />
           {selectedPattern && source && (
             <PatternSidePanel

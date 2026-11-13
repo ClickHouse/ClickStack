@@ -10,7 +10,6 @@ import { useGroupedPatterns } from '@/hooks/usePatterns';
 
 jest.mock('@/hooks/usePatterns', () => ({
   LEVEL_COLUMN_ALIAS: '__hdx_level',
-  DRAIN_EXTRA_DELIMITERS: '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'.split(''),
   useGroupedPatterns: jest.fn(),
 }));
 

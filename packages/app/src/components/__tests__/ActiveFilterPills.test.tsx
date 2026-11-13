@@ -151,6 +151,30 @@ describe('ActiveFilterPills', () => {
     expect(screen.getByText('100 – 500')).toBeInTheDocument();
   });
 
+  it('renders pattern filters and removes them through their handler', () => {
+    const patternFilter = {
+      condition: "NOT match(Body, '^x$')",
+      valueExpression: 'Body',
+      template: 'Connection to db <*> <*> timed out',
+      action: 'exclude' as const,
+    };
+    const onRemovePatternFilter = jest.fn();
+    renderWithMantine(
+      <ActiveFilterPills
+        searchFilters={makeSearchFilters({})}
+        chartConfig={CHART_CONFIG}
+        patternFilters={[patternFilter]}
+        onRemovePatternFilter={onRemovePatternFilter}
+      />,
+    );
+    expect(screen.getByText('Pattern')).toBeInTheDocument();
+    expect(
+      screen.getByText('Connection to db … timed out'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button'));
+    expect(onRemovePatternFilter).toHaveBeenCalledWith(patternFilter);
+  });
+
   it('calls setFilterValue when removing an included pill', () => {
     const searchFilters = makeSearchFilters({
       status: {
