@@ -3141,14 +3141,21 @@ export class Metadata {
     // high-cardinality key holds up only its own batch's values. Within a
     // batch, large dictionary blocks get one read per key; see
     // getMapTextIndexKeyValues.
-    for (const [column, options] of mapTextIndexQueryOptions) {
-      const perKey =
-        (await this.getTextIndexDictionaryBlockSize({
-          databaseName,
-          tableName,
-          connectionId,
-          indexName: options.indexName,
-        })) >= PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE;
+    // Every Map column's block size is looked up at once, not one at a time.
+    const mapColumns = await Promise.all(
+      [...mapTextIndexQueryOptions].map(async ([column, options]) => ({
+        column,
+        options,
+        perKey:
+          (await this.getTextIndexDictionaryBlockSize({
+            databaseName,
+            tableName,
+            connectionId,
+            indexName: options.indexName,
+          })) >= PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE,
+      })),
+    );
+    for (const { column, options, perKey } of mapColumns) {
       for (const keys of chunk(options.keys, TEXT_INDEX_KEYS_PER_QUERY)) {
         promises.push(
           this.getMapTextIndexKeyValues({
