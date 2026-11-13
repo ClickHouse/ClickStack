@@ -1,5 +1,6 @@
 import { TemplateMinerConfig } from '@/drain/config';
 import {
+  buildCompactPatternPredicate,
   buildPatternPredicate,
   parsePatternPredicate,
   templateToRegex,
@@ -12,14 +13,56 @@ const withPunctuation = { extraDelimiters: PUNCTUATION };
 
 // RE2 spells code points \x{HHHH} and categories \pZ; JS (with the u flag)
 // spells them \u{HHHH} and \p{Z}, and has no POSIX classes.
+function toJsSource(re2: string): string {
+  return re2
+    .replace(/\\x\{([0-9A-Fa-f]+)\}/g, '\\u{$1}')
+    .replace(/(?<!\\)\\p([A-Z])/g, '\\p{$1}')
+    .replaceAll('[:punct:]', '!-\\/:-@\\[-`{-~');
+}
+
 function toJsRegex(re2: string): RegExp {
-  return RegExp(
-    re2
-      .replace(/\\x\{([0-9A-Fa-f]+)\}/g, '\\u{$1}')
-      .replace(/(?<!\\)\\p([A-Z])/g, '\\p{$1}')
-      .replaceAll('[:punct:]', '!-\\/:-@\\[-`{-~'),
-    'u',
-  );
+  return RegExp(toJsSource(re2), 'u');
+}
+
+const unescapeSql = (literal: string) =>
+  literal.replace(/''/g, "'").replace(/\\\\/g, '\\');
+
+// Evaluates a compact predicate the way ClickHouse would: replaceRegexpAll,
+// then match.
+function matchesCompact(predicate: string, value: string): boolean {
+  const call =
+    /^match\(replaceRegexpAll\(.+, '((?:[^'\\]|\\\\|'')*)', ' '\), '((?:[^'\\]|\\\\|'')*)'\)$/s.exec(
+      predicate,
+    );
+  if (call == null) throw new Error(`not a compact predicate: ${predicate}`);
+  const separatorRun = RegExp(toJsSource(unescapeSql(call[1])), 'gu');
+  return toJsRegex(unescapeSql(call[2])).test(value.replace(separatorRun, ' '));
+}
+
+const MESSAGES = [
+  'Connection to db-1:5432 timed out after 30s (retry 1/3)',
+  'Connection to db-2:5432 timed out after 30s (retry 2/3)',
+  'user=alice action=login status=ok',
+  'user=bob action=login status=ok',
+  '[2026-04-17T08:35:57.725Z] "GET /api/products/2ZYF HTTP/1.1" 200 -',
+  '[2026-04-17T08:36:02.101Z] "GET /api/products/L9EC HTTP/1.1" 200 -',
+  'path=C:\\temp\\a.txt mode=[r^w] note={a|b} cost=$5 ~ok',
+  'path=C:\\temp\\b.txt mode=[r^w] note={a|b} cost=$7 ~ok',
+];
+
+function mineClusters(): { template: string; members: string[] }[] {
+  const config = new TemplateMinerConfig();
+  config.drainExtraDelimiters = PUNCTUATION;
+  const miner = new TemplateMiner(config);
+  const members = new Map<number, string[]>();
+  for (const message of MESSAGES) {
+    const { clusterId } = miner.addLogMessage(message);
+    members.set(clusterId, [...(members.get(clusterId) ?? []), message]);
+  }
+  return [...members].map(([clusterId, clusterMembers]) => ({
+    template: miner.drain.getCluster(clusterId)!.getTemplate(),
+    members: clusterMembers,
+  }));
 }
 
 describe('templateToRegex', () => {
@@ -55,31 +98,60 @@ describe('templateToRegex', () => {
   });
 
   it('matches every member of every cluster mined with the same delimiters', () => {
-    const config = new TemplateMinerConfig();
-    config.drainExtraDelimiters = PUNCTUATION;
-    const miner = new TemplateMiner(config);
-    const messages = [
-      'Connection to db-1:5432 timed out after 30s (retry 1/3)',
-      'Connection to db-2:5432 timed out after 30s (retry 2/3)',
-      'user=alice action=login status=ok',
-      'user=bob action=login status=ok',
-      '[2026-04-17T08:35:57.725Z] "GET /api/products/2ZYF HTTP/1.1" 200 -',
-      '[2026-04-17T08:36:02.101Z] "GET /api/products/L9EC HTTP/1.1" 200 -',
-      'path=C:\\temp\\a.txt mode=[r^w] note={a|b} cost=$5 ~ok',
-      'path=C:\\temp\\b.txt mode=[r^w] note={a|b} cost=$7 ~ok',
-    ];
-    const members = new Map<number, string[]>();
-    for (const message of messages) {
-      const { clusterId } = miner.addLogMessage(message);
-      members.set(clusterId, [...(members.get(clusterId) ?? []), message]);
-    }
-    for (const [clusterId, clusterMembers] of members) {
-      const template = miner.drain.getCluster(clusterId)!.getTemplate();
+    for (const { template, members } of mineClusters()) {
       const regex = toJsRegex(templateToRegex(template, withPunctuation));
-      for (const message of messages) {
-        expect(regex.test(message)).toBe(clusterMembers.includes(message));
+      for (const message of MESSAGES) {
+        expect(regex.test(message)).toBe(members.includes(message));
       }
     }
+  });
+});
+
+describe('buildCompactPatternPredicate', () => {
+  it('matches exactly what the full predicate matches', () => {
+    const values = [
+      ...MESSAGES,
+      '  GET /api/v1/users/9 404 3ms.',
+      '',
+      ' \t ',
+      'GET api v1 users 9 404',
+    ];
+    const templates = [
+      ...mineClusters().map(c => c.template),
+      'GET api v1 users <*> <*> <*>',
+      '<*>',
+      '',
+    ];
+    for (const options of [withPunctuation, undefined]) {
+      for (const template of templates) {
+        const full = toJsRegex(templateToRegex(template, options));
+        const compact = buildCompactPatternPredicate(
+          'Body',
+          template,
+          options,
+        )!;
+        for (const value of values) {
+          expect([template, value, matchesCompact(compact, value)]).toEqual([
+            template,
+            value,
+            full.test(value),
+          ]);
+        }
+      }
+    }
+  });
+
+  it('is much shorter than the full predicate for long templates', () => {
+    const template = Array.from({ length: 40 }, (_, i) =>
+      i % 3 === 0 ? '<*>' : `word${i}`,
+    ).join(' ');
+    const full = buildPatternPredicate('Body', template, withPunctuation)!;
+    const compact = buildCompactPatternPredicate(
+      'Body',
+      template,
+      withPunctuation,
+    )!;
+    expect(compact.length * 4).toBeLessThan(full.length);
   });
 });
 
@@ -88,17 +160,25 @@ describe('parsePatternPredicate', () => {
     ['Body', 'GET api v1 users <*> <*> <*>'],
     ["JSONExtractString(Body, 'message')", 'user <*> action login status ok'],
     ['Body', '<*>'],
-  ])('reads back what buildPatternPredicate built (%s)', (expr, template) => {
-    const predicate = buildPatternPredicate(expr, template, withPunctuation)!;
-    expect(parsePatternPredicate(predicate, withPunctuation)).toEqual({
-      valueExpression: expr,
-      template,
-    });
+  ])('reads back what either builder built (%s)', (expr, template) => {
+    for (const build of [buildPatternPredicate, buildCompactPatternPredicate]) {
+      const predicate = build(expr, template, withPunctuation)!;
+      expect(parsePatternPredicate(predicate, withPunctuation)).toEqual({
+        valueExpression: expr,
+        template,
+      });
+    }
   });
 
   it('rejects other conditions', () => {
     expect(parsePatternPredicate("ServiceName IN ('api')")).toBeNull();
     expect(parsePatternPredicate("match(Body, 'timed out')")).toBeNull();
+    expect(
+      parsePatternPredicate(
+        "match(replaceRegexpAll(Body, '[ ]+', ' '), '^ ?timed out ?$')",
+        withPunctuation,
+      ),
+    ).toBeNull();
     expect(
       parsePatternPredicate(
         buildPatternPredicate('Body', 'Sending <*> rows')!,

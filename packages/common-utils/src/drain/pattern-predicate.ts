@@ -54,6 +54,10 @@ function separatorClass(options?: PatternRegexOptions): string {
   );
 }
 
+function tokensOf(template: string): string[] {
+  return template.split(/\s+/).filter(t => t.length > 0);
+}
+
 /** Anchored RE2 regex that a value matches when it fits the Drain template. */
 export function templateToRegex(
   template: string,
@@ -61,8 +65,7 @@ export function templateToRegex(
 ): string {
   const separators = separatorClass(options);
   const separator = `[${separators}]`;
-  const tokens = template.split(/\s+/).filter(t => t.length > 0);
-  const body = tokens
+  const body = tokensOf(template)
     .map(t =>
       t === PATTERN_WILDCARD ? `[^${separators}]+` : escapeRe2Literal(t),
     )
@@ -83,18 +86,78 @@ export function buildPatternPredicate(
   return `match(${valueExpression}, '${escapeSqlString(templateToRegex(template, options))}')`;
 }
 
+// Regex over a value whose separator runs were replaced by single spaces.
+function compactRegex(template: string): string {
+  const body = tokensOf(template)
+    .map(t => (t === PATTERN_WILDCARD ? '[^ ]+' : escapeRe2Literal(t)))
+    .join(' ');
+  return `^ ?${body} ?$`;
+}
+
 /**
- * Reverse of buildPatternPredicate: the value expression and template of a
- * predicate it built with the same options, or null for any other condition.
+ * The same match as buildPatternPredicate in much shorter SQL: separator runs
+ * in the value become single spaces first, so the separator class appears
+ * once instead of between every token. For conditions that are stored or
+ * shared, such as search filters kept in the URL.
+ */
+export function buildCompactPatternPredicate(
+  valueExpression: string,
+  template: string,
+  options?: PatternRegexOptions,
+): string | null {
+  if (template.length > MAX_PREDICATE_TEMPLATE_LENGTH) return null;
+  const separatorRun = `[${separatorClass(options)}]+`;
+  const normalized = `replaceRegexpAll(${valueExpression}, '${escapeSqlString(separatorRun)}', ' ')`;
+  return `match(${normalized}, '${escapeSqlString(compactRegex(template))}')`;
+}
+
+const unescapeSql = (literal: string) =>
+  literal.replace(/''/g, "'").replace(/\\\\/g, '\\');
+const unescapeRe2Literal = (token: string) => token.replace(/\\(.)/g, '$1');
+
+function parseCompactPredicate(
+  condition: string,
+  options?: PatternRegexOptions,
+): { valueExpression: string; template: string } | null {
+  const call =
+    /^match\(replaceRegexpAll\((.+), '((?:[^'\\]|\\\\|'')*)', ' '\), '((?:[^'\\]|\\\\|'')*)'\)$/s.exec(
+      condition,
+    );
+  if (call == null) return null;
+  const [, valueExpression, separatorLiteral, regexLiteral] = call;
+  if (unescapeSql(separatorLiteral) !== `[${separatorClass(options)}]+`) {
+    return null;
+  }
+  const regex = unescapeSql(regexLiteral);
+  if (!regex.startsWith('^ ?') || !regex.endsWith(' ?$')) return null;
+  const inner = regex.slice('^ ?'.length, regex.length - ' ?$'.length);
+  // The wildcard `[^ ]+` itself contains a space, so match tokens rather
+  // than splitting on spaces.
+  const template = (inner.match(/\[\^ \]\+|[^ ]+/g) ?? [])
+    .map(part =>
+      part === '[^ ]+' ? PATTERN_WILDCARD : unescapeRe2Literal(part),
+    )
+    .join(' ');
+  return compactRegex(template) === regex
+    ? { valueExpression, template }
+    : null;
+}
+
+/**
+ * Reverse of buildPatternPredicate and buildCompactPatternPredicate: the
+ * value expression and template of a predicate either built with the same
+ * options, or null for any other condition.
  */
 export function parsePatternPredicate(
   condition: string,
   options?: PatternRegexOptions,
 ): { valueExpression: string; template: string } | null {
+  const compact = parseCompactPredicate(condition, options);
+  if (compact != null) return compact;
   const call = /^match\((.+), '((?:[^'\\]|\\\\|'')*)'\)$/s.exec(condition);
   if (call == null) return null;
   const [, valueExpression, literal] = call;
-  const regex = literal.replace(/''/g, "'").replace(/\\\\/g, '\\');
+  const regex = unescapeSql(literal);
 
   const separators = separatorClass(options);
   const separator = `[${separators}]`;
@@ -107,7 +170,7 @@ export function parsePatternPredicate(
     .map(part =>
       part === `[^${separators}]+`
         ? PATTERN_WILDCARD
-        : part.replace(/\\(.)/g, '$1'),
+        : unescapeRe2Literal(part),
     )
     .join(' ');
   // Only what this module builds counts, so a hand-written match() isn't
