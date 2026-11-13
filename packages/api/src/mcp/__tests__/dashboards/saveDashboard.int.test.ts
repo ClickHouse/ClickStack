@@ -4027,4 +4027,77 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       expect(getFirstText(patchResult)).toContain('savedFilterValues');
     });
   });
+
+  describe('reference variables', () => {
+    const filters = [
+      { type: 'CONNECTION', name: 'Connection', variableName: 'conn' },
+      {
+        type: 'DATA_SOURCE',
+        name: 'Traces source',
+        variableName: 'traces',
+        allowedSourceKinds: [SourceKind.Trace],
+        connectionId: '$conn',
+      },
+    ];
+
+    it('saves and returns variables and tiles that reference them', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            name: 'Builder',
+            config: {
+              displayType: 'line',
+              sourceId: '$traces',
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Raw SQL',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId: '$conn',
+              sqlTemplate: 'SELECT 1',
+            },
+          },
+        ],
+        filters,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(result));
+      expect(output.filters).toEqual([
+        expect.objectContaining(filters[0]),
+        expect.objectContaining(filters[1]),
+      ]);
+      expect(
+        output.tiles.map((t: ExternalDashboardTileWithId) => t.config),
+      ).toEqual([
+        expect.objectContaining({ sourceId: '$traces' }),
+        expect.objectContaining({ connectionId: '$conn' }),
+      ]);
+    });
+
+    it('rejects a tile referencing an undeclared variable', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            name: 'Builder',
+            config: {
+              displayType: 'line',
+              sourceId: '$traces',
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain(
+        'does not name a data source variable',
+      );
+    });
+  });
 });

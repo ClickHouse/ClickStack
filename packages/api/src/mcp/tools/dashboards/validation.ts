@@ -5,6 +5,8 @@ import {
   getDashboardVariableDeclarations,
   getFilterVariableName,
   isFilterVariableEnabled,
+  isReferenceVariableFilterType,
+  pairWithVariableNames,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
@@ -250,18 +252,24 @@ export function getFilterVariableWarnings(
  * Non-blocking check: a saved filter value of type 'variable' whose `name`
  * matches no variable-enabled filter is silently ignored when the dashboard
  * loads, so a typo'd variable name looks like a saved default but never
- * applies. Warn so the agent can fix the name or add the filter.
+ * applies. Warn so the agent can fix the name or add the filter. Data source
+ * and connection variables count too, though they are not text variables.
  */
 export function getSavedFilterValueWarnings(
   savedFilterValues: McpSavedFilterValues | undefined,
   filters: FilterForVariableDeclaration[] | undefined,
 ): string[] {
   if (!savedFilterValues?.length) return [];
-  const declaredNames = new Set(
-    getDashboardVariableDeclarations(filters).map(
+  const declaredNames = new Set([
+    ...getDashboardVariableDeclarations(filters).map(
       declaration => declaration.name,
     ),
-  );
+    ...pairWithVariableNames(
+      (filters ?? []).filter(filter =>
+        isReferenceVariableFilterType(filter.type),
+      ),
+    ).map(({ name }) => name),
+  ]);
   const warnings: string[] = [];
   for (const value of savedFilterValues) {
     if (value.type !== 'variable') continue;

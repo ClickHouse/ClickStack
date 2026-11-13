@@ -5,7 +5,6 @@ import {
   isFilterBroadcastEnabled,
   isFilterRequired,
   isFilterVariableEnabled,
-  isReferenceVariableFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AlertErrorType,
@@ -242,10 +241,7 @@ export function translateExternalChartToTileConfig(
 }
 
 /** Filter types the external API and MCP don't expose yet. */
-type InternalOnlyDashboardFilter = Extract<
-  DashboardFilter,
-  { type: 'ADHOC' | 'DATA_SOURCE' | 'CONNECTION' }
->;
+type InternalOnlyDashboardFilter = Extract<DashboardFilter, { type: 'ADHOC' }>;
 export type ExternalCompatibleDashboardFilter = Exclude<
   DashboardFilter,
   InternalOnlyDashboardFilter
@@ -257,7 +253,7 @@ export function getExternalCompatibleFilters(
 ): ExternalCompatibleDashboardFilter[] {
   return (filters ?? []).filter(
     (filter): filter is ExternalCompatibleDashboardFilter =>
-      !isAdhocFilter(filter) && !isReferenceVariableFilter(filter),
+      !isAdhocFilter(filter),
   );
 }
 
@@ -286,6 +282,15 @@ export function translateFilterToExternalFilter(
         ...omit(filter, 'source', ...omittedKeys),
         sourceId: filter.source.toString(),
       };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connection'),
+        ...(filter.connection ? { connectionId: filter.connection } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     case 'QUERY_EXPRESSION': {
       // Ignore variableName and appliesToSourceIds if the filter is not in a mode that uses them
@@ -320,6 +325,15 @@ export function translateExternalFilterToFilter(
 
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connectionId'),
+        ...(filter.connectionId ? { connection: filter.connectionId } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     default:
       filter satisfies never;

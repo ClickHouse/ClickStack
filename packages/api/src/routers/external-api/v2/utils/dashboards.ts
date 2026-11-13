@@ -6,6 +6,7 @@ import {
   TIME_SERIES_DISPLAY_TYPE_BY_NAME,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
+  collectRefinementIssues,
   validateDashboardContainersStructure,
   validateDashboardFilterFieldGating,
   validateDashboardFilterModes,
@@ -13,16 +14,14 @@ import {
   validateDashboardFilterVariableNames,
   validateDashboardTileContainerRefs,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
-import {
-  isPrometheusLabelFilter,
-  isStaticListFilter,
-} from '@hyperdx/common-utils/dist/filters';
+import { isPrometheusLabelFilter } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
   isHeatmapCompatibleSource,
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AggregateFunctionSchema,
   BuilderSavedChartConfig,
@@ -30,6 +29,7 @@ import {
   DASHBOARD_MAX_CONTAINERS,
   DashboardContainer,
   DashboardContainerSchema,
+  DashboardFilter,
   DisplayType,
   HeatmapMode,
   isLogSource,
@@ -54,6 +54,7 @@ import { deleteDashboardAlerts } from '@/controllers/alerts';
 import { getConnectionsByTeam } from '@/controllers/connection';
 import { getSources } from '@/controllers/sources';
 import Dashboard, { DashboardDocument } from '@/models/dashboard';
+import { getVariableReferenceError } from '@/utils/dashboardVariableReferences';
 import {
   getExternalCompatibleFilters,
   getExternalCompatibleFilterValues,
@@ -1307,19 +1308,21 @@ function getMissingSources(
     }
   }
 
-  if (filters?.length) {
-    for (const filter of filters) {
-      // Every variant but the static one names a source.
-      if (!isStaticListFilter(filter)) {
-        sourceIds.add(filter.sourceId);
-      }
+  for (const filter of filters ?? []) {
+    if ('sourceId' in filter) {
+      sourceIds.add(filter.sourceId);
     }
   }
 
   const existingSourceIds = new Set(
     sources.map(source => source._id.toString()),
   );
-  return [...sourceIds].filter(sourceId => !existingSourceIds.has(sourceId));
+  // Variable references are checked by validateDashboardVariableReferences
+  return [...sourceIds].filter(
+    sourceId =>
+      parseVariableReference(sourceId) == null &&
+      !existingSourceIds.has(sourceId),
+  );
 }
 
 /**
@@ -1589,17 +1592,25 @@ async function getMissingOnClickDashboards(
   return [...dashboardIds].filter(id => !existingDashboardIds.has(id));
 }
 
-/** Returns connection IDs referenced in tiles that do not belong to the team */
+/** Returns connection IDs referenced in tiles and filters that do not belong to the team */
 async function getMissingConnections(
   team: string | mongoose.Types.ObjectId,
   tiles: ExternalDashboardTileWithId[],
+  filters: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[] = [],
 ): Promise<string[]> {
   const connectionIds = new Set<string>();
+  // Variable references are checked by validateDashboardVariableReferences
+  const addConnectionId = (id: string | undefined) => {
+    if (id && parseVariableReference(id) == null) connectionIds.add(id);
+  };
 
   for (const tile of tiles) {
     if (isConfigTile(tile) && isRawSqlExternalTileConfig(tile.config)) {
-      connectionIds.add(tile.config.connectionId);
+      addConnectionId(tile.config.connectionId);
     }
+  }
+  for (const filter of filters) {
+    if ('connectionId' in filter) addConnectionId(filter.connectionId);
   }
 
   if (connectionIds.size === 0) return [];
@@ -1731,6 +1742,11 @@ export type TileValidationContext = {
   filters?: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[];
   /** Existing internal tiles for scoping heatmap change detection (update paths). */
   existingTiles?: DashboardDocument['tiles'];
+  /**
+   * Stored internal filters, which tile variable references are checked
+   * against when the request carries no `filters` (partial update paths).
+   */
+  storedFilters?: DashboardFilter[];
   /** Container set to validate tile containerId/tabId refs against. */
   containers: DashboardContainer[];
 };
@@ -1747,12 +1763,21 @@ export type TileValidationContext = {
 export async function validateDashboardTiles(
   ctx: TileValidationContext,
 ): Promise<string | null> {
-  const { teamId, tiles, filters, existingTiles, containers } = ctx;
+  const { teamId, tiles, filters, existingTiles, storedFilters, containers } =
+    ctx;
 
   // Container/tab ref resolution.
   const tileRefIssues = collectTileContainerRefIssues(containers, tiles);
   if (tileRefIssues.length > 0) {
     return tileRefIssues.join('; ');
+  }
+
+  const variableReferenceError = getVariableReferenceError(
+    convertExternalTilesToInternal(tiles),
+    filters ? convertExternalFiltersToInternal(filters) : storedFilters,
+  );
+  if (variableReferenceError) {
+    return variableReferenceError;
   }
 
   // Fetch sources/connections/onClick targets in parallel.
@@ -1763,7 +1788,7 @@ export async function validateDashboardTiles(
     invalidOnClickSearchSources,
   ] = await Promise.all([
     fetchSourcesForValidation(teamId),
-    getMissingConnections(teamId, tiles),
+    getMissingConnections(teamId, tiles, filters),
     getMissingOnClickDashboards(teamId, tiles),
     getInvalidOnClickSearchSources(teamId, tiles),
   ]);
@@ -1942,15 +1967,13 @@ export function collectTileContainerRefIssues(
   containers: DashboardContainer[],
   tiles: ExternalDashboardTileWithId[],
 ): string[] {
-  const schema = z.object({}).superRefine((_, ctx) => {
-    const containerById = new Map<string, DashboardContainer>(
-      containers.map(c => [c.id, c]),
-    );
-    validateDashboardTileContainerRefs(containerById, tiles, ctx);
-  });
-  const result = schema.safeParse({});
-  if (result.success) return [];
-  return result.error.issues.map(issue => {
+  const containerById = new Map<string, DashboardContainer>(
+    containers.map(c => [c.id, c]),
+  );
+  const issues = collectRefinementIssues(ctx =>
+    validateDashboardTileContainerRefs(containerById, tiles, ctx),
+  );
+  return issues.map(issue => {
     const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
     return `${path}${issue.message}`;
   });
