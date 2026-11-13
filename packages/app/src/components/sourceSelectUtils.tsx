@@ -1,5 +1,6 @@
 import { createContext, use, useMemo } from 'react';
 import {
+  getConnectionVariableNames,
   getSourceVariableDeclarations,
   isSourceVariableAccepted,
   parseVariableReference,
@@ -30,7 +31,7 @@ export const SOURCE_KIND_ICONS: Record<string, React.ReactNode> = {
   [SourceKind.Promql]: <IconChartLine size={16} />,
 };
 
-const VARIABLE_ICON = <IconVariable size={16} />;
+export const VARIABLE_ICON = <IconVariable size={16} />;
 
 export function getSourceOptionIcon(
   value: string | undefined,
@@ -42,16 +43,17 @@ export function getSourceOptionIcon(
 
 type ReferenceVariablesContextValue = {
   sourceVariables: SourceVariableDeclaration[];
+  connectionVariables: string[];
   values: ReferenceVariableValues;
 };
 
 const ReferenceVariablesContext = createContext<ReferenceVariablesContextValue>(
-  { sourceVariables: [], values: new Map() },
+  { sourceVariables: [], connectionVariables: [], values: new Map() },
 );
 
 /**
- * Offers the data source variables `filters` declare to the pickers below it
- * that opt in, and their selections to `useResolvedReference`.
+ * Offers the data source and connection variables `filters` declare to the
+ * pickers below it that opt in, and their selections to `useResolvedReference`.
  */
 export function ReferenceVariablesProvider({
   filters,
@@ -65,6 +67,7 @@ export function ReferenceVariablesProvider({
   const value = useMemo(
     () => ({
       sourceVariables: getSourceVariableDeclarations(filters),
+      connectionVariables: getConnectionVariableNames(filters),
       values,
     }),
     [filters, values],
@@ -77,8 +80,8 @@ export function ReferenceVariablesProvider({
 }
 
 /**
- * The ID a source field currently queries: an ID as is, or the selection of
- * the variable it references.
+ * The ID a source or connection field currently queries: an ID as is, or the
+ * selection of the variable it references.
  */
 export function useResolvedReference(
   value: string | undefined,
@@ -103,16 +106,20 @@ const toVariableItem = (name: string): ComboboxItem => {
 /**
  * A source picker's items, preceded by a "Variables" group of the data source
  * variables it can offer. A variable is offered only if every kind it can
- * resolve to is allowed, so no selection can produce an unusable source.
+ * resolve to is allowed, so no selection can produce an unusable source, and,
+ * for a picker limited to `connection`, only if it is unlimited or limited to
+ * that same connection (ID or variable reference).
  */
 export function useWithSourceVariableItems(
   sourceItems: ComboboxItem[] | SourceSelectGroup[],
   {
     enabled,
     allowedSourceKinds,
+    connection,
   }: {
     enabled: boolean;
     allowedSourceKinds?: SourceKind[];
+    connection?: string;
   },
 ): (ComboboxItem | SourceSelectGroup)[] {
   const { sourceVariables } = use(ReferenceVariablesContext);
@@ -121,14 +128,32 @@ export function useWithSourceVariableItems(
     const items = sourceVariables
       .filter(
         variable =>
-          !allowedSourceKinds ||
-          isSourceVariableAccepted(variable, allowedSourceKinds),
+          (!allowedSourceKinds ||
+            isSourceVariableAccepted(variable, allowedSourceKinds)) &&
+          (!connection ||
+            !variable.connection ||
+            variable.connection === connection),
       )
       .map(variable => toVariableItem(variable.name));
     return items.length > 0
       ? [{ group: 'Variables', items }, ...sourceItems]
       : sourceItems;
-  }, [enabled, sourceVariables, allowedSourceKinds, sourceItems]);
+  }, [enabled, sourceVariables, allowedSourceKinds, connection, sourceItems]);
+}
+
+/** A connection picker's items, preceded by a "Variables" group of connection variables. */
+export function useWithConnectionVariableItems(
+  connectionItems: ComboboxItem[],
+  enabled: boolean,
+): (ComboboxItem | SourceSelectGroup)[] {
+  const { connectionVariables } = use(ReferenceVariablesContext);
+  return useMemo(() => {
+    if (!enabled || connectionVariables.length === 0) return connectionItems;
+    return [
+      { group: 'Variables', items: connectionVariables.map(toVariableItem) },
+      { group: 'Connections', items: connectionItems },
+    ];
+  }, [enabled, connectionVariables, connectionItems]);
 }
 
 /** Header for sources that have no section assigned. Internal to this module. */

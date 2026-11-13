@@ -1404,7 +1404,8 @@ export class DashboardPage {
       | 'Static values'
       | 'PromQL label values'
       | 'Ad hoc keys and values'
-      | 'Data source',
+      | 'Data source'
+      | 'Connection',
   ) {
     await this.getFilterTypePicker().click();
     await this.getFilterOption(label).click();
@@ -1493,6 +1494,7 @@ export class DashboardPage {
     name: string,
     kindLabels: string[],
     variableName: string,
+    connectionLabel?: string,
   ) {
     await this.addFiltersButton.click();
     await this.selectFilterType('Data source');
@@ -1504,6 +1506,28 @@ export class DashboardPage {
       await kindsInput.click();
       await this.getFilterOption(label).click();
     }
+    if (connectionLabel !== undefined) {
+      // Close the kinds dropdown, which covers this input; Escape would close
+      // the modal instead
+      await this.getFilterNameInput().click();
+      await this.page
+        .getByTestId('filter-data-source-connection-input')
+        .click();
+      await this.getFilterOption(connectionLabel).click();
+    }
+    await this.variableNameInput.fill(variableName);
+    await this.page.getByTestId('save-filter-button').click();
+    await this.getFilterItemByName(name).waitFor({
+      state: 'visible',
+      timeout: 10000,
+    });
+  }
+
+  /** Add a connection variable and wait for it in the filters list. */
+  async addConnectionFilterToDashboard(name: string, variableName: string) {
+    await this.addFiltersButton.click();
+    await this.selectFilterType('Connection');
+    await this.getFilterNameInput().fill(name);
     await this.variableNameInput.fill(variableName);
     await this.page.getByTestId('save-filter-button').click();
     await this.getFilterItemByName(name).waitFor({

@@ -1,12 +1,16 @@
 /**
- * A `DATA_SOURCE` dashboard filter is a single-select variable whose value is
- * a source. Tiles and other filters reference it as `$name` in place of a
- * source, block until it has a selection, and cannot carry alerts.
+ * `DATA_SOURCE` and `CONNECTION` dashboard filters are single-select variables
+ * whose value is a source or a connection. Tiles and other filters reference
+ * them as `$name` in place of an ID, block until they have a selection, and
+ * cannot carry alerts.
  */
+import { DisplayType } from '@hyperdx/common-utils/dist/types';
+
 import { DashboardPage } from '../page-objects/DashboardPage';
 import { SERVICES } from '../seed-clickhouse';
 import { expect, test } from '../utils/base-test';
 import {
+  DEFAULT_CONNECTION_NAME,
   DEFAULT_LOGS_SOURCE_NAME,
   DEFAULT_TRACES_SOURCE_NAME,
 } from '../utils/constants';
@@ -142,6 +146,71 @@ test.describe(
         await expect(
           dashboardPage.getTileMissingRequiredFilters(0),
         ).toContainText('Logs source');
+      });
+    });
+
+    test('drives a raw SQL tile from connection and source variables', async () => {
+      const editor = dashboardPage.chartEditor;
+
+      await test.step('Create a connection variable and a source variable limited to it', async () => {
+        await dashboardPage.createNewDashboard();
+        await dashboardPage.openEditFiltersModal();
+        await dashboardPage.addConnectionFilterToDashboard(
+          'Cluster',
+          'cluster',
+        );
+        await dashboardPage.addDataSourceFilterToDashboard(
+          'Logs source',
+          ['Logs'],
+          'logs',
+          '$cluster',
+        );
+        await expect(
+          dashboardPage.getFilterItemByName('Logs source'),
+        ).toContainText('$cluster');
+        await dashboardPage.closeFiltersModal();
+        await expect(
+          dashboardPage.getFilterPendingVariableWarning('Logs source'),
+        ).toBeVisible();
+      });
+
+      await test.step('A raw SQL tile on the variables cannot have an alert', async () => {
+        await dashboardPage.addTile();
+        await expect(editor.nameInput).toBeVisible();
+        await editor.waitForDataToLoad();
+        await editor.setChartType(DisplayType.Number);
+        await editor.setChartName('Variable count');
+        await editor.switchToSqlMode();
+        await expect(editor.alertButton).toBeVisible();
+        await editor.selectConnection('$cluster');
+        await editor.selectSource('$logs');
+        await expect(editor.alertButton).toHaveCount(0);
+        await editor.typeSqlQuery('SELECT count() FROM $__sourceTable');
+        await editor.save();
+        await expect(
+          dashboardPage.getTileMissingRequiredFilters(0),
+        ).toContainText('Cluster');
+      });
+
+      await test.step('Selecting a connection, then a source on it, loads the tile', async () => {
+        await dashboardPage.selectReferenceFilterValue(
+          'Cluster',
+          DEFAULT_CONNECTION_NAME,
+        );
+        await dashboardPage.selectReferenceFilterValue(
+          'Logs source',
+          DEFAULT_LOGS_SOURCE_NAME,
+        );
+        await expect(
+          dashboardPage.getTileMissingRequiredFilters(0),
+        ).toHaveCount(0);
+        await expect(dashboardPage.getNumberTileValue(0)).toBeVisible();
+      });
+
+      await test.step('The editor keeps both references', async () => {
+        await dashboardPage.editTile(0);
+        await expect(editor.connection).toHaveValue('$cluster');
+        await expect(editor.source).toHaveValue('$logs');
       });
     });
   },

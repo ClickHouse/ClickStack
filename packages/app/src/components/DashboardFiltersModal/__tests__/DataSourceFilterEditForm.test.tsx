@@ -8,6 +8,10 @@ import {
   toFormValues,
 } from '@/components/DashboardFiltersModal/filterFormState';
 
+jest.mock('@/connection', () => ({
+  useConnections: () => ({ data: [{ id: 'conn-1', name: 'Primary' }] }),
+}));
+
 function Harness({ allowedSourceKinds }: { allowedSourceKinds: SourceKind[] }) {
   const { control } = useForm<FilterFormValues>({
     defaultValues: {

@@ -9,6 +9,7 @@ import {
   validateRawSqlChartConfig,
   validateRawSqlForAlert,
 } from '@hyperdx/common-utils/dist/core/utils';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   ChartVariable,
   RawSqlChartConfig,
@@ -148,9 +149,10 @@ export default function RawSqlChartEditor({
   const { data: sources } = useSources();
 
   const displayType = useWatch({ control, name: 'displayType' });
-  const connection = useWatch({ control, name: 'connection' });
-  // A data source variable reference syncs and expands macros as the source
-  // it currently selects.
+  // Source and connection variable references sync, autocomplete and expand
+  // macros as the source and connection they currently select.
+  const storedConnection = useWatch({ control, name: 'connection' });
+  const connection = useResolvedReference(storedConnection);
   const source = useResolvedReference(useWatch({ control, name: 'source' }));
   const sqlTemplate = useWatch({ control, name: 'sqlTemplate' });
   const chartName = useWatch({ control, name: 'name' });
@@ -210,12 +212,25 @@ export default function RawSqlChartEditor({
       prevConnection,
       sources,
     });
-    if (update?.field === 'connection') {
+    // A connection variable stays as picked; the tile shows a mismatch
+    // instead of having its reference replaced
+    if (
+      update?.field === 'connection' &&
+      parseVariableReference(storedConnection) == null
+    ) {
       setValue('connection', update.value);
     } else if (update?.field === 'source') {
       setValue('source', update.value);
     }
-  }, [connection, prevConnection, prevSource, setValue, source, sources]);
+  }, [
+    connection,
+    storedConnection,
+    prevConnection,
+    prevSource,
+    setValue,
+    source,
+    sources,
+  ]);
 
   const placeholderSQl = SQL_PLACEHOLDERS[displayType ?? DisplayType.Table];
 
@@ -277,6 +292,8 @@ export default function RawSqlChartEditor({
             control={control}
             name="connection"
             size="xs"
+            allowConnectionVariables
+            data-testid="connection-selector"
           />
           <Group align="center" gap={8} mx="md">
             <Text size="sm" ps="md">
@@ -298,6 +315,7 @@ export default function RawSqlChartEditor({
             allowedSourceKinds={allowedSourceKinds}
             allowSourceVariables
             connectionId={connection}
+            variableConnection={storedConnection}
             size="xs"
             clearable
             placeholder="None"

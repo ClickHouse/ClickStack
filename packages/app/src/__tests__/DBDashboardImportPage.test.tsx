@@ -720,3 +720,67 @@ describe('Dashboard import - data source variables', () => {
     expect(payload.filters[2].sources).toEqual(['$logs', 'src-traces']);
   });
 });
+
+describe('Dashboard import - connection variables', () => {
+  const connectionVariableTemplate = DashboardTemplateSchema.parse({
+    version: '0.1.0',
+    name: 'Connection Variables',
+    tiles: [
+      {
+        id: 'tile-rawsql',
+        x: 0,
+        y: 0,
+        w: 6,
+        h: 3,
+        config: {
+          name: 'tile-rawsql',
+          displayType: 'table',
+          configType: 'sql',
+          connection: '$conn',
+          sqlTemplate: 'SELECT 1',
+        },
+      },
+    ],
+    filters: [
+      {
+        id: 'conn',
+        type: 'CONNECTION',
+        name: 'Cluster',
+        variableName: 'conn',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+      {
+        id: 'ds',
+        type: 'DATA_SOURCE',
+        name: 'Logs source',
+        variableName: 'logs',
+        allowedSourceKinds: [SourceKind.Log],
+        connection: 'Default',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+    ],
+  });
+
+  it('keeps connection references and maps a data source variable connection', async () => {
+    renderWithMantine(<Mapping input={connectionVariableTemplate} />);
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    expect(screen.queryByText('$conn')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(payload.tiles[0].config.connection).toBe('$conn');
+    expect(payload.filters[1].connection).toBe('conn-default');
+  });
+});

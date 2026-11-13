@@ -43,6 +43,7 @@ import {
 import { PromqlLabelFilterEditForm } from './PromqlLabelFilterEditForm';
 import { QueryExpressionFilterEditForm } from './QueryExpressionFilterEditForm';
 import { StaticListFilterEditForm } from './StaticListFilterEditForm';
+import { VariableNameInput } from './VariableNameInput';
 
 const FILTER_TYPE_OPTIONS = [
   {
@@ -67,6 +68,7 @@ const FILTER_TYPE_OPTIONS = [
       ]
     : []),
   { value: DashboardFilterType.enum.DATA_SOURCE, label: 'Data source' },
+  { value: DashboardFilterType.enum.CONNECTION, label: 'Connection' },
 ];
 
 interface DashboardFilterEditFormProps {
@@ -245,7 +247,12 @@ export const DashboardFilterEditForm = ({
             message="Failed to load filter"
             showErrorMessage
           >
-            {formFilterType === 'DATA_SOURCE' ? (
+            {formFilterType === 'CONNECTION' ? (
+              <VariableNameInput
+                control={control}
+                otherFilters={otherFilters}
+              />
+            ) : formFilterType === 'DATA_SOURCE' ? (
               <DataSourceFilterEditForm
                 control={control}
                 otherFilters={otherFilters}
