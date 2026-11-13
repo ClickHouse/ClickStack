@@ -1,7 +1,9 @@
 import { TemplateMinerConfig } from '@/drain/config';
 import {
   buildPatternPredicate,
+  MAX_PREDICATE_TEMPLATE_LENGTH,
   parsePatternPredicate,
+  PatternRegexOptions,
   templateToRegex,
 } from '@/drain/pattern-predicate';
 import { TemplateMiner } from '@/drain/template-miner';
@@ -11,10 +13,12 @@ const PUNCTUATION = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'.split('');
 const withPunctuation = { extraDelimiters: PUNCTUATION };
 
 // RE2 spells code points \x{HHHH} and categories \pZ; JS (with the u flag)
-// spells them \u{HHHH} and \p{Z}, and has no POSIX classes.
+// spells them \u{HHHH} and \p{Z}, and has no POSIX classes. RE2's \s is
+// [\t\n\f\r ]; JS's also covers Unicode spaces and BOM.
 function toJsRegex(re2: string): RegExp {
   return RegExp(
     re2
+      .replace(/(?<!\\)\\s/g, '\\t\\n\\f\\r ')
       .replace(/\\x\{([0-9A-Fa-f]+)\}/g, '\\u{$1}')
       .replace(/(?<!\\)\\p([A-Z])/g, '\\p{$1}')
       .replaceAll('[:punct:]', '!-\\/:-@\\[-`{-~'),
@@ -38,6 +42,31 @@ describe('templateToRegex', () => {
     const regex = toJsRegex(templateToRegex('a <*> c d e f g', partial));
     expect(regex.test('a/x:c-d]e\\f^g')).toBe(true);
     expect(regex.test('a/x:c-d]e\\f^g.h')).toBe(false);
+  });
+
+  it('splits on Python whitespace for templates mined by Drain3', () => {
+    const python: PatternRegexOptions = {
+      extraDelimiters: PUNCTUATION,
+      whitespace: 'python',
+    };
+    // Python's str.split() splits on the \x1C-\x1F separators and NEL but not
+    // on BOM; JS `\s` is the other way round.
+    const drain3 = toJsRegex(templateToRegex('a b c', python));
+    expect(drain3.test('a\x1eb\x85c')).toBe(true);
+    expect(drain3.test('a\ufeffb c')).toBe(false);
+    const ts = toJsRegex(templateToRegex('a b c', withPunctuation));
+    expect(ts.test('a\x1eb\x85c')).toBe(false);
+    expect(ts.test('a\ufeffb c')).toBe(true);
+
+    const predicate = buildPatternPredicate('Body', 'a b c', python)!;
+    expect(parsePatternPredicate(predicate, python)?.template).toBe('a b c');
+    expect(parsePatternPredicate(predicate, withPunctuation)).toBeNull();
+  });
+
+  it('rejects delimiters longer than one character', () => {
+    expect(() => templateToRegex('a', { extraDelimiters: ['::'] })).toThrow(
+      'single characters',
+    );
   });
 
   it('treats extra delimiters as separators', () => {
@@ -83,6 +112,14 @@ describe('templateToRegex', () => {
   });
 });
 
+describe('buildPatternPredicate', () => {
+  it('builds no predicate for a template over the length limit', () => {
+    const atLimit = 'x'.repeat(MAX_PREDICATE_TEMPLATE_LENGTH);
+    expect(buildPatternPredicate('Body', atLimit)).not.toBeNull();
+    expect(buildPatternPredicate('Body', `${atLimit}x`)).toBeNull();
+  });
+});
+
 describe('parsePatternPredicate', () => {
   it.each([
     ['Body', 'GET api v1 users <*> <*> <*>'],
@@ -96,13 +133,27 @@ describe('parsePatternPredicate', () => {
     });
   });
 
+  it('reads back what buildPatternPredicate built without options', () => {
+    const predicate = buildPatternPredicate('Body', 'Sending <*> rows')!;
+    expect(parsePatternPredicate(predicate)).toEqual({
+      valueExpression: 'Body',
+      template: 'Sending <*> rows',
+    });
+  });
+
   it('rejects other conditions', () => {
     expect(parsePatternPredicate("ServiceName IN ('api')")).toBeNull();
     expect(parsePatternPredicate("match(Body, 'timed out')")).toBeNull();
+    // A predicate only reads back with the options it was built with.
     expect(
       parsePatternPredicate(
         buildPatternPredicate('Body', 'Sending <*> rows')!,
         withPunctuation,
+      ),
+    ).toBeNull();
+    expect(
+      parsePatternPredicate(
+        buildPatternPredicate('Body', 'Sending <*> rows', withPunctuation)!,
       ),
     ).toBeNull();
   });
