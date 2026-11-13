@@ -125,10 +125,10 @@ function compactRegex(template: string, options?: PatternRegexOptions): string {
  * once instead of between every token. For conditions that are stored or
  * shared, such as search filters kept in the URL.
  *
- * The two forms agree as long as no template token contains a separator,
- * which holds for templates mined with the same options. As in
- * buildPatternPredicate, `valueExpression` goes into the SQL as is: pass a
- * column expression, never user input.
+ * Null when a template token holds one of the extra delimiters: normalizing
+ * would split it, so the two forms would disagree. Templates mined with the
+ * same options never have one. As in buildPatternPredicate, `valueExpression`
+ * goes into the SQL as is: pass a column expression, never user input.
  */
 export function buildCompactPatternPredicate(
   valueExpression: string,
@@ -136,6 +136,11 @@ export function buildCompactPatternPredicate(
   options?: PatternRegexOptions,
 ): string | null {
   if (template.length > MAX_PREDICATE_TEMPLATE_LENGTH) return null;
+  const delimiters = options?.extraDelimiters ?? [];
+  const splitsToken = tokensOf(template, options).some(
+    t => t !== PATTERN_WILDCARD && [...t].some(c => delimiters.includes(c)),
+  );
+  if (splitsToken) return null;
   const separatorRun = `[${separatorClass(options)}]+`;
   const normalized = `replaceRegexpAll(${valueExpression}, '${escapeSqlString(separatorRun)}', ' ')`;
   return `match(${normalized}, '${escapeSqlString(compactRegex(template, options))}')`;

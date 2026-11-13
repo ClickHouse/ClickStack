@@ -147,11 +147,15 @@ describe('templateToRegex', () => {
   });
 });
 
+const PARTIAL: PatternRegexOptions = {
+  extraDelimiters: ['/', ':', '-', ']', '\\', '^'],
+};
+
 // The option sets the equivalence and round-trip tests run under.
 const OPTION_SETS: (PatternRegexOptions | undefined)[] = [
   withPunctuation,
   undefined,
-  { extraDelimiters: ['/', ':', '-', ']', '\\', '^'] },
+  PARTIAL,
   { extraDelimiters: PUNCTUATION, whitespace: 'python' },
 ];
 
@@ -204,6 +208,55 @@ describe('buildCompactPatternPredicate', () => {
       withPunctuation,
     )!;
     expect(compact.length * 4).toBeLessThan(full.length);
+  });
+
+  it('escapes regex and SQL syntax in tokens', () => {
+    // Mined without punctuation delimiters, tokens keep their punctuation.
+    const cases: [PatternRegexOptions | undefined, string][] = [
+      [undefined, 'GET /api/v1.2 (ok) $5 a|b'],
+      [undefined, "user=<*> it's C:\\tmp 3ms."],
+      [PARTIAL, 'GET api v1.2 (ok) $5 a|b'],
+    ];
+    const values = [
+      'GET /api/v1.2 (ok) $5 a|b',
+      'GET /api/v1x2 (ok) $5 a|b',
+      'GET api v1.2 (ok) $5 a|b',
+      'GET/api/v1.2 (ok) $5 a|b',
+      "user=<*> it's C:\\tmp 3ms.",
+      "user=<*> it's C:\\tmp 3msX",
+    ];
+    for (const [options, template] of cases) {
+      const full = toJsRegex(templateToRegex(template, options));
+      const compact = buildCompactPatternPredicate('Body', template, options)!;
+      for (const value of values) {
+        expect([template, value, matchesCompact(compact, value)]).toEqual([
+          template,
+          value,
+          full.test(value),
+        ]);
+      }
+      expect(parsePatternPredicate(compact, options)?.template).toBe(template);
+    }
+    // `.` is a literal, so only the template's own text matches.
+    const compact = buildCompactPatternPredicate(
+      'Body',
+      'GET /api/v1.2 (ok) $5 a|b',
+    )!;
+    expect(matchesCompact(compact, 'GET /api/v1.2 (ok) $5 a|b')).toBe(true);
+    expect(matchesCompact(compact, 'GET /api/v1x2 (ok) $5 a|b')).toBe(false);
+  });
+
+  it('builds no predicate for a token that holds a delimiter', () => {
+    // Mined without delimiters, then built with them: normalizing would split
+    // `db-1:5432`, so the compact form can't match what the full one does.
+    const template = 'Connection to db-1:5432 timed out';
+    expect(
+      buildCompactPatternPredicate('Body', template, withPunctuation),
+    ).toBeNull();
+    expect(buildPatternPredicate('Body', template, withPunctuation)).not.toBe(
+      null,
+    );
+    expect(buildCompactPatternPredicate('Body', template)).not.toBeNull();
   });
 });
 
