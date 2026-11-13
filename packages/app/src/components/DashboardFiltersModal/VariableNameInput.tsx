@@ -12,6 +12,8 @@ import { FilterFormControl } from './filterFormState';
 interface VariableNameInputProps {
   control: FilterFormControl;
   otherFilters: DashboardFilter[];
+  /** For filters whose name isn't a referenceable variable. */
+  label?: string;
   /** Replaces the tooltip, for filters whose name isn't a referenceable variable. */
   description?: string;
 }
@@ -19,6 +21,7 @@ interface VariableNameInputProps {
 export const VariableNameInput = ({
   control,
   otherFilters,
+  label = 'Variable name',
   description,
 }: VariableNameInputProps) => {
   const { errors } = useFormState({ control });
@@ -27,7 +30,7 @@ export const VariableNameInput = ({
 
   return (
     <CustomInputWrapper
-      label="Variable name"
+      label={label}
       tooltipText={
         description ? undefined : 'The name by which the variable is referenced'
       }
