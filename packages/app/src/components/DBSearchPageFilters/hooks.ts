@@ -255,6 +255,8 @@ function useFacets({
           tableName: tableConnection.tableName,
           connectionId: tableConnection.connectionId,
           metadataMVs: tableConnection.metadataMVs,
+          // "Load more" wants every value in the time range, not a sample of parts.
+          mapKeyIndexMaxParts: null,
           keyExpressions: [sqlKey],
           maxValuesPerKey: SINGLE_KEY_VALUES_LIMIT,
           dateRange,

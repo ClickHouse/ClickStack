@@ -1672,4 +1672,79 @@ describe('sources router', () => {
       expect(sources).toHaveLength(0);
     });
   });
+
+  describe('mapKeyIndexMaxParts field', () => {
+    it('POST / - persists mapKeyIndexMaxParts and PUT /:id updates it', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const created = await agent
+        .post('/sources')
+        .send({ ...MOCK_SOURCE, mapKeyIndexMaxParts: 50 })
+        .expect(200);
+      expect(created.body.mapKeyIndexMaxParts).toBe(50);
+
+      await agent
+        .put(`/sources/${created.body.id}`)
+        .send({ ...MOCK_SOURCE, id: created.body.id, mapKeyIndexMaxParts: 5 })
+        .expect(200);
+
+      const updated = await Source.findById(created.body.id).lean();
+      if (updated?.kind !== SourceKind.Log) {
+        throw new Error(`expected Log source, got ${updated?.kind}`);
+      }
+      expect(updated.mapKeyIndexMaxParts).toBe(5);
+    });
+
+    it.each([0, 2.5, -1])(
+      'POST / - rejects mapKeyIndexMaxParts %s',
+      async mapKeyIndexMaxParts => {
+        const { agent } = await getLoggedInAgent(server);
+
+        await agent
+          .post('/sources')
+          .send({ ...MOCK_SOURCE, mapKeyIndexMaxParts })
+          .expect(400);
+
+        expect(await Source.find({}).lean()).toHaveLength(0);
+      },
+    );
+  });
+
+  describe('mapKeyIndexPartSelection field', () => {
+    it('POST / - persists mapKeyIndexPartSelection and PUT /:id updates it', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const created = await agent
+        .post('/sources')
+        .send({ ...MOCK_SOURCE, mapKeyIndexPartSelection: 'largest' })
+        .expect(200);
+      expect(created.body.mapKeyIndexPartSelection).toBe('largest');
+
+      await agent
+        .put(`/sources/${created.body.id}`)
+        .send({
+          ...MOCK_SOURCE,
+          id: created.body.id,
+          mapKeyIndexPartSelection: 'smallest',
+        })
+        .expect(200);
+
+      const updated = await Source.findById(created.body.id).lean();
+      if (updated?.kind !== SourceKind.Log) {
+        throw new Error(`expected Log source, got ${updated?.kind}`);
+      }
+      expect(updated.mapKeyIndexPartSelection).toBe('smallest');
+    });
+
+    it('POST / - rejects an unknown mapKeyIndexPartSelection', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      await agent
+        .post('/sources')
+        .send({ ...MOCK_SOURCE, mapKeyIndexPartSelection: 'random' })
+        .expect(400);
+
+      expect(await Source.find({}).lean()).toHaveLength(0);
+    });
+  });
 });

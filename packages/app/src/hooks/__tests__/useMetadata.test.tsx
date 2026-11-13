@@ -454,6 +454,85 @@ describe('useGetKeyValues', () => {
     ).toEqual([{ kvRollupTable: 'logs_kv' }, { kvRollupTable: 'traces_kv' }]);
   });
 
+  // Sources here only carry the fields the hook reads.
+  const mockSources = (data: Record<string, unknown>[]) =>
+    jest.mocked(useSources).mockReturnValue({
+      data,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useSources>);
+
+  it("passes log and trace sources' part settings to 'all' mode lookups, and no others", async () => {
+    const defaultSources = jest.mocked(useSources)();
+    mockSources([
+      {
+        id: 'logs',
+        kind: 'log',
+        mapKeyIndexMaxParts: 7,
+        mapKeyIndexPartSelection: 'largest',
+      },
+      // Not a log or trace source, so its fields don't apply.
+      {
+        id: 'metrics',
+        kind: 'metric',
+        mapKeyIndexMaxParts: 9,
+        mapKeyIndexPartSelection: 'smallest',
+      },
+    ]);
+    const streamAllKeyValues = mockLookups.all([], []);
+
+    try {
+      const { result } = renderValues({
+        mode: 'all',
+        chartConfigs: [
+          logsConfig,
+          createMockChartConfig({
+            source: 'metrics',
+            from: { databaseName: 'db', tableName: 'metrics' },
+          }),
+        ],
+      });
+      await waitForSettled(result);
+
+      expect(
+        streamAllKeyValues.mock.calls.map(([args]) => [
+          args.tableName,
+          args.mapKeyIndexMaxParts,
+          args.mapKeyIndexPartSelection,
+        ]),
+      ).toEqual([
+        ['logs', 7, 'largest'],
+        ['metrics', undefined, undefined],
+      ]);
+    } finally {
+      jest.mocked(useSources).mockReturnValue(defaultSources);
+    }
+  });
+
+  it("refetches 'all' mode values when the source's part settings change", async () => {
+    const defaultSources = jest.mocked(useSources)();
+    const withParts = (mapKeyIndexMaxParts: number) =>
+      mockSources([{ id: 'logs', kind: 'log', mapKeyIndexMaxParts }]);
+    const streamAllKeyValues = mockLookups.all([], []);
+
+    try {
+      withParts(20);
+      const { result, rerender } = renderValues({
+        mode: 'all',
+        chartConfigs: [logsConfig],
+      });
+      await waitForSettled(result);
+
+      withParts(5);
+      rerender();
+      await waitFor(() => expect(streamAllKeyValues).toHaveBeenCalledTimes(2));
+      expect(
+        streamAllKeyValues.mock.calls.map(([args]) => args.mapKeyIndexMaxParts),
+      ).toEqual([20, 5]);
+    } finally {
+      jest.mocked(useSources).mockReturnValue(defaultSources);
+    }
+  });
+
   it("passes limit to 'all' mode lookups as maxValuesPerKey", async () => {
     const streamAllKeyValues = mockLookups.all([]);
 

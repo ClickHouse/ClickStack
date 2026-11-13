@@ -1,6 +1,7 @@
 import {
   BaseSourceSchema,
   LogSourceSchema,
+  MapKeyIndexPartSelection,
   MetricsDataType,
   MetricSourceSchema,
   PROMQL_SOURCE_BACKENDS,
@@ -189,6 +190,11 @@ export const LogSource = Source.discriminator<ILogSource>(
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
     },
+    mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
+    },
     orderByExpression: String,
   }),
 );
@@ -239,6 +245,11 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     metadataMaterializedViews: {
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
+    },
+    mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
     },
     orderByExpression: String,
   }),

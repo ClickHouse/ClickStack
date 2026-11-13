@@ -15,7 +15,12 @@ import {
 } from '@/core/renderChartConfig';
 import { isBuilderChartConfig } from '@/guards';
 import { TextIndexInfoLookup } from '@/queryParser';
-import { BuilderChartConfigWithDateRange, SourceKind, TSource } from '@/types';
+import {
+  BuilderChartConfigWithDateRange,
+  MapKeyIndexPartSelection,
+  SourceKind,
+  TSource,
+} from '@/types';
 
 // Mock ClickhouseClient
 const mockClickhouseClient = {
@@ -1397,6 +1402,88 @@ describe('Metadata', () => {
       expect(sql).toContain('substring(token, position(token,');
       expect(sql).toContain('GROUP BY column, key');
     });
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'reads only the parts nearest the median size from the %s text index',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+        });
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+          mapKeyIndexMaxParts: 5,
+        });
+
+        const partsLimits = (mockClickhouseClient.query as jest.Mock).mock.calls
+          .filter(([opts]) => opts.query.includes('mergeTreeTextIndex('))
+          .map(([opts]) => {
+            const match = opts.query.match(
+              /ORDER BY abs\(rn - \(cnt \+ 1\) \/ 2\), name\s+LIMIT \{(\w+):Int32\}/,
+            );
+            expect(match).not.toBeNull();
+            return opts.query_params[match[1]];
+          });
+        expect(partsLimits).toEqual([20, 5]);
+      },
+    );
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'reads every part in the time range from the %s text index when the part limit is null',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+          mapKeyIndexMaxParts: null,
+        });
+
+        const textIndexCall = (
+          mockClickhouseClient.query as jest.Mock
+        ).mock.calls.find(([opts]) =>
+          opts.query.includes('mergeTreeTextIndex('),
+        );
+        expect(textIndexCall[0].query).toMatch(
+          /part_name IN \(SELECT name\s+FROM system\.parts/,
+        );
+        expect(textIndexCall[0].query).not.toContain('row_number()');
+      },
+    );
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'orders the %s text index parts by the configured part selection',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+
+        await metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [keyExpression],
+          mapKeyIndexPartSelection: MapKeyIndexPartSelection.Largest,
+        });
+
+        const textIndexCall = (
+          mockClickhouseClient.query as jest.Mock
+        ).mock.calls.find(([opts]) =>
+          opts.query.includes('mergeTreeTextIndex('),
+        );
+        expect(textIndexCall[0].query).toMatch(
+          /\)\s+ORDER BY rn DESC\s+LIMIT \{\w+:Int32\}/,
+        );
+      },
+    );
 
     it('routes ServiceName and SeverityText through getMetadataMVKeyValues (KV rollup MV path)', async () => {
       setupDefaultLogsSchema();
@@ -3288,6 +3375,90 @@ describe('Metadata', () => {
 
         expect(results).toEqual([['http.method'], ['http.method']]);
         expect(mockClickhouseClient.query).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it.each(textIndexLookups)(
+      'reads only the parts nearest the median size on the %s text index path',
+      async (_, textIndexLookup) => {
+        const md = new Metadata(mockClickhouseClient, new MetadataCache());
+        jest.spyOn(md, 'getServerVersion').mockResolvedValue([26, 3, 0, 0]);
+        jest
+          .spyOn(md, 'getMapColumnTextIndexes')
+          .mockResolvedValue(textIndexLookup);
+        (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+          json: () => Promise.resolve({ data: [{ key: 'http.method' }] }),
+        });
+        const args = {
+          databaseName: 'default',
+          tableName: 'otel_logs',
+          column: 'LogAttributes',
+          connectionId: 'test_connection',
+          dateRange: [
+            new Date('2024-01-01T00:00:00Z'),
+            new Date('2024-01-01T01:00:00Z'),
+          ] as [Date, Date],
+          timestampValueExpression: 'Timestamp',
+        };
+
+        await md.getMapKeys(args);
+        await md.getMapKeys({ ...args, mapKeyIndexMaxParts: 5 });
+
+        // A different limit is a different result, not a cache hit.
+        expect(mockClickhouseClient.query).toHaveBeenCalledTimes(2);
+        const calls = (mockClickhouseClient.query as jest.Mock).mock.calls;
+        const partsLimits = calls.map(([opts]) => {
+          const match = opts.query.match(
+            /row_number\(\) OVER \(ORDER BY rows, name\)[\s\S]+ORDER BY abs\(rn - \(cnt \+ 1\) \/ 2\), name\s+LIMIT \{(\w+):Int32\}/,
+          );
+          expect(match).not.toBeNull();
+          return opts.query_params[match[1]];
+        });
+        expect(partsLimits).toEqual([20, 5]);
+      },
+    );
+
+    it.each(textIndexLookups)(
+      'orders the parts by the configured part selection on the %s text index path',
+      async (_, textIndexLookup) => {
+        const md = new Metadata(mockClickhouseClient, new MetadataCache());
+        jest.spyOn(md, 'getServerVersion').mockResolvedValue([26, 3, 0, 0]);
+        jest
+          .spyOn(md, 'getMapColumnTextIndexes')
+          .mockResolvedValue(textIndexLookup);
+        (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+          json: () => Promise.resolve({ data: [{ key: 'http.method' }] }),
+        });
+        const args = {
+          databaseName: 'default',
+          tableName: 'otel_logs',
+          column: 'LogAttributes',
+          connectionId: 'test_connection',
+          dateRange: [
+            new Date('2024-01-01T00:00:00Z'),
+            new Date('2024-01-01T01:00:00Z'),
+          ] as [Date, Date],
+          timestampValueExpression: 'Timestamp',
+        };
+
+        for (const mapKeyIndexPartSelection of [
+          MapKeyIndexPartSelection.Smallest,
+          MapKeyIndexPartSelection.Largest,
+          MapKeyIndexPartSelection.Median,
+        ]) {
+          await md.getMapKeys({ ...args, mapKeyIndexPartSelection });
+        }
+
+        // Each selection is a different result, not a cache hit.
+        const orders = (mockClickhouseClient.query as jest.Mock).mock.calls.map(
+          ([opts]) =>
+            opts.query.match(/\)\s+ORDER BY (.+)\s+LIMIT \{\w+:Int32\}/)?.[1],
+        );
+        expect(orders).toEqual([
+          'rn',
+          'rn DESC',
+          'abs(rn - (cnt + 1) / 2), name',
+        ]);
       },
     );
   });

@@ -13,6 +13,7 @@ import {
   parseKeyPath,
   TableConnection,
   TableMetadata,
+  tcFromSource,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   FilterState,
@@ -530,12 +531,24 @@ export function useMultipleGetKeyValues(
       ? { retry, structuralSharing, refetchOnWindowFocus: true }
       : {};
 
+  // Resolved here, not in the stream, so editing a source's part settings
+  // changes the query key instead of serving cached facets.
+  const partSettings = chartConfigsArr.map(chartConfig => {
+    const { mapKeyIndexMaxParts, mapKeyIndexPartSelection } = tcFromSource(
+      chartConfig.source
+        ? sources?.find(s => s.id === chartConfig.source)
+        : undefined,
+    );
+    return { mapKeyIndexMaxParts, mapKeyIndexPartSelection };
+  });
+
   const query = useStreamingQuery<Facet>({
     queryKey: [
       'useMetadata.useGetKeyValues',
       mode,
       metadataMVsOverride,
       ...chartConfigsArr.map(cc => ({ ...cc })),
+      partSettings,
       ...keys,
       // Serialized: react-query hashes keys with JSON.stringify, which would
       // flatten every distinct Set selection to `{}`.
@@ -573,7 +586,7 @@ export function useMultipleGetKeyValues(
         },
       );
 
-      const lookups = chartConfigsArr.map(chartConfig => {
+      const lookups = chartConfigsArr.map((chartConfig, i) => {
         const source = chartConfig.source
           ? sources?.find(s => s.id === chartConfig.source)
           : undefined;
@@ -582,7 +595,7 @@ export function useMultipleGetKeyValues(
           (source && (isLogSource(source) || isTraceSource(source))
             ? source.metadataMaterializedViews
             : undefined);
-        return { chartConfig, source, metadataMVs };
+        return { chartConfig, source, metadataMVs, ...partSettings[i] };
       });
 
       if (mode === 'exact') {
@@ -606,18 +619,26 @@ export function useMultipleGetKeyValues(
       }
 
       // mode === 'all'
-      const streams = lookups.map(({ chartConfig, metadataMVs }) =>
-        metadata.streamAllKeyValues({
-          databaseName: chartConfig.from.databaseName,
-          tableName: chartConfig.from.tableName,
-          keyExpressions: limitedKeys,
-          maxValuesPerKey: limit,
-          connectionId: chartConfig.connection,
+      const streams = lookups.map(
+        ({
+          chartConfig,
           metadataMVs,
-          dateRange: chartConfig.dateRange,
-          timestampValueExpression: chartConfig.timestampValueExpression,
-          signal,
-        }),
+          mapKeyIndexMaxParts,
+          mapKeyIndexPartSelection,
+        }) =>
+          metadata.streamAllKeyValues({
+            databaseName: chartConfig.from.databaseName,
+            tableName: chartConfig.from.tableName,
+            keyExpressions: limitedKeys,
+            maxValuesPerKey: limit,
+            connectionId: chartConfig.connection,
+            metadataMVs,
+            mapKeyIndexMaxParts,
+            mapKeyIndexPartSelection,
+            dateRange: chartConfig.dateRange,
+            timestampValueExpression: chartConfig.timestampValueExpression,
+            signal,
+          }),
       );
       for await (const keyValues of mergeStreams(streams)) {
         yield keyValues.map(({ key, value }) => ({
