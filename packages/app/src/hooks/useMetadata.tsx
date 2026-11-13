@@ -7,6 +7,7 @@ import {
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
 import {
+  DEFAULT_MAX_KEYS,
   Field,
   FieldsCondition,
   MetricNames,
@@ -279,6 +280,9 @@ export function useMultipleAllFields(
   const metadata = useMetadataWithSettings();
   const { data: me, isFetched } = api.useMe();
   const isFieldMetadataDisabled = !!me?.team?.fieldMetadataDisabled;
+  // The team setting only raises Map key discovery, so a low limit doesn't
+  // shrink the keys offered to autocomplete and the other field pickers.
+  const maxKeys = Math.max(useFilterKeysFetchLimit(), DEFAULT_MAX_KEYS);
   const allPopulated = tableConnections.every(
     tc => !!tc.databaseName && !!tc.tableName && !!tc.connectionId,
   );
@@ -291,6 +295,7 @@ export function useMultipleAllFields(
       timestampValueExpression,
       isFieldMetadataDisabled,
       conditions,
+      maxKeys,
     ],
     queryFn: () =>
       Promise.all(
@@ -310,6 +315,7 @@ export function useMultipleAllFields(
                   timestampValueExpression:
                     timestampValueExpression ?? tc.timestampValueExpression,
                   condition: conditions?.[i],
+                  maxKeys,
                 });
             return { fields, columns };
           } catch (error) {

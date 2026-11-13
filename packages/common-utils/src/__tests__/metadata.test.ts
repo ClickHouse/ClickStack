@@ -3823,7 +3823,7 @@ describe('Metadata', () => {
       jest.clearAllMocks();
     });
 
-    it('threads dateRange and timestampValueExpression through to getMapKeys', async () => {
+    it('threads dateRange, timestampValueExpression, and maxKeys through to getMapKeys', async () => {
       const realCache = new (
         jest.requireActual('../core/metadata') as any
       ).MetadataCache();
@@ -3860,12 +3860,14 @@ describe('Metadata', () => {
         connectionId: 'conn-1',
         dateRange,
         timestampValueExpression: 'EventTime, EventDate',
+        maxKeys: 5000,
       });
 
       expect(getMapKeysSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           dateRange,
           timestampValueExpression: 'EventTime, EventDate',
+          maxKeys: 5000,
         }),
       );
     });
