@@ -5,12 +5,14 @@ import {
   getFilterVariableName,
   getPendingFilterValuesVariables,
   isAdhocFilter,
+  isDataSourceFilter,
   isFilterGlobalRequirement,
   isFilterRequired,
   isFilterVariableEnabled,
   isQueryExpressionFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
+import { ReferenceVariableValues } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AdhocFilterCondition,
   ChartVariable,
@@ -28,6 +30,7 @@ import {
   getPendingVariablesTooltip,
 } from './components/DashboardFilterLabel';
 import { FilterLinkToggle } from './components/FilterLinkToggle';
+import { DataSourceDashboardFilter } from './components/ReferenceVariableDashboardFilter';
 import { VirtualMultiSelect } from './components/VirtualMultiSelect/VirtualMultiSelect';
 import { useDashboardFilterValues } from './hooks/useDashboardFilterValues';
 
@@ -173,6 +176,13 @@ interface DashboardFilterProps {
   variables?: ChartVariable[];
   /** Required filters with nothing selected, which can block ad hoc filters. */
   unsatisfiedRequiredFilters?: DashboardFilter[];
+  /** The selected ID of each data source and connection variable, by name. */
+  referenceVariableValues?: ReferenceVariableValues;
+  /**
+   * The unselected reference variables each filter's fields reference, by
+   * filter ID. `filters` are otherwise expected with their references resolved.
+   */
+  unresolvedReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
 }
 
 const DashboardFilters = ({
@@ -184,6 +194,8 @@ const DashboardFilters = ({
   onSetAdhocConditions,
   variables,
   unsatisfiedRequiredFilters,
+  referenceVariableValues,
+  unresolvedReferenceVariablesByFilterId,
 }: DashboardFilterProps) => {
   // "Link" mode (opt-in, off by default): each dropdown's values are narrowed by
   // the others' selections. Off by default because contingent value lookups
@@ -191,13 +203,22 @@ const DashboardFilters = ({
   // on, all of a source's facets are computed in a single groupUniqArrayIf scan.
   const [linked, setLinked] = useState(false);
 
+  // A filter whose data source variable has no selection has nothing to query yet
+  const queryableFilters = useMemo(
+    () =>
+      filters.filter(
+        filter => !unresolvedReferenceVariablesByFilterId?.has(filter.id),
+      ),
+    [filters, unresolvedReferenceVariablesByFilterId],
+  );
+
   const {
     data: filterValuesById,
     erroredFilterIds,
     filterErrorMessages,
     isFetching,
   } = useDashboardFilterValues({
-    filters,
+    filters: queryableFilters,
     dateRange,
     variables,
     // Only narrow by sibling selections when linked.
@@ -214,6 +235,25 @@ const DashboardFilters = ({
   return (
     <Group align="start">
       {filters.map(filter => {
+        const unresolvedVariables =
+          unresolvedReferenceVariablesByFilterId?.get(filter.id) ?? [];
+        if (isDataSourceFilter(filter)) {
+          return (
+            <DataSourceDashboardFilter
+              key={filter.id}
+              filter={filter}
+              pendingVariables={unresolvedVariables}
+              value={referenceVariableValues?.get(
+                getFilterVariableName(filter) ?? '',
+              )}
+              onChange={value =>
+                onSetFilterValue(filter.id, value ? [value] : [])
+              }
+              effect={getFilterEffect(filter)}
+              requiredTooltip={getRequiredFilterTooltip(filter)}
+            />
+          );
+        }
         if (isAdhocFilter(filter)) {
           return (
             <AdhocDashboardFilter
@@ -238,14 +278,17 @@ const DashboardFilters = ({
         // Fall back to the hook-level fetching state only until this filter's
         // query has produced an entry; once it has (even with empty values),
         // honor its own loading flag.
-        const isLoadingValues = queriedFilterValues
-          ? queriedFilterValues.isLoading
-          : isFetching;
+        const isLoadingValues =
+          unresolvedVariables.length === 0 &&
+          (queriedFilterValues ? queriedFilterValues.isLoading : isFetching);
         // Only a queried dropdown has a values query that can await a
-        // variable's selection.
-        const pendingVariables = isQueryExpressionFilter(filter)
-          ? getPendingFilterValuesVariables(filter, variables)
-          : undefined;
+        // variable's selection, besides any data source variable it reads from.
+        const pendingVariables = [
+          ...unresolvedVariables,
+          ...(isQueryExpressionFilter(filter)
+            ? getPendingFilterValuesVariables(filter, variables)
+            : []),
+        ];
         return (
           <DashboardFilterSelect
             key={filter.id}
