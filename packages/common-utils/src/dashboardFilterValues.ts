@@ -14,6 +14,7 @@ import {
 } from '@/filters';
 import { isPromqlSavedChartConfig, isRawSqlSavedChartConfig } from '@/guards';
 import { hasMacro, isMissingFiltersMacro } from '@/macros';
+import { getReferenceVariableFilters } from '@/referenceVariables';
 import {
   AdhocDashboardFilter,
   AdhocFilterValue,
@@ -269,6 +270,8 @@ export function getAdhocFilterTargetsForTile(
  * 2. The tile references the filter's variable.
  * 3. The filter applies via broadcast to the tile's source, and the tile
  *    applies broadcast conditions (`consumesBroadcastFilters`).
+ * 4. The filter is a data source or connection variable the tile's stored
+ *    config references.
  */
 export function getBlockingRequiredFilters(
   unsatisfiedRequiredFilters: DashboardFilter[],
@@ -277,8 +280,16 @@ export function getBlockingRequiredFilters(
     referencedVariableNames?: readonly string[];
     /** Whether the tile's query applies broadcast filter conditions. */
     consumesBroadcastFilters: boolean;
+    /** The reference variables the tile's stored config references. */
+    referenceVariableNames?: readonly string[];
   },
 ): DashboardFilter[] {
+  const referenceVariableNames = new Set(tile.referenceVariableNames ?? []);
+  const referenceVariableFilterIds = new Set(
+    getReferenceVariableFilters(unsatisfiedRequiredFilters)
+      .filter(({ name }) => referenceVariableNames.has(name))
+      .map(({ filter }) => filter.id),
+  );
   const referencedNamesSet = new Set(tile.referencedVariableNames ?? []);
   const referencedFilterIds = new Set(
     getDashboardVariableFilters(unsatisfiedRequiredFilters)
@@ -290,6 +301,7 @@ export function getBlockingRequiredFilters(
     filter =>
       isFilterGlobalRequirement(filter) ||
       referencedFilterIds.has(filter.id) ||
+      referenceVariableFilterIds.has(filter.id) ||
       (tile.consumesBroadcastFilters &&
         doesFilterApplyToSource(filter, tile.sourceId)),
   );
@@ -301,15 +313,19 @@ export function getBlockingRequiredFilterNames({
   sourceId,
   unsatisfiedRequiredFilters,
   referencedVariables,
+  referenceVariableNames,
 }: {
   config: SavedChartConfig | ChartConfigWithOptDateRange;
   sourceId: string | undefined;
   unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
   /** The tile's variables, already narrowed to the ones it references. */
   referencedVariables: readonly { name: string }[] | undefined;
+  /** The reference variables the tile's stored config references. */
+  referenceVariableNames?: readonly string[];
 }): string[] {
   return getBlockingRequiredFilters(unsatisfiedRequiredFilters ?? [], {
     sourceId,
+    referenceVariableNames,
     referencedVariableNames: referencedVariables?.map(
       variable => variable.name,
     ),

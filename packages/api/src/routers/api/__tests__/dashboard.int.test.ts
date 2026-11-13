@@ -1518,6 +1518,130 @@ describe('dashboard router', () => {
     );
   });
 
+  describe('data source variables', () => {
+    const dataSourceFilter = {
+      id: new Types.ObjectId().toString(),
+      type: 'DATA_SOURCE' as const,
+      name: 'Logs source',
+      variableName: 'logs',
+      allowedSourceKinds: [SourceKind.Log],
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    };
+
+    it('persists a tile and a filter that reference the variable', async () => {
+      const tile = makeTile({ sourceId: '$logs' });
+      const queriedFilter = {
+        id: new Types.ObjectId().toString(),
+        type: 'QUERY_EXPRESSION' as const,
+        name: 'Service',
+        expression: 'ServiceName',
+        source: '$logs',
+      };
+
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [tile],
+          filters: [dataSourceFilter, queriedFilter],
+        })
+        .expect(200);
+
+      expect(created.body.tiles[0].config.source).toBe('$logs');
+      expect(created.body.filters).toEqual([dataSourceFilter, queriedFilter]);
+    });
+
+    it('rejects a reference to an unknown variable', async () => {
+      const res = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, tiles: [makeTile({ sourceId: '$nope' })] })
+        .expect(400);
+
+      expect(JSON.stringify(res.body)).toMatch(
+        /does not name a data source variable/,
+      );
+    });
+
+    it('rejects a variable offering kinds the reference cannot use', async () => {
+      const res = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [
+            {
+              ...dataSourceFilter,
+              allowedSourceKinds: [SourceKind.Log, SourceKind.Promql],
+            },
+          ],
+        })
+        .expect(400);
+
+      expect(JSON.stringify(res.body)).toMatch(/promql/);
+    });
+
+    it('validates a PATCH of tiles against the stored filters', async () => {
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [dataSourceFilter] })
+        .expect(200);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ tiles: [makeTile({ sourceId: '$logs' })] })
+        .expect(200);
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ filters: [] })
+        .expect(400);
+    });
+
+    it('drops an alert on a tile that uses the variable', async () => {
+      await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [
+            makeTile({
+              sourceId: '$logs',
+              alert: makeMockAlert(webhook._id.toString()),
+            }),
+          ],
+          filters: [dataSourceFilter],
+        })
+        .expect(200);
+
+      expect(await Alert.countDocuments({ team: team._id })).toBe(0);
+    });
+
+    it('rejects a tile alert on a tile that uses the variable', async () => {
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [dataSourceFilter],
+        })
+        .expect(200);
+
+      const res = await agent
+        .post('/alerts')
+        .send(
+          makeAlertInput({
+            dashboardId: created.body.id,
+            tileId: created.body.tiles[0].id,
+            webhookId: webhook._id.toString(),
+          }),
+        )
+        .expect(400);
+
+      expect(res.body.message).toMatch(/data source or connection variable/);
+    });
+  });
+
   describe('promql-label filters', () => {
     const createPromqlSource = () =>
       Source.create({
