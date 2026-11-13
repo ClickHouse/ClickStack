@@ -18,5 +18,13 @@ export {
 } from './mine-patterns';
 export { Node } from './node';
 export { buildNoisyBodyMatcher, selectNoisyPatterns } from './noisy-matcher';
+export type { PatternRegexOptions } from './pattern-predicate';
+export {
+  ASCII_PUNCTUATION,
+  buildPatternPredicate,
+  MAX_PREDICATE_TEMPLATE_LENGTH,
+  parsePatternPredicate,
+  templateToRegex,
+} from './pattern-predicate';
 export type { AddLogMessageResult, ExtractedParameter } from './template-miner';
 export { TemplateMiner } from './template-miner';
