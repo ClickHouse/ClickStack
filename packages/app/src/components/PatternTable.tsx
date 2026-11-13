@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import {
   BuilderChartConfigWithDateRange,
+  ConditionFilter,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
@@ -17,6 +18,8 @@ import {
   buildPatternColumnExpression,
   PatternColumnSelector,
 } from './Patterns/PatternColumnSelector';
+import type { PatternFilterAction } from './Patterns/patternFilter';
+import { PatternRowActions } from './Patterns/PatternRowActions';
 import PatternSidePanel from './PatternSidePanel';
 
 const emptyMap = new Map();
@@ -30,6 +33,7 @@ export default function PatternTable({
   draftPatternColumn: externalDraftPatternColumn,
   onDraftPatternColumnChange: externalOnDraftPatternColumnChange,
   onSubmit: externalOnSubmit,
+  onPatternFilter,
   source,
 }: {
   config: BuilderChartConfigWithDateRange;
@@ -39,6 +43,10 @@ export default function PatternTable({
   draftPatternColumn?: string;
   onDraftPatternColumnChange?: (value: string) => void;
   onSubmit?: () => void;
+  onPatternFilter?: (
+    filter: ConditionFilter,
+    action: PatternFilterAction,
+  ) => void;
   totalCountQueryKeyPrefix: string;
   source?: TSource;
 }) {
@@ -93,6 +101,22 @@ export default function PatternTable({
       (a, b) => b.count - a.count,
     ) as Pattern[];
   }, [groupedResults]);
+
+  // The rows are the patterns. One without a template gets no buttons.
+  const renderRowActions = useMemo(
+    () =>
+      onPatternFilter == null
+        ? undefined
+        : (row: Record<string, unknown>) =>
+            typeof row.template === 'string' ? (
+              <PatternRowActions
+                template={row.template}
+                valueExpression={effectiveBodyValueExpression}
+                onFilter={onPatternFilter}
+              />
+            ) : null,
+    [effectiveBodyValueExpression, onPatternFilter],
+  );
 
   return (
     <>
@@ -164,6 +188,7 @@ export default function PatternTable({
             }}
             config={patternQueryConfig}
             showExpandButton={false}
+            rowActions={renderRowActions}
           />
           {selectedPattern && source && (
             <PatternSidePanel

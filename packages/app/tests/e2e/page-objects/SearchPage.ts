@@ -209,6 +209,30 @@ export class SearchPage {
       .nth(PATTERN_LIST_LEVEL_COLUMN_INDEX);
   }
 
+  /** The Pattern-column cell of a pattern-list row (see patternListLevelCell). */
+  patternListPatternCell(rowIndex = 0) {
+    const PATTERN_LIST_PATTERN_COLUMN_INDEX = 3;
+    return this.patternListRows
+      .nth(rowIndex)
+      .locator('td > button > div')
+      .nth(PATTERN_LIST_PATTERN_COLUMN_INDEX);
+  }
+
+  /** Active-filter pills for filters added from the Event Patterns view. */
+  get patternFilterPills() {
+    return this.page.getByTestId('active-filter-pill-pattern');
+  }
+
+  /** Hover a pattern-list row and click one of its filter buttons. */
+  async clickPatternRowAction(
+    name: 'Filter for this pattern' | 'Exclude this pattern',
+    rowIndex = 0,
+  ) {
+    const row = this.patternListRows.nth(rowIndex);
+    await row.hover();
+    await row.getByRole('button', { name }).click();
+  }
+
   /** Open the first pattern's sample flyout and wait for it to render. */
   async openFirstPattern(timeout = 30_000) {
     await this.patternListRows.first().click();
