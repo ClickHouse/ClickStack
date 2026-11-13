@@ -8439,6 +8439,102 @@ describe('External API v2 Dashboards - new format', () => {
     });
   });
 
+  describe('reference variables', () => {
+    const connectionFilter = {
+      type: 'CONNECTION' as const,
+      name: 'Connection',
+      variableName: 'conn',
+    };
+    const dataSourceFilter = {
+      type: 'DATA_SOURCE' as const,
+      name: 'Traces source',
+      variableName: 'traces',
+      allowedSourceKinds: [SourceKind.Trace],
+      connectionId: '$conn',
+    };
+    const rawSqlTile = {
+      name: 'Raw SQL',
+      x: 0,
+      y: 0,
+      w: 6,
+      h: 3,
+      config: {
+        configType: 'sql',
+        displayType: 'table',
+        connectionId: '$conn',
+        sqlTemplate: 'SELECT 1',
+      },
+    };
+
+    it('round-trips the variables, their values and the tiles that use them', async () => {
+      const savedFilterValues = [
+        { type: 'variable', name: 'conn', values: [connection._id.toString()] },
+        {
+          type: 'variable',
+          name: 'traces',
+          values: [traceSource._id.toString()],
+        },
+      ];
+      const created = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [makeExternalTile({ sourceId: '$traces' }), rawSqlTile],
+          tags: [],
+          filters: [connectionFilter, dataSourceFilter],
+          savedFilterValues,
+        })
+        .expect(200);
+
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      expect(fetched.body.data.filters).toEqual([
+        expect.objectContaining(connectionFilter),
+        expect.objectContaining(dataSourceFilter),
+      ]);
+      expect(fetched.body.data.tiles.map(t => t.config)).toEqual([
+        expect.objectContaining({ sourceId: '$traces' }),
+        expect.objectContaining({ connectionId: '$conn' }),
+      ]);
+      expect(fetched.body.data.savedFilterValues).toEqual(savedFilterValues);
+
+      const echoed = await authRequest(
+        'put',
+        `${BASE_URL}/${created.body.data.id}`,
+      )
+        .send(fetched.body.data)
+        .expect(200);
+      expect(echoed.body.data.filters).toEqual(fetched.body.data.filters);
+      expect(echoed.body.data.tiles.map(t => t.config)).toEqual(
+        fetched.body.data.tiles.map(t => t.config),
+      );
+    });
+
+    it('rejects a tile referencing an undeclared variable', async () => {
+      const res = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [makeExternalTile({ sourceId: '$traces' })],
+          tags: [],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a data source variable/);
+    });
+
+    it('rejects a connection reference to an undeclared connection variable', async () => {
+      const res = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [rawSqlTile],
+          tags: [],
+          filters: [{ ...dataSourceFilter, connectionId: undefined }],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a connection variable/);
+    });
+  });
+
   describe('ad hoc filters', () => {
     const adhocFilter = () => ({
       id: new ObjectId().toString(),

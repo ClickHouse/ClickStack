@@ -135,6 +135,8 @@ Apply these before calling clickstack_save_dashboard. Each rule is enforced by t
 
 9g. SET savedFilterValues TO GIVE THE DASHBOARD A DEFAULT SELECTION. Pass savedFilterValues on clickstack_save_dashboard or clickstack_patch_dashboard to pre-select filter values whenever the dashboard opens. Pair this with a required filter (9e) so the dashboard opens scoped rather than blocked.
 
+9h. TO LET VIEWERS SWITCH THE SOURCE OR CONNECTION, USE A DATA_SOURCE OR CONNECTION FILTER. filters: [{ type: "DATA_SOURCE", name: "Logs source", variableName: "logs", allowedSourceKinds: ["log"] }] adds a required source picker; tiles then set sourceId: "$logs" (filters may use it in sourceId or appliesToSourceIds). A CONNECTION filter does the same for raw SQL tiles' connectionId, and a DATA_SOURCE filter's optional connectionId limits its sources to one connection. Keep allowedSourceKinds to kinds charts treat alike (log + trace, or one kind). Tiles that use either cannot have alerts, and clickstack_query_tile needs a selection for the variable (variableValues or the dashboard's saved value).
+
 10. UPDATE IS REPLACE, NOT MERGE. clickstack_save_dashboard with an id overwrites tiles, containers, and filters in their entirety. Call clickstack_get_dashboard first when you only want to add or rename one entry; do not send a partial set or you will silently drop everything you omitted.
 
 11. GROUP RELATED TILES INTO CONTAINERS. REQUIRED at five or more tiles, no exceptions. An ungrouped wall of nine or ten tiles is a readability failure even when each tile is correct in isolation. Containers are the right way to introduce structure; markdown tiles for section labels are not.

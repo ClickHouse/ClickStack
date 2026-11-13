@@ -1809,7 +1809,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -1906,7 +1906,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -1983,7 +1983,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2070,7 +2070,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2153,7 +2153,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2214,7 +2214,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2269,7 +2269,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2363,7 +2363,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2421,7 +2421,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2485,7 +2485,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2525,7 +2525,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to mine patterns from.",
+            "description": "ID of the data source to mine patterns from, or `$name` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2590,7 +2590,7 @@
           },
           "connectionId": {
             "type": "string",
-            "description": "ID of the ClickHouse connection to execute the query against.",
+            "description": "ID of the ClickHouse connection to execute the query against, or\n`$name` of a CONNECTION filter on the dashboard.\n",
             "example": "65f5e4a3b9e77c001a567890"
           },
           "sqlTemplate": {
@@ -2601,7 +2601,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "Optional ID of the data source associated with this Raw SQL chart. Used for applying dashboard filters.",
+            "description": "Optional ID of the data source associated with this Raw SQL chart, or `$name` of a DATA_SOURCE filter on the dashboard. Used for applying dashboard filters.",
             "example": "65f5e4a3b9e77c001a567890"
           },
           "numberFormat": {
@@ -3951,6 +3951,12 @@
           },
           {
             "$ref": "#/components/schemas/PrometheusLabelFilterInput"
+          },
+          {
+            "$ref": "#/components/schemas/DataSourceFilterInput"
+          },
+          {
+            "$ref": "#/components/schemas/ConnectionFilterInput"
           }
         ],
         "discriminator": {
@@ -3958,7 +3964,95 @@
           "mapping": {
             "QUERY_EXPRESSION": "#/components/schemas/QueryExpressionFilterInput",
             "STATIC_LIST": "#/components/schemas/StaticListFilterInput",
-            "PROMETHEUS_LABEL": "#/components/schemas/PrometheusLabelFilterInput"
+            "PROMETHEUS_LABEL": "#/components/schemas/PrometheusLabelFilterInput",
+            "DATA_SOURCE": "#/components/schemas/DataSourceFilterInput",
+            "CONNECTION": "#/components/schemas/ConnectionFilterInput"
+          }
+        }
+      },
+      "DataSourceFilterInput": {
+        "type": "object",
+        "description": "A variable whose single, required value is a source. Tiles reference it\nas `$variableName` in their sourceId, and other filters in sourceId or\nappliesToSourceIds, so viewers can switch the source those read. Tiles\nthat use it do not load until a source is selected, and cannot have\nalerts.\n",
+        "required": [
+          "type",
+          "name",
+          "allowedSourceKinds"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "DATA_SOURCE"
+            ],
+            "description": "Filter type discriminator. Must be \"DATA_SOURCE\".",
+            "example": "DATA_SOURCE"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name of the variable's dropdown",
+            "example": "Logs source"
+          },
+          "variableName": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]*$",
+            "description": "Token tiles and filters reference the selected source by, as `$variableName`.",
+            "example": "logs"
+          },
+          "allowedSourceKinds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "log",
+                "trace",
+                "session",
+                "metric",
+                "promql"
+              ]
+            },
+            "description": "Kinds of sources offered. A field can only reference the variable\nif it accepts every listed kind.\n",
+            "example": [
+              "log"
+            ]
+          },
+          "connectionId": {
+            "type": "string",
+            "description": "Optional connection the offered sources are limited to: a\nconnection ID, or `$name` of a CONNECTION filter on the dashboard.\n",
+            "example": "$conn"
+          }
+        }
+      },
+      "ConnectionFilterInput": {
+        "type": "object",
+        "description": "A variable whose single, required value is a connection. Raw SQL tiles\nreference it as `$variableName` in their connectionId, and data source\nvariables in theirs. Tiles that use it do not load until a connection is\nselected, and cannot have alerts.\n",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "CONNECTION"
+            ],
+            "description": "Filter type discriminator. Must be \"CONNECTION\".",
+            "example": "CONNECTION"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name of the variable's dropdown",
+            "example": "Connection"
+          },
+          "variableName": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]*$",
+            "description": "Token raw SQL tiles reference the selected connection by, as `$variableName`.",
+            "example": "conn"
           }
         }
       },
@@ -3994,7 +4088,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "Source ID this dashboard filter key applies to",
+            "description": "Source ID this dashboard filter key applies to, or `$name` of a DATA_SOURCE filter on the dashboard",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "sourceMetricType": {

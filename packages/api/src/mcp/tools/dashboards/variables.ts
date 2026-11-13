@@ -5,14 +5,43 @@ import {
   isFilterVariableEnabled,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
+import {
+  getConfigReferenceFields,
+  getReferenceVariableFilters,
+  getStringField,
+  parseVariableReference,
+} from '@hyperdx/common-utils/dist/referenceVariables';
 import type { ChartVariable } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
 import { z } from 'zod';
 
+import type { ExternalDashboard } from '@/routers/external-api/v2/utils/dashboards';
 import type {
   ExternalDashboardFilter,
   ExternalDashboardFilterWithId,
+  ExternalDashboardTileWithId,
 } from '@/utils/zod';
+
+type ExternalFilters =
+  | (ExternalDashboardFilter | ExternalDashboardFilterWithId)[]
+  | undefined;
+
+/** Names of the data source and connection variables a dashboard declares. */
+function getReferenceVariableNames(filters: ExternalFilters): Set<string> {
+  return new Set(getReferenceVariableFilters(filters).map(({ name }) => name));
+}
+
+/** The external API name of a chart config field that can hold a reference. */
+function toExternalReferenceKey(
+  key: ReturnType<typeof getConfigReferenceFields>[number]['key'],
+): 'sourceId' | 'connectionId' {
+  switch (key) {
+    case 'source':
+      return 'sourceId';
+    case 'connection':
+      return 'connectionId';
+  }
+}
 
 /** Optional per-variable selection for a tile run. */
 export const mcpVariableValuesParam = z
@@ -28,7 +57,9 @@ export const mcpVariableValuesParam = z
         .array(z.string())
         .describe(
           'Values to treat as selected. An empty array means nothing is selected for this variable. ' +
-            "For a STATIC_LIST filter's variable, every value must be one of the filter's declared options.",
+            "For a STATIC_LIST filter's variable, every value must be one of the filter's declared options. " +
+            'For a DATA_SOURCE or CONNECTION variable, pass one source or connection ID; it ' +
+            "overrides the dashboard's saved selection.",
         ),
     }),
   )
@@ -65,9 +96,11 @@ export function resolveDashboardVariables(
   if (!variableValues?.length) return { variables };
 
   const byName = new Map(variables.map(variable => [variable.name, variable]));
+  // Resolved separately, by resolveTileVariableReferences
+  const referenceVariableNames = getReferenceVariableNames(filters);
   const unknownVariableValues = variableValues
     .map(({ name }) => name)
-    .filter(name => !byName.has(name));
+    .filter(name => !byName.has(name) && !referenceVariableNames.has(name));
   if (unknownVariableValues.length > 0) {
     const available =
       variables.length > 0
@@ -121,10 +154,56 @@ export function resolveDashboardVariables(
 
   // Override the default empty selection with the given variableValues
   for (const { name, values } of variableValues) {
-    byName.get(name)!.values = values;
+    const variable = byName.get(name);
+    if (variable) variable.values = values;
   }
 
   return { variables };
+}
+
+/**
+ * Replace a tile's `$name` sourceId / connectionId with the source or
+ * connection its data source or connection variable selects: the caller's
+ * variableValues first, then the dashboard's saved selection. A tile with no
+ * selection cannot run, as on the dashboard, so that is an error naming the
+ * variable.
+ */
+export function resolveTileVariableReferences<
+  T extends ExternalDashboardTileWithId,
+>(
+  tile: T,
+  filters: ExternalFilters,
+  variableValues: McpVariableValues | undefined,
+  savedFilterValues: ExternalDashboard['savedFilterValues'] = [],
+): { tile: T } | { error: string } {
+  if (!('config' in tile) || tile.config == null) return { tile };
+  const referenceVariableNames = getReferenceVariableNames(filters);
+  const selections = new Map<string, string[]>();
+  for (const value of savedFilterValues ?? []) {
+    if (value.type === 'variable') selections.set(value.name, value.values);
+  }
+  for (const { name, values } of variableValues ?? []) {
+    if (referenceVariableNames.has(name)) selections.set(name, values);
+  }
+
+  let config: object = tile.config;
+  for (const { key } of getConfigReferenceFields(config)) {
+    const field = toExternalReferenceKey(key);
+    const name = parseVariableReference(getStringField(config, field));
+    if (name == null) continue;
+    const selected = selections.get(name) ?? [];
+    if (selected.length !== 1) {
+      return {
+        error:
+          `Tile "${tile.id}" reads its ${field} from the $${name} variable, which ` +
+          (selected.length === 0
+            ? 'has no selection. Pass one ID for it in variableValues, or save a selection on the dashboard.'
+            : 'accepts exactly one value.'),
+      };
+    }
+    config = { ...config, [field]: selected[0] };
+  }
+  return { tile: { ...tile, config } };
 }
 
 /** Options of each static filter, keyed by the variable name it answers to. */

@@ -19,7 +19,11 @@ import {
   getRawSqlTileMacroWarnings,
   getTileVariableWarnings,
 } from './validation';
-import { mcpVariableValuesParam, resolveDashboardVariables } from './variables';
+import {
+  mcpVariableValuesParam,
+  resolveDashboardVariables,
+  resolveTileVariableReferences,
+} from './variables';
 
 /**
  * How many tiles to query against ClickHouse at once. Kept lowish so a batch
@@ -251,6 +255,16 @@ export function registerQueryTiles({
               return { ...base, status: 'skipped' };
             }
 
+            const resolvedTile = resolveTileVariableReferences(
+              tile,
+              externalDashboard.filters,
+              variableValues,
+              externalDashboard.savedFilterValues,
+            );
+            if ('error' in resolvedTile) {
+              return { ...base, status: 'error', error: resolvedTile.error };
+            }
+
             // Run the query under the shared deadline. It's passed as a thunk
             // so withDeadline can skip issuing it entirely once the budget is
             // spent (see withDeadline). withDeadline hands the thunk an
@@ -263,10 +277,13 @@ export function registerQueryTiles({
             try {
               const result = await withDeadline(
                 signal =>
-                  runConfigTile(teamId.toString(), tile, startDate, endDate, {
-                    abortSignal: signal,
-                    variables,
-                  }),
+                  runConfigTile(
+                    teamId.toString(),
+                    resolvedTile.tile,
+                    startDate,
+                    endDate,
+                    { abortSignal: signal, variables },
+                  ),
                 deadlineAt,
               );
 

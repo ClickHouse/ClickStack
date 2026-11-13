@@ -655,7 +655,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "line"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -742,7 +742,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "stacked_bar"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -812,7 +812,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "stacked_line"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -888,7 +888,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "table"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -962,7 +962,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "number"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1021,7 +1021,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "pie"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1074,7 +1074,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "bar"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1167,7 +1167,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "distribution"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1215,7 +1215,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "series"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1264,7 +1264,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "search"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: string
@@ -1295,7 +1295,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "event_patterns"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to mine patterns from.
+ *           description: ID of the data source to mine patterns from, or `$name` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: string
@@ -1345,7 +1345,9 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "sql"
  *         connectionId:
  *           type: string
- *           description: ID of the ClickHouse connection to execute the query against.
+ *           description: |
+ *             ID of the ClickHouse connection to execute the query against, or
+ *             `$name` of a CONNECTION filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a567890"
  *         sqlTemplate:
  *           type: string
@@ -1354,7 +1356,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "SELECT count() FROM otel_logs WHERE timestamp > now() - INTERVAL 1 HOUR"
  *         sourceId:
  *           type: string
- *           description: Optional ID of the data source associated with this Raw SQL chart. Used for applying dashboard filters.
+ *           description: Optional ID of the data source associated with this Raw SQL chart, or `$name` of a DATA_SOURCE filter on the dashboard. Used for applying dashboard filters.
  *           example: "65f5e4a3b9e77c001a567890"
  *         numberFormat:
  *           $ref: '#/components/schemas/NumberFormat'
@@ -2368,12 +2370,90 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *         - $ref: '#/components/schemas/QueryExpressionFilterInput'
  *         - $ref: '#/components/schemas/StaticListFilterInput'
  *         - $ref: '#/components/schemas/PrometheusLabelFilterInput'
+ *         - $ref: '#/components/schemas/DataSourceFilterInput'
+ *         - $ref: '#/components/schemas/ConnectionFilterInput'
  *       discriminator:
  *         propertyName: type
  *         mapping:
  *           QUERY_EXPRESSION: '#/components/schemas/QueryExpressionFilterInput'
  *           STATIC_LIST: '#/components/schemas/StaticListFilterInput'
  *           PROMETHEUS_LABEL: '#/components/schemas/PrometheusLabelFilterInput'
+ *           DATA_SOURCE: '#/components/schemas/DataSourceFilterInput'
+ *           CONNECTION: '#/components/schemas/ConnectionFilterInput'
+ *
+ *     DataSourceFilterInput:
+ *       type: object
+ *       description: |
+ *         A variable whose single, required value is a source. Tiles reference it
+ *         as `$variableName` in their sourceId, and other filters in sourceId or
+ *         appliesToSourceIds, so viewers can switch the source those read. Tiles
+ *         that use it do not load until a source is selected, and cannot have
+ *         alerts.
+ *       required:
+ *         - type
+ *         - name
+ *         - allowedSourceKinds
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [DATA_SOURCE]
+ *           description: Filter type discriminator. Must be "DATA_SOURCE".
+ *           example: "DATA_SOURCE"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name of the variable's dropdown
+ *           example: "Logs source"
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: Token tiles and filters reference the selected source by, as `$variableName`.
+ *           example: "logs"
+ *         allowedSourceKinds:
+ *           type: array
+ *           minItems: 1
+ *           items:
+ *             type: string
+ *             enum: [log, trace, session, metric, promql]
+ *           description: |
+ *             Kinds of sources offered. A field can only reference the variable
+ *             if it accepts every listed kind.
+ *           example: ["log"]
+ *         connectionId:
+ *           type: string
+ *           description: |
+ *             Optional connection the offered sources are limited to: a
+ *             connection ID, or `$name` of a CONNECTION filter on the dashboard.
+ *           example: "$conn"
+ *
+ *     ConnectionFilterInput:
+ *       type: object
+ *       description: |
+ *         A variable whose single, required value is a connection. Raw SQL tiles
+ *         reference it as `$variableName` in their connectionId, and data source
+ *         variables in theirs. Tiles that use it do not load until a connection is
+ *         selected, and cannot have alerts.
+ *       required:
+ *         - type
+ *         - name
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [CONNECTION]
+ *           description: Filter type discriminator. Must be "CONNECTION".
+ *           example: "CONNECTION"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name of the variable's dropdown
+ *           example: "Connection"
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: Token raw SQL tiles reference the selected connection by, as `$variableName`.
+ *           example: "conn"
  *
  *     QueryExpressionFilterInput:
  *       type: object
@@ -2404,7 +2484,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "environment"
  *         sourceId:
  *           type: string
- *           description: Source ID this dashboard filter key applies to
+ *           description: Source ID this dashboard filter key applies to, or `$name` of a DATA_SOURCE filter on the dashboard
  *           example: "65f5e4a3b9e77c001a111111"
  *         sourceMetricType:
  *           type: string
@@ -3603,6 +3683,7 @@ router.put(
         tiles,
         filters,
         existingTiles: existingDashboard.tiles ?? [],
+        storedFilters: existingDashboard.filters,
         containers: effectiveContainers,
       });
       if (validationError) {

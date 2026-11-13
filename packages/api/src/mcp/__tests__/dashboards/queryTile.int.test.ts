@@ -11,6 +11,7 @@ import {
   seedExponentialHistogramMetric,
 } from '@/fixtures';
 import { callTool, getFirstText } from '@/mcp/__tests__/mcpTestUtils';
+import Dashboard from '@/models/dashboard';
 import { Source } from '@/models/source';
 
 import { setupDashboardTests } from './setup';
@@ -1371,6 +1372,87 @@ describe('MCP Dashboard Tools - clickstack_query_tile', () => {
 
       expect(rows).toHaveLength(3);
       expect(rows.map(r => r.ServiceName)).toEqual(['svc-e', 'svc-d', 'svc-c']);
+    });
+  });
+
+  describe('reference variables', () => {
+    const createVariableDashboard = (savedFilterValues: unknown[] = []) =>
+      new Dashboard({
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            id: 'variable-tile',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 3,
+            config: {
+              name: 'Count',
+              source: '$traces',
+              displayType: 'number',
+              select: [{ aggFn: 'count', valueExpression: '' }],
+              where: '',
+            },
+          },
+        ],
+        filters: [
+          {
+            id: 'ds-filter',
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+            minSelections: 1,
+            maxSelections: 1,
+            isBroadcastEnabled: false,
+            isVariableEnabled: true,
+          },
+        ],
+        savedFilterValues,
+        team: ctx.team._id,
+      }).save();
+
+    it("runs a tile on its data source variable's saved selection", async () => {
+      const dashboard = await createVariableDashboard([
+        {
+          type: 'variable',
+          name: 'traces',
+          values: [ctx.traceSource._id.toString()],
+        },
+      ]);
+
+      const result = await callTool(ctx.client!, 'clickstack_query_tile', {
+        dashboardId: dashboard._id.toString(),
+        tileId: 'variable-tile',
+      });
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it('runs a tile on a selection passed in variableValues', async () => {
+      const dashboard = await createVariableDashboard();
+
+      const result = await callTool(ctx.client!, 'clickstack_query_tile', {
+        dashboardId: dashboard._id.toString(),
+        tileId: 'variable-tile',
+        variableValues: [
+          { name: 'traces', values: [ctx.traceSource._id.toString()] },
+        ],
+      });
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it('reports a data source variable with no selection', async () => {
+      const dashboard = await createVariableDashboard();
+
+      const result = await callTool(ctx.client!, 'clickstack_query_tile', {
+        dashboardId: dashboard._id.toString(),
+        tileId: 'variable-tile',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('$traces variable');
     });
   });
 });
