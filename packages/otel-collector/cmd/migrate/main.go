@@ -43,6 +43,9 @@ type Config struct {
 	// Reconcile TTL on already-existing tables, not just newly created ones.
 	ReconcileTableTTL bool
 
+	// Set 8,192-token text index dictionary blocks on the seeded tables.
+	SetTextIndexBlockSize bool
+
 	// TLS settings
 	TLSCAFile             string
 	TLSCertFile           string
@@ -69,6 +72,7 @@ func loadConfig() (*Config, error) {
 		MetricsTTL:            getEnv("HYPERDX_OTEL_EXPORTER_METRICS_TTL", tablesTTL),
 		SessionsTTL:           getEnv("HYPERDX_OTEL_EXPORTER_SESSIONS_TTL", tablesTTL),
 		ReconcileTableTTL:     getEnv("HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL", "false") == "true",
+		SetTextIndexBlockSize: getEnv("HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE", "true") != "false",
 		TLSCAFile:             getEnv("CLICKHOUSE_TLS_CA_FILE", ""),
 		TLSCertFile:           getEnv("CLICKHOUSE_TLS_CERT_FILE", ""),
 		TLSKeyFile:            getEnv("CLICKHOUSE_TLS_KEY_FILE", ""),
@@ -919,8 +923,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Non-fatal so it can't block startup; older servers keep 512-token blocks.
-	if supportsTextIndexTableSettings(chMajor, chMinor) {
+	// On by default; HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE=false lets
+	// operators who manage these tables opt out. Non-fatal so it can't block
+	// startup; older servers keep 512-token blocks.
+	if cfg.SetTextIndexBlockSize && supportsTextIndexTableSettings(chMajor, chMinor) {
 		if err := setTextIndexBlockSize(ctx, db, cfg.Database); err != nil {
 			log.Printf("WARNING: text index block size: %v", err)
 		}

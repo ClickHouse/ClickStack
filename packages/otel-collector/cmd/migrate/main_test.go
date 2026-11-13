@@ -111,6 +111,9 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.ReconcileTableTTL {
 			t.Error("ReconcileTableTTL should default to false")
 		}
+		if !cfg.SetTextIndexBlockSize {
+			t.Error("SetTextIndexBlockSize should default to true")
+		}
 		if cfg.SchemaDir != dir {
 			t.Errorf("SchemaDir: got %q, want %q", cfg.SchemaDir, dir)
 		}
@@ -628,6 +631,20 @@ func TestProcessSchemaDir_NonexistentDir(t *testing.T) {
 // ---------------------------------------------------------------------------
 // per-signal TTL resolution + reconcile helpers
 // ---------------------------------------------------------------------------
+
+func TestLoadConfig_TextIndexBlockSizeOptOut(t *testing.T) {
+	dir := t.TempDir()
+	os.Args = []string{"migrate", dir}
+	t.Setenv("HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE", "false")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SetTextIndexBlockSize {
+		t.Error("SetTextIndexBlockSize should be false")
+	}
+}
 
 func TestLoadConfig_PerSignalTTL(t *testing.T) {
 	dir := t.TempDir()
