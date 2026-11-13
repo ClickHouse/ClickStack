@@ -3146,6 +3146,39 @@ describe('Metadata', () => {
 
       expect(mockClickhouseClient.query).toHaveBeenCalledTimes(2);
     });
+
+    it('shares one scan between concurrent callers when no text index or rollup applies', async () => {
+      const md = buildMetadata();
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      jest
+        .spyOn(md, 'getMapColumnTextIndexes')
+        .mockResolvedValue(new Map() as TextIndexInfoLookup);
+      jest.spyOn(md, 'getColumn').mockResolvedValue({
+        name: 'LogAttributes',
+        type: 'Map(String, String)',
+        default_type: '',
+        default_expression: '',
+        comment: '',
+        codec_expression: '',
+        ttl_expression: '',
+      });
+      (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+        json: () => Promise.resolve({ data: [{ keysArr: ['raw.key'] }] }),
+      });
+
+      const {
+        timestampValueExpression: _timestampValueExpression,
+        metadataMVs: _metadataMVs,
+        ...scanArgs
+      } = baseArgs;
+      const results = await Promise.all([
+        md.getMapKeys(scanArgs),
+        md.getMapKeys(scanArgs),
+      ]);
+
+      expect(results).toEqual([['raw.key'], ['raw.key']]);
+      expect(mockClickhouseClient.query).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('getMapKeys (text index paths)', () => {
@@ -3222,6 +3255,39 @@ describe('Metadata', () => {
         expect(query).toMatch(
           /GROUP BY key HAVING key != ''\s+ORDER BY sum\(cardinality\) DESC, key\s+LIMIT/,
         );
+      },
+    );
+
+    it.each(textIndexLookups)(
+      'shares one read between concurrent callers on the %s text index path',
+      async (_, textIndexLookup) => {
+        const md = new Metadata(mockClickhouseClient, new MetadataCache());
+        jest.spyOn(md, 'getServerVersion').mockResolvedValue([26, 3, 0, 0]);
+        jest
+          .spyOn(md, 'getMapColumnTextIndexes')
+          .mockResolvedValue(textIndexLookup);
+        (mockClickhouseClient.query as jest.Mock).mockResolvedValue({
+          json: () => Promise.resolve({ data: [{ key: 'http.method' }] }),
+        });
+        const args = {
+          databaseName: 'default',
+          tableName: 'otel_logs',
+          column: 'LogAttributes',
+          connectionId: 'test_connection',
+          dateRange: [
+            new Date('2024-01-01T00:00:00Z'),
+            new Date('2024-01-01T01:00:00Z'),
+          ] as [Date, Date],
+          timestampValueExpression: 'Timestamp',
+        };
+
+        const results = await Promise.all([
+          md.getMapKeys(args),
+          md.getMapKeys(args),
+        ]);
+
+        expect(results).toEqual([['http.method'], ['http.method']]);
+        expect(mockClickhouseClient.query).toHaveBeenCalledTimes(1);
       },
     );
   });
