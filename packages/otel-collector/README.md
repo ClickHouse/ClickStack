@@ -157,7 +157,8 @@ config for logs).
 In OpAMP supervisor mode, when collector authentication is enforced the
 receiver authenticates against the team API keys (same as `otlp/hyperdx`) via
 the `DD-API-KEY` header. Set the Datadog Agent's `DD_API_KEY` to a HyperDX
-team ingestion API key.
+team ingestion API key, or to `INGESTION_API_KEY` where the API honors it
+(all-in-one and dev builds, or with `ENABLE_INGESTION_API_KEY=true`).
 
 ## Computing span metrics from ingested traces
 

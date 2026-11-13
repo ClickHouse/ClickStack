@@ -105,7 +105,7 @@ pings `/v1/opamp` with status, and the server returns updated config when needed
 - **Model**: `models/agent.ts` - agent state persistence
 - **Proto**: `proto/` - Protocol Buffer definitions for OpAMP and anyvalue
 
-Config is derived from the team document with the ingestion API key.
+Config is derived from the team document with the ingestion API key. `INGESTION_API_KEY` is also accepted on all-in-one and dev builds, or anywhere with `ENABLE_INGESTION_API_KEY=true`.
 
 ### Background Tasks (`src/tasks/`)
 
