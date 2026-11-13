@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS ${DATABASE}.hyperdx_sessions
   -- Text indexes use 8,192-token dictionary blocks (the default is 512). Each
   -- part's sparse index is 16x smaller, which makes reading filter values
   -- with mergeTreeTextIndex() and looking up tokens much cheaper on large parts.
-  INDEX idx_session_id __hdx_materialized_session.id TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_rum_session_id __hdx_materialized_rum.sessionId TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
+  INDEX idx_session_id __hdx_materialized_session.id TYPE text(tokenizer = 'array'),
+  INDEX idx_rum_session_id __hdx_materialized_rum.sessionId TYPE text(tokenizer = 'array'),
   INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
   INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
   INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,

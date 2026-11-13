@@ -5,7 +5,8 @@
 perf: read large-block Map text index values per key, most frequent first
 
 "All values" lookups on Map key=value text indexes with large dictionary blocks
-(4096 or more, e.g. `dictionary_block_size = 8192` as the seed schemas now use)
+(4096 or more, e.g. `text_index_dictionary_block_size = 8192`, which the
+collector's migration now sets on ClickHouse 26.6+)
 now read each key separately, in parallel queries of at most 10 keys, and stop
 after 20,000 tokens per key, so a key with a value per row (request IDs, UUIDs)
 can't hold up the others. Values come from `topKWeighted(limit)` weighted by
