@@ -454,26 +454,30 @@ describe('useGetKeyValues', () => {
     ).toEqual([{ kvRollupTable: 'logs_kv' }, { kvRollupTable: 'traces_kv' }]);
   });
 
+  // Sources here only carry the fields the hook reads.
+  const mockSources = (data: Record<string, unknown>[]) =>
+    jest.mocked(useSources).mockReturnValue({
+      data,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useSources>);
+
   it("passes log and trace sources' part settings to 'all' mode lookups, and no others", async () => {
     const defaultSources = jest.mocked(useSources)();
-    jest.mocked(useSources).mockReturnValue({
-      data: [
-        {
-          id: 'logs',
-          kind: 'log',
-          mapKeyIndexMaxParts: 7,
-          mapKeyIndexPartSelection: 'largest',
-        },
-        // Not a log or trace source, so its fields don't apply.
-        {
-          id: 'metrics',
-          kind: 'metric',
-          mapKeyIndexMaxParts: 9,
-          mapKeyIndexPartSelection: 'smallest',
-        },
-      ],
-      isLoading: false,
-    } as any);
+    mockSources([
+      {
+        id: 'logs',
+        kind: 'log',
+        mapKeyIndexMaxParts: 7,
+        mapKeyIndexPartSelection: 'largest',
+      },
+      // Not a log or trace source, so its fields don't apply.
+      {
+        id: 'metrics',
+        kind: 'metric',
+        mapKeyIndexMaxParts: 9,
+        mapKeyIndexPartSelection: 'smallest',
+      },
+    ]);
     const streamAllKeyValues = mockLookups.all([], []);
 
     try {
@@ -507,10 +511,7 @@ describe('useGetKeyValues', () => {
   it("refetches 'all' mode values when the source's part settings change", async () => {
     const defaultSources = jest.mocked(useSources)();
     const withParts = (mapKeyIndexMaxParts: number) =>
-      jest.mocked(useSources).mockReturnValue({
-        data: [{ id: 'logs', kind: 'log', mapKeyIndexMaxParts }],
-        isLoading: false,
-      } as any);
+      mockSources([{ id: 'logs', kind: 'log', mapKeyIndexMaxParts }]);
     const streamAllKeyValues = mockLookups.all([], []);
 
     try {
