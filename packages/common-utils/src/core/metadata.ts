@@ -79,19 +79,19 @@ export const DEFAULT_MAP_KEY_INDEX_MAX_PARTS = 20;
 // Cap keys per dispatched query: each key is another operation for the db to fetch, and simply fetching all keys at once can be too much for the db to handle.
 export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
 
-// Distinct values a text index values lookup reads per key. The dictionary is
+// Index rows a text index values lookup reads per key. The dictionary is
 // sorted, so a key with more than this gets the most frequent among its
-// alphabetically first ones. Keep it above "Load more"'s 10,000 values.
+// alphabetically first ones.
 const TEXT_INDEX_TOKENS_PER_KEY = 20_000;
 
-// mergeTreeTextIndex returns one row per part and token, so a value in every
-// part read takes maxParts rows; scaling the LIMIT by maxParts keeps room for
-// TEXT_INDEX_TOKENS_PER_KEY distinct values. A read of every part ("Load
-// more") isn't capped.
+// mergeTreeTextIndex returns one row per part and token, so the cap counts a
+// value once per part it's in, and values only in parts read after it are
+// missed. That sample is enough for the top values of a filter, but "Load
+// more" (no part limit) wants every value, so its read isn't capped.
 const textIndexTokenLimit = (maxParts: number | null): ChSql =>
   maxParts == null
     ? chSql``
-    : chSql`LIMIT ${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(TEXT_INDEX_TOKENS_PER_KEY * maxParts, 'maxParts') }}`;
+    : chSql`LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }}`;
 // Keys or columns per text index values query; see dispatchKeyValueQueries.
 const TEXT_INDEX_KEYS_PER_QUERY = 10;
 // Smallest dictionary block size that gets one read per key; see

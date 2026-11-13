@@ -1760,8 +1760,8 @@ describe('Metadata Integration Tests', () => {
 
   describe('getAllKeyValues - values repeated across parts', () => {
     // mergeTreeTextIndex returns one row per part and token, so a token cap
-    // that ignores the part count stops before the later parts' values. Each
-    // part holds the same SHARED values plus OWN values no other part has.
+    // stops before the later parts' values. Each part holds the same SHARED
+    // values plus OWN values no other part has.
     const tableName = 'test_text_index_values_across_parts';
     const PARTS = 25;
     const SHARED = 1000;
@@ -1820,7 +1820,7 @@ describe('Metadata Integration Tests', () => {
       ['Map key=value', "ResourceAttributes['pod']"],
       ['plain-column', 'Tags'],
     ])(
-      'returns every distinct value from the %s text index, with and without a part limit',
+      'returns every distinct value from the %s text index for "Load more"',
       async (_, keyExpression) => {
         if (!textIndexSupported) {
           console.warn(
@@ -1829,26 +1829,20 @@ describe('Metadata Integration Tests', () => {
           return;
         }
 
-        // PARTS is above the default limit of 20, so unset reads 20 parts and
-        // null reads all of them.
-        for (const [mapKeyIndexMaxParts, partsRead] of [
-          [undefined, 20],
-          [null, PARTS],
-        ] as const) {
-          const metadata = new Metadata(hdxClient, new MetadataCache());
-          const result = await metadata.getAllKeyValues({
-            databaseName: 'default',
-            tableName,
-            keyExpressions: [keyExpression],
-            maxValuesPerKey: 10000,
-            mapKeyIndexMaxParts,
-            connectionId: 'test_connection',
-            dateRange: dateRange(),
-            timestampValueExpression: 'Timestamp',
-          });
-          expect(result).toHaveLength(1);
-          expect(result[0].value).toHaveLength(SHARED + OWN * partsRead);
-        }
+        // "Load more" passes null: every part, no token cap.
+        const metadata = new Metadata(hdxClient, new MetadataCache());
+        const result = await metadata.getAllKeyValues({
+          databaseName: 'default',
+          tableName,
+          keyExpressions: [keyExpression],
+          maxValuesPerKey: 10000,
+          mapKeyIndexMaxParts: null,
+          connectionId: 'test_connection',
+          dateRange: dateRange(),
+          timestampValueExpression: 'Timestamp',
+        });
+        expect(result).toHaveLength(1);
+        expect(result[0].value).toHaveLength(SHARED + OWN * PARTS);
       },
     );
   });
