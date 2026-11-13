@@ -435,3 +435,74 @@ describe('toQuotedClickHouseKeyExpression', () => {
     });
   });
 });
+
+describe('toQuotedClickHouseKeyExpression with JSON columns', () => {
+  const knownColumns = new Set(['message', 'LogAttributes']);
+  const jsonColumns = new Set(['message']);
+
+  it('keeps a dotted key under a JSON column in JSON dot access, never Map brackets', () => {
+    // `message` is a native JSON column; `message['email']` makes ClickHouse
+    // fail with "First argument for function 'arrayElement' must be array".
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.email',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`email`)');
+  });
+
+  it('splits a nested JSON path into one quoted segment per level', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.owner.profile.contact.email',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`owner`.`profile`.`contact`.`email`)');
+  });
+
+  // The row panel writes a filter on a value inside a JSON array as
+  // ``col.`events`[1].`id` ``. After the state cleans the backticks, the
+  // subscript must survive re-escaping as a subscript, not as part of a name.
+  it('keeps array subscripts in a JSON path as subscripts', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.events[1].detail.parameters[2].value',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`events`[1].`detail`.`parameters`[2].`value`)');
+  });
+
+  it('keeps chained array subscripts', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.grid[1][2].x',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`grid`[1][2].`x`)');
+  });
+
+  it('is idempotent on a key already in JSON form', () => {
+    const once = toQuotedClickHouseKeyExpression(
+      'message.email',
+      knownColumns,
+      jsonColumns,
+    );
+    expect(
+      toQuotedClickHouseKeyExpression(once, knownColumns, jsonColumns),
+    ).toBe(once);
+  });
+
+  it('still uses bracket access for a Map column', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'LogAttributes.host',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe("LogAttributes['host']");
+  });
+});

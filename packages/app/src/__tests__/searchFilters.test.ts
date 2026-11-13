@@ -990,6 +990,62 @@ describe('searchFilters', () => {
       ]);
     });
 
+    it('keeps an existing JSON-column filter in JSON form when another filter is added', () => {
+      onFilterChange.mockClear();
+      const { result } = renderHook(() =>
+        useSearchPageFilterState({
+          // An earlier chip on a key inside the JSON column `message`, as
+          // persisted in the URL.
+          searchQuery: [
+            {
+              type: 'sql',
+              condition: "toString(`message`.`email`) IN ('user@example.test')",
+            },
+          ],
+          onFilterChange,
+          knownColumns: new Set(['message', 'source_name']),
+          jsonColumns: new Set(['message']),
+        }),
+      );
+
+      act(() => {
+        result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
+      });
+
+      const conditions = (
+        onFilterChange.mock.lastCall![0] as ConditionFilter[]
+      ).map(f => f.condition);
+      // Re-persisting must not rewrite the existing key into Map bracket form
+      // (`message['email']`), which ClickHouse rejects for a JSON column.
+      expect(conditions).toContain(
+        "toString(`message`.`email`) IN ('user@example.test')",
+      );
+      expect(conditions.some(c => c.includes("['"))).toBe(false);
+    });
+
+    it('keeps an existing JSON array-path filter intact when another filter is added', () => {
+      onFilterChange.mockClear();
+      const arrayPathCondition =
+        "toString(`message`.`events`[1].`detail`.`parameters`[2].`value`) IN ('EMAIL_SERVICE')";
+      const { result } = renderHook(() =>
+        useSearchPageFilterState({
+          searchQuery: [{ type: 'sql', condition: arrayPathCondition }],
+          onFilterChange,
+          knownColumns: new Set(['message', 'source_name']),
+          jsonColumns: new Set(['message']),
+        }),
+      );
+
+      act(() => {
+        result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
+      });
+
+      const conditions = (
+        onFilterChange.mock.lastCall![0] as ConditionFilter[]
+      ).map(f => f.condition);
+      expect(conditions).toContain(arrayPathCondition);
+    });
+
     it('setOnlyFilters applies all filters in a single onFilterChange emit', () => {
       onFilterChange.mockClear();
       const { result } = renderHook(() =>
