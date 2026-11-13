@@ -27,9 +27,6 @@ CREATE TABLE IF NOT EXISTS ${DATABASE}.otel_traces
     `SampleRate` UInt64 MATERIALIZED greatest(toUInt64OrZero(SpanAttributes['SampleRate']), 1) CODEC(T64, ZSTD(3)),
     `ResourceAttributeItems` Array(String) ALIAS arrayMap((arr) -> concat(arr.1, '=', arr.2), ResourceAttributes::Array(Tuple(String, String))),
     `SpanAttributeItems` Array(String) ALIAS arrayMap((arr) -> concat(arr.1, '=', arr.2), SpanAttributes::Array(Tuple(String, String))),
-    -- Text indexes use 8,192-token dictionary blocks (the default is 512). Each
-    -- part's sparse index is 16x smaller, which makes reading filter values
-    -- with mergeTreeTextIndex() and looking up tokens much cheaper on large parts.
     INDEX idx_trace_id TraceId TYPE text(tokenizer = 'array'),
     INDEX idx_rum_session_id __hdx_materialized_rum.sessionId TYPE text(tokenizer = 'array'),
     INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE text(tokenizer = 'array'),
