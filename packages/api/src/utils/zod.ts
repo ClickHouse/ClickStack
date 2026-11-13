@@ -1,6 +1,8 @@
 import { validateChartConfigFormulas } from '@hyperdx/common-utils/dist/dashboardValidation';
 import {
   addDuplicateTileIdIssues,
+  AdhocDashboardFilterSchema,
+  AdhocFilterValueSchema,
   AggregateFunctionSchema,
   AlertChartConfigSchema,
   alertDisplayNameSchema,
@@ -200,6 +202,14 @@ const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
   isVariableEnabled: z.literal(true).default(true),
 });
 
+// Field names match the stored filter, so it needs no translation.
+const externalAdhocFilterShape = AdhocDashboardFilterSchema.extend({
+  sources: z.array(objectIdSchema).min(1),
+  appliesToSourceIds: z.array(objectIdSchema).optional(),
+  isBroadcastEnabled: z.literal(true).default(true),
+  isVariableEnabled: z.literal(true).default(true),
+});
+
 export const externalDashboardFilterSchemaWithId = z.discriminatedUnion(
   'type',
   [
@@ -207,6 +217,7 @@ export const externalDashboardFilterSchemaWithId = z.discriminatedUnion(
     externalStaticListFilterShape.strict(),
     externalPromqlLabelFilterShape.strict(),
     externalSqlQueryFilterShape.strict(),
+    externalAdhocFilterShape.strict(),
   ],
 );
 
@@ -224,6 +235,7 @@ export const externalDashboardFilterSchema = z.discriminatedUnion('type', [
   externalStaticListFilterShape.omit({ id: true }).strict(),
   externalPromqlLabelFilterShape.omit({ id: true }).strict(),
   externalSqlQueryFilterShape.omit({ id: true }).strict(),
+  externalAdhocFilterShape.omit({ id: true }).strict(),
 ]);
 
 export type ExternalDashboardFilter = z.infer<
@@ -231,8 +243,9 @@ export type ExternalDashboardFilter = z.infer<
 >;
 
 /**
- * One entry in a dashboard's `savedFilterValues`: either a rendered SQL
- * predicate, or a selection addressed by the dashboard variable it belongs to.
+ * One entry in a dashboard's `savedFilterValues`: a rendered SQL predicate, a
+ * selection addressed by the dashboard variable it belongs to, or an ad hoc
+ * filter's conditions addressed by its variable name.
  */
 export const externalSqlSavedFilterValueSchema = z.object({
   type: z.literal('sql').optional().default('sql'),
@@ -245,6 +258,7 @@ export const externalVariableSavedFilterValueSchema =
 export const externalDashboardSavedFilterValueSchema = z.union([
   externalSqlSavedFilterValueSchema,
   externalVariableSavedFilterValueSchema,
+  AdhocFilterValueSchema.strict(),
 ]);
 
 // ================================

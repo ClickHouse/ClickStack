@@ -19,6 +19,7 @@ import {
   TIME_RANGE_MACROS,
 } from '@hyperdx/common-utils/dist/macros';
 import {
+  DashboardFilterValue,
   DisplayType,
   QueryExpressionDashboardFilter,
   SavedChartConfig,
@@ -37,8 +38,6 @@ import {
   isRawSqlExternalTileConfig,
 } from '@/routers/external-api/v2/utils/dashboards';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
-
-import type { McpSavedFilterValues } from './schemas';
 
 /**
  * Returns one entry per raw SQL tile that uses a source-dependent macro but
@@ -264,7 +263,7 @@ export function getFilterVariableWarnings(
  * applies. Warn so the agent can fix the name or add the filter.
  */
 export function getSavedFilterValueWarnings(
-  savedFilterValues: McpSavedFilterValues | undefined,
+  savedFilterValues: DashboardFilterValue[] | undefined,
   filters: FilterForVariableDeclaration[] | undefined,
 ): string[] {
   if (!savedFilterValues?.length) return [];

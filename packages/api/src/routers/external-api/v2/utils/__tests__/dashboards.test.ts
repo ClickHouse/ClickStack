@@ -508,6 +508,43 @@ describe('convertToExternalDashboard orphan-ref heal', () => {
     expect(hidden.filters?.map(f => f.id)).toEqual(['static-filter']);
   });
 
+  it('hides ad hoc filters and their saved conditions only when asked', () => {
+    const adhoc = {
+      id: 'adhoc-filter',
+      type: 'ADHOC' as const,
+      name: 'Conditions',
+      sourceType: 'sql' as const,
+      sources: [new mongoose.Types.ObjectId().toString()],
+      isBroadcastEnabled: true as const,
+      isVariableEnabled: true as const,
+      variableName: 'conds',
+    };
+    const variableValue = {
+      type: 'variable' as const,
+      name: 'env',
+      values: ['prod'],
+    };
+    const adhocValue = {
+      type: 'adhoc' as const,
+      name: 'conds',
+      conditions: [
+        { key: 'ServiceName', operator: '=' as const, value: 'api' },
+      ],
+    };
+    const doc = makeDoc({
+      filters: [adhoc],
+      savedFilterValues: [variableValue, adhocValue],
+    });
+
+    const shown = convertToExternalDashboard(doc);
+    expect(shown.filters).toEqual([adhoc]);
+    expect(shown.savedFilterValues).toEqual([variableValue, adhocValue]);
+
+    const hidden = convertToExternalDashboard(doc, { hideAdhoc: true });
+    expect(hidden.filters).toEqual([]);
+    expect(hidden.savedFilterValues).toEqual([variableValue]);
+  });
+
   // seriesLimit is three-state (matching the internal schema): omitted =
   // default cap, 0 = unlimited, positive N = top-N. All three must survive a
   // GET->PUT round-trip: 0 and N pass through, null maps to absent (the
