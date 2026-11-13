@@ -936,11 +936,17 @@ export class Metadata {
     }
     // Rank by size. Median picks from the middle out: tiny unmerged parts
     // hold few keys and the largest merged parts have the biggest dictionaries.
-    const order = {
-      [MapKeyIndexPartSelection.Median]: 'abs(rn - (cnt + 1) / 2), name',
-      [MapKeyIndexPartSelection.Smallest]: 'rn',
-      [MapKeyIndexPartSelection.Largest]: 'rn DESC',
-    }[partSelection];
+    let order: string;
+    switch (partSelection) {
+      case MapKeyIndexPartSelection.Smallest:
+        order = 'rn';
+        break;
+      case MapKeyIndexPartSelection.Largest:
+        order = 'rn DESC';
+        break;
+      default:
+        order = 'abs(rn - (cnt + 1) / 2), name';
+    }
     return chSql`part_name IN (
       SELECT name FROM (
         SELECT name,
