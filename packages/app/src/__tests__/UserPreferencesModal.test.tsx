@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { Provider } from 'jotai';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -97,6 +98,51 @@ describe('UserPreferencesModal', () => {
         'Expand inline',
       );
       expect(readStoredPreferences().rowClickAction).toBe('expand');
+    });
+  });
+
+  describe('CRT mode', () => {
+    const KONAMI =
+      '{ArrowUp}{ArrowUp}{ArrowDown}{ArrowDown}{ArrowLeft}{ArrowRight}{ArrowLeft}{ArrowRight}ba';
+
+    it('hides the toggle until the Konami code is typed', async () => {
+      renderModal();
+      expect(screen.queryByTestId('crt-mode-switch')).toBeNull();
+
+      await userEvent.keyboard(KONAMI);
+      expect(screen.getByTestId('crt-unlock-scene')).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId('crt-mode-switch'));
+
+      expect(readStoredPreferences().crtMode).toBe(true);
+    });
+
+    it('ignores the Konami code while the modal is closed', async () => {
+      window.localStorage.clear();
+      const ClosedThenOpened = () => {
+        const [opened, setOpened] = React.useState(false);
+        return (
+          <>
+            <button onClick={() => setOpened(true)}>open</button>
+            <UserPreferencesModal opened={opened} onClose={() => {}} />
+          </>
+        );
+      };
+      renderWithMantine(
+        <Provider>
+          <ClosedThenOpened />
+        </Provider>,
+      );
+      await userEvent.keyboard(KONAMI);
+      await userEvent.click(screen.getByText('open'));
+      await screen.findByTestId('time-zone-select');
+
+      expect(screen.queryByTestId('crt-mode-switch')).toBeNull();
+    });
+
+    it('shows the toggle while CRT mode is on so it can be turned off', () => {
+      renderModal({ crtMode: true });
+
+      expect(screen.getByTestId('crt-mode-switch')).toBeChecked();
     });
   });
 });

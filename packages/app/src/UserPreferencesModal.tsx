@@ -1,9 +1,19 @@
 import * as React from 'react';
 import { Badge } from '@clickhouse/click-ui';
-import { Divider, Group, Modal, Select, Stack, Text } from '@mantine/core';
+import {
+  Divider,
+  Group,
+  Modal,
+  Select,
+  Stack,
+  Switch,
+  Text,
+} from '@mantine/core';
 
+import { CrtUnlockReveal } from './components/CrtUnlockReveal';
 import { TimeZoneSelect, TimeZoneShortcuts } from './components/TimeZoneSelect';
 import { isContentFontSize, OPTIONS_CONTENT_FONT_SIZE } from './config/fonts';
+import { useKonamiCode } from './hooks/useKonamiCode';
 import {
   DEFAULT_ROW_CLICK_ACTION,
   RowClickAction,
@@ -56,6 +66,27 @@ export const UserPreferencesModal = ({
 }) => {
   const { userPreferences, setUserPreference } = useUserPreferences();
   const { contentFontSize } = useContentFontSize();
+  const [crtUnlocked, setCrtUnlocked] = React.useState(false);
+  // AppNav keeps this component mounted while closed, so gate on `opened`.
+  useKonamiCode(
+    React.useCallback(() => opened && setCrtUnlocked(true), [opened]),
+  );
+  React.useEffect(() => {
+    if (!opened) setCrtUnlocked(false);
+  }, [opened]);
+
+  const crtSetting = (
+    <SettingContainer
+      label="CRT mode"
+      description="Make the screen look like an old CRT monitor"
+    >
+      <Switch
+        data-testid="crt-mode-switch"
+        checked={!!userPreferences.crtMode}
+        onChange={e => setUserPreference({ crtMode: e.currentTarget.checked })}
+      />
+    </SettingContainer>
+  );
 
   return (
     <Modal
@@ -169,6 +200,12 @@ export const UserPreferencesModal = ({
             allowDeselect={false}
           />
         </SettingContainer>
+
+        {crtUnlocked ? (
+          <CrtUnlockReveal>{crtSetting}</CrtUnlockReveal>
+        ) : (
+          userPreferences.crtMode && crtSetting
+        )}
       </Stack>
     </Modal>
   );
