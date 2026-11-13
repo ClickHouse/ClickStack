@@ -1,11 +1,11 @@
-import { minePatterns } from '@hyperdx/common-utils/dist/drain';
-
 import {
-  andSql,
   buildPatternPredicate,
   MAX_PREDICATE_TEMPLATE_LENGTH,
+  minePatterns,
   templateToRegex,
-} from '@/mcp/tools/query/patternDrilldown';
+} from '@hyperdx/common-utils/dist/drain';
+
+import { andSql } from '@/mcp/tools/query/patternDrilldown';
 
 // RE2 spells code points \x{HHHH} and categories \pZ; JS (with the u flag)
 // spells them \u{HHHH} and \p{Z}. ClickHouse behaviour is covered by
