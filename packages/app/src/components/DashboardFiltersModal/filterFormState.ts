@@ -5,11 +5,13 @@ import {
   isFilterGlobalRequirement,
   isFilterRequired,
   isFilterVariableEnabled,
+  isReferenceVariableFilterType,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AdhocDashboardFilter,
   DashboardFilter,
   DashboardFilterSchema,
+  DataSourceDashboardFilter,
   PromqlLabelDashboardFilter,
   QueryExpressionDashboardFilter,
   StaticListDashboardFilter,
@@ -53,7 +55,8 @@ export type FilterFormValues = {
     | 'isGlobalRequirement'
     | 'maxSelections'
   > &
-  Pick<AdhocDashboardFilter, 'sourceType' | 'sources'>;
+  Pick<AdhocDashboardFilter, 'sourceType' | 'sources'> &
+  Pick<DataSourceDashboardFilter, 'allowedSourceKinds' | 'connection'>;
 
 export type FilterFormControl = Control<FilterFormValues>;
 
@@ -65,6 +68,7 @@ export const toFormValues = (
   const staticList = filter?.type === 'STATIC_LIST' ? filter : undefined;
   const promqlLabel = filter?.type === 'PROMETHEUS_LABEL' ? filter : undefined;
   const adhoc = filter?.type === 'ADHOC' ? filter : undefined;
+  const dataSource = filter?.type === 'DATA_SOURCE' ? filter : undefined;
 
   return {
     id: filter?.id ?? crypto.randomUUID(),
@@ -100,6 +104,10 @@ export const toFormValues = (
     // ADHOC fields
     sourceType: adhoc?.sourceType ?? 'sql',
     sources: adhoc?.sources ?? [],
+
+    // DATA_SOURCE fields
+    allowedSourceKinds: dataSource?.allowedSourceKinds ?? [],
+    connection: dataSource?.connection,
   };
 };
 
@@ -137,6 +145,27 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),
       ...selectionLimits,
+    });
+  }
+
+  // Reference variables are always single-select and required, so the
+  // checkboxes are not consulted
+  if (isReferenceVariableFilterType(values.type)) {
+    return DashboardFilterSchema.parse({
+      id: values.id,
+      type: values.type,
+      name: values.name,
+      ...(values.type === 'DATA_SOURCE'
+        ? {
+            allowedSourceKinds: values.allowedSourceKinds,
+            connection: values.connection || undefined,
+          }
+        : {}),
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: getFilterVariableName(values),
     });
   }
 

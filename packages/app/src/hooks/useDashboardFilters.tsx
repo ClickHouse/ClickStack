@@ -29,6 +29,15 @@ import {
   mergeAdhocConditions,
 } from '@hyperdx/common-utils/dist/filters';
 import {
+  getConnectionVariableFilters,
+  getReferenceVariableFilters,
+  getSourceVariableFilters,
+  isSourceOfferedByVariable,
+  ReferenceVariableValues,
+  resolveFilterReferences,
+  resolveVariableReference,
+} from '@hyperdx/common-utils/dist/referenceVariables';
+import {
   ADHOC_FILTER_MAX_CONDITIONS,
   AdhocDashboardFilter,
   AdhocFilterCondition,
@@ -37,6 +46,7 @@ import {
   BroadcastFilter,
   ChartVariable,
   DashboardFilter,
+  TSource,
 } from '@hyperdx/common-utils/dist/types';
 
 import {
@@ -128,7 +138,22 @@ const rebuildEntries = (
   });
 };
 
-const useDashboardFilters = (filters: DashboardFilter[]) => {
+const useDashboardFilters = (
+  filters: DashboardFilter[],
+  {
+    sources,
+  }: {
+    /**
+     * The team's sources. While given, a data source variable's selection
+     * that the variable no longer offers (deleted or disabled, or outside its
+     * kinds or connection) counts as no selection.
+     */
+    sources?: readonly Pick<
+      TSource,
+      'id' | 'kind' | 'connection' | 'disabled'
+    >[];
+  } = {},
+) => {
   const [filterValueEntries, setFilterValueEntries] = useQueryState(
     'filters',
     dashboardFilterValuesParser,
@@ -199,6 +224,7 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
     ignoredExpressions,
     ignoredVariableNames,
     variables,
+    referenceVariableValues,
     unsatisfiedRequiredFilters,
   } = useMemo<{
     selectionByFilterId: ReadonlyMap<string, FilterSelection>;
@@ -206,6 +232,7 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
     ignoredExpressions: string[];
     ignoredVariableNames: string[];
     variables: ChartVariable[];
+    referenceVariableValues: ReferenceVariableValues;
     unsatisfiedRequiredFilters: DashboardFilter[];
   }>(() => {
     const parsed = parseDashboardFilterValues(filterValueEntries ?? []);
@@ -217,6 +244,40 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
     for (const filter of nonAdhocFilters) {
       const selection = resolveFilterSelection(filter, parsed);
       if (selection) selectionByFilterId.set(filter.id, selection);
+    }
+
+    // Connections first: a data source variable may be limited to the one a
+    // connection variable selects.
+    const selectedId = (filterId: string) => {
+      const [id] = selectionByFilterId.get(filterId)?.included ?? [];
+      return id == null ? undefined : String(id);
+    };
+    const connectionValues = new Map(
+      getConnectionVariableFilters(filters).map(({ filter, name }) => [
+        name,
+        selectedId(filter.id),
+      ]),
+    );
+    if (sources) {
+      for (const { filter } of getSourceVariableFilters(filters)) {
+        const sourceId = selectedId(filter.id);
+        if (sourceId == null) continue;
+        const source = sources.find(s => s.id === sourceId);
+        // An unselected connection variable leaves its reference, which no
+        // source's connection matches
+        const connection =
+          resolveVariableReference(filter.connection, connectionValues) ??
+          filter.connection;
+        if (
+          !source ||
+          !isSourceOfferedByVariable(source, {
+            allowedSourceKinds: filter.allowedSourceKinds,
+            connection,
+          })
+        ) {
+          selectionByFilterId.delete(filter.id);
+        }
+      }
     }
 
     const adhocConditionsByFilterId = new Map<string, AdhocFilterCondition[]>();
@@ -239,8 +300,10 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
     );
 
     const variableFilters = getDashboardVariableFilters(nonAdhocFilters);
+    const referenceVariableFilters = getReferenceVariableFilters(filters);
     const declaredVariableNames = new Set([
       ...variableFilters.map(v => v.name),
+      ...referenceVariableFilters.map(v => v.name),
       ...adhocFilters.flatMap(filter => getFilterVariableName(filter) ?? []),
     ]);
     const ignoredVariableNames = Array.from(parsed.byVariable.keys()).filter(
@@ -264,10 +327,18 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
       },
     );
 
+    const referenceVariableValues = new Map(
+      referenceVariableFilters.map(({ filter, name }) => [
+        name,
+        selectedId(filter.id),
+      ]),
+    );
+
     return {
       selectionByFilterId,
       adhocConditionsByFilterId,
       variables,
+      referenceVariableValues,
       ignoredExpressions,
       ignoredVariableNames,
       unsatisfiedRequiredFilters: getUnsatisfiedRequiredFilters(
@@ -275,7 +346,27 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
         selectionByFilterId,
       ),
     };
-  }, [filterValueEntries, filters]);
+  }, [filterValueEntries, filters, sources]);
+
+  // Filters as they query: source and connection variable references replaced
+  // by the selections. Unselected references are left as written.
+  const { resolvedFilters, unresolvedReferenceVariablesByFilterId } =
+    useMemo(() => {
+      const resolved = filters.map(filter =>
+        resolveFilterReferences(filter, referenceVariableValues),
+      );
+      return {
+        resolvedFilters: resolved.map(({ filter }) => filter),
+        unresolvedReferenceVariablesByFilterId: new Map(
+          resolved
+            .filter(({ unresolvedVariables }) => unresolvedVariables.length > 0)
+            .map(({ filter, unresolvedVariables }) => [
+              filter.id,
+              unresolvedVariables,
+            ]),
+        ),
+      };
+    }, [filters, referenceVariableValues]);
 
   /** Returns the set of rendered filter conditions corresponding to filters matching the given predicate */
   const getFiltersQueriesFor = useCallback(
@@ -294,7 +385,7 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
         }
       };
 
-      for (const filter of filters) {
+      for (const filter of resolvedFilters) {
         if (!predicate(filter)) continue;
         if (isAdhocFilter(filter)) {
           const conditions = adhocConditionsByFilterId.get(filter.id);
@@ -318,7 +409,7 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
       }
       return queries;
     },
-    [filters, selectionByFilterId, adhocConditionsByFilterId],
+    [resolvedFilters, selectionByFilterId, adhocConditionsByFilterId],
   );
 
   /**
@@ -391,6 +482,12 @@ const useDashboardFilters = (filters: DashboardFilter[]) => {
     broadcastedFilters,
     /** Set the selected values for a filter, by its ID */
     setFilterValue,
+    /** The selected ID of each data source and connection variable, by name. */
+    referenceVariableValues,
+    /** The filters with their reference variable references resolved, in filter order. */
+    resolvedFilters,
+    /** The unselected reference variables each filter's fields reference, by filter ID. */
+    unresolvedReferenceVariablesByFilterId,
     /** Each ad hoc filter's current conditions, keyed by `filter.id`. */
     adhocConditionsByFilterId,
     /** Replace the conditions of an ad hoc filter, by its ID */

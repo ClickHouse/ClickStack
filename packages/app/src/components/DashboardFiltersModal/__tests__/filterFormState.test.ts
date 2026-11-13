@@ -1,4 +1,4 @@
-import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
+import { DashboardFilter, SourceKind } from '@hyperdx/common-utils/dist/types';
 
 import {
   FilterFormValues,
@@ -317,6 +317,74 @@ describe('toSavedFilter', () => {
     ).toThrow();
   });
 
+  it('saves a data source filter as single-select and required', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'DATA_SOURCE',
+        name: 'Logs source',
+        allowedSourceKinds: [SourceKind.Log],
+        isRequired: false,
+        isSingleSelect: false,
+        expression: 'ignored',
+        source: 'ignored',
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: expect.any(String),
+      type: 'DATA_SOURCE',
+      name: 'Logs source',
+      variableName: 'Logs_source',
+      allowedSourceKinds: [SourceKind.Log],
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    });
+    expect(toFormValues(saved).allowedSourceKinds).toEqual([SourceKind.Log]);
+  });
+
+  it('saves a data source filter limited to a connection variable', () => {
+    expect(
+      toSavedFilter(
+        formValues({
+          type: 'DATA_SOURCE',
+          name: 'Logs source',
+          allowedSourceKinds: [SourceKind.Log],
+          connection: '$conn',
+        }),
+      ),
+    ).toMatchObject({ connection: '$conn' });
+  });
+
+  it('saves a connection filter as single-select and required', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'CONNECTION',
+        name: 'Cluster',
+        isSingleSelect: false,
+        source: 'ignored',
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: expect.any(String),
+      type: 'CONNECTION',
+      name: 'Cluster',
+      variableName: 'Cluster',
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    });
+  });
+
+  it('rejects a data source filter without source kinds', () => {
+    expect(() =>
+      toSavedFilter(formValues({ type: 'DATA_SOURCE', name: 'Source' })),
+    ).toThrow();
+  });
+
   it('rejects values the schema cannot accept', () => {
     expect(() =>
       toSavedFilter(formValues({ type: 'STATIC_LIST', options: [] })),
@@ -324,7 +392,10 @@ describe('toSavedFilter', () => {
   });
 });
 
-/** The minimum a form needs to save, per filter type the form supports. */
+/**
+ * The minimum a form needs to save, per filter type with configurable
+ * selection limits.
+ */
 const byType: Record<
   Exclude<DashboardFilter['type'], 'ADHOC' | 'DATA_SOURCE' | 'CONNECTION'>,
   Partial<FilterFormValues>

@@ -39,7 +39,7 @@ test.describe(
         dashboardPage.getTileMissingRequiredFilters(tileIndex);
       await expect(placeholder).toBeVisible({ timeout: 20000 });
       await expect(placeholder).toContainText(
-        `Missing required filters: ${filterNames}`,
+        `Missing required filters or variables: ${filterNames}`,
       );
     };
 

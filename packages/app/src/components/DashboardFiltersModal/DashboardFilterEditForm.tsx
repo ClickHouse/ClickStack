@@ -3,6 +3,7 @@ import { useForm, useWatch } from 'react-hook-form';
 import {
   deriveVariableName,
   getFilterVariableName,
+  isReferenceVariableFilterType,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   ChartVariable,
@@ -33,6 +34,7 @@ import { useZIndex } from '@/zIndex';
 import { AdhocFilterEditForm } from './AdhocFilterEditForm';
 import { MODAL_SIZE } from './constants';
 import { CustomInputWrapper } from './CustomInputWrapper';
+import { DataSourceFilterEditForm } from './DataSourceFilterEditForm';
 import {
   FilterFormValues,
   toFormValues,
@@ -64,6 +66,7 @@ const FILTER_TYPE_OPTIONS = [
         },
       ]
     : []),
+  { value: DashboardFilterType.enum.DATA_SOURCE, label: 'Data source' },
 ];
 
 interface DashboardFilterEditFormProps {
@@ -184,6 +187,12 @@ export const DashboardFilterEditForm = ({
     return variables?.filter(variable => variable.name !== ownName);
   }, [variables, filter]);
 
+  // Ad hoc conditions and reference variables have fixed selection rules
+  const showSelectionOptions =
+    showRequiredFilterOptions &&
+    formFilterType !== 'ADHOC' &&
+    !isReferenceVariableFilterType(formFilterType);
+
   const isNew = !filter;
   const showTypeInput = !!showVariableOptions;
 
@@ -236,7 +245,12 @@ export const DashboardFilterEditForm = ({
             message="Failed to load filter"
             showErrorMessage
           >
-            {formFilterType === 'STATIC_LIST' ? (
+            {formFilterType === 'DATA_SOURCE' ? (
+              <DataSourceFilterEditForm
+                control={control}
+                otherFilters={otherFilters}
+              />
+            ) : formFilterType === 'STATIC_LIST' ? (
               <StaticListFilterEditForm
                 control={control}
                 otherFilters={otherFilters}
@@ -269,7 +283,7 @@ export const DashboardFilterEditForm = ({
             )}
           </ErrorBoundary>
 
-          {showRequiredFilterOptions && formFilterType !== 'ADHOC' && (
+          {showSelectionOptions && (
             <Stack gap="xs">
               <Divider my="xs" />
               <CheckBoxControlled

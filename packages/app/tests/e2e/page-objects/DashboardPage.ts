@@ -1397,7 +1397,8 @@ export class DashboardPage {
       | 'Queried values'
       | 'Static values'
       | 'PromQL label values'
-      | 'Ad hoc keys and values',
+      | 'Ad hoc keys and values'
+      | 'Data source',
   ) {
     await this.getFilterTypePicker().click();
     await this.getFilterOption(label).click();
@@ -1476,6 +1477,39 @@ export class DashboardPage {
       state: 'visible',
       timeout: 10000,
     });
+  }
+
+  /**
+   * Add a data source variable offering sources of the given kinds, by their
+   * labels in the form (e.g. 'Logs'), and wait for it in the filters list.
+   */
+  async addDataSourceFilterToDashboard(
+    name: string,
+    kindLabels: string[],
+    variableName: string,
+  ) {
+    await this.addFiltersButton.click();
+    await this.selectFilterType('Data source');
+    await this.getFilterNameInput().fill(name);
+    const kindsInput = this.page.getByTestId(
+      'filter-allowed-source-kinds-input',
+    );
+    for (const label of kindLabels) {
+      await kindsInput.click();
+      await this.getFilterOption(label).click();
+    }
+    await this.variableNameInput.fill(variableName);
+    await this.page.getByTestId('save-filter-button').click();
+    await this.getFilterItemByName(name).waitFor({
+      state: 'visible',
+      timeout: 10000,
+    });
+  }
+
+  /** Pick a value in a data source or connection variable's filter bar select. */
+  async selectReferenceFilterValue(filterName: string, optionLabel: string) {
+    await this.getFilterSelectByName(filterName).click();
+    await this.getFilterOption(optionLabel).click();
   }
 
   /** The PromQL filter form's label field. */
