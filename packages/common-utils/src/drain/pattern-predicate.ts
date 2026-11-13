@@ -11,17 +11,26 @@ export const MAX_PREDICATE_TEMPLATE_LENGTH = 4000;
 
 export type PatternRegexOptions = {
   /**
-   * The extra delimiters the miner was configured with. Drain turns each one
-   * into a space before splitting, so they separate tokens like whitespace.
+   * The extra delimiters the miner was configured with, one character each.
+   * Drain turns each one into a space before splitting, so they separate
+   * tokens like whitespace.
    */
   extraDelimiters?: string[];
+  /**
+   * The whitespace the miner split on: JavaScript's `\s` for the TypeScript
+   * Drain port (the default), or Python's `str.split()` for Drain3.
+   */
+  whitespace?: 'js' | 'python';
 };
 
-// Drain tokenizes with JS `\s`, which includes Unicode spaces and BOM; RE2's
-// `\s` is ASCII-only. JS `\s` = RE2 `\s` + \v + \pZ (Zs/Zl/Zp) + BOM. `\pZ`
-// keeps the snippet short; spelling out the code points repeats ~100 chars
-// between every token.
+// The TypeScript Drain port tokenizes with JS `\s`, which includes Unicode
+// spaces and BOM; RE2's `\s` is ASCII-only. JS `\s` = RE2 `\s` + \v + \pZ
+// (Zs/Zl/Zp) + BOM. `\pZ` keeps the snippet short; spelling out the code
+// points repeats ~100 chars between every token.
 const JS_WHITESPACE = '\\s\\x{0B}\\pZ\\x{FEFF}';
+// Python's `str.split()`, which Drain3 uses: RE2 `\s` + \v + the separators
+// \x1C-\x1F + NEL + \pZ, and no BOM.
+const PYTHON_WHITESPACE = '\\s\\x{0B}\\x{1C}-\\x{1F}\\x{85}\\pZ';
 
 function escapeRe2Literal(token: string): string {
   return token.replace(/[\\^$.|?*+()[\]{}]/g, '\\$&');
@@ -33,11 +42,18 @@ function escapeRe2ClassChars(chars: string): string {
   return chars.replace(/[\\\]^[-]/g, '\\$&');
 }
 
-// Exactly RE2's `[:punct:]`, and Python's string.punctuation.
-const ASCII_PUNCTUATION = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~';
+/** The ASCII punctuation: exactly RE2's `[:punct:]`, and Python's `string.punctuation`. */
+export const ASCII_PUNCTUATION = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~';
 
 function separatorClass(options?: PatternRegexOptions): string {
   const delimiters = options?.extraDelimiters ?? [];
+  // Drain splits on each delimiter as a whole string, which a character class
+  // can't express for one longer than a character.
+  if (delimiters.some(d => [...d].length !== 1)) {
+    throw new Error('extraDelimiters must be single characters');
+  }
+  const whitespace =
+    options?.whitespace === 'python' ? PYTHON_WHITESPACE : JS_WHITESPACE;
   // The class repeats between every token, so spelling out all 32 ASCII
   // punctuation characters (most of which need URL encoding) makes the
   // filter too long to keep in a URL.
@@ -48,7 +64,7 @@ function separatorClass(options?: PatternRegexOptions): string {
     ? delimiters.filter(c => !ASCII_PUNCTUATION.includes(c))
     : delimiters;
   return (
-    JS_WHITESPACE +
+    whitespace +
     (allPunctuation ? '[:punct:]' : '') +
     escapeRe2ClassChars(rest.join(''))
   );
