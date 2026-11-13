@@ -1757,4 +1757,99 @@ describe('Metadata Integration Tests', () => {
       });
     },
   );
+
+  describe('getAllKeyValues - values repeated across parts', () => {
+    // mergeTreeTextIndex returns one row per part and token, so a token cap
+    // that ignores the part count stops before the later parts' values. Each
+    // part holds the same SHARED values plus OWN values no other part has.
+    const tableName = 'test_text_index_values_across_parts';
+    const PARTS = 25;
+    const SHARED = 1000;
+    const OWN = 100;
+    const dateRange = (): [Date, Date] => [
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 1000),
+    ];
+    let textIndexSupported = false;
+
+    beforeAll(async () => {
+      const probe = new Metadata(hdxClient, new MetadataCache());
+      textIndexSupported = supportsMergeTreeTextIndex(
+        await probe.getServerVersion({ connectionId: 'test_connection' }),
+      );
+      if (!textIndexSupported) return;
+
+      await client.command({
+        query: `CREATE OR REPLACE TABLE default.${tableName} (
+            Timestamp DateTime64(9),
+            ResourceAttributes Map(LowCardinality(String), String),
+            ResourceAttributeItems Array(String) MATERIALIZED
+              arrayMap(x -> concat(x.1, '=', x.2), CAST(ResourceAttributes, 'Array(Tuple(String, String))')),
+            Tags Array(String),
+            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1,
+            INDEX idx_tags Tags TYPE text(tokenizer = 'array') GRANULARITY 1
+          )
+          ENGINE = MergeTree()
+          PARTITION BY toDate(Timestamp)
+          ORDER BY Timestamp
+          SETTINGS text_index_dictionary_block_size = 8192
+        `,
+      });
+      await client.command({
+        query: `SYSTEM STOP MERGES default.${tableName}`,
+      });
+      for (let i = 0; i < PARTS; i++) {
+        await client.command({
+          query: `INSERT INTO default.${tableName} (Timestamp, ResourceAttributes, Tags)
+            SELECT now64(9) - INTERVAL 10 MINUTE, map('pod', v), [v]
+            FROM (
+              SELECT if(number < ${SHARED}, concat('shared-', toString(number)), concat('own-${i}-', toString(number))) AS v
+              FROM numbers(${SHARED + OWN})
+            )`,
+        });
+      }
+    });
+
+    afterAll(async () => {
+      await client.command({
+        query: `DROP TABLE IF EXISTS default.${tableName}`,
+      });
+    });
+
+    it.each([
+      ['Map key=value', "ResourceAttributes['pod']"],
+      ['plain-column', 'Tags'],
+    ])(
+      'returns every distinct value from the %s text index, with and without a part limit',
+      async (_, keyExpression) => {
+        if (!textIndexSupported) {
+          console.warn(
+            'Skipping: ClickHouse < 26.3 does not support mergeTreeTextIndex()',
+          );
+          return;
+        }
+
+        // PARTS is above the default limit of 20, so unset reads 20 parts and
+        // null reads all of them.
+        for (const [mapKeyIndexMaxParts, partsRead] of [
+          [undefined, 20],
+          [null, PARTS],
+        ] as const) {
+          const metadata = new Metadata(hdxClient, new MetadataCache());
+          const result = await metadata.getAllKeyValues({
+            databaseName: 'default',
+            tableName,
+            keyExpressions: [keyExpression],
+            maxValuesPerKey: 10000,
+            mapKeyIndexMaxParts,
+            connectionId: 'test_connection',
+            dateRange: dateRange(),
+            timestampValueExpression: 'Timestamp',
+          });
+          expect(result).toHaveLength(1);
+          expect(result[0].value).toHaveLength(SHARED + OWN * partsRead);
+        }
+      },
+    );
+  });
 });

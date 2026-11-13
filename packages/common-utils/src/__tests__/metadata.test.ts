@@ -1382,7 +1382,8 @@ describe('Metadata', () => {
 
       expect(sql).toContain('mergeTreeTextIndex(');
       expect(sql).toContain('topKWeighted(');
-      expect(sql).toContain('LIMIT 20000');
+      // 20,000 tokens for each of the default 20 parts.
+      expect(sql).toContain('LIMIT 400000');
       expect(sql).not.toContain('startsWith(token,');
     });
 
@@ -1436,11 +1437,37 @@ describe('Metadata', () => {
       expect(branches[0]).toContain("'requestId' AS key");
       expect(branches[1]).toContain("startsWith(token, 'region=')");
       for (const branch of branches) {
-        expect(branch).toContain('LIMIT 20000');
+        // 20,000 tokens for each of the default 20 parts.
+        expect(branch).toContain('LIMIT 400000');
       }
       expect(call.clickhouse_settings.max_rows_to_read).toBe('0');
       expect(call.clickhouse_settings.read_overflow_mode).toBeUndefined();
     });
+
+    it.each([
+      ['map KV', "LogAttributes['requestId']"],
+      ['native', 'TraceId'],
+    ])(
+      'scales the %s text index token cap by the parts read, and drops it when every part is read',
+      async (_, keyExpression) => {
+        setupDefaultLogsSchema();
+        withDictionaryBlockSize(8192);
+
+        for (const mapKeyIndexMaxParts of [5, null]) {
+          await metadata.getAllKeyValues({
+            ...baseArgs,
+            keyExpressions: [keyExpression],
+            mapKeyIndexMaxParts,
+          });
+        }
+
+        const tokenLimits = (mockClickhouseClient.query as jest.Mock).mock.calls
+          .map(([opts]) => opts.query as string)
+          .filter(q => q.includes('mergeTreeTextIndex('))
+          .map(q => q.match(/LIMIT (\d+)/)?.[1]);
+        expect(tokenLimits).toEqual(['100000', undefined]);
+      },
+    );
 
     it('reads all Map keys in one pass when the index has small dictionary blocks', async () => {
       setupDefaultLogsSchema();
