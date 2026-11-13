@@ -24,6 +24,7 @@ import {
   type DashboardFilterQueryIssue,
   getAdhocFilterSourceKinds,
   isAdhocFilter,
+  isDataSourceFilter,
   isPrometheusLabelFilter,
   isQueryExpressionFilter,
   isSqlQueryFilter,
@@ -80,6 +81,7 @@ import {
 
 import SelectControlled from './components/SelectControlled';
 import { SourceMultiSelectControlled } from './components/SourceMultiSelect';
+import { useConnectionItems } from './hooks/useConnectionItems';
 import api from './api';
 import { usePageTitle } from './brand';
 import { useConnections } from './connection';
@@ -448,8 +450,8 @@ function resolveAppliesToSources(
 }
 
 /**
- * A data source variable reference (`$name`) is portable as written, so
- * import neither maps it nor asks the user to.
+ * A data source or connection variable reference (`$name`) is portable as
+ * written, so import neither maps it nor asks the user to.
  */
 const isVariableRef = (name: string | undefined) =>
   parseVariableReference(name) != null;
@@ -466,6 +468,18 @@ const isSourceBackedTemplateFilter = (
 ): filter is QueryExpressionDashboardFilter | PromqlLabelDashboardFilter =>
   (isQueryExpressionFilter(filter) || isPrometheusLabelFilter(filter)) &&
   !isVariableRef(filter.source);
+
+/**
+ * Returns the filter if it names a connection import must map: a SQL query
+ * filter, or a data source variable limited to a connection.
+ */
+const connectionBackedTemplateFilter = (filter: DashboardFilter | undefined) =>
+  filter &&
+  (isSqlQueryFilter(filter) || isDataSourceFilter(filter)) &&
+  filter.connection &&
+  !isVariableRef(filter.connection)
+    ? filter
+    : undefined;
 
 /** Returns the filter if it names a source, or `undefined` if it doesn't. */
 const sourceBackedTemplateFilter = (filter: DashboardFilter | undefined) =>
@@ -529,7 +543,7 @@ export function buildMappingFormSchema(
       connectionMappings: z.array(MappingValueSchema),
       /** A list of filter source mappings, ordered by input filter index */
       filterSourceMappings: z.array(MappingValueSchema).optional(),
-      /** A list of filter connection mappings, ordered by input filter index. Only applicable for SQL query filters */
+      /** Connection mappings of SQL query filters and data source variables, ordered by input filter index */
       filterConnectionMappings: z.array(MappingValueSchema).optional(),
       /**
        * Per-filter applies-to source mappings. Each entry is an array of mapped
@@ -572,7 +586,11 @@ export function buildMappingFormSchema(
         }
         // A raw SQL tile always gets a connection row, and its connection is
         // not optional — leaving it unpicked used to throw on `connection!.id`.
-        if (isRawSqlSavedChartConfig(config) && !data.connectionMappings[idx]) {
+        if (
+          isRawSqlSavedChartConfig(config) &&
+          !isVariableRef(config.connection) &&
+          !data.connectionMappings[idx]
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['connectionMappings', idx],
@@ -588,6 +606,16 @@ export function buildMappingFormSchema(
         });
 
       input.filters?.forEach((filter, idx) => {
+        if (
+          connectionBackedTemplateFilter(filter) &&
+          !data.filterConnectionMappings?.[idx]
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['filterConnectionMappings', idx],
+            message: 'Select a connection for this filter',
+          });
+        }
         if (isAdhocFilter(filter)) {
           const kinds = getAdhocFilterSourceKinds(filter.sourceType);
           const kindMessage =
@@ -618,17 +646,6 @@ export function buildMappingFormSchema(
               code: z.ZodIssueCode.custom,
               path: ['filterAppliesToSourceMappings', idx],
               message: kindMessage,
-            });
-          }
-          return;
-        }
-
-        if (isSqlQueryFilter(filter)) {
-          if (!data.filterConnectionMappings?.[idx]) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ['filterConnectionMappings', idx],
-              message: 'Select a connection for this filter',
             });
           }
           return;
@@ -670,6 +687,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
   const router = useRouter();
   const { data: sources } = useSources();
   const { data: connections } = useConnections();
+  const connectionItems = useConnectionItems();
   const { data: dashboards } = useDashboards();
   const { data: existingTags } = api.useTags();
   const [dashboardId] = useQueryState('dashboardId', parseAsString);
@@ -722,17 +740,19 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
     const findConnectionIdByName = (name: string) =>
       connections.find(conn => conn.name.toLowerCase() === name.toLowerCase())
-        ?.id || '';
+        ?.id ?? '';
 
     const connectionMappings = input.tiles.map(tile => {
       const config = tile.config as SavedChartConfig;
-      if (!isRawSqlSavedChartConfig(config)) return '';
+      if (!isRawSqlSavedChartConfig(config) || isVariableRef(config.connection))
+        return '';
       return findConnectionIdByName(config.connection);
     });
 
-    const filterConnectionMappings = input.filters?.map(filter =>
-      isSqlQueryFilter(filter) ? findConnectionIdByName(filter.connection) : '',
-    );
+    const filterConnectionMappings = input.filters?.map(filter => {
+      const connection = connectionBackedTemplateFilter(filter)?.connection;
+      return connection ? findConnectionIdByName(connection) : '';
+    });
 
     const filterSourceMappings = input.filters?.map(filter => {
       const sourceName = sourceBackedTemplateFilter(filter)?.source;
@@ -791,8 +811,8 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
     setValue('tileSourceMappings', tileSourceMappings);
     setValue('connectionMappings', connectionMappings);
-    setValue('filterSourceMappings', filterSourceMappings);
     setValue('filterConnectionMappings', filterConnectionMappings);
+    setValue('filterSourceMappings', filterSourceMappings);
     multiMappingSlotsRef.current.clear();
     filterAppliesToSourceMappings?.forEach((mapping, idx) => {
       setValue(`filterAppliesToSourceMappings.${idx}`, mapping);
@@ -983,8 +1003,8 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
     sources,
   ]);
 
-  // Propagate connection mapping changes to other RawSQL tiles and SQL query
-  // filters with the same input connection
+  // Propagate connection mapping changes to other RawSQL tiles and filters
+  // with the same input connection
   useEffect(() => {
     if (isUpdatingRef.current) return;
     if (!input.tiles) return;
@@ -1017,9 +1037,11 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
       );
       if (filterIdx !== -1) {
         prevFilterConnectionMappingsRef.current = filterConnectionMappings;
-        const filter = input.filters?.[filterIdx];
-        if (filter && isSqlQueryFilter(filter)) {
-          inputConnectionName = filter.connection;
+        const connection = connectionBackedTemplateFilter(
+          input.filters?.[filterIdx],
+        )?.connection;
+        if (connection) {
+          inputConnectionName = connection;
           connectionId = filterConnectionMappings[filterIdx] ?? '';
         }
       }
@@ -1044,8 +1066,8 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
         ?.map((filter, index) => ({ filter, index }))
         .filter(
           ({ filter }) =>
-            isSqlQueryFilter(filter) &&
-            filter.connection === inputConnectionName,
+            connectionBackedTemplateFilter(filter)?.connection ===
+            inputConnectionName,
         )
         .map(({ index }) => `filterConnectionMappings.${index}` as const) ?? [];
 
@@ -1159,12 +1181,14 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
         };
 
         if (isRawSqlSavedChartConfig(tile.config)) {
-          const connection = findConnection(data.connectionMappings[idx]);
+          const connection = isVariableRef(tile.config.connection)
+            ? tile.config.connection
+            : findConnection(data.connectionMappings[idx])!.id;
           return {
             ...tile,
             config: applyOnClick({
               ...tile.config,
-              connection: connection!.id,
+              connection,
               ...(source ? { source: source.id } : {}),
             }),
           };
@@ -1206,11 +1230,13 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
             appliesToSourceIds,
           };
         }
-        if (isSqlQueryFilter(filter)) {
-          const connection = findConnection(
-            data.filterConnectionMappings?.[idx],
-          );
-          return { ...filter, connection: connection!.id };
+        if (connectionBackedTemplateFilter(filter)) {
+          return {
+            ...filter,
+            // The form schema requires this mapping
+            connection: findConnection(data.filterConnectionMappings?.[idx])!
+              .id,
+          };
         }
         const source = findSource(data.filterSourceMappings?.[idx]);
         return {
@@ -1322,7 +1348,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                     </Table.Tr>
                   )}
                   {/** Mapping for the tile's connection, if it's a raw sql tile */}
-                  {isRawSql && (
+                  {isRawSql && !isVariableRef(config.connection) && (
                     <Table.Tr>
                       <Table.Td>{tile.config.name}</Table.Td>
                       <Table.Td>Data connection</Table.Td>
@@ -1331,10 +1357,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                         <SelectControlled
                           control={control}
                           name={`connectionMappings.${i}`}
-                          data={connections?.map(conn => ({
-                            value: conn.id,
-                            label: conn.name,
-                          }))}
+                          data={connectionItems}
                           placeholder="Select a connection"
                         />
                       </Table.Td>
@@ -1394,6 +1417,25 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                 : undefined;
               return (
                 <Fragment key={filter.id}>
+                  {connectionBackedTemplateFilter(filter) && (
+                    <Table.Tr>
+                      <Table.Td>{filter.name} (Filter)</Table.Td>
+                      <Table.Td>Data connection</Table.Td>
+                      <Table.Td>
+                        {connectionBackedTemplateFilter(filter)?.connection}
+                      </Table.Td>
+                      <Table.Td>
+                        <SelectControlled
+                          control={control}
+                          name={`filterConnectionMappings.${i}`}
+                          data={connectionItems}
+                          placeholder="Select a connection"
+                        />
+                      </Table.Td>
+                      <Table.Td />
+                      <Table.Td />
+                    </Table.Tr>
+                  )}
                   {isSourceBackedTemplateFilter(filter) && (
                     <Table.Tr>
                       <Table.Td>{filter.name} (Filter)</Table.Td>
@@ -1416,24 +1458,6 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                       </Table.Td>
                       <Table.Td />
                       <Table.Td />
-                    </Table.Tr>
-                  )}
-                  {isSqlQueryFilter(filter) && (
-                    <Table.Tr>
-                      <Table.Td>{filter.name} (Filter)</Table.Td>
-                      <Table.Td>Data connection</Table.Td>
-                      <Table.Td>{filter.connection}</Table.Td>
-                      <Table.Td>
-                        <SelectControlled
-                          control={control}
-                          name={`filterConnectionMappings.${i}`}
-                          data={connections?.map(conn => ({
-                            value: conn.id,
-                            label: conn.name,
-                          }))}
-                          placeholder="Select a connection"
-                        />
-                      </Table.Td>
                     </Table.Tr>
                   )}
                   {isAdhocFilter(filter) && !!adhocSourceNames?.length && (

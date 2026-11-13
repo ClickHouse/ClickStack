@@ -154,10 +154,11 @@ export default function RawSqlChartEditor({
   const { data: sources } = useSources();
 
   const displayType = useWatch({ control, name: 'displayType' });
-  const connection = useWatch({ control, name: 'connection' });
+  // Source and connection variable references autocomplete and expand macros
+  // as the source and connection they currently select.
+  const storedConnection = useWatch({ control, name: 'connection' });
+  const connection = useResolvedReference(storedConnection);
   const storedSource = useWatch({ control, name: 'source' });
-  // A data source variable reference expands macros as the source it
-  // currently selects.
   const source = useResolvedReference(storedSource);
   const sqlTemplate = useWatch({ control, name: 'sqlTemplate' });
   const chartName = useWatch({ control, name: 'name' });
@@ -217,12 +218,25 @@ export default function RawSqlChartEditor({
       prevConnection,
       sources,
     });
-    if (update?.field === 'connection') {
+    // A connection variable stays as picked; the tile shows a mismatch
+    // instead of having its reference replaced
+    if (
+      update?.field === 'connection' &&
+      parseVariableReference(storedConnection) == null
+    ) {
       setValue('connection', update.value);
     } else if (update?.field === 'source') {
       setValue('source', update.value);
     }
-  }, [connection, prevConnection, prevSource, setValue, storedSource, sources]);
+  }, [
+    connection,
+    storedConnection,
+    prevConnection,
+    prevSource,
+    setValue,
+    storedSource,
+    sources,
+  ]);
 
   const placeholderSQl = SQL_PLACEHOLDERS[displayType ?? DisplayType.Table];
 
@@ -284,6 +298,8 @@ export default function RawSqlChartEditor({
             control={control}
             name="connection"
             size="xs"
+            allowConnectionVariables
+            data-testid="connection-selector"
           />
           <Group align="center" gap={8} mx="md">
             <Text size="sm" ps="md">
@@ -305,6 +321,7 @@ export default function RawSqlChartEditor({
             allowedSourceKinds={allowedSourceKinds}
             allowSourceVariables
             connectionId={connection}
+            variableConnection={storedConnection}
             size="xs"
             clearable
             placeholder="None"
