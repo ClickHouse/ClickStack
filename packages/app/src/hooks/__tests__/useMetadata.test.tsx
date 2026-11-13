@@ -734,7 +734,7 @@ describe('useMultipleAllFields', () => {
   ];
   const columnsB = [column('col_b', 'String')];
 
-  let team: { fieldMetadataDisabled?: boolean };
+  let team: { fieldMetadataDisabled?: boolean; filterKeysFetchLimit?: number };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -810,6 +810,29 @@ describe('useMultipleAllFields', () => {
       }),
     );
   });
+
+  it.each([
+    [undefined, 1000],
+    [100, 1000],
+    [5000, 5000],
+  ])(
+    'with a filter key limit of %s, discovers up to %s keys per Map column',
+    async (filterKeysFetchLimit, maxKeys) => {
+      team.filterKeysFetchLimit = filterKeysFetchLimit;
+      const getAllFields = jest
+        .spyOn(mockMetadata, 'getAllFields')
+        .mockResolvedValue(fieldsA);
+
+      const { result } = renderHook(() => useMultipleAllFields([tcA]), {
+        wrapper,
+      });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(getAllFields).toHaveBeenCalledWith(
+        expect.objectContaining({ maxKeys }),
+      );
+    },
+  );
 
   it('should deduplicate fields across successful connections', async () => {
     jest

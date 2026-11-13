@@ -70,7 +70,7 @@ import {
 // If filters initially are taking too long to load, decrease this number.
 // Between 1e6 - 5e6 is a good range.
 export const DEFAULT_METADATA_MAX_ROWS_TO_READ = 3e6;
-const DEFAULT_MAX_KEYS = 1000;
+export const DEFAULT_MAX_KEYS = 1000;
 // shortcut: keys and values found only in parts outside the selection can be
 // missed; raise it per source (mapKeyIndexMaxParts) or pick other parts
 // (mapKeyIndexPartSelection) if they go missing.
@@ -2121,10 +2121,13 @@ export class Metadata {
     dateRange,
     timestampValueExpression,
     condition,
+    maxKeys,
   }: TableConnection & {
     dateRange?: [Date, Date];
     timestampValueExpression?: string;
     condition?: FieldsCondition;
+    /** Most keys to discover per Map or JSON column. */
+    maxKeys?: number;
   }) {
     const fields: Field[] = [];
     const columns = await this.getColumns({
@@ -2172,6 +2175,7 @@ export class Metadata {
             metricName,
             dateRange,
             timestampValueExpression,
+            maxKeys,
           });
 
           for (const path of paths) {
@@ -2196,6 +2200,7 @@ export class Metadata {
           dateRange,
           timestampValueExpression,
           conditionSql,
+          maxKeys,
         });
 
         const match = column.type.match(/Map\(.+,\s*(.+)\)/);
