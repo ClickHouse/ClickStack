@@ -78,6 +78,8 @@ describe('AdhocFilterEditForm', () => {
   it('says the name is not a referenceable variable', () => {
     renderForm(adhoc());
 
+    expect(screen.getByText('Unique name')).toBeInTheDocument();
+    expect(screen.queryByText('Variable name')).not.toBeInTheDocument();
     expect(
       screen.getByText(/can't be referenced as variables/),
     ).toBeInTheDocument();
