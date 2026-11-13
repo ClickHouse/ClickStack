@@ -9,6 +9,7 @@ import {
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import { configUsesReferenceVariable } from '@hyperdx/common-utils/dist/referenceVariables';
 import { isRangeThresholdType } from '@hyperdx/common-utils/dist/types';
 import { groupBy } from 'lodash';
 import { type FilterQuery, Types } from 'mongoose';
@@ -97,6 +98,11 @@ export const validateAlertInput = async (
 
     // The alert checker cannot evaluate these tiles, so the alert would never run.
     if (tile.config != null && !savedChartConfigSupportsAlerts(tile.config)) {
+      if (configUsesReferenceVariable(tile.config)) {
+        throw new Api400Error(
+          'Alerts are not supported on tiles that use a data source or connection variable',
+        );
+      }
       if (isPromqlSavedChartConfig(tile.config)) {
         throw new Api400Error('Alerts are not supported on PromQL tiles');
       }

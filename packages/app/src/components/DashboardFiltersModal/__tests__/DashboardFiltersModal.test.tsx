@@ -12,6 +12,7 @@ import { FilterFormControl } from '@/components/DashboardFiltersModal/filterForm
 jest.mock('@/useConfirm', () => ({ useConfirm: () => jest.fn() }));
 
 jest.mock('@/source', () => ({ useSources: () => ({ data: [] }) }));
+jest.mock('@/connection', () => ({ useConnections: () => ({ data: [] }) }));
 
 // Mantine's Combobox calls scrollIntoView when its dropdown opens; jsdom lacks it.
 window.HTMLElement.prototype.scrollIntoView = jest.fn();

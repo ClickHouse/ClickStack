@@ -7,7 +7,22 @@ import {
   isFilterBroadcastEnabled,
   isFilterVariableEnabled,
 } from './filters';
-import { DashboardContainerSchema, DisplayType } from './types';
+import {
+  getConfigReferenceFields,
+  getConnectionVariableNames,
+  getFilterReferenceFields,
+  getReferenceFieldValues,
+  getSourceVariableFilters,
+  getStringField,
+  getUnacceptedSourceKinds,
+  parseVariableReference,
+  ReferenceField,
+} from './referenceVariables';
+import {
+  DashboardContainerSchema,
+  DashboardFilter,
+  DisplayType,
+} from './types';
 
 // Inputs shared by the internal `DashboardSchema` refinement and the
 // external API body schema: the validation only depends on the
@@ -373,4 +388,116 @@ export function validateChartConfigFormulas(
       path: [...configPath, 'formulas'],
     });
   }
+}
+
+/** The issues a refinement raises, run on its own outside a schema. */
+export function collectRefinementIssues(
+  refine: (ctx: z.RefinementCtx) => void,
+): z.ZodIssue[] {
+  const result = z
+    .object({})
+    .superRefine((_value, ctx) => refine(ctx))
+    .safeParse({});
+  return result.success ? [] : result.error.issues;
+}
+
+/**
+ * Every reference variable reference must name a variable of the right type
+ * on the dashboard: `$name` in a source field names a data source variable
+ * offering only kinds the field accepts; `$name` in a connection field names a
+ * connection variable. The fields are those of `getConfigReferenceFields` and
+ * `getFilterReferenceFields`.
+ *
+ * Issues raised:
+ * - An unknown variable, or one of the wrong type (path `<tilesPath>[i].config.<field>` or `<filtersPath>[i].<field>[j]`).
+ * - A data source variable offering kinds the field does not accept (same paths).
+ */
+export function validateDashboardVariableReferences(
+  // Structural so stored documents (whose alerts carry server fields) fit
+  tiles: { config: object }[],
+  filters: DashboardFilter[],
+  ctx: z.RefinementCtx,
+  paths?: {
+    tilesPath?: (string | number)[];
+    filtersPath?: (string | number)[];
+  },
+): void {
+  const tilesPath = paths?.tilesPath ?? ['tiles'];
+  const filtersPath = paths?.filtersPath ?? ['filters'];
+  const kindsByName = new Map(
+    getSourceVariableFilters(filters).map(({ filter, name }) => [
+      name,
+      filter.allowedSourceKinds,
+    ]),
+  );
+  const connectionVariableNames = new Set(getConnectionVariableNames(filters));
+
+  const check = (
+    value: string,
+    field: ReferenceField<string>,
+    path: (string | number)[],
+  ) => {
+    const name = parseVariableReference(value);
+    if (name == null) return;
+    if (field.target === 'connection') {
+      if (connectionVariableNames.has(name)) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `"${value}" does not name a connection variable on this dashboard`,
+        path,
+      });
+      return;
+    }
+    const kinds = kindsByName.get(name);
+    if (kinds == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `"${value}" does not name a data source variable on this dashboard`,
+        path,
+      });
+      return;
+    }
+    const unaccepted = getUnacceptedSourceKinds(
+      { allowedSourceKinds: kinds },
+      field.acceptedKinds,
+    );
+    if (unaccepted.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Data source variable "${value}" offers ${unaccepted.join(', ')} sources, which cannot be used here`,
+        path,
+      });
+    }
+  };
+
+  const checkFields = (
+    object: object,
+    fields: ReferenceField<string>[],
+    path: (string | number)[],
+  ) => {
+    for (const field of fields) {
+      const value = getStringField(object, field.key);
+      if (value != null) {
+        check(value, field, [...path, field.key]);
+      } else {
+        getReferenceFieldValues(object, field.key).forEach((entry, i) =>
+          check(entry, field, [...path, field.key, i]),
+        );
+      }
+    }
+  };
+
+  tiles.forEach((tile, tileIdx) =>
+    checkFields(tile.config, getConfigReferenceFields(tile.config), [
+      ...tilesPath,
+      tileIdx,
+      'config',
+    ]),
+  );
+  filters.forEach((filter, filterIdx) =>
+    checkFields(filter, getFilterReferenceFields(filter), [
+      ...filtersPath,
+      filterIdx,
+    ]),
+  );
 }

@@ -5,6 +5,7 @@ import {
   isFilterBroadcastEnabled,
   isFilterRequired,
   isFilterVariableEnabled,
+  isReferenceVariableFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AlertErrorType,
@@ -241,7 +242,10 @@ export function translateExternalChartToTileConfig(
 }
 
 /** Filter types the external API and MCP don't expose yet. */
-type InternalOnlyDashboardFilter = Extract<DashboardFilter, { type: 'ADHOC' }>;
+type InternalOnlyDashboardFilter = Extract<
+  DashboardFilter,
+  { type: 'ADHOC' | 'DATA_SOURCE' | 'CONNECTION' }
+>;
 export type ExternalCompatibleDashboardFilter = Exclude<
   DashboardFilter,
   InternalOnlyDashboardFilter
@@ -253,7 +257,7 @@ export function getExternalCompatibleFilters(
 ): ExternalCompatibleDashboardFilter[] {
   return (filters ?? []).filter(
     (filter): filter is ExternalCompatibleDashboardFilter =>
-      !isAdhocFilter(filter),
+      !isAdhocFilter(filter) && !isReferenceVariableFilter(filter),
   );
 }
 

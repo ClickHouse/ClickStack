@@ -938,6 +938,37 @@ export function isAdhocFilter<T extends { type: DashboardFilterKind }>(
   return filter.type === 'ADHOC';
 }
 
+/** Type guard for DATA_SOURCE type filters. */
+export function isDataSourceFilter<T extends { type: DashboardFilterKind }>(
+  filter: T,
+): filter is Extract<T, { type: 'DATA_SOURCE' }> {
+  return filter.type === 'DATA_SOURCE';
+}
+
+/** Type guard for CONNECTION type filters. */
+export function isConnectionFilter<T extends { type: DashboardFilterKind }>(
+  filter: T,
+): filter is Extract<T, { type: 'CONNECTION' }> {
+  return filter.type === 'CONNECTION';
+}
+
+/**
+ * Whether a filter type is a reference variable: a data source or connection
+ * variable, whose value is an ID that tiles and filters use in place of one.
+ */
+export function isReferenceVariableFilterType(
+  type: DashboardFilterKind | undefined,
+): type is 'DATA_SOURCE' | 'CONNECTION' {
+  return type === 'DATA_SOURCE' || type === 'CONNECTION';
+}
+
+/** Type guard for reference variable filters; see `isReferenceVariableFilterType`. */
+export function isReferenceVariableFilter<
+  T extends { type: DashboardFilterKind },
+>(filter: T): filter is Extract<T, { type: 'DATA_SOURCE' | 'CONNECTION' }> {
+  return isReferenceVariableFilterType(filter.type);
+}
+
 /**
  * The sources an ADHOC filter broadcasts its conditions to: its
  * `appliesToSourceIds`, or its own `sources` when that is unset or empty.
@@ -1211,6 +1242,7 @@ export type DashboardVariableDeclaration = Pick<
 
 /** Minimal projection of fields necessary to extract the variables a dashboard declares. */
 export type FilterForVariableDeclaration = {
+  type?: DashboardFilterKind;
   name: string;
   expression?: string;
   variableName?: string;
@@ -1220,17 +1252,33 @@ export type FilterForVariableDeclaration = {
 
 /**
  * The variable-enabled filters a dashboard declares, paired with the name each
- * one answers to, in filter order.
+ * one answers to, in filter order. Data source variables are left out: their
+ * value selects a tile's source or connection and is never substituted into
+ * query text.
  */
 export function getDashboardVariableFilters<
   T extends FilterForVariableDeclaration,
 >(filters: T[] | undefined): { filter: T; name: string }[] {
+  return pairWithVariableNames(
+    (filters ?? []).filter(
+      filter =>
+        isFilterVariableEnabled(filter) &&
+        !isReferenceVariableFilterType(filter.type),
+    ),
+  );
+}
+
+/**
+ * Each filter paired with the name it answers to, skipping filters with no
+ * usable name.
+ */
+export function pairWithVariableNames<
+  T extends { name: string; variableName?: string },
+>(filters: T[]): { filter: T; name: string }[] {
   const results: { filter: T; name: string }[] = [];
   const takenNames = new Set<string>();
 
-  for (const filter of filters ?? []) {
-    if (!isFilterVariableEnabled(filter)) continue;
-
+  for (const filter of filters) {
     // There shouldn't be any duplicate names, but if there are then the first one wins.
     const name = getFilterVariableName(filter);
     if (!name || takenNames.has(name)) continue;
