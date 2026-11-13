@@ -1208,13 +1208,14 @@ export class Metadata {
       });
       const index = textIndexInfo.key.indexName;
       // `cardinality` is the token's row count in the part, not a distinct count.
+      // topKWeighted keeps a fixed-size table instead of grouping every token,
+      // so millions of one-off keys cost MiBs, not GiBs. While the distinct
+      // keys fit in that table (3 * maxKeys) it picks the same keys as an exact
+      // count, apart from ties at the cutoff; the order can differ slightly.
       const sql = chSql`
-        SELECT token AS key
+        SELECT arrayJoin(topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(maxKeys, 'maxKeys') }})(token, cardinality)) AS key
         FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: index }})
-        WHERE ${partsFilter}
-        GROUP BY key HAVING key != ''
-        ORDER BY sum(cardinality) DESC, key
-        LIMIT ${{ Int32: maxKeys }}`;
+        WHERE ${partsFilter} AND token != ''`;
       try {
         const keys = await this.clickhouseClient
           .query<'JSON'>({
@@ -1253,14 +1254,16 @@ export class Metadata {
       });
       const index = textIndexInfo.kv.indexName;
       const separator = textIndexInfo.kv.separator;
-      // `cardinality` is the token's row count in the part, not a distinct count.
+      // `cardinality` is the token's row count in the part, not a distinct
+      // count. See the key text index query for why topKWeighted.
       const sql = chSql`
-        SELECT splitByString(${{ String: separator }}, token)[1] AS key
-        FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: index }})
-        WHERE ${partsFilter}
-        GROUP BY key HAVING key != ''
-        ORDER BY sum(cardinality) DESC, key
-        LIMIT ${{ Int32: maxKeys }}`;
+        SELECT arrayJoin(topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(maxKeys, 'maxKeys') }})(mapKey, cardinality)) AS key
+        FROM (
+          SELECT splitByString(${{ String: separator }}, token)[1] AS mapKey, cardinality
+          FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: index }})
+          WHERE ${partsFilter}
+        )
+        WHERE mapKey != ''`;
       try {
         const keys = await this.clickhouseClient
           .query<'JSON'>({
