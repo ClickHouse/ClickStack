@@ -1609,6 +1609,9 @@ describe('Metadata', () => {
 
     it.each([
       [8192, [10, 10, 5]],
+      // The per-key threshold is 2048.
+      [2048, [10, 10, 5]],
+      [1024, [1, 1, 1]],
       [512, [1, 1, 1]],
     ])(
       'batches Map text index values by dictionary block size (%d)',
