@@ -454,6 +454,56 @@ describe('useGetKeyValues', () => {
     ).toEqual([{ kvRollupTable: 'logs_kv' }, { kvRollupTable: 'traces_kv' }]);
   });
 
+  it("passes log and trace sources' part settings to 'all' mode lookups, and no others", async () => {
+    const defaultSources = jest.mocked(useSources)();
+    jest.mocked(useSources).mockReturnValue({
+      data: [
+        {
+          id: 'logs',
+          kind: 'log',
+          mapKeyIndexMaxParts: 7,
+          mapKeyIndexPartSelection: 'largest',
+        },
+        // Not a log or trace source, so its fields don't apply.
+        {
+          id: 'metrics',
+          kind: 'metric',
+          mapKeyIndexMaxParts: 9,
+          mapKeyIndexPartSelection: 'smallest',
+        },
+      ],
+      isLoading: false,
+    } as any);
+    const streamAllKeyValues = mockLookups.all([], []);
+
+    try {
+      const { result } = renderValues({
+        mode: 'all',
+        chartConfigs: [
+          logsConfig,
+          createMockChartConfig({
+            source: 'metrics',
+            from: { databaseName: 'db', tableName: 'metrics' },
+          }),
+        ],
+      });
+      await waitForSettled(result);
+
+      expect(
+        streamAllKeyValues.mock.calls.map(([args]) => [
+          args.tableName,
+          args.mapKeyIndexMaxParts,
+          args.mapKeyIndexPartSelection,
+        ]),
+      ).toEqual([
+        ['logs', 7, 'largest'],
+        ['metrics', undefined, undefined],
+      ]);
+    } finally {
+      jest.mocked(useSources).mockReturnValue(defaultSources);
+    }
+  });
+
   it("refetches 'all' mode values when the source's part settings change", async () => {
     const defaultSources = jest.mocked(useSources)();
     const withParts = (mapKeyIndexMaxParts: number) =>
