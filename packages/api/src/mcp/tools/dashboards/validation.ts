@@ -4,6 +4,7 @@ import type { FilterForVariableDeclaration } from '@hyperdx/common-utils/dist/fi
 import {
   getDashboardVariableDeclarations,
   getFilterVariableName,
+  isAdhocConditionSupported,
   isFilterVariableEnabled,
 } from '@hyperdx/common-utils/dist/filters';
 import {
@@ -18,6 +19,8 @@ import {
   TIME_RANGE_MACROS,
 } from '@hyperdx/common-utils/dist/macros';
 import {
+  AdhocFilterSourceType,
+  AdhocFilterValue,
   DashboardFilterValue,
   DisplayType,
   QueryExpressionDashboardFilter,
@@ -246,14 +249,17 @@ export function getFilterVariableWarnings(
 }
 
 /**
- * Non-blocking check: a saved filter value of type 'variable' whose `name`
- * matches no variable-enabled filter is silently ignored when the dashboard
- * loads, so a typo'd variable name looks like a saved default but never
- * applies. Warn so the agent can fix the name or add the filter.
+ * Non-blocking check: a saved filter value of type 'variable' or 'adhoc' whose
+ * `name` matches no filter of its kind, or an ad hoc condition its filter's
+ * source type can't express, is silently ignored when the dashboard loads, so
+ * it looks like a saved default but never applies. Warn so the agent can fix
+ * it.
  */
 export function getSavedFilterValueWarnings(
   savedFilterValues: DashboardFilterValue[] | undefined,
-  filters: FilterForVariableDeclaration[] | undefined,
+  filters:
+    | (FilterForVariableDeclaration & { sourceType?: AdhocFilterSourceType })[]
+    | undefined,
 ): string[] {
   if (!savedFilterValues?.length) return [];
   const declaredNames = new Set(
@@ -261,8 +267,19 @@ export function getSavedFilterValueWarnings(
       declaration => declaration.name,
     ),
   );
+  const adhocSourceTypeByName = new Map(
+    (filters ?? []).flatMap(filter =>
+      filter.type === 'ADHOC' && filter.sourceType
+        ? [[getFilterVariableName(filter), filter.sourceType] as const]
+        : [],
+    ),
+  );
   const warnings: string[] = [];
   for (const value of savedFilterValues) {
+    if (value.type === 'adhoc') {
+      warnings.push(...getAdhocValueWarnings(value, adhocSourceTypeByName));
+      continue;
+    }
     if (value.type !== 'variable') continue;
     const name = value.name.trim();
     if (!name || declaredNames.has(name)) continue;
@@ -274,6 +291,29 @@ export function getSavedFilterValueWarnings(
     );
   }
   return warnings;
+}
+
+function getAdhocValueWarnings(
+  value: AdhocFilterValue,
+  sourceTypeByName: ReadonlyMap<string | undefined, AdhocFilterSourceType>,
+): string[] {
+  const sourceType = sourceTypeByName.get(value.name.trim());
+  if (sourceType === undefined) {
+    return [
+      `savedFilterValues has ad hoc conditions for "${value.name}", which no ADHOC ` +
+        "filter's variableName matches. They are ignored when the dashboard loads: " +
+        'fix the name or remove the entry.',
+    ];
+  }
+  const unsupported = value.conditions.filter(
+    condition => !isAdhocConditionSupported(sourceType, condition),
+  );
+  if (unsupported.length === 0) return [];
+  return [
+    `savedFilterValues has ad hoc conditions for "${value.name}" using ` +
+      `${[...new Set(unsupported.map(c => c.operator))].join(', ')}, which a ` +
+      `${sourceType} filter cannot apply. They are not applied to tiles.`,
+  ];
 }
 
 function variableIssueSubject(language: TemplateLanguage): string {

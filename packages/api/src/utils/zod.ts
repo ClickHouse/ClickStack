@@ -242,10 +242,13 @@ export const externalSqlSavedFilterValueSchema = z.object({
 export const externalVariableSavedFilterValueSchema =
   VariableFilterValueSchema.strict();
 
+export const externalAdhocSavedFilterValueSchema =
+  AdhocFilterValueSchema.strict();
+
 export const externalDashboardSavedFilterValueSchema = z.union([
   externalSqlSavedFilterValueSchema,
   externalVariableSavedFilterValueSchema,
-  AdhocFilterValueSchema.strict(),
+  externalAdhocSavedFilterValueSchema,
 ]);
 
 // ================================

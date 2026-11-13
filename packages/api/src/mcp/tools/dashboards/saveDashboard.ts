@@ -1,7 +1,6 @@
 import {
   getFilterVariableName,
   isFilterVariableEnabled,
-  isPrometheusLabelFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import { isPromqlSavedChartConfig } from '@hyperdx/common-utils/dist/guards';
 import type { DashboardContainer } from '@hyperdx/common-utils/dist/types';
@@ -22,6 +21,7 @@ import {
   convertExternalTilesToInternal,
   convertToExternalDashboard,
   createDashboardBodySchema,
+  isPromqlFilter,
   resolveSavedQueryLanguage,
   updateDashboardBodySchema,
   validateDashboardTiles,
@@ -236,7 +236,6 @@ async function createDashboard({
 
   const externalDashboard = convertToExternalDashboard(newDashboard, {
     hidePromql: !promqlEnabled,
-    hideAdhoc: true,
   });
   return {
     content: [
@@ -358,9 +357,9 @@ async function updateDashboard({
     tilesWithId,
     existingTileIds,
   );
-  // With PromQL disabled, reads hide PromQL tiles and PROMETHEUS_LABEL
-  // filters, so the agent's lists never contain them. Keep them rather than
-  // delete what it could not see. A request tile that reuses a hidden tile's
+  // With PromQL disabled, reads hide PromQL tiles and PromQL filters, so the
+  // agent's lists never contain them. Keep them rather than delete what it
+  // could not see. A request tile that reuses a hidden tile's
   // id replaces it.
   const requestTileIds = new Set(requestTiles.map(tile => tile.id));
   const internalTiles = promqlEnabled
@@ -393,8 +392,7 @@ async function updateDashboard({
     const hiddenFilters = promqlEnabled
       ? []
       : (existingDashboard.filters ?? []).filter(
-          filter =>
-            isPrometheusLabelFilter(filter) && !requestFilterIds.has(filter.id),
+          filter => isPromqlFilter(filter) && !requestFilterIds.has(filter.id),
         );
 
     // The body schema checks that variable names are unique only across the
@@ -453,7 +451,6 @@ async function updateDashboard({
 
   const externalDashboard = convertToExternalDashboard(updatedDashboard, {
     hidePromql: !promqlEnabled,
-    hideAdhoc: true,
   });
   return {
     content: [
