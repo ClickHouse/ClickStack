@@ -1,10 +1,9 @@
 import {
   getFilterBroadcastTarget,
   getFilterVariableName,
-  isAdhocFilter,
   isFilterGlobalRequirement,
+  isFilterReferenceableVariable,
   isFilterRequired,
-  isFilterVariableEnabled,
 } from '@hyperdx/common-utils/dist/filters';
 import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
 import {
@@ -163,9 +162,7 @@ export const DashboardFiltersList = ({
           }
 
           const variableName =
-            showVariableOptions &&
-            isFilterVariableEnabled(filter) &&
-            !isAdhocFilter(filter)
+            showVariableOptions && isFilterReferenceableVariable(filter)
               ? getFilterVariableName(filter)
               : undefined;
           return (

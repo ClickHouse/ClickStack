@@ -20,6 +20,7 @@ import {
   isAdhocConditionSupported,
   isFilterBroadcastEnabled,
   isFilterGlobalRequirement,
+  isFilterReferenceableVariable,
   isFilterRequired,
   isFilterVariableEnabled,
   isQueryExpressionFilter,
@@ -1738,6 +1739,22 @@ describe('filters', () => {
       expect(isFilterVariableEnabled({ isVariableEnabled: true })).toBe(true);
       expect(isFilterVariableEnabled({ isVariableEnabled: false })).toBe(false);
     });
+  });
+
+  describe('isFilterReferenceableVariable', () => {
+    it.each([
+      ['QUERY_EXPRESSION', true, true],
+      ['STATIC_LIST', true, true],
+      ['QUERY_EXPRESSION', false, false],
+      ['ADHOC', true, false],
+    ] as const)(
+      '%s with variables %s: %s',
+      (type, isVariableEnabled, expected) => {
+        expect(isFilterReferenceableVariable({ type, isVariableEnabled })).toBe(
+          expected,
+        );
+      },
+    );
   });
 
   describe('isFilterRequired', () => {

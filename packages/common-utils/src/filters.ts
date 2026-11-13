@@ -866,6 +866,18 @@ export function isFilterVariableEnabled(filter: {
 }
 
 /**
+ * Whether tiles can reference a filter's selection as `$variableName`. An ad
+ * hoc filter is variable-enabled only so its name stays unique; the name just
+ * keys its conditions.
+ */
+export function isFilterReferenceableVariable(filter: {
+  type?: DashboardFilterKind;
+  isVariableEnabled?: boolean;
+}): boolean {
+  return isFilterVariableEnabled(filter) && filter.type !== 'ADHOC';
+}
+
+/**
  * Whether a filter must have at least one value selected before the tiles it
  * covers will load.
  */
@@ -1285,9 +1297,7 @@ export function getDashboardVariableFilters<
   const takenNames = new Set<string>();
 
   for (const filter of filters ?? []) {
-    if (!isFilterVariableEnabled(filter)) continue;
-    // Their variable name only keys their conditions; it isn't referenceable.
-    if (filter.type === 'ADHOC') continue;
+    if (!isFilterReferenceableVariable(filter)) continue;
 
     // There shouldn't be any duplicate names, but if there are then the first one wins.
     const name = getFilterVariableName(filter);
