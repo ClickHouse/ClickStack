@@ -2217,6 +2217,52 @@ describe('Metadata', () => {
         value: ['r1'],
       };
 
+      it("looks up every Map column's dictionary block size at once", async () => {
+        setupDefaultLogsSchema();
+        const kvIndex = (mapColumn: string, indexName: string) => ({
+          kv: {
+            columnName: mapColumn,
+            mapColumn,
+            indexName,
+            separator: '=',
+            useHasAny: false,
+          },
+        });
+        jest.spyOn(metadata, 'getMapColumnTextIndexes').mockResolvedValue(
+          new Map([
+            ['LogAttributes', kvIndex('LogAttributes', 'idx_log_attr_items')],
+            [
+              'ResourceAttributes',
+              kvIndex('ResourceAttributes', 'idx_res_attr_items'),
+            ],
+          ]),
+        );
+        let releaseSettings: () => void = () => {};
+        const settings = jest
+          .spyOn(metadata, 'getMergeTreeSettings')
+          .mockReturnValue(
+            new Promise(resolve => {
+              releaseSettings = () => resolve(undefined);
+            }),
+          );
+
+        const result = metadata.getAllKeyValues({
+          ...baseArgs,
+          keyExpressions: [
+            "LogAttributes['requestId']",
+            "ResourceAttributes['service.name']",
+          ],
+        });
+        // Both lookups start before either finishes.
+        for (let i = 0; i < 50 && settings.mock.calls.length < 2; i++) {
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        expect(settings).toHaveBeenCalledTimes(2);
+
+        releaseSettings();
+        await result;
+      });
+
       it('yields each query as it finishes, without waiting for the slowest', async () => {
         setupDefaultLogsSchema();
         let releaseMapTextIndex: () => void = () => {};
