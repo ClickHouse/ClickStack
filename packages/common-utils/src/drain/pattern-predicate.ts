@@ -70,8 +70,11 @@ function separatorClass(options?: PatternRegexOptions): string {
   );
 }
 
-function tokensOf(template: string): string[] {
-  return template.split(/\s+/).filter(t => t.length > 0);
+// A template is its tokens joined by spaces. Drain3 keeps a BOM inside a
+// token, where JS `\s` would split.
+function tokensOf(template: string, options?: PatternRegexOptions): string[] {
+  const split = options?.whitespace === 'python' ? /[^\S\u{FEFF}]+/u : /\s+/;
+  return template.split(split).filter(t => t.length > 0);
 }
 
 /** Anchored RE2 regex that a value matches when it fits the Drain template. */
@@ -81,7 +84,7 @@ export function templateToRegex(
 ): string {
   const separators = separatorClass(options);
   const separator = `[${separators}]`;
-  const body = tokensOf(template)
+  const body = tokensOf(template, options)
     .map(t =>
       t === PATTERN_WILDCARD ? `[^${separators}]+` : escapeRe2Literal(t),
     )
@@ -109,8 +112,8 @@ const COMPACT_END = ' ?$';
 const COMPACT_WILDCARD = '[^ ]+';
 
 // Regex over a value whose separator runs were replaced by single spaces.
-function compactRegex(template: string): string {
-  const body = tokensOf(template)
+function compactRegex(template: string, options?: PatternRegexOptions): string {
+  const body = tokensOf(template, options)
     .map(t => (t === PATTERN_WILDCARD ? COMPACT_WILDCARD : escapeRe2Literal(t)))
     .join(' ');
   return `${COMPACT_START}${body}${COMPACT_END}`;
@@ -122,10 +125,10 @@ function compactRegex(template: string): string {
  * once instead of between every token. For conditions that are stored or
  * shared, such as search filters kept in the URL.
  *
- * The two forms agree as long as no template token contains a separator,
- * which holds for templates mined with the same options. As in
- * buildPatternPredicate, `valueExpression` goes into the SQL as is: pass a
- * column expression, never user input.
+ * Null when a template token holds one of the extra delimiters: normalizing
+ * would split it, so the two forms would disagree. Templates mined with the
+ * same options never have one. As in buildPatternPredicate, `valueExpression`
+ * goes into the SQL as is: pass a column expression, never user input.
  */
 export function buildCompactPatternPredicate(
   valueExpression: string,
@@ -133,9 +136,14 @@ export function buildCompactPatternPredicate(
   options?: PatternRegexOptions,
 ): string | null {
   if (template.length > MAX_PREDICATE_TEMPLATE_LENGTH) return null;
+  const delimiters = options?.extraDelimiters ?? [];
+  const splitsToken = tokensOf(template, options).some(
+    t => t !== PATTERN_WILDCARD && [...t].some(c => delimiters.includes(c)),
+  );
+  if (splitsToken) return null;
   const separatorRun = `[${separatorClass(options)}]+`;
   const normalized = `replaceRegexpAll(${valueExpression}, '${escapeSqlString(separatorRun)}', ' ')`;
-  return `match(${normalized}, '${escapeSqlString(compactRegex(template))}')`;
+  return `match(${normalized}, '${escapeSqlString(compactRegex(template, options))}')`;
 }
 
 const unescapeSql = (literal: string) =>
@@ -170,7 +178,7 @@ function parseCompactPredicate(
       part === COMPACT_WILDCARD ? PATTERN_WILDCARD : unescapeRe2Literal(part),
     )
     .join(' ');
-  return compactRegex(template) === regex
+  return compactRegex(template, options) === regex
     ? { valueExpression, template }
     : null;
 }
