@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -644,6 +645,49 @@ func supportsFullTextSearch(major, minor int) bool {
 	return major > 26 || (major == 26 && minor >= 2)
 }
 
+// textIndexTables are the seeded tables with text indexes.
+var textIndexTables = []string{"otel_logs", "otel_traces", "hyperdx_sessions"}
+
+// supportsTextIndexTableSettings returns true if the ClickHouse version has the
+// text_index_dictionary_block_size MergeTree setting. This requires ClickHouse
+// >= 26.6.
+func supportsTextIndexTableSettings(major, minor int) bool {
+	return major > 26 || (major == 26 && minor >= 6)
+}
+
+// setTextIndexBlockSize gives the seeded tables 8,192-token text index
+// dictionary blocks (the default is 512), so filter value reads load a 16x
+// smaller sparse index per part. It runs after the seed so existing tables
+// get it too; new parts use it, existing parts keep theirs until merged. A
+// table that already sets the value is left alone.
+func setTextIndexBlockSize(ctx context.Context, db *sql.DB, database string) error {
+	var firstErr error
+	for _, table := range textIndexTables {
+		var engineFull string
+		err := db.QueryRowContext(ctx,
+			"SELECT engine_full FROM system.tables WHERE database = ? AND name = ?",
+			database, table).Scan(&engineFull)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err == nil && strings.Contains(engineFull, "text_index_dictionary_block_size") {
+			continue
+		}
+		if err == nil {
+			_, err = db.ExecContext(ctx, fmt.Sprintf(
+				"ALTER TABLE `%s`.`%s` MODIFY SETTING text_index_dictionary_block_size = 8192",
+				database, table))
+		}
+		if err != nil {
+			log.Printf("WARNING: could not set the text index block size on %s: %v", table, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
 // swapLogsSchemaForCompat replaces the full-text-search logs schema with the
 // compatibility variant (bloom_filter indexes) in the processed temp directory.
 // It removes 00002_otel_logs.sql and renames 00002_otel_logs_compat.sql to
@@ -873,6 +917,13 @@ func main() {
 		log.Printf("ERROR: Schema seed failed after %d attempts: %v", cfg.MaxRetries, err)
 		log.Println("========================================")
 		os.Exit(1)
+	}
+
+	// Non-fatal so it can't block startup; older servers keep 512-token blocks.
+	if supportsTextIndexTableSettings(chMajor, chMinor) {
+		if err := setTextIndexBlockSize(ctx, db, cfg.Database); err != nil {
+			log.Printf("WARNING: text index block size: %v", err)
+		}
 	}
 
 	// CREATE TABLE IF NOT EXISTS won't update TTL on existing tables; reconcile

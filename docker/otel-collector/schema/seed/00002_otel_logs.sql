@@ -32,15 +32,15 @@ CREATE TABLE IF NOT EXISTS ${DATABASE}.otel_logs
   -- Text indexes use 8,192-token dictionary blocks (the default is 512). Each
   -- part's sparse index is 16x smaller, which makes reading filter values
   -- with mergeTreeTextIndex() and looking up tokens much cheaper on large parts.
-  INDEX idx_trace_id TraceId TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_session_id __hdx_materialized_session.id TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_scope_attr_items ScopeAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192),
-  INDEX idx_lower_body lower(Body) TYPE text(tokenizer = 'splitByNonAlpha', dictionary_block_size = 8192)
+  INDEX idx_trace_id TraceId TYPE text(tokenizer = 'array'),
+  INDEX idx_session_id __hdx_materialized_session.id TYPE text(tokenizer = 'array'),
+  INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE text(tokenizer = 'array'),
+  INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array'),
+  INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE text(tokenizer = 'array'),
+  INDEX idx_scope_attr_items ScopeAttributeItems TYPE text(tokenizer = 'array'),
+  INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array'),
+  INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array'),
+  INDEX idx_lower_body lower(Body) TYPE text(tokenizer = 'splitByNonAlpha')
 )
 ENGINE = MergeTree
 PARTITION BY toDate(Timestamp)

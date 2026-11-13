@@ -697,10 +697,11 @@ describe('Metadata Integration Tests', () => {
             ResourceAttributeItems Array(String) MATERIALIZED
               arrayMap(x -> concat(x.1, '=', x.2), CAST(ResourceAttributes, 'Array(Tuple(String, String))'))
               CODEC(ZSTD(1)),
-            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
+            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1
           )
           ENGINE = MergeTree()
           ORDER BY (Timestamp)
+          SETTINGS text_index_dictionary_block_size = 8192
         `,
       });
 
@@ -712,10 +713,11 @@ describe('Metadata Integration Tests', () => {
             LogAttributeItems Array(String) MATERIALIZED
               arrayMap((x) -> concat(x.1, '=', x.2), LogAttributes::Array(Tuple(String, String)))
               CODEC(ZSTD(1)),
-            INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
+            INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1
           )
           ENGINE = MergeTree()
           ORDER BY (Timestamp)
+          SETTINGS text_index_dictionary_block_size = 8192
         `,
       });
     });
@@ -1657,14 +1659,14 @@ describe('Metadata Integration Tests', () => {
     {
       path: 'key',
       tableName: 'test_map_keys_key_text_index_order',
-      indexDefinition: `INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1`,
+      indexDefinition: `INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array') GRANULARITY 1`,
     },
     {
       path: 'kv',
       tableName: 'test_map_keys_kv_text_index_order',
       indexDefinition: `LogAttributeItems Array(String) MATERIALIZED
           arrayMap(x -> concat(x.1, '=', x.2), CAST(LogAttributes, 'Array(Tuple(String, String))')),
-        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1`,
+        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1`,
     },
   ])(
     'getMapKeys - $path text index ordering',
@@ -1688,6 +1690,7 @@ describe('Metadata Integration Tests', () => {
             ENGINE = MergeTree()
             PARTITION BY toDate(Timestamp)
             ORDER BY Timestamp
+            SETTINGS text_index_dictionary_block_size = 8192
           `,
         });
 

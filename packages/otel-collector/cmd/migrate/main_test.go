@@ -959,6 +959,35 @@ func TestSupportsFullTextSearch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// supportsTextIndexTableSettings
+// ---------------------------------------------------------------------------
+
+func TestSupportsTextIndexTableSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		major    int
+		minor    int
+		expected bool
+	}{
+		{"26.6 exact threshold", 26, 6, true},
+		{"26.10 above minor", 26, 10, true},
+		{"27.0 above major", 27, 0, true},
+		{"26.5 below minor", 26, 5, false},
+		{"26.2 text indexes without the setting", 26, 2, false},
+		{"25.9 below major", 25, 9, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := supportsTextIndexTableSettings(tt.major, tt.minor)
+			if got != tt.expected {
+				t.Errorf("supportsTextIndexTableSettings(%d, %d) = %v, want %v", tt.major, tt.minor, got, tt.expected)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // swapLogsSchemaForCompat
 // ---------------------------------------------------------------------------
 
