@@ -186,7 +186,13 @@ describe('FilterConditionEditor', () => {
     renderEditor({ operators: PROMQL_FILTER_OPERATORS });
     await userEvent.click(screen.getByRole('combobox', { name: 'Operator' }));
     const options = await screen.findAllByRole('option', { hidden: true });
-    expect(options.map(o => o.textContent)).toEqual(['=', '!=', '=~', '!~']);
+    expect(options.map(o => o.textContent)).toEqual([
+      '=',
+      '!=',
+      '=~',
+      '!~',
+      '=|',
+    ]);
   });
 
   it('disables Apply until a key is entered', async () => {

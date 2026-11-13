@@ -1,6 +1,7 @@
 import {
   getFilterBroadcastTarget,
   getFilterVariableName,
+  isAdhocFilter,
   isFilterGlobalRequirement,
   isFilterRequired,
   isFilterVariableEnabled,
@@ -169,7 +170,9 @@ export const DashboardFiltersList = ({
           }
 
           const variableName =
-            showVariableOptions && isFilterVariableEnabled(filter)
+            showVariableOptions &&
+            isFilterVariableEnabled(filter) &&
+            !isAdhocFilter(filter)
               ? getFilterVariableName(filter)
               : undefined;
           return (

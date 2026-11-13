@@ -23,6 +23,7 @@ jest.mock('@/components/AdhocDashboardFilter/useAdhocFilterOptions', () => ({
 const filter: AdhocDashboardFilterType = {
   id: 'adhoc1',
   type: 'ADHOC',
+  isBroadcastEnabled: true,
   name: 'Conditions',
   sourceType: 'sql',
   sources: ['logs'],
@@ -79,6 +80,39 @@ describe('AdhocDashboardFilter', () => {
     const pills = screen.getAllByTestId('adhoc-condition-pill');
     expect(pills[0]).toHaveTextContent('ServiceName != api');
     expect(pills[1]).toHaveTextContent('Level regex ^err');
+  });
+
+  it('collapses conditions past the first three until expanded', async () => {
+    renderFilter(
+      Array.from({ length: 5 }, (_, i) => ({ ...existing, value: `${i}` })),
+    );
+    const toggle = screen.getByTestId('adhoc-filter-toggle-more-Conditions');
+
+    expect(screen.getAllByTestId('adhoc-condition-pill')).toHaveLength(3);
+    expect(toggle).toHaveTextContent('+2 more');
+
+    await userEvent.click(toggle);
+    expect(screen.getAllByTestId('adhoc-condition-pill')).toHaveLength(5);
+    expect(toggle).toHaveTextContent('Show less');
+
+    await userEvent.click(toggle);
+    expect(screen.getAllByTestId('adhoc-condition-pill')).toHaveLength(3);
+  });
+
+  it('shows no toggle for three conditions or fewer', () => {
+    renderFilter([existing, existing, existing]);
+    expect(
+      screen.queryByTestId('adhoc-filter-toggle-more-Conditions'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('marks conditions a SQL filter cannot apply as invalid', () => {
+    renderFilter([{ key: 'job', operator: '=|', value: 'api' }]);
+
+    expect(screen.getByTestId('adhoc-condition-pill')).toHaveAttribute(
+      'data-invalid',
+      'true',
+    );
   });
 
   it('marks conditions a PromQL filter cannot apply as invalid', () => {

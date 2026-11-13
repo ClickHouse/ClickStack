@@ -149,7 +149,6 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
 
   // Selection limits don't apply to conditions, so they aren't stored.
   if (values.type === 'ADHOC') {
-    const isBroadcastEnabled = isFilterBroadcastEnabled(values);
     return DashboardFilterSchema.parse({
       id: values.id,
       type: values.type,
@@ -158,10 +157,8 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       sources: values.sources,
       // Only SQL suggestions can be narrowed; the input is hidden otherwise
       ...(values.sourceType === 'sql' ? whereFields : {}),
-      isBroadcastEnabled,
-      // Hidden, and so unvalidated, while broadcast is off
-      appliesToSourceIds:
-        isBroadcastEnabled && appliesTo?.length ? appliesTo : undefined,
+      isBroadcastEnabled: true,
+      appliesToSourceIds: appliesTo?.length ? appliesTo : undefined,
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),
     });

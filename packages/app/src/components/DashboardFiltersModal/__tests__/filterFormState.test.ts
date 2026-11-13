@@ -89,7 +89,7 @@ describe('toFormValues', () => {
       sourceType: 'promql',
       sources: ['prom'],
       appliesToSourceIds: ['prom-2'],
-      isBroadcastEnabled: false,
+      isBroadcastEnabled: true,
       isVariableEnabled: true,
       variableName: 'conds',
     });
@@ -100,7 +100,7 @@ describe('toFormValues', () => {
       sources: ['prom'],
       appliesToSourceIds: ['prom-2'],
       variableName: 'conds',
-      isBroadcastEnabled: false,
+      isBroadcastEnabled: true,
     });
   });
 
@@ -117,6 +117,7 @@ describe('toFormValues', () => {
       sources: ['logs'],
       where: 'Namespace:$namespace',
       whereLanguage: 'lucene',
+      isBroadcastEnabled: true,
       isVariableEnabled: true,
     });
 
@@ -294,7 +295,7 @@ describe('toSavedFilter', () => {
     expect(saved).not.toHaveProperty('whereLanguage');
   });
 
-  it('drops the ad hoc broadcast scope when broadcast is off', () => {
+  it('always broadcasts an ad hoc filter, even when switched from a non-broadcasting type', () => {
     const saved = toSavedFilter(
       formValues({
         type: 'ADHOC',
@@ -306,8 +307,8 @@ describe('toSavedFilter', () => {
     );
 
     expect(saved).toMatchObject({
-      isBroadcastEnabled: false,
-      appliesToSourceIds: undefined,
+      isBroadcastEnabled: true,
+      appliesToSourceIds: ['logs'],
     });
   });
 
