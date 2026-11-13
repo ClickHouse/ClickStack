@@ -1,3 +1,4 @@
+import { resolveTraceScope } from '@/core/traceScope';
 import {
   BuilderChartConfig,
   DateRange,
@@ -8,6 +9,7 @@ import {
   pickSampleWeightExpressionProps,
   SearchCondition,
   SearchConditionLanguage,
+  SearchScope,
   SelectList,
   SortSpecificationList,
   SQLInterval,
@@ -92,6 +94,12 @@ export type SearchChartConfigInput = {
   dateRangeStartInclusive?: boolean;
   dateRangeEndInclusive?: boolean;
   granularity?: SQLInterval;
+
+  /**
+   * Whether multi-predicate AND is evaluated per span (default) or across all
+   * spans of a trace. Omitted resolves to span downstream.
+   */
+  searchScope?: SearchScope;
 };
 
 /**
@@ -143,6 +151,7 @@ export function buildSearchChartConfig(
   // For hard isolation, configure a ClickHouse ROW POLICY at the DB level
   // instead. Existing values are still honored here for backward
   // compatibility; new sources should not set the field.
+  const traceScope = resolveTraceScope(source);
   const tableFilter = getSourceTableFilters(source);
   const userFilters: Filter[] = input.filters ?? [];
   const mergedFilters: Filter[] = [...tableFilter, ...userFilters];
@@ -190,6 +199,12 @@ export function buildSearchChartConfig(
       ? { dateRangeEndInclusive: input.dateRangeEndInclusive }
       : {}),
     ...(input.granularity != null ? { granularity: input.granularity } : {}),
+    // The search-level `searchScope` maps onto the chart-config `filtersScope`,
+    // which is how `renderChartConfig` refers to the same span-vs-trace choice.
+    ...(input.searchScope ? { filtersScope: input.searchScope } : {}),
+    ...(traceScope.applicable
+      ? { traceIdExpression: traceScope.traceIdExpression }
+      : {}),
   };
 
   return config;

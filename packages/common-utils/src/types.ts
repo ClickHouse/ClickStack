@@ -1384,6 +1384,11 @@ export type DashboardFilterValue = z.infer<typeof DashboardFilterValueSchema>;
 // --------------------------
 // SAVED SEARCH
 // --------------------------
+// Single source of truth for the span-vs-trace search scope. Imported wherever
+// the union is needed so the enum has one canonical definition.
+export const SearchScopeSchema = z.enum(['span', 'trace']);
+export type SearchScope = z.infer<typeof SearchScopeSchema>;
+
 export const SavedSearchSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1395,6 +1400,9 @@ export const SavedSearchSchema = z.object({
   orderBy: z.string().optional(),
   filters: z.array(FilterSchema).optional(),
   alerts: z.array(AlertSchema).optional(),
+  // Persist the span-vs-trace search scope so a saved Trace search reloads as
+  // Trace (and alerts built from it evaluate Trace), not Span.
+  searchScope: SearchScopeSchema.optional(),
 });
 
 export type SavedSearch = z.infer<typeof SavedSearchSchema>;
@@ -1837,6 +1845,12 @@ export const _ChartConfigSchema = SharedChartSettingsSchema.extend({
   sampleWeightExpression: z.string().optional(),
   markdown: z.string().optional(),
   filtersLogicalOperator: z.enum(['AND', 'OR']).optional(),
+  // Whether multi-predicate AND is evaluated per span (default) or across all
+  // spans of a trace. Absence resolves to span, preserving existing output.
+  filtersScope: SearchScopeSchema.optional(),
+  // Trace-id expression carried from the source; only trace scope reads it.
+  // Absence disables the trace-scope rewrite (fail-closed to span).
+  traceIdExpression: z.string().optional(),
   filters: z.array(FilterSchema).optional(),
   connection: z.string(),
   selectGroupBy: z.boolean().optional(),
@@ -2059,6 +2073,11 @@ export type DateRange = {
   // `__hdx_series_limit` CTE so every chunk ranks (and keeps) the same
   // top-N series. Never persisted.
   seriesLimitDateRange?: [Date, Date];
+  // Set when the query is chunked into time windows (see useOffsetPaginatedQuery):
+  // the user's full selected range, so trace-scope membership subqueries can
+  // match spans that straddle a window boundary instead of only seeing the
+  // current chunk's window. Never persisted.
+  traceScopeDateRange?: [Date, Date];
   // Runtime-only, populated from the queried Metric or PromQL source's
   // `minAutoGranularity` (when set) by whichever caller resolves the source
   // before rendering. Floors "auto" granularity resolution; see
@@ -2912,6 +2931,14 @@ export function isLogSource(source: TSource): source is TLogSource {
 export function isTraceSource(source: TSource): source is TTraceSource {
   return source.kind === SourceKind.Trace;
 }
+// Whether a source can back trace-scoped AND, and the trace-id expression to
+// intersect on when it can; otherwise why it cannot.
+export type TraceScopeResolution =
+  | { applicable: true; traceIdExpression: string }
+  | {
+      applicable: false;
+      reason: 'non-trace-source' | 'missing-trace-id-expression';
+    };
 export function isSessionSource(source: TSource): source is TSessionSource {
   return source.kind === SourceKind.Session;
 }
