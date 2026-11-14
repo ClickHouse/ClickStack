@@ -15,6 +15,10 @@ import {
 } from '@/components/Search/traceRedMetrics';
 import type { NumberFormat } from '@/types';
 
+// A sidebar filter the user has applied; every RED config must carry it so the
+// tiles stay in sync with the results list.
+const BASE_FILTER = { type: 'sql' as const, condition: "SpanKind = 'Server'" };
+
 const base: BuilderChartConfigWithDateRange = {
   connection: 'conn',
   from: { databaseName: 'default', tableName: 'otel_traces' },
@@ -22,7 +26,7 @@ const base: BuilderChartConfigWithDateRange = {
   select: [{ aggFn: 'count', aggCondition: '', valueExpression: '' }],
   where: "ServiceName = 'api'",
   whereLanguage: 'sql',
-  filters: [],
+  filters: [BASE_FILTER],
   dateRange: [new Date(0), new Date(60_000)],
   granularity: 'auto',
   groupBy: 'StatusCode',
@@ -34,11 +38,13 @@ const DURATION_FORMAT: NumberFormat = { output: 'duration', factor: 1e-9 };
 
 describe('traceRedMetrics', () => {
   describe('redBaseConfig', () => {
-    it('strips the status-code groupBy and preserves filter + time range', () => {
+    it('strips the status-code groupBy and preserves filters + where + time range', () => {
       const result = redBaseConfig(base);
       expect(result.groupBy).toBeUndefined();
       expect(result.where).toBe(base.where);
       expect(result.dateRange).toBe(base.dateRange);
+      // sidebar filters must survive, or the tiles would disagree with results
+      expect(result.filters).toEqual([BASE_FILTER]);
     });
   });
 
@@ -84,8 +90,8 @@ describe('traceRedMetrics', () => {
         },
         {
           alias: 'Error rate',
-          // guards the empty-bucket 0/0; ratio can't exceed 1 so no clamp
-          valueExpression: 'if(total_spans > 0, error_spans / total_spans, 0)',
+          // divided directly: total_spans is always >= 1 in a returned bucket
+          valueExpression: 'error_spans / total_spans',
         },
       ]);
       // the two aggregated counts are the ones hidden from the chart
@@ -108,7 +114,12 @@ describe('traceRedMetrics', () => {
           valueExpression: '',
         },
       ]);
-      expect(result?.filters).toEqual([{ type: 'sql', condition: ERROR_COND }]);
+      // the error condition is APPENDED to the user's active filters, not
+      // replacing them, so the tile stays scoped to the current search
+      expect(result?.filters).toEqual([
+        BASE_FILTER,
+        { type: 'sql', condition: ERROR_COND },
+      ]);
     });
 
     it('returns undefined when the source has no usable status expression', () => {
@@ -143,14 +154,14 @@ describe('traceRedMetrics', () => {
           valueExpression: DURATION_EXPR,
         },
         {
-          alias: 'p95',
+          alias: 'P95',
           aggFn: 'quantile',
           level: 0.95,
           aggCondition: '',
           valueExpression: DURATION_EXPR,
         },
         {
-          alias: 'p99',
+          alias: 'P99',
           aggFn: 'quantile',
           level: 0.99,
           aggCondition: '',

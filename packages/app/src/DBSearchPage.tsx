@@ -2987,7 +2987,10 @@ function DBSearchPageContent() {
                           </Group>
                         </Box>
                         {!hasQueryError &&
-                          (traceRedMetricsSource != null ? (
+                          // The three side-by-side RED tiles need room; on a
+                          // compact (narrow/mobile) viewport they would be
+                          // unreadable, so fall back to the single histogram.
+                          (traceRedMetricsSource != null && !isCompact ? (
                             <Box
                               className={searchPageStyles.timeChartContainer}
                               mih="0"
