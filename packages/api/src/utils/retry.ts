@@ -1,5 +1,4 @@
-import { serializeError } from 'serialize-error';
-
+import { serializeErrorWithCause } from './errors';
 import logger from './logger';
 
 interface RetryOptions {
@@ -82,7 +81,7 @@ export const withRetry = async <T>(
 
       logger.warn(
         {
-          error: serializeError(error),
+          error: serializeErrorWithCause(error),
           attempt,
           maxRetries,
           delayMs: delay,

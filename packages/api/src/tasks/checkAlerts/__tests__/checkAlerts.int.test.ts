@@ -31,6 +31,7 @@ import Alert, { AlertSource, IAlert } from '@/models/alert';
 import AlertHistory from '@/models/alertHistory';
 import Connection, { IConnection } from '@/models/connection';
 import Dashboard, { IDashboard } from '@/models/dashboard';
+import PendingNotification from '@/models/pendingNotification';
 import { ISavedSearch, SavedSearch } from '@/models/savedSearch';
 import { ISource, LogSource, Source } from '@/models/source';
 import { ITeam } from '@/models/team';
@@ -4483,6 +4484,10 @@ describe('checkAlerts', () => {
         expect(updated!.executionErrors![0].type).toBe(
           AlertErrorType.WEBHOOK_ERROR,
         );
+        // Stored so a later tick sends the resolve again.
+        expect(
+          await PendingNotification.countDocuments({ alert: details.alert.id }),
+        ).toBe(1);
       });
 
       it('clears errors after a successful execution', async () => {

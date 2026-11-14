@@ -27,6 +27,9 @@ import AlertHistory, {
 } from '@/models/alertHistory';
 import Connection, { IConnection } from '@/models/connection';
 import Dashboard from '@/models/dashboard';
+import PendingNotification, {
+  IPendingNotification,
+} from '@/models/pendingNotification';
 import { type ISavedSearch, SavedSearch } from '@/models/savedSearch';
 import { type ISource, Source } from '@/models/source';
 import Webhook, { IWebhook } from '@/models/webhook';
@@ -670,6 +673,61 @@ export default class DefaultAlertProvider implements AlertProvider {
       },
       { upsert: true },
     );
+  }
+
+  async appendAlertErrorHistory(
+    alertId: string,
+    evaluationWindowStart: Date,
+    error: IAlertError,
+  ) {
+    await AlertHistory.updateOne(
+      {
+        alert: new mongoose.Types.ObjectId(alertId),
+        createdAt: evaluationWindowStart,
+        state: AlertState.ERROR,
+      },
+      {
+        $push: { errors: error },
+        $setOnInsert: { counts: 0, lastValues: [] },
+      },
+      { upsert: true },
+    );
+  }
+
+  async getPendingNotifications(alertIds: string[]) {
+    if (alertIds.length === 0) {
+      return [];
+    }
+    return PendingNotification.find({
+      alert: { $in: alertIds.map(id => new mongoose.Types.ObjectId(id)) },
+    }).lean<IPendingNotification[]>();
+  }
+
+  async savePendingNotifications(records: IPendingNotification[]) {
+    if (records.length === 0) {
+      return;
+    }
+    await PendingNotification.bulkWrite(
+      records.map(record => ({
+        replaceOne: {
+          filter: { eventId: record.eventId },
+          replacement: record,
+          upsert: true,
+        },
+      })),
+      { ordered: false },
+    );
+  }
+
+  async updatePendingNotification(
+    eventId: string,
+    update: Pick<IPendingNotification, 'attempts' | 'nextAttemptAt'>,
+  ) {
+    await PendingNotification.updateOne({ eventId }, { $set: update });
+  }
+
+  async deletePendingNotification(eventId: string) {
+    await PendingNotification.deleteOne({ eventId });
   }
 
   async getWebhooks(teamId: string | ObjectId) {
