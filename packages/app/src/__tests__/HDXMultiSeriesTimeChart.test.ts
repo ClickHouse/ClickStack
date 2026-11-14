@@ -12,7 +12,9 @@ import type { LineData } from '@/ChartUtils';
 import type { ActiveClickSeries } from '@/HDXMultiSeriesTimeChart';
 import {
   buildActiveClickSeries,
+  cappedYAxisUpperBound,
   collectMemoChartGradientHexes,
+  compactTickAnchor,
   computeYAxisBounds,
   formatAxisTick,
   getExpandableYAxisTicks,
@@ -597,6 +599,100 @@ describe('computeYAxisBounds', () => {
     expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
+  describe('with yAxisMaxDomain (capped axis, e.g. a 0-100% rate tile)', () => {
+    it('pins a flat/zero series to [0, cap] with clean ticks instead of auto', () => {
+      // The flat-data case above falls back to [0, 'auto']; with a cap it must
+      // show the full [0, cap] range so a 0% rate reads as 0%, not a nonsense
+      // auto-scaled range.
+      const bounds = computeYAxisBounds(
+        [{ a: 0 }, { a: 0 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      expect(bounds).toEqual({
+        domain: [0, 1],
+        ticks: [0, 0.5, 1],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('scales the upper bound to the data peak but never above the cap', () => {
+      const bounds = computeYAxisBounds(
+        [{ a: 0.5 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      // Peak 0.5 -> 0.55 with headroom, nice-stepped to 0.6, still under the cap.
+      expect(bounds).toEqual({
+        domain: [0, 0.6],
+        ticks: [0, 0.2, 0.4, 0.6],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('keeps the cap under a selection so selecting the sole series cannot collapse the axis', () => {
+      // Regression: on the selection path a flat 0% rate used to fall through
+      // to min/max fitting and collapse the capped axis to [0, 0].
+      const bounds = computeYAxisBounds(
+        [{ a: 0 }],
+        [series('a')],
+        true,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      expect(bounds.domain).toEqual([0, 1]);
+      expect((bounds.ticks ?? []).length).toBeGreaterThan(1);
+    });
+
+    it('wins over reference lines rather than deferring to Recharts', () => {
+      const bounds = computeYAxisBounds(
+        [{ a: 0.5 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [0.8],
+        undefined,
+        1,
+      );
+      // Identical to the no-reference-line case: the cap is applied before the
+      // reference-line handling, so the line at 0.8 neither widens the domain
+      // nor defers to Recharts' auto domain.
+      expect(bounds).toEqual({
+        domain: [0, 0.6],
+        ticks: [0, 0.2, 0.4, 0.6],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('does not apply to a stacked chart (left to Recharts)', () => {
+      const bounds = computeYAxisBounds(
+        [{ a: 0.5 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.StackedBar,
+        [],
+        undefined,
+        1,
+      );
+      expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+    });
+  });
+
   it('falls back to auto for flat negative data on a fitted axis', () => {
     // Regression: the same guard could also invert the domain (e.g.
     // [0, -5]) for all-negative data padded past zero.
@@ -1140,5 +1236,49 @@ describe('getVisibleTooltipRows', () => {
     const keys = result.rows.map(r => r.dataKey);
     expect(keys.filter(k => k === 's3')).toHaveLength(1);
     expect(result.rows).toHaveLength(20);
+  });
+});
+
+describe('cappedYAxisUpperBound', () => {
+  it('auto-scales to the data max plus 10% headroom when below the cap', () => {
+    expect(cappedYAxisUpperBound(0.5, 1)).toBeCloseTo(0.55);
+  });
+
+  it('never exceeds the cap, even when the data max plus headroom would', () => {
+    // 0.95 * 1.1 = 1.045, clamped to the cap.
+    expect(cappedYAxisUpperBound(0.95, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(5, 1)).toBe(1);
+  });
+
+  it('uses the cap for a flat/zero series instead of a degenerate domain', () => {
+    expect(cappedYAxisUpperBound(0, 1)).toBe(1);
+  });
+
+  it('uses the cap for a negative or non-finite data max', () => {
+    expect(cappedYAxisUpperBound(-1, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(NaN, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(Infinity, 1)).toBe(1);
+  });
+});
+
+describe('compactTickAnchor', () => {
+  it('anchors the first tick to the start edge', () => {
+    expect(compactTickAnchor(0, 5)).toBe('start');
+  });
+
+  it('anchors the last tick to the end edge', () => {
+    expect(compactTickAnchor(4, 5)).toBe('end');
+  });
+
+  it('centers interior ticks', () => {
+    expect(compactTickAnchor(2, 5)).toBe('middle');
+  });
+
+  it('treats a negative index as the start edge', () => {
+    expect(compactTickAnchor(-1, 5)).toBe('start');
+  });
+
+  it('resolves the single-tick case to start (the first-edge check wins)', () => {
+    expect(compactTickAnchor(0, 1)).toBe('start');
   });
 });

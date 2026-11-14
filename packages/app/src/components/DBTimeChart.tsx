@@ -21,6 +21,7 @@ import {
 import {
   BuilderChartConfigWithDateRange,
   ChartConfigWithDateRange,
+  ChartPaletteToken,
   DisplayType,
 } from '@hyperdx/common-utils/dist/types';
 import { Popover, Portal } from '@mantine/core';
@@ -394,6 +395,16 @@ type DBTimeChartComponentProps = {
    * with the series' group-by expressions (or PromQL labels) and values.
    */
   onFilter?: TileFilterHandler;
+  /**
+   * Anchor the first/last x-axis labels inward so they are not clipped on
+   * narrow charts (e.g. side-by-side RED metric tiles). Forwarded to the chart.
+   */
+  compactXAxisLabels?: boolean;
+  /**
+   * Cap the y-axis upper bound (e.g. 1 for a 0-100% rate) while still
+   * auto-scaling below it. Forwarded to the chart.
+   */
+  yAxisMaxDomain?: number;
 };
 
 function DBTimeChartComponent({
@@ -421,6 +432,8 @@ function DBTimeChartComponent({
   errorVariant,
   onFocusSeries,
   onFilter,
+  compactXAxisLabels,
+  yAxisMaxDomain,
 }: DBTimeChartComponentProps) {
   const [selectedSeriesSet, setSelectedSeriesSet] = useState<Set<string>>(
     new Set(),
@@ -631,6 +644,23 @@ function DBTimeChartComponent({
   const { formatByColumn, chartFormat: axisNumberFormat } =
     useChartNumberFormats(queriedConfig, data?.meta);
 
+  // Per-series colors come from each select item's `color` (keyed by its result
+  // column name, i.e. its alias), the single source of truth for pinning a
+  // series to a palette token. Derived here so setLineColors can override the
+  // positional palette for exactly those columns, without a separate color map.
+  const seriesColors = useMemo(() => {
+    if (!isBuilderChartConfig(config) || !Array.isArray(config.select)) {
+      return undefined;
+    }
+    const entries: [string, ChartPaletteToken][] = [];
+    for (const selectItem of config.select) {
+      if (selectItem.alias && selectItem.color) {
+        entries.push([selectItem.alias, selectItem.color]);
+      }
+    }
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }, [config]);
+
   const {
     error: resultFormattingError,
     graphResults,
@@ -669,6 +699,7 @@ function DBTimeChartComponent({
         generateEmptyBuckets: shouldFillNullsWithZero(fillNulls),
         source,
         hiddenSeries,
+        seriesColors,
         previousPeriodOffsetSeconds,
         // "Load all" (from the warning / pinned tooltip) overrides everything;
         // otherwise the per-tile Series Limit drives the cap (null = default,
@@ -710,6 +741,7 @@ function DBTimeChartComponent({
     config.seriesLimit,
     previousPeriodData,
     hiddenSeries,
+    seriesColors,
     previousPeriodOffsetSeconds,
     showAllSeries,
   ]);
@@ -1168,6 +1200,8 @@ function DBTimeChartComponent({
             dateRangeEndInclusive={queriedConfig.dateRangeEndInclusive}
             fitYAxisToData={queriedConfig.fitYAxisToData}
             lineInterpolation={queriedConfig.lineInterpolation}
+            compactXAxisLabels={compactXAxisLabels}
+            yAxisMaxDomain={yAxisMaxDomain}
           />
         </>
       )}

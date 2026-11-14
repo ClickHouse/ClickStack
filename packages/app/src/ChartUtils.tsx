@@ -35,6 +35,7 @@ import {
   BuilderSavedChartConfig,
   ChartConfigWithDateRange,
   ChartConfigWithOptDateRange,
+  ChartPaletteToken,
   DateRange,
   DisplayType,
   Filter,
@@ -62,7 +63,12 @@ import {
 import { getMetricNameSql } from './otelSemanticConventions';
 import { AggFn, TableChartSeries, TimeChartSeries } from './types';
 import { NumberFormat } from './types';
-import { getColorProps, getLogLevelColorOrder, logLevelColor } from './utils';
+import {
+  getColorFromCSSToken,
+  getColorProps,
+  getLogLevelColorOrder,
+  logLevelColor,
+} from './utils';
 
 type SortOrder = 'asc' | 'desc';
 
@@ -636,6 +642,7 @@ interface LineDataWithOptionalColor extends Omit<LineData, 'color'> {
 
 function setLineColors(
   sortedLineData: LineDataWithOptionalColor[],
+  seriesColors?: Record<string, ChartPaletteToken>,
 ): LineData[] {
   // Ensure that the current and previous period lines are the same color
   const lineColorByCurrentPeriodKey = new Map<string, string>();
@@ -646,10 +653,15 @@ function setLineColors(
     if (lineColorByCurrentPeriodKey.has(currentPeriodKey)) {
       line.color = lineColorByCurrentPeriodKey.get(currentPeriodKey);
     } else if (!line.color) {
-      line.color = getColorProps(
-        colorIndex++,
-        line.displayName ?? line.dataKey,
-      );
+      const seriesName = line.displayName ?? line.dataKey;
+      // A color set on the series' select item (keyed by its result-column name)
+      // wins over the positional palette, so a series keeps the same hue no
+      // matter how the data sorts it. A pinned series does not consume a
+      // positional slot, so unpinned series keep their natural palette order.
+      const pinnedToken = seriesColors?.[line.valueColumnName];
+      line.color = pinnedToken
+        ? getColorFromCSSToken(pinnedToken)
+        : getColorProps(colorIndex++, seriesName);
       lineColorByCurrentPeriodKey.set(currentPeriodKey, line.color);
     } else {
       lineColorByCurrentPeriodKey.set(currentPeriodKey, line.color);
@@ -801,6 +813,7 @@ export function formatResponseForTimeChart({
   hiddenSeries = [],
   previousPeriodOffsetSeconds = 0,
   maxSeries = MAX_RENDERED_TIME_CHART_SERIES,
+  seriesColors,
 }: {
   dateRange: [Date, Date];
   granularity?: SQLInterval;
@@ -816,6 +829,13 @@ export function formatResponseForTimeChart({
    * every series (the "load all" escape hatch behind the hidden-series notice).
    */
   maxSeries?: number;
+  /**
+   * Pin specific series (keyed by result-column name) to a palette token instead
+   * of the positional palette, so their color is stable across sessions and can
+   * avoid hues reserved for other meanings (e.g. keeping latency off error red).
+   * Callers derive this from each select item's `color`.
+   */
+  seriesColors?: Record<string, ChartPaletteToken>;
 }) {
   const meta = currentPeriodResponse.meta;
 
@@ -1050,7 +1070,7 @@ export function formatResponseForTimeChart({
     (a, b) => a[timestampColumn.name] - b[timestampColumn.name],
   );
 
-  const sortedLineDataWithColors = setLineColors(sortedLineData);
+  const sortedLineDataWithColors = setLineColors(sortedLineData, seriesColors);
 
   // Count of LOGICAL groups actually rendered, in the same unit as
   // hiddenSeriesCount — so a comparison chart (current + previous entries per
