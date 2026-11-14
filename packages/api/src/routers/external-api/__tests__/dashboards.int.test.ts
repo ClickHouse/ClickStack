@@ -8443,6 +8443,7 @@ describe('External API v2 Dashboards - new format', () => {
     const adhocFilter = () => ({
       id: new ObjectId().toString(),
       type: 'ADHOC' as const,
+      isBroadcastEnabled: true as const,
       name: 'Ad hoc',
       sourceType: 'sql' as const,
       sources: [traceSource._id.toString()],

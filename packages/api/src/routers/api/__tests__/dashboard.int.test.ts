@@ -1875,6 +1875,7 @@ describe('dashboard router', () => {
     const makeAdhocFilter = (overrides = {}) => ({
       id: new Types.ObjectId().toString(),
       type: 'ADHOC' as const,
+      isBroadcastEnabled: true as const,
       name: 'Ad hoc',
       sourceType: 'sql' as const,
       sources: [logSourceId],
@@ -1900,7 +1901,6 @@ describe('dashboard router', () => {
       const filter = makeAdhocFilter({
         sources: [logSourceId, traceSourceId],
         appliesToSourceIds: [traceSourceId],
-        isBroadcastEnabled: false,
       });
 
       const created = await agent
@@ -1972,6 +1972,8 @@ describe('dashboard router', () => {
       ['an invalid variable name', { variableName: '1adhoc' }],
       ['not variable-enabled', { isVariableEnabled: false }],
       ['variables unset', { isVariableEnabled: undefined }],
+      ['broadcast disabled', { isBroadcastEnabled: false }],
+      ['broadcast unset', { isBroadcastEnabled: undefined }],
       ['a minimum selection', { minSelections: 1 }],
       ['a maximum selection', { maxSelections: 1 }],
       ['a global requirement', { isGlobalRequirement: true }],
