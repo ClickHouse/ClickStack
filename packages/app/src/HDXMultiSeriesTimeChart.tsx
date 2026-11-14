@@ -1453,7 +1453,8 @@ export const MemoChart = memo(function MemoChart({
    * Cap the y-axis upper bound at this value (e.g. 1 for a 0-100% rate). The
    * axis still auto-scales below the cap so small values keep a tight range,
    * and a flat/zero series falls back to the cap instead of a degenerate
-   * auto-domain. Only applied on the default (non-fit, non-selection) path.
+   * auto-domain. Applied on every path (selection and fit included) so the
+   * capped axis cannot collapse; only stacked charts ignore it.
    */
   yAxisMaxDomain?: number;
 }) {
@@ -1738,7 +1739,7 @@ export const MemoChart = memo(function MemoChart({
           dy={8}
           textAnchor={textAnchor}
           verticalAnchor="start"
-          fontSize={11}
+          fontSize={axisTickFontSize}
           fontFamily="IBM Plex Mono, monospace"
           fill="var(--color-text-muted)"
         >
@@ -1746,7 +1747,7 @@ export const MemoChart = memo(function MemoChart({
         </Text>
       );
     },
-    [xTickFormatter],
+    [xTickFormatter, axisTickFontSize],
   );
 
   const tickFormatter = useCallback(
