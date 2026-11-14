@@ -1189,20 +1189,39 @@ export function computeYAxisBounds(
   }
   const shouldFitYAxis = fitYAxisToData;
 
-  if (!hasSelection && !shouldFitYAxis) {
-    if (yAxisMaxDomain != null) {
-      // Auto-scale up to the data max (with headroom) but never above the cap;
-      // a flat or zero series uses the cap instead of a degenerate auto-domain
-      // (which recharts renders as e.g. 0-400% for a 0% rate). Recharts ticks
-      // this domain itself, so no explicit ticks are returned.
+  if (yAxisMaxDomain != null) {
+    // A capped axis (e.g. a 0-100% rate tile): pin the lower bound at 0 and
+    // scale the upper bound to the data peak with headroom but never above the
+    // cap, so a flat or near-zero series can't auto-scale to a nonsense range.
+    // Applied on every path (selection and fit included) so selecting the sole
+    // series can't collapse the axis to [0, 0]; a numeric bound (not a function
+    // domain) lets the nice-tick logic dedupe labels instead of Recharts
+    // repeating "0%" at very small rates.
+    const { max } = scanYAxisValueRange(graphResults, visibleLineData);
+    const upperBound = cappedYAxisUpperBound(max, yAxisMaxDomain);
+    const expanded = getExpandableYAxisTicks(
+      0,
+      upperBound,
+      5,
+      axisNumberFormat,
+    );
+    if (expanded.ticks.length === 0) {
+      const baseFormat = (value: number) =>
+        formatAxisTick(value, axisNumberFormat);
       return {
-        domain: [
-          0,
-          (dataMax: number) => cappedYAxisUpperBound(dataMax, yAxisMaxDomain),
-        ],
-        ticks: undefined,
+        domain: [0, upperBound],
+        ticks: getYAxisTicks(0, upperBound, baseFormat),
+        tickFormatter: baseFormat,
       };
     }
+    return {
+      domain: [0, expanded.max],
+      ticks: expanded.ticks,
+      tickFormatter: expanded.tickFormatter,
+    };
+  }
+
+  if (!hasSelection && !shouldFitYAxis) {
     // A fully numeric domain skips Recharts' own nice rounding, and a
     // reference line can extend it further - defer to Recharts entirely.
     if (referenceLineValues.length > 0) {
