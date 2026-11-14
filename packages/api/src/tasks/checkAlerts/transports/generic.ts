@@ -20,6 +20,7 @@ import type {
   WebhookChannel,
 } from '@/tasks/checkAlerts/transports/types';
 import { escapeJsonString } from '@/tasks/util';
+import { serializeErrorWithCause } from '@/utils/errors';
 import { getCounter, getHistogram } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import { withRetry } from '@/utils/retry';
@@ -293,7 +294,8 @@ const sendGenericWebhook = async (
   } catch (e) {
     logger.error(
       {
-        error: serializeError(e),
+        error: serializeErrorWithCause(e),
+        webhookId: webhook._id.toString(),
       },
       'Failed to send generic webhook message',
     );

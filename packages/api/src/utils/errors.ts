@@ -1,3 +1,5 @@
+import { serializeError } from 'serialize-error';
+
 export enum StatusCode {
   BAD_REQUEST = 400,
   CONFLICT = 409,
@@ -63,3 +65,30 @@ export const isDuplicateKeyError = (e: unknown): boolean =>
   e != null &&
   typeof e === 'object' &&
   (e as { code?: unknown }).code === 11000;
+
+// Guards against self-referential cause chains.
+const MAX_CAUSE_DEPTH = 5;
+
+/**
+ * serializeError, keeping `cause` and AggregateError's `errors`, which it
+ * drops. undici's fetch rejects with a bare "fetch failed" and puts the
+ * reason (DNS, connect, TLS) only on `cause`.
+ */
+export const serializeErrorWithCause = (error: unknown, depth = 0): unknown => {
+  if (!(error instanceof Error)) {
+    return serializeError(error);
+  }
+  const serialized: Record<string, unknown> = { ...serializeError(error) };
+  if (depth >= MAX_CAUSE_DEPTH) {
+    return serialized;
+  }
+  if (error.cause != null) {
+    serialized.cause = serializeErrorWithCause(error.cause, depth + 1);
+  }
+  if (error instanceof AggregateError) {
+    serialized.errors = error.errors.map(e =>
+      serializeErrorWithCause(e, depth + 1),
+    );
+  }
+  return serialized;
+};

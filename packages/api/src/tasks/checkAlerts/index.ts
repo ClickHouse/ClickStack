@@ -67,6 +67,7 @@ import AlertHistory, {
   IAlertHistoryAnalytics,
 } from '@/models/alertHistory';
 import { IDashboard } from '@/models/dashboard';
+import { IPendingNotification } from '@/models/pendingNotification';
 import { ISavedSearch } from '@/models/savedSearch';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
@@ -85,6 +86,10 @@ import {
   findAlertEvaluator,
   THRESHOLD_EVALUATOR_NAME,
 } from '@/tasks/checkAlerts/evaluators';
+import {
+  resendPendingNotifications,
+  toPendingNotification,
+} from '@/tasks/checkAlerts/pendingNotifications';
 import {
   AlertDetails,
   AlertProvider,
@@ -110,6 +115,7 @@ import {
   unflattenObject,
 } from '@/tasks/util';
 import { alertConfigHasGroupBy, isPopulatedRef } from '@/utils/alerts';
+import { serializeErrorWithCause } from '@/utils/errors';
 import {
   getActiveTraceId,
   getCounter,
@@ -1286,6 +1292,35 @@ export const processAlert = async (
           }
         : undefined;
 
+    // A firing alert sends ALERT again on every evaluation, but a resolve is
+    // sent once, so a resolve that failed to deliver is stored and sent again
+    // on later ticks (see resendPendingNotifications). Failures before
+    // dispatch (deleted webhook, notification cap) carry no job: sending them
+    // again cannot succeed.
+    const savePendingResolves = async (failures: NotificationFailure[]) => {
+      const records = failures.flatMap(failure => {
+        const record =
+          failure.job &&
+          toPendingNotification(failure.job, nowInMinsRoundDown, wallClockNow);
+        return record ? [record] : [];
+      });
+      if (records.length === 0) {
+        return;
+      }
+      try {
+        await alertProvider.savePendingNotifications(records);
+      } catch (e) {
+        logger.error(
+          {
+            alertId: alert.id,
+            eventIds: records.map(r => r.eventId),
+            error: serializeError(e),
+          },
+          'Failed to store undelivered alert resolve',
+        );
+      }
+    };
+
     // Helper to send a notification, catching and logging any errors.
     // Resolves true when a dispatch was attempted (even if delivery later
     // fails — failures surface via executionErrors, mirroring the threshold
@@ -1375,11 +1410,14 @@ export const processAlert = async (
               alertId: alert.id,
               group,
               target: failure.target,
-              error: serializeError(failure.error),
+              error: serializeErrorWithCause(failure.error),
             },
             'Notification target could not be dispatched',
           );
           executionErrors.push(makeNotificationAlertError(failure));
+        }
+        if (state === AlertState.OK) {
+          await savePendingResolves(failures);
         }
       } catch (e) {
         // Render-level failures (title/link building, template compile) —
@@ -2123,6 +2161,7 @@ export default class CheckAlertTask implements HdxTask {
   async processAlertTask(
     alertTask: AlertTask,
     teamWebhooksById: Map<string, IWebhook>,
+    pendingByAlert: Map<string, IPendingNotification[]> = new Map(),
   ): Promise<boolean> {
     return tasksTracer.startActiveSpan('processAlertTask', async span => {
       setBusinessContext({ teamId: alertTask.conn.team.toString() });
@@ -2155,6 +2194,20 @@ export default class CheckAlertTask implements HdxTask {
               'processAlert',
               async () => {
                 setBusinessContext({ teamId: conn.team.toString() });
+                const pending = pendingByAlert.get(alert.alert.id);
+                if (pending != null && pending.length > 0) {
+                  await resendPendingNotifications({
+                    alert: alert.alert,
+                    getPreviousState: group =>
+                      alert.previousMap.get(
+                        computeHistoryMapKey(alert.alert.id, group),
+                      )?.state,
+                    now: alertTask.now,
+                    pending,
+                    provider: this.provider,
+                    teamWebhooksById,
+                  });
+                }
                 // Set once here, so the alert's own query, the EXPLAIN
                 // probes and the notification's sample rows all get tagged.
                 await withQueryAttribution(
@@ -2204,6 +2257,34 @@ export default class CheckAlertTask implements HdxTask {
     });
   }
 
+  /**
+   * Failed resolves to send again this tick, by alert id. A failed lookup only
+   * delays them to the next tick, so it must not stop evaluation.
+   */
+  private async getPendingNotificationsByAlert(
+    alertIds: string[],
+  ): Promise<Map<string, IPendingNotification[]>> {
+    const byAlert = new Map<string, IPendingNotification[]>();
+    try {
+      const records = await this.provider.getPendingNotifications(alertIds);
+      for (const record of records) {
+        const alertId = record.alert.toString();
+        const existing = byAlert.get(alertId);
+        if (existing) {
+          existing.push(record);
+        } else {
+          byAlert.set(alertId, [record]);
+        }
+      }
+    } catch (e) {
+      logger.error(
+        { error: serializeError(e) },
+        'Failed to load pending alert notifications',
+      );
+    }
+    return byAlert;
+  }
+
   async execute(): Promise<void> {
     if (this.args.taskName !== 'check-alerts') {
       throw new Error(
@@ -2246,12 +2327,20 @@ export default class CheckAlertTask implements HdxTask {
       `Obtained teams and webhooks for all alertTasks`,
     );
 
+    const pendingByAlert = await this.getPendingNotificationsByAlert(
+      alertTasks.flatMap(task => task.alerts.map(details => details.alert.id)),
+    );
+
     let failedBatchCount = 0;
     for (const task of alertTasks) {
       const teamWebhooksById =
         teamToWebhooks.get(task.conn.team.toString()) ?? new Map();
       this.task_queue.add(async () => {
-        const success = await this.processAlertTask(task, teamWebhooksById);
+        const success = await this.processAlertTask(
+          task,
+          teamWebhooksById,
+          pendingByAlert,
+        );
         if (!success) {
           failedBatchCount++;
         }

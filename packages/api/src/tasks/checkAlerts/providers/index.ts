@@ -7,6 +7,7 @@ import { IAlert, IAlertError } from '@/models/alert';
 import { IAlertHistory, IAlertHistoryAnalytics } from '@/models/alertHistory';
 import { IConnection } from '@/models/connection';
 import { IDashboard } from '@/models/dashboard';
+import { IPendingNotification } from '@/models/pendingNotification';
 import { ISavedSearch } from '@/models/savedSearch';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
@@ -141,6 +142,31 @@ export interface AlertProvider {
     evaluationWindowStart?: Date,
     analytics?: IAlertHistoryAnalytics,
   ): Promise<void>;
+
+  /**
+   * Append one error to the ERROR-state history row of the given window,
+   * keeping the errors already on it. Used for failures noticed after the
+   * window's evaluation finished, such as a resolve that was never delivered.
+   */
+  appendAlertErrorHistory(
+    alertId: string,
+    evaluationWindowStart: Date,
+    error: IAlertError,
+  ): Promise<void>;
+
+  /** Notifications waiting to be sent again for the given alerts. */
+  getPendingNotifications(alertIds: string[]): Promise<IPendingNotification[]>;
+
+  /** Store failed notifications, replacing any stored with the same eventId. */
+  savePendingNotifications(records: IPendingNotification[]): Promise<void>;
+
+  /** Record another failed attempt for a stored notification. */
+  updatePendingNotification(
+    eventId: string,
+    update: Pick<IPendingNotification, 'attempts' | 'nextAttemptAt'>,
+  ): Promise<void>;
+
+  deletePendingNotification(eventId: string): Promise<void>;
 
   /** Fetch all webhooks for the given team, returning a map of webhook ID to webhook */
   getWebhooks(teamId: string | ObjectId): Promise<Map<string, IWebhook>>;

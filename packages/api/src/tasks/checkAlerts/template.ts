@@ -62,6 +62,7 @@ import { createHandlebarsWithHelpers } from '@/tasks/checkAlerts/transports';
 import { unflattenObject } from '@/tasks/util';
 import { resolveAlertDisplayFields } from '@/utils/alerts';
 import { truncateString } from '@/utils/common';
+import { serializeErrorWithCause } from '@/utils/errors';
 import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 
@@ -479,6 +480,8 @@ export type NotificationFailure = {
   /** The channel type the target belongs to, or 'unknown' when it couldn't be determined (e.g. an unparseable @mention). */
   type: AlertChannelType | 'unknown';
   error: unknown;
+  /** Set when `dispatch()` rejected, so the caller can send the job again. */
+  job?: NotificationJob;
 };
 
 // PopulatedAlertChannel only has a `webhook` variant in this repo, but a
@@ -995,7 +998,7 @@ ${targetTemplate}`;
             {
               alertId: alert.id,
               webhookId: channelKey(job.populatedChannel),
-              error: serializeError(e),
+              error: serializeErrorWithCause(e),
             },
             'Failed to deliver alert notification',
           );
@@ -1003,6 +1006,7 @@ ${targetTemplate}`;
             target: channelLabel(job.populatedChannel),
             type: job.populatedChannel.type,
             error: e,
+            job,
           });
         } finally {
           timings.push({

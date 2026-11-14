@@ -4,10 +4,12 @@ import mongoose from 'mongoose';
 import * as config from '@/config';
 import { ObjectId } from '@/models';
 import { AlertSource, AlertThresholdType, IAlert } from '@/models/alert';
+import { IPendingNotification } from '@/models/pendingNotification';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
 import * as checkAlerts from '@/tasks/checkAlerts';
 import CheckAlertTask from '@/tasks/checkAlerts';
+import * as pendingNotifications from '@/tasks/checkAlerts/pendingNotifications';
 import {
   AlertDetails,
   AlertProvider,
@@ -38,6 +40,11 @@ describe('CheckAlertTask', () => {
         getWebhooks: jest.fn(),
         updateAlertState: jest.fn(),
         recordAlertErrors: jest.fn(),
+        appendAlertErrorHistory: jest.fn(),
+        getPendingNotifications: jest.fn().mockResolvedValue([]),
+        savePendingNotifications: jest.fn(),
+        updatePendingNotification: jest.fn(),
+        deletePendingNotification: jest.fn(),
         asyncDispose: jest.fn(),
         buildChartLink: jest.fn(),
         buildChartExplorerLink: jest.fn(),
@@ -171,6 +178,88 @@ describe('CheckAlertTask', () => {
       );
 
       mockProcessAlert.mockRestore();
+    });
+
+    const makeTaskForAlert = (alertId: string): AlertTask => ({
+      alerts: [
+        {
+          alert: { id: alertId } as IAlert,
+          taskType: AlertTaskType.SAVED_SEARCH,
+          previousMap: new Map(),
+        } as AlertDetails,
+      ],
+      conn: {
+        id: 'conn-123',
+        _id: new mongoose.Types.ObjectId(),
+        host: config.CLICKHOUSE_HOST,
+        username: config.CLICKHOUSE_USER,
+        password: config.CLICKHOUSE_PASSWORD,
+        name: '',
+        team: new mongoose.Types.ObjectId(),
+      },
+      now: new Date(),
+    });
+
+    it("sends an alert's pending notifications again before evaluating it", async () => {
+      const task = new CheckAlertTask({ taskName: TaskName.CHECK_ALERTS });
+      const alertId = new mongoose.Types.ObjectId().toString();
+      const alertTask = makeTaskForAlert(alertId);
+      const record: IPendingNotification = {
+        eventId: 'event-1',
+        team: alertTask.conn.team,
+        alert: new mongoose.Types.ObjectId(alertId),
+        group: '',
+        webhook: new mongoose.Types.ObjectId(),
+        message: '{}',
+        windowStart: alertTask.now,
+        firstFailedAt: alertTask.now,
+        attempts: 1,
+        nextAttemptAt: alertTask.now,
+        expireAt: alertTask.now,
+      };
+      mockAlertProvider.getAlertTasks.mockResolvedValue([alertTask]);
+      mockAlertProvider.getWebhooks.mockResolvedValue(new Map());
+      mockAlertProvider.getPendingNotifications.mockResolvedValue([record]);
+
+      const calls: string[] = [];
+      const resendSpy = jest
+        .spyOn(pendingNotifications, 'resendPendingNotifications')
+        .mockImplementation(async () => {
+          calls.push('resend');
+        });
+      mockProcessAlert.mockImplementation(async () => {
+        calls.push('process');
+      });
+
+      await task.execute();
+
+      expect(mockAlertProvider.getPendingNotifications).toHaveBeenCalledWith([
+        alertId,
+      ]);
+      expect(resendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alert: alertTask.alerts[0].alert,
+          pending: [record],
+          now: alertTask.now,
+        }),
+      );
+      expect(calls).toEqual(['resend', 'process']);
+      resendSpy.mockRestore();
+    });
+
+    it('still evaluates alerts when pending notifications cannot be loaded', async () => {
+      const task = new CheckAlertTask({ taskName: TaskName.CHECK_ALERTS });
+      mockAlertProvider.getAlertTasks.mockResolvedValue([
+        makeTaskForAlert('alert-123'),
+      ]);
+      mockAlertProvider.getWebhooks.mockResolvedValue(new Map());
+      mockAlertProvider.getPendingNotifications.mockRejectedValue(
+        new Error('mongo down'),
+      );
+
+      await task.execute();
+
+      expect(mockProcessAlert).toHaveBeenCalledTimes(1);
     });
 
     it("should ensure that the correct team's webhooks are passed to processAlert", async () => {
