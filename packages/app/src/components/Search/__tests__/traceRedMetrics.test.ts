@@ -11,7 +11,6 @@ import {
   errorsConfig,
   redBaseConfig,
 } from '@/components/Search/traceRedMetrics';
-import type { NumberFormat } from '@/types';
 
 // A sidebar filter the user has applied; every RED config must carry it so the
 // tiles stay in sync with the results list.
@@ -32,7 +31,6 @@ const base: BuilderChartConfigWithDateRange = {
 
 const ERROR_COND = "lower(StatusCode) IN ('error', 'status_code_error')";
 const DURATION_EXPR = 'Duration';
-const DURATION_FORMAT: NumberFormat = { output: 'duration', factor: 1e-9 };
 
 describe('traceRedMetrics', () => {
   describe('redBaseConfig', () => {
@@ -117,15 +115,12 @@ describe('traceRedMetrics', () => {
   });
 
   describe('durationConfig', () => {
-    it('aggregates the raw duration column and passes the display format through', () => {
-      const result = durationConfig(
-        redBaseConfig(base),
-        DURATION_EXPR,
-        DURATION_FORMAT,
-      );
+    it('aggregates the raw duration column without a hand-set number format', () => {
+      const result = durationConfig(redBaseConfig(base), DURATION_EXPR);
       expect(result.displayType).toBe(DisplayType.Line);
-      // no SQL-side unit conversion: the format handles the unit at display
-      expect(result.numberFormat).toBe(DURATION_FORMAT);
+      // No explicit numberFormat: DBTimeChart infers the duration unit from the
+      // select items (each aggregates the duration expression) at display time.
+      expect(result.numberFormat).toBeUndefined();
       expect(result.select).toEqual([
         {
           alias: 'Avg',
@@ -160,11 +155,7 @@ describe('traceRedMetrics', () => {
     // back in. The color lives on the select item, so it can't drift from the
     // series the way a separate name-keyed map could.
     it('pins each duration series to a stable, non-reserved hue', () => {
-      const { select } = durationConfig(
-        redBaseConfig(base),
-        DURATION_EXPR,
-        DURATION_FORMAT,
-      );
+      const { select } = durationConfig(redBaseConfig(base), DURATION_EXPR);
       const reserved = [
         'chart-red',
         'chart-error',

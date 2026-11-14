@@ -2901,10 +2901,15 @@ function DBSearchPageContent() {
                           </Group>
                         </Box>
                         {!hasQueryError &&
-                          // The three side-by-side RED tiles need room; on a
-                          // compact (narrow/mobile) viewport they would be
-                          // unreadable, so fall back to the single histogram.
-                          (traceRedMetricsSource != null && !isCompact ? (
+                          // The three side-by-side RED tiles need room, so on a
+                          // compact (narrow/mobile) viewport fall back to the
+                          // single histogram. The RED tiles also have fixed
+                          // grouping (Throughput by status, Errors by status,
+                          // Duration ungrouped), so when the user picks a custom
+                          // group-by fall back to the histogram, which honors it.
+                          (traceRedMetricsSource != null &&
+                          !isCompact &&
+                          !isCustomGroupBy ? (
                             <Box
                               className={searchPageStyles.timeChartContainer}
                               mih="0"
