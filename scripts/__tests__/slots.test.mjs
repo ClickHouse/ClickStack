@@ -75,6 +75,7 @@ test('exports the integration test ports', () => {
     HDX_CI_MONGO_PORT: '40043',
     HDX_CI_API_PORT: '19044',
     HDX_CI_OPAMP_PORT: '14364',
+    HDX_CI_PROMETHEUS_PORT: '19144',
     HDX_CI_PROJECT: 'int-44',
   });
 });

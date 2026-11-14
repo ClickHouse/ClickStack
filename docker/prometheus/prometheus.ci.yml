@@ -1,0 +1,12 @@
+# Integration tests: a Prometheus with no local data that reads every sample
+# from ClickHouse's remote-read handler (default.metrics_ts, see
+# docker/clickhouse/local/config.xml). PromQL tests can then compare Prometheus
+# with ClickHouse's own PromQL engine on the same samples.
+global:
+  scrape_interval: 1h
+
+remote_read:
+  - url: http://ch-server:9363/read
+    # Without this, Prometheus skips the remote for the window its own
+    # (empty) TSDB would cover.
+    read_recent: true
