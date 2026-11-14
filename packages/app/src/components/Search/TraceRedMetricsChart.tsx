@@ -11,13 +11,11 @@ import { DBTimeChart, type SeriesGroupFilter } from '@/components/DBTimeChart';
 import { getTraceDurationNumberFormat } from '@/source';
 
 import {
-  DURATION_SERIES_COLORS,
   durationConfig,
   ERROR_RATE_HELPER_SERIES,
   errorsConfig,
   ErrorsMode,
   redBaseConfig,
-  throughputConfig,
 } from './traceRedMetrics';
 
 // Each RED tile is a ChartCard flex child that fills its column; ChartCard
@@ -46,6 +44,7 @@ export function TraceRedMetricsChart({
   source,
   isReady,
   queryKeyPrefix,
+  throughputQueryKeyPrefix,
   onTimeRangeSelect,
   onFocusSeries,
 }: {
@@ -53,11 +52,17 @@ export function TraceRedMetricsChart({
   histogramTimeChartConfig: BuilderChartConfigWithDateRange;
   source: TTraceSource;
   isReady: boolean;
+  /** Query-key prefix for the auxiliary Errors/Duration tiles, kept separate so
+   * their slow quantile scans stay out of the reported search latency. */
   queryKeyPrefix?: string;
+  /** Query-key prefix for the Throughput tile. It is the status-grouped count
+   * histogram this view replaces, so passing the results header's prefix here
+   * lets react-query dedupe the two into a single scan. */
+  throughputQueryKeyPrefix?: string;
   onTimeRangeSelect?: (start: Date, end: Date) => void;
   /** Filter the results by a clicked status series, matching the histogram's
-   * per-status drill-down. Only the volume Errors chart is grouped by status,
-   * so only it surfaces this. */
+   * per-status drill-down. Surfaced by the Throughput tile and the volume
+   * Errors chart, which are the status-grouped ones. */
   onFocusSeries?: (filters: SeriesGroupFilter[]) => void;
 }) {
   const [errorsMode, setErrorsMode] = useState<ErrorsMode>('rate');
@@ -81,7 +86,6 @@ export function TraceRedMetricsChart({
     () => redBaseConfig(histogramTimeChartConfig),
     [histogramTimeChartConfig],
   );
-  const throughput = useMemo(() => throughputConfig(base), [base]);
   const errors = useMemo(
     () => errorsConfig(base, source.statusCodeExpression, errorsMode),
     [base, source.statusCodeExpression, errorsMode],
@@ -121,11 +125,17 @@ export function TraceRedMetricsChart({
     <IsolatedChartSyncProvider>
       <Flex direction="row" h="100%" gap="sm" mih="0" miw="0">
         <ChartCard style={RED_TILE_STYLE}>
+          {/* Throughput is the status-grouped count histogram this view
+              replaces, rendered from the same config under the results header's
+              query-key prefix so react-query runs a single shared scan, and it
+              keeps the per-status drill-down via onFocusSeries. */}
           <DBTimeChart
             title="Throughput"
-            config={throughput}
+            config={histogramTimeChartConfig}
             showLegend
+            onFocusSeries={onFocusSeries}
             {...commonProps}
+            queryKeyPrefix={throughputQueryKeyPrefix}
           />
         </ChartCard>
         {errors != null && (
@@ -157,10 +167,11 @@ export function TraceRedMetricsChart({
           </ChartCard>
         )}
         <ChartCard style={RED_TILE_STYLE}>
+          {/* Duration series pin their colors via each select item's `color`
+              (set in durationConfig), so no seriesColors prop is needed here. */}
           <DBTimeChart
             title="Duration"
             config={duration}
-            seriesColors={DURATION_SERIES_COLORS}
             showLegend
             {...commonProps}
           />

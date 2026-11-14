@@ -5,13 +5,11 @@ import {
 
 import { INTEGER_NUMBER_FORMAT } from '@/ChartUtils';
 import {
-  DURATION_SERIES_COLORS,
   durationConfig,
   ERROR_RATE_FORMAT,
   ERROR_RATE_HELPER_SERIES,
   errorsConfig,
   redBaseConfig,
-  throughputConfig,
 } from '@/components/Search/traceRedMetrics';
 import type { NumberFormat } from '@/types';
 
@@ -45,24 +43,6 @@ describe('traceRedMetrics', () => {
       expect(result.dateRange).toBe(base.dateRange);
       // sidebar filters must survive, or the tiles would disagree with results
       expect(result.filters).toEqual([BASE_FILTER]);
-    });
-  });
-
-  describe('throughputConfig', () => {
-    it('counts spans, rendered as bars', () => {
-      const result = throughputConfig(redBaseConfig(base));
-      expect(result.displayType).toBe(DisplayType.StackedBar);
-      expect(result.numberFormat).toBe(INTEGER_NUMBER_FORMAT);
-      expect(result.select).toEqual([
-        {
-          alias: 'Spans',
-          aggFn: 'count',
-          aggCondition: '',
-          valueExpression: '',
-        },
-      ]);
-      // honors the active WHERE filter carried from the base config
-      expect(result.where).toBe(base.where);
     });
   });
 
@@ -152,6 +132,7 @@ describe('traceRedMetrics', () => {
           aggFn: 'avg',
           aggCondition: '',
           valueExpression: DURATION_EXPR,
+          color: 'chart-blue',
         },
         {
           alias: 'P95',
@@ -159,6 +140,7 @@ describe('traceRedMetrics', () => {
           level: 0.95,
           aggCondition: '',
           valueExpression: DURATION_EXPR,
+          color: 'chart-cyan',
         },
         {
           alias: 'P99',
@@ -166,43 +148,33 @@ describe('traceRedMetrics', () => {
           level: 0.99,
           aggCondition: '',
           valueExpression: DURATION_EXPR,
+          color: 'chart-purple',
         },
       ]);
     });
 
-    // The color pins are resolved by result-column name, so a select alias
-    // that no longer has a matching key silently falls back to the positional
-    // palette. Assert the two stay in lockstep rather than trusting that both
-    // sides get updated together.
-    it('pins a color for exactly the series it selects', () => {
+    // Latency is not an error signal: red/error/warning/success are reserved for
+    // other meanings, and the positional palette would otherwise hand slot 2 to
+    // chart-red. Pinning each series via its select-item color keeps latency off
+    // those hues; this guards both the specific pins and a reserved hue creeping
+    // back in. The color lives on the select item, so it can't drift from the
+    // series the way a separate name-keyed map could.
+    it('pins each duration series to a stable, non-reserved hue', () => {
       const { select } = durationConfig(
         redBaseConfig(base),
         DURATION_EXPR,
         DURATION_FORMAT,
       );
-      // durationConfig always builds a select list, never a raw SQL string
-      const aliases = Array.isArray(select)
-        ? select.map(s => ('alias' in s ? s.alias : undefined))
-        : [];
-      expect(aliases).toEqual(Object.keys(DURATION_SERIES_COLORS));
-    });
-
-    // Latency is not an error signal: red is reserved for the Errors tile, and
-    // the rest of the semantic palette carries its own meaning. The positional
-    // palette would hand slot 2 to chart-red, so this is the regression guard
-    // for that specific hue coming back.
-    it('never colors a latency series with a reserved semantic hue', () => {
       const reserved = [
         'chart-red',
         'chart-error',
         'chart-warning',
         'chart-success',
       ];
-      expect(
-        Object.values(DURATION_SERIES_COLORS).filter(token =>
-          reserved.includes(token),
-        ),
-      ).toEqual([]);
+      // durationConfig always builds a select list, never a raw SQL string
+      const colors = Array.isArray(select) ? select.map(s => s.color) : [];
+      expect(colors).toEqual(['chart-blue', 'chart-cyan', 'chart-purple']);
+      expect(colors.filter(c => c != null && reserved.includes(c))).toEqual([]);
     });
   });
 });
