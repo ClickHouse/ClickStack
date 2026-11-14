@@ -210,6 +210,17 @@ describe('MCP PromQL sources', () => {
       expect(output.metricNames).toContain('stale_metric');
     });
 
+    it('says so when no series has the metricName', async () => {
+      const result = await callTool(client, 'clickstack_describe_source', {
+        sourceId: promqlSource._id.toString(),
+        metricName: 'no_such_metric',
+      });
+
+      const output = JSON.parse(getFirstText(result));
+      expect(output.labelNames).toEqual([]);
+      expect(output.note).toContain('"no_such_metric"');
+    });
+
     it('passes metricName to a Prometheus endpoint as a match[] selector', async () => {
       const source = await createPrometheusSource();
       mockFetch.mockImplementation(async () => prometheusResponse(['up']));
@@ -219,12 +230,16 @@ describe('MCP PromQL sources', () => {
         metricName: 'http.server.duration',
       });
 
-      const labels = mockFetch.mock.calls
-        .map(([input]) => new URL(String(input)))
-        .find(u => u.pathname === '/api/v1/labels');
-      expect(labels?.searchParams.get('match[]')).toBe(
+      const urls = mockFetch.mock.calls.map(
+        ([input]) => new URL(String(input)),
+      );
+      const byPath = (path: string) => urls.find(u => u.pathname === path);
+      expect(byPath('/api/v1/labels')?.searchParams.get('match[]')).toBe(
         '{__name__="http.server.duration"}',
       );
+      expect(
+        byPath('/api/v1/label/__name__/values')?.searchParams.has('match[]'),
+      ).toBe(false);
     });
 
     it('describes a Prometheus endpoint source through its label API', async () => {

@@ -23,8 +23,9 @@ import {
   PROMETHEUS_MAX_RESULT_ROWS,
   type PrometheusHttpApiSupport,
   queryInstantViaTableFunction,
+  queryLabelNames,
+  queryLabelValues,
   queryRangeViaTableFunction,
-  queryTimeSeriesNames,
 } from '@/controllers/timeseriesEngine';
 import { withSpan } from '@/utils/instrumentation';
 import {
@@ -333,16 +334,16 @@ export async function getPromqlLabelCatalog({
       password: connection.password,
       requestTimeout: PROMETHEUS_FETCH_TIMEOUT_MS,
     }),
+    connectionId: connection.id,
     databaseName: source.from.databaseName,
     tableName: source.from.tableName,
     limit: limit + 1,
     signal,
   };
+  // No startMs/endMs: without them neither lookup reads the time ranges.
   const [labelNames, metricNames] = await Promise.all([
-    metricName != null
-      ? queryTimeSeriesNames({ ...args, metricName })
-      : undefined,
-    queryTimeSeriesNames(args),
+    metricName != null ? queryLabelNames({ ...args, metricName }) : undefined,
+    queryLabelValues({ ...args, labelName: '__name__' }),
   ]);
   return { backend: 'clickhouse', labelNames, metricNames };
 }

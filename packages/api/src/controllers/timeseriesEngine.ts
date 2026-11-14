@@ -312,39 +312,22 @@ export async function queryLabelValues({
  */
 export async function queryLabelNames({
   limit,
+  metricName,
   ...args
-}: TimeSeriesTagsQueryArgs): Promise<string[]> {
+}: TimeSeriesTagsQueryArgs & {
+  /** Only this metric's series; the tags table is sorted by metric name. */
+  metricName?: string;
+}): Promise<string[]> {
   // The engine keeps `__name__` in `metric_name`, not `tags`, so it is folded
   // back in explicitly.
   const value = chSql`arrayJoin(arrayConcat([${{ String: '__name__' }}], mapKeys(${{ Identifier: 'tags' }})))`;
   const conditions = await getSeriesFilterConditions(args);
+  if (metricName != null)
+    conditions.push(
+      chSql`${{ Identifier: 'metric_name' }} = ${{ String: metricName }}`,
+    );
 
   return queryDistinctTagsValues({ ...args, value, conditions, limit });
-}
-
-/**
- * Metric names, or with `metricName` that metric's label names, read from the
- * tags table alone. Unlike the label lookups above, there is no time filter:
- * on a large table it groups every series id in the time ranges table, which
- * costs far more than the names. So the lists can include series with no
- * recent samples.
- */
-export async function queryTimeSeriesNames({
-  metricName,
-  ...args
-}: Pick<
-  TimeSeriesTagsQueryArgs,
-  'client' | 'databaseName' | 'tableName' | 'limit' | 'signal'
-> & { metricName?: string }): Promise<string[]> {
-  const metric = chSql`${{ Identifier: 'metric_name' }}`;
-  if (metricName == null)
-    return queryDistinctTagsValues({ ...args, value: metric, conditions: [] });
-  // The tags table is sorted by metric name, so this reads only that metric.
-  return queryDistinctTagsValues({
-    ...args,
-    value: chSql`arrayJoin(arrayConcat([${{ String: '__name__' }}], mapKeys(${{ Identifier: 'tags' }})))`,
-    conditions: [chSql`${metric} = ${{ String: metricName }}`],
-  });
 }
 
 // --------------------------
