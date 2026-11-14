@@ -375,12 +375,6 @@ type DBTimeChartComponentProps = {
   sourceId?: string;
   /** Names of series that should not be shown in the chart */
   hiddenSeries?: string[];
-  /**
-   * Pin specific series (by display name) to a palette token instead of the
-   * positional palette, so their color stays stable across sessions and can
-   * avoid hues reserved for other meanings (e.g. keeping latency off error red).
-   */
-  seriesColors?: Record<string, ChartPaletteToken>;
   title?: React.ReactNode;
   toolbarPrefix?: React.ReactNode[];
   toolbarSuffix?: React.ReactNode[];
@@ -430,7 +424,6 @@ function DBTimeChartComponent({
   showLegend = true,
   sourceId,
   hiddenSeries,
-  seriesColors,
   title,
   toolbarPrefix,
   toolbarSuffix,
@@ -650,6 +643,23 @@ function DBTimeChartComponent({
 
   const { formatByColumn, chartFormat: axisNumberFormat } =
     useChartNumberFormats(queriedConfig, data?.meta);
+
+  // Per-series colors come from each select item's `color` (keyed by its result
+  // column name, i.e. its alias), the single source of truth for pinning a
+  // series to a palette token. Derived here so setLineColors can override the
+  // positional palette for exactly those columns, without a separate color map.
+  const seriesColors = useMemo(() => {
+    if (!isBuilderChartConfig(config) || !Array.isArray(config.select)) {
+      return undefined;
+    }
+    const entries: [string, ChartPaletteToken][] = [];
+    for (const selectItem of config.select) {
+      if (selectItem.alias && selectItem.color) {
+        entries.push([selectItem.alias, selectItem.color]);
+      }
+    }
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }, [config]);
 
   const {
     error: resultFormattingError,

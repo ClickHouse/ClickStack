@@ -654,11 +654,11 @@ function setLineColors(
       line.color = lineColorByCurrentPeriodKey.get(currentPeriodKey);
     } else if (!line.color) {
       const seriesName = line.displayName ?? line.dataKey;
-      // A caller-pinned color (keyed by series name) wins over the positional
-      // palette, so a series keeps the same hue no matter how the data sorts
-      // it. A pinned series does not consume a positional slot, so unpinned
-      // series keep their natural palette order.
-      const pinnedToken = seriesColors?.[seriesName];
+      // A color set on the series' select item (keyed by its result-column name)
+      // wins over the positional palette, so a series keeps the same hue no
+      // matter how the data sorts it. A pinned series does not consume a
+      // positional slot, so unpinned series keep their natural palette order.
+      const pinnedToken = seriesColors?.[line.valueColumnName];
       line.color = pinnedToken
         ? getColorFromCSSToken(pinnedToken)
         : getColorProps(colorIndex++, seriesName);
@@ -830,9 +830,10 @@ export function formatResponseForTimeChart({
    */
   maxSeries?: number;
   /**
-   * Pin specific series (by display name) to a palette token instead of the
-   * positional palette, so their color is stable across sessions and can avoid
-   * hues reserved for other meanings (e.g. keeping latency off error red).
+   * Pin specific series (keyed by result-column name) to a palette token instead
+   * of the positional palette, so their color is stable across sessions and can
+   * avoid hues reserved for other meanings (e.g. keeping latency off error red).
+   * Callers derive this from each select item's `color`.
    */
   seriesColors?: Record<string, ChartPaletteToken>;
 }) {

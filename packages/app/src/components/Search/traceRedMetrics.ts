@@ -1,7 +1,6 @@
 import { errorStatusPredicateSql } from '@hyperdx/common-utils/dist/core/spanPredicates';
 import {
   BuilderChartConfigWithDateRange,
-  ChartPaletteToken,
   DisplayType,
 } from '@hyperdx/common-utils/dist/types';
 
@@ -52,21 +51,6 @@ export function redBaseConfig(
   histogramTimeChartConfig: BuilderChartConfigWithDateRange,
 ): BuilderChartConfigWithDateRange {
   return { ...histogramTimeChartConfig, groupBy: undefined };
-}
-
-/** Throughput: span count per bucket. Bars (StackedBar is the only display
- * type that renders bars; a single series draws like a plain bar chart). */
-export function throughputConfig(
-  base: BuilderChartConfigWithDateRange,
-): BuilderChartConfigWithDateRange {
-  return {
-    ...base,
-    select: [
-      { alias: 'Spans', aggFn: 'count', aggCondition: '', valueExpression: '' },
-    ],
-    displayType: DisplayType.StackedBar,
-    numberFormat: INTEGER_NUMBER_FORMAT,
-  };
 }
 
 /**
@@ -145,32 +129,21 @@ export function errorsConfig(
   };
 }
 
-// Duration series aliases, declared once so durationConfig's select and the
-// DURATION_SERIES_COLORS pins below key off the same strings. setLineColors
-// resolves a pin by result-column name, so a rename that touched only one side
-// would silently drop the pin and let that percentile fall back to the
-// positional palette slot (chart-red) the pins exist to avoid, with no test or
-// type failure to catch it.
+// Duration series aliases. The palette hue lives on each select item's `color`
+// below, so the alias and its color are declared together and can't drift apart.
 const DURATION_AVG_ALIAS = 'Avg';
 const DURATION_P95_ALIAS = 'P95';
 const DURATION_P99_ALIAS = 'P99';
 
 /**
- * Pin the Duration percentiles to stable, cool palette hues so latency never
- * borrows error red (or warning orange / success green), and so each percentile
- * keeps its color across sessions regardless of how the data sorts the lines.
- */
-export const DURATION_SERIES_COLORS = {
-  [DURATION_AVG_ALIAS]: 'chart-blue',
-  [DURATION_P95_ALIAS]: 'chart-cyan',
-  [DURATION_P99_ALIAS]: 'chart-purple',
-} satisfies Record<string, ChartPaletteToken>;
-
-/**
- * Duration: Avg, p95, p99 over the source's raw duration expression. Aggregating
- * the raw column (not a divided-to-ms expression) keeps it MV-friendly; the
- * caller passes a duration NumberFormat derived from the source's precision
- * (via getTraceDurationNumberFormat) so unit conversion happens at display.
+ * Duration: Avg, P95, P99 over the source's raw duration expression. Each series
+ * pins a stable, cool palette hue via its select item's `color`, so latency never
+ * borrows error red (or warning orange / success green) and each percentile keeps
+ * its color across sessions regardless of how the data sorts the lines.
+ * Aggregating the raw column (not a divided-to-ms expression) keeps it
+ * MV-friendly; the caller passes a duration NumberFormat derived from the
+ * source's precision (via getTraceDurationNumberFormat) so unit conversion
+ * happens at display.
  */
 export function durationConfig(
   base: BuilderChartConfigWithDateRange,
@@ -185,6 +158,7 @@ export function durationConfig(
         aggFn: 'avg',
         aggCondition: '',
         valueExpression: durationExpression,
+        color: 'chart-blue',
       },
       {
         alias: DURATION_P95_ALIAS,
@@ -192,6 +166,7 @@ export function durationConfig(
         level: 0.95,
         aggCondition: '',
         valueExpression: durationExpression,
+        color: 'chart-cyan',
       },
       {
         alias: DURATION_P99_ALIAS,
@@ -199,6 +174,7 @@ export function durationConfig(
         level: 0.99,
         aggCondition: '',
         valueExpression: durationExpression,
+        color: 'chart-purple',
       },
     ],
     displayType: DisplayType.Line,
