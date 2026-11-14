@@ -11,6 +11,8 @@ type HistogramCountInput = {
   from: TemplatedInput;
   where: TemplatedInput;
   valueAlias: TemplatedInput;
+  // Per-series key, from renderMetricSeriesKey in renderChartConfig.ts.
+  attrHashExpr: string;
 };
 
 export const GROUP_ALIAS = 'group';
@@ -53,14 +55,6 @@ const renderDimensionGroupBy = ({
   return rendered.sql.length > 0 ? chSql`GROUP BY ${rendered}` : chSql``;
 };
 
-// SQL expression for hashing metric attributes into a per-series key.
-// Variadic cityHash64 over the three attribute scopes — works for both
-// Map(LowCardinality(String), String) and JSON columns. Prior to HDX-4466
-// the Map-schema path wrapped the three maps in mapConcat() before hashing;
-// see the ticket for the cross-scope same-key implications of the switch.
-const ATTR_HASH_EXPR =
-  'cityHash64(ScopeAttributes, ResourceAttributes, Attributes)';
-
 export const translateHistogram = ({
   select,
   ...rest
@@ -71,6 +65,7 @@ export const translateHistogram = ({
   from: TemplatedInput;
   where: TemplatedInput;
   valueAlias: TemplatedInput;
+  attrHashExpr: string;
 }) => {
   if (select.aggFn === 'quantile') {
     if (!('level' in select) || select.level === null)
@@ -92,6 +87,7 @@ const translateHistogramCount = ({
   from,
   where,
   valueAlias,
+  attrHashExpr,
 }: HistogramCountInput): WithClauses => [
   {
     name: 'source',
@@ -101,7 +97,7 @@ const translateHistogramCount = ({
             AggregationTemporality,
             ${renderTimeBucketProjection(timeBucketSelect)}
             ${groupBy ? chSql`[${groupBy}] AS ${GROUP_ALIAS},` : ''}
-            ${ATTR_HASH_EXPR} AS attr_hash,
+            ${attrHashExpr} AS attr_hash,
             cityHash64(ExplicitBounds) AS bounds_hash,
             toInt64(Count) AS current_count,
             lagInFrame(toNullable(current_count), 1, NULL) OVER (
@@ -140,6 +136,7 @@ const translateHistogramQuantile = ({
   from,
   where,
   valueAlias,
+  attrHashExpr,
   level,
 }: {
   timeBucketSelect?: TemplatedInput;
@@ -147,6 +144,7 @@ const translateHistogramQuantile = ({
   from: TemplatedInput;
   where: TemplatedInput;
   valueAlias: TemplatedInput;
+  attrHashExpr: string;
   level: number;
 }): WithClauses => [
   {
@@ -189,7 +187,7 @@ const translateHistogramQuantile = ({
                   ExplicitBounds,
                   ResourceAttributes,
                   Attributes,${groupBy ? chSql`[${groupBy}] as ${GROUP_ALIAS},` : ''}
-                  ${ATTR_HASH_EXPR} AS attr_hash,
+                  ${attrHashExpr} AS attr_hash,
                   cityHash64(ExplicitBounds) AS bounds_hash,
                   CAST(BucketCounts AS Array(Int64)) counts
               FROM ${from}
@@ -259,6 +257,7 @@ export const translateExponentialHistogram = ({
   from: TemplatedInput;
   where: TemplatedInput;
   valueAlias: TemplatedInput;
+  attrHashExpr: string;
 }) => {
   if (select.aggFn === 'quantile') {
     if (!('level' in select) || select.level === null)
@@ -282,6 +281,7 @@ const translateExponentialHistogramCount = ({
   from,
   where,
   valueAlias,
+  attrHashExpr,
 }: HistogramCountInput): WithClauses => [
   {
     name: 'source',
@@ -293,7 +293,7 @@ const translateExponentialHistogramCount = ({
         AggregationTemporality,
         ${renderTimeBucketProjection(timeBucketSelect)}
         ${groupBy ? chSql`[${groupBy}] AS ${GROUP_ALIAS},` : ''}
-        ${ATTR_HASH_EXPR} AS attr_hash,
+        ${attrHashExpr} AS attr_hash,
         toInt64(Count) AS current_count,
         count() OVER prev_row = 0 AS is_first_series_point,
         toInt64(any(Count) OVER prev_row) AS previous_count,
@@ -335,6 +335,7 @@ const translateExponentialHistogramQuantile = ({
   from,
   where,
   valueAlias,
+  attrHashExpr,
   level,
 }: {
   timeBucketSelect?: TemplatedInput;
@@ -342,6 +343,7 @@ const translateExponentialHistogramQuantile = ({
   from: TemplatedInput;
   where: TemplatedInput;
   valueAlias: TemplatedInput;
+  attrHashExpr: string;
   level: number;
 }): WithClauses => [
   // Filter for the relevant source data
@@ -354,7 +356,7 @@ const translateExponentialHistogramQuantile = ({
         StartTimeUnix,
         AggregationTemporality,
         Scale,
-        ${ATTR_HASH_EXPR} AS attr_hash,
+        ${attrHashExpr} AS attr_hash,
         ${groupBy ? chSql`[${groupBy}] as ${GROUP_ALIAS},` : ''}
         ZeroCount,
         PositiveOffset,

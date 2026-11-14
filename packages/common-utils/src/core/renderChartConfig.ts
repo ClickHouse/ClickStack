@@ -2055,6 +2055,37 @@ async function renderMetricWhere(
     : where;
 }
 
+/**
+ * Per-series key of a metric source CTE (AttributesHash / attr_hash). The
+ * variadic cityHash64 works for both Map(LowCardinality(String), String) and
+ * JSON attribute columns (HDX-4466). ScopeName is in the key because two
+ * instrumentation scopes can report the same metric with the same attributes,
+ * and OTel makes them two streams. Every metric type uses this key, but
+ * HyperDX does not require ScopeName on metric tables. The gauge and sum
+ * Bucketed CTEs select ScopeName anyway; the histogram queries did not read
+ * it before. So a table without it (or a failed column lookup) keeps the key
+ * without it, which is the query from before ScopeName was added.
+ * A NULL argument makes cityHash64 return NULL, which would merge every series
+ * with a NULL ScopeName, so a Nullable ScopeName is hashed as ''.
+ */
+async function renderMetricSeriesKey(
+  metadata: Metadata,
+  table: { databaseName: string; tableName: string; connectionId: string },
+): Promise<string> {
+  let scopeName = '';
+  try {
+    const column = await metadata.getColumn({ ...table, column: 'ScopeName' });
+    if (column != null) {
+      scopeName = column.type.includes('Nullable(')
+        ? "ifNull(ScopeName, ''), "
+        : 'ScopeName, ';
+    }
+  } catch (e) {
+    console.warn('Failed to look up the ScopeName column of a metric table', e);
+  }
+  return `cityHash64(${scopeName}ScopeAttributes, ResourceAttributes, Attributes)`;
+}
+
 async function translateMetricChartConfig(
   chartConfig: BuilderChartConfigWithOptDateRangeEx,
   metadata: Metadata,
@@ -2090,9 +2121,7 @@ async function translateMetricChartConfig(
     MetricsDataType.Histogram in metricTables &&
     metricTables[MetricsDataType.Histogram];
 
-  // AttributesHash is computed inline with a variadic cityHash64 call
-  // (HDX-4466). This works for both Map(LowCardinality(String), String) and
-  // JSON attribute columns, so no schema detection round-trip is needed.
+  // AttributesHash comes from renderMetricSeriesKey (see its comment).
 
   if (
     metricType === MetricsDataType.Gauge &&
@@ -2143,6 +2172,11 @@ async function translateMetricChartConfig(
       bucketedColumns: GAUGE_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
     });
+    const seriesKey = await renderMetricSeriesKey(metadata, {
+      databaseName: from.databaseName,
+      tableName: metricTables[MetricsDataType.Gauge],
+      connectionId: chartConfig.connection,
+    });
 
     return {
       ...restChartConfig,
@@ -2152,7 +2186,7 @@ async function translateMetricChartConfig(
           sql: chSql`
             SELECT
               *,
-              cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash${{ UNSAFE_RAW_SQL: computedColumns.select }}
+              ${{ UNSAFE_RAW_SQL: seriesKey }} AS AttributesHash${{ UNSAFE_RAW_SQL: computedColumns.select }}
             FROM ${renderFrom({ from: { ...from, tableName: metricTables[MetricsDataType.Gauge] }, isRenderingRawSqlTemplate: chartConfig.isRenderingRawSqlTemplate, metricType: MetricsDataType.Gauge })}
             WHERE ${where}
           `,
@@ -2255,6 +2289,11 @@ async function translateMetricChartConfig(
       bucketedColumns: SUM_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
     });
+    const seriesKey = await renderMetricSeriesKey(metadata, {
+      databaseName: from.databaseName,
+      tableName: metricTables[MetricsDataType.Sum],
+      connectionId: chartConfig.connection,
+    });
 
     /**
      * See: https://github.com/open-telemetry/opentelemetry-proto/blob/main/opentelemetry/proto/metrics/v1/metrics.proto
@@ -2281,7 +2320,7 @@ async function translateMetricChartConfig(
         sql: chSql`
                 SELECT
                   *,
-                  cityHash64(ScopeAttributes, ResourceAttributes, Attributes) AS AttributesHash,
+                  ${{ UNSAFE_RAW_SQL: seriesKey }} AS AttributesHash,
                   IF(
                     AggregationTemporality = 1,
                     Value, -- DELTA: Value is already the per-interval increase
@@ -2545,6 +2584,12 @@ async function translateMetricChartConfig(
       }),
       where,
       valueAlias,
+      attrHashExpr: await renderMetricSeriesKey(metadata, {
+        databaseName: from.databaseName,
+        // eslint-disable-next-line security/detect-object-injection
+        tableName: metricTables[metricType],
+        connectionId: chartConfig.connection,
+      }),
     };
 
     // The translated scope only projects [bucket?, group, value] — the

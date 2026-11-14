@@ -987,9 +987,10 @@ describe('queryChartConfig Integration Tests', () => {
 
     const OTEL_ORDER_BY = `ORDER BY (ServiceName, MetricName, toStartOfHour(TimeUnix), cityHash64(Attributes), TimeUnix)`;
 
-    // The per-series key is cityHash64(ScopeAttributes, ResourceAttributes,
-    // Attributes); give every service a distinct resource attribute so two
-    // services never collapse into one attributes-hash series.
+    // The per-series key is cityHash64(ScopeName, ScopeAttributes,
+    // ResourceAttributes, Attributes) (see renderMetricSeriesKey); give every
+    // service a distinct resource attribute so two services never collapse
+    // into one attributes-hash series.
     const commonFields = (metricName: string, ts: string, service: string) => ({
       ResourceAttributes: { 'service.name': service },
       ResourceSchemaUrl: '',
