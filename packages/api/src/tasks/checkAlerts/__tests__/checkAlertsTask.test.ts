@@ -3,11 +3,19 @@ import mongoose from 'mongoose';
 
 import * as config from '@/config';
 import { ObjectId } from '@/models';
-import { AlertSource, AlertThresholdType, IAlert } from '@/models/alert';
+import {
+  AlertSource,
+  AlertState,
+  AlertThresholdType,
+  IAlert,
+} from '@/models/alert';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
 import * as checkAlerts from '@/tasks/checkAlerts';
-import CheckAlertTask from '@/tasks/checkAlerts';
+import CheckAlertTask, {
+  AggregatedAlertHistory,
+  partitionPreviousMapsByAlert,
+} from '@/tasks/checkAlerts';
 import {
   AlertDetails,
   AlertProvider,
@@ -22,6 +30,130 @@ jest.mock('@/tasks/checkAlerts/providers', () => {
     ...jest.requireActual('@/tasks/checkAlerts/providers'),
     loadProvider: jest.fn(),
   };
+});
+
+type TestHistory = Omit<AggregatedAlertHistory, '_id'>;
+
+const buildHistory = (group?: string): TestHistory => ({
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  state: AlertState.OK,
+  group,
+});
+
+const buildPartitionTask = (
+  alerts: { id: string; previousMap: Map<string, TestHistory> }[],
+  teamId = new mongoose.Types.ObjectId(),
+): AlertTask =>
+  ({
+    alerts: alerts.map(({ id, previousMap }) => ({
+      alert: {
+        id,
+        team: { _id: teamId },
+        source: AlertSource.SAVED_SEARCH,
+        threshold: 10,
+        thresholdType: AlertThresholdType.ABOVE,
+        interval: '1m',
+        channel: { type: 'webhook', webhookId: 'webhook-123' },
+      },
+      taskType: AlertTaskType.SAVED_SEARCH,
+      previousMap,
+    })),
+    conn: {
+      id: 'conn-123',
+      _id: new mongoose.Types.ObjectId(),
+      host: config.CLICKHOUSE_HOST,
+      username: config.CLICKHOUSE_USER,
+      password: config.CLICKHOUSE_PASSWORD,
+      name: '',
+      team: teamId,
+    },
+    now: new Date(),
+  }) as unknown as AlertTask;
+
+describe('partitionPreviousMapsByAlert', () => {
+  it('gives each alert only its own entries from a shared map, keys unchanged', () => {
+    const groupedA = buildHistory('service:api');
+    const groupedB = buildHistory('service:web');
+    const ungrouped = buildHistory();
+    const otherAlert = buildHistory();
+    const shared = new Map([
+      ['grouped||service:api', groupedA],
+      ['grouped||service:web', groupedB],
+      ['ungrouped', ungrouped],
+      ['not-in-tick', otherAlert],
+    ]);
+
+    const [task] = partitionPreviousMapsByAlert([
+      buildPartitionTask([
+        { id: 'grouped', previousMap: shared },
+        { id: 'ungrouped', previousMap: shared },
+        { id: 'no-history', previousMap: shared },
+      ]),
+    ]);
+
+    expect(task.alerts[0].previousMap).toEqual(
+      new Map([
+        ['grouped||service:api', groupedA],
+        ['grouped||service:web', groupedB],
+      ]),
+    );
+    expect(task.alerts[1].previousMap).toEqual(
+      new Map([['ungrouped', ungrouped]]),
+    );
+    expect(task.alerts[2].previousMap.size).toBe(0);
+  });
+
+  it('keeps a group name that contains the delimiter with its alert', () => {
+    const history = buildHistory('path:a||b');
+    const shared = new Map([['alert-1||path:a||b', history]]);
+
+    const [task] = partitionPreviousMapsByAlert([
+      buildPartitionTask([{ id: 'alert-1', previousMap: shared }]),
+    ]);
+
+    expect(task.alerts[0].previousMap).toEqual(
+      new Map([['alert-1||path:a||b', history]]),
+    );
+  });
+
+  it('splits maps shared across tasks and keeps already separate maps', () => {
+    const shared = new Map([
+      ['alert-1', buildHistory()],
+      ['alert-2||g:1', buildHistory('g:1')],
+    ]);
+    const own = new Map([['alert-3', buildHistory()]]);
+
+    const tasks = partitionPreviousMapsByAlert([
+      buildPartitionTask([{ id: 'alert-1', previousMap: shared }]),
+      buildPartitionTask([
+        { id: 'alert-2', previousMap: shared },
+        { id: 'alert-3', previousMap: own },
+      ]),
+    ]);
+
+    expect([...tasks[0].alerts[0].previousMap.keys()]).toEqual(['alert-1']);
+    expect([...tasks[1].alerts[0].previousMap.keys()]).toEqual([
+      'alert-2||g:1',
+    ]);
+    expect([...tasks[1].alerts[1].previousMap.keys()]).toEqual(['alert-3']);
+  });
+
+  it('does not mutate the input tasks or maps', () => {
+    const shared = new Map([
+      ['alert-1', buildHistory()],
+      ['alert-2', buildHistory()],
+    ]);
+    const input = buildPartitionTask([
+      { id: 'alert-1', previousMap: shared },
+      { id: 'alert-2', previousMap: shared },
+    ]);
+
+    partitionPreviousMapsByAlert([input]);
+
+    expect(shared.size).toBe(2);
+    expect(input.alerts[0].previousMap).toBe(shared);
+    expect(input.alerts[1].previousMap).toBe(shared);
+  });
 });
 
 describe('CheckAlertTask', () => {
@@ -329,6 +461,53 @@ describe('CheckAlertTask', () => {
       expect(mockAlertProvider.getWebhooks).toHaveBeenCalledWith(
         team2Id.toString(),
       );
+    });
+
+    it('should pass each alert only its own previous history', async () => {
+      const args: CheckAlertsTaskArgs = { taskName: TaskName.CHECK_ALERTS };
+      const task = new CheckAlertTask(args);
+
+      const groupA = buildHistory('g:a');
+      const groupB = buildHistory('g:b');
+      const ungrouped = buildHistory();
+      const shared = new Map([
+        ['alert-1||g:a', groupA],
+        ['alert-1||g:b', groupB],
+        ['alert-2', ungrouped],
+      ]);
+
+      mockAlertProvider.getAlertTasks.mockResolvedValue([
+        buildPartitionTask([
+          { id: 'alert-1', previousMap: shared },
+          { id: 'alert-2', previousMap: shared },
+        ]),
+      ]);
+      mockAlertProvider.getWebhooks.mockResolvedValue(new Map());
+      mockAlertProvider.getClickHouseClient.mockResolvedValue(
+        new ClickhouseClient({}),
+      );
+      const receivedMaps = new Map<string, Map<string, unknown>>();
+      mockProcessAlert.mockImplementation(
+        async (_now: Date, details: AlertDetails) => {
+          receivedMaps.set(details.alert.id, details.previousMap);
+        },
+      );
+
+      await task.execute();
+
+      expect(receivedMaps).toEqual(
+        new Map([
+          [
+            'alert-1',
+            new Map([
+              ['alert-1||g:a', groupA],
+              ['alert-1||g:b', groupB],
+            ]),
+          ],
+          ['alert-2', new Map([['alert-2', ungrouped]])],
+        ]),
+      );
+      expect(shared.size).toBe(3);
     });
 
     describe('when a connection fails', () => {
