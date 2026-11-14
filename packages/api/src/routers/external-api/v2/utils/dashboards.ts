@@ -32,6 +32,7 @@ import {
   DASHBOARD_MAX_CONTAINERS,
   DashboardContainer,
   DashboardContainerSchema,
+  DashboardFilter,
   DisplayType,
   HeatmapMode,
   isLogSource,
@@ -57,8 +58,6 @@ import { getConnectionsByTeam } from '@/controllers/connection';
 import { getSources } from '@/controllers/sources';
 import Dashboard, { DashboardDocument } from '@/models/dashboard';
 import {
-  getMcpCompatibleFilters,
-  getMcpCompatibleFilterValues,
   translateExternalChartToTileConfig,
   translateExternalFilterToFilter,
   translateFilterToExternalFilter,
@@ -771,17 +770,22 @@ function convertTileToExternalChart(
   };
 }
 
+/** Whether a filter only works while PromQL is enabled. */
+export function isPromqlFilter(filter: DashboardFilter): boolean {
+  return (
+    isPrometheusLabelFilter(filter) ||
+    (isAdhocFilter(filter) && filter.sourceType === 'promql')
+  );
+}
+
 export function convertToExternalDashboard(
   dashboard: DashboardDocument,
   {
     hidePromql = false,
-    hideAdhoc = false,
   }: {
-    // MCP hides PromQL tiles and PROMETHEUS_LABEL filters while PromQL is
-    // disabled on the deployment.
+    // MCP hides PromQL tiles and PromQL filters while PromQL is disabled on
+    // the deployment.
     hidePromql?: boolean;
-    // MCP doesn't expose ad hoc filters or their saved conditions yet.
-    hideAdhoc?: boolean;
   } = {},
 ): ExternalDashboard {
   const containers = dashboard.containers ?? [];
@@ -803,17 +807,12 @@ export function convertToExternalDashboard(
         convertTileToExternalChart(tile, containerById, dashboardId),
       ),
     tags: dashboard.tags || [],
-    filters: (hideAdhoc
-      ? getMcpCompatibleFilters(dashboard.filters)
-      : (dashboard.filters ?? [])
-    )
-      .filter(filter => !(hidePromql && isPrometheusLabelFilter(filter)))
+    filters: (dashboard.filters ?? [])
+      .filter(filter => !(hidePromql && isPromqlFilter(filter)))
       .map(translateFilterToExternalFilter),
     savedQuery: dashboard.savedQuery ?? null,
     savedQueryLanguage: dashboard.savedQueryLanguage ?? null,
-    savedFilterValues: hideAdhoc
-      ? getMcpCompatibleFilterValues(dashboard.savedFilterValues)
-      : (dashboard.savedFilterValues ?? []),
+    savedFilterValues: dashboard.savedFilterValues ?? [],
     // Mongoose persists missing arrays as []. Only emit containers when
     // the user actually saved one or more, so dashboards without the
     // organization layer round-trip with the field absent.
