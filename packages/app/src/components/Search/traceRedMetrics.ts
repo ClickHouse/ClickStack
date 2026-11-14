@@ -141,14 +141,14 @@ const DURATION_P99_ALIAS = 'P99';
  * borrows error red (or warning orange / success green) and each percentile keeps
  * its color across sessions regardless of how the data sorts the lines.
  * Aggregating the raw column (not a divided-to-ms expression) keeps it
- * MV-friendly; the caller passes a duration NumberFormat derived from the
- * source's precision (via getTraceDurationNumberFormat) so unit conversion
- * happens at display.
+ * MV-friendly; because every series aggregates the source's duration expression
+ * with a unit-preserving aggFn, DBTimeChart's own number-format inference
+ * (useChartNumberFormats -> getTraceDurationNumberFormat) applies the duration
+ * unit at display, so no explicit numberFormat is needed here.
  */
 export function durationConfig(
   base: BuilderChartConfigWithDateRange,
   durationExpression: string,
-  numberFormat: NumberFormat | undefined,
 ): BuilderChartConfigWithDateRange {
   return {
     ...base,
@@ -178,6 +178,5 @@ export function durationConfig(
       },
     ],
     displayType: DisplayType.Line,
-    numberFormat,
   };
 }
