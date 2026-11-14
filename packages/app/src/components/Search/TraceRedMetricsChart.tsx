@@ -8,7 +8,6 @@ import { Flex, SegmentedControl } from '@mantine/core';
 import { IsolatedChartSyncProvider } from '@/chartSync';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { DBTimeChart, type SeriesGroupFilter } from '@/components/DBTimeChart';
-import { getTraceDurationNumberFormat } from '@/source';
 
 import {
   durationConfig,
@@ -67,20 +66,11 @@ export function TraceRedMetricsChart({
 }) {
   const [errorsMode, setErrorsMode] = useState<ErrorsMode>('rate');
 
-  // Aggregate the raw Duration column (MV-friendly) and let the display format,
-  // derived from the source's durationPrecision, convert the unit.
+  // Aggregate the raw Duration column (MV-friendly). DBTimeChart's own
+  // number-format inference applies the duration unit at display, since every
+  // duration series aggregates the source's duration expression (see
+  // durationConfig), so no explicit format is computed here.
   const durationExpression = source.durationExpression ?? '';
-  // Memoized: getTraceDurationNumberFormat returns a fresh object, so an
-  // unmemoized value would change identity every render and defeat the
-  // `duration` memo below (re-rendering DBTimeChart on every keystroke/tick).
-  const durationFormat = useMemo(
-    () =>
-      getTraceDurationNumberFormat(source, {
-        valueExpression: durationExpression,
-        aggFn: 'avg',
-      }),
-    [source, durationExpression],
-  );
 
   const base = useMemo(
     () => redBaseConfig(histogramTimeChartConfig),
@@ -91,8 +81,8 @@ export function TraceRedMetricsChart({
     [base, source.statusCodeExpression, errorsMode],
   );
   const duration = useMemo(
-    () => durationConfig(base, durationExpression, durationFormat),
-    [base, durationExpression, durationFormat],
+    () => durationConfig(base, durationExpression),
+    [base, durationExpression],
   );
 
   const errorsModeControl = (
