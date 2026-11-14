@@ -111,6 +111,17 @@ export function TraceRedMetricsChart({
     compactXAxisLabels: true,
   } as const;
 
+  // Throughput stacks per status when the view is grouped (the source default),
+  // where the legend names each status and is worth showing. With "group by
+  // none" it collapses to a single count() series, so hide the legend instead
+  // of surfacing the raw aggregate expression as a label.
+  const throughputGrouped =
+    typeof histogramTimeChartConfig.groupBy === 'string'
+      ? histogramTimeChartConfig.groupBy.trim().length > 0
+      : Array.isArray(histogramTimeChartConfig.groupBy)
+        ? histogramTimeChartConfig.groupBy.length > 0
+        : false;
+
   return (
     <IsolatedChartSyncProvider>
       <Flex direction="row" h="100%" gap="sm" mih="0" miw="0">
@@ -122,7 +133,7 @@ export function TraceRedMetricsChart({
           <DBTimeChart
             title="Throughput"
             config={histogramTimeChartConfig}
-            showLegend
+            showLegend={throughputGrouped}
             onFocusSeries={onFocusSeries}
             {...commonProps}
             queryKeyPrefix={throughputQueryKeyPrefix}
