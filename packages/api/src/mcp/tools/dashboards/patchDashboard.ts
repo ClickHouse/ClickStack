@@ -15,7 +15,7 @@ import {
   isConfigTile,
   validateDashboardTiles,
 } from '@/routers/external-api/v2/utils/dashboards';
-import { getExternalCompatibleFilterValues } from '@/utils/externalApi';
+import { getMcpCompatibleFilterValues } from '@/utils/externalApi';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 import { externalDashboardTileSchemaWithId } from '@/utils/zod';
 
@@ -127,7 +127,7 @@ export function registerPatchDashboard({
           // Convert only for the error message (read-only, no write-back).
           const externalDashboard = convertToExternalDashboard(
             existingDashboard,
-            { hidePromql: !promqlEnabled },
+            { hidePromql: !promqlEnabled, hideAdhoc: true },
           );
           return mcpUserError(
             `Tile not found: ${tileId}. Available tile IDs: ${externalDashboard.tiles.map(t => `${t.id} (${t.name})`).join(', ')}`,
@@ -271,7 +271,7 @@ export function registerPatchDashboard({
         tags: updatedDashboard.tags,
         ...(savedFilterValues !== undefined
           ? {
-              savedFilterValues: getExternalCompatibleFilterValues(
+              savedFilterValues: getMcpCompatibleFilterValues(
                 updatedDashboard.savedFilterValues,
               ),
             }

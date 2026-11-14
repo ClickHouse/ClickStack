@@ -184,6 +184,7 @@ export function registerQueryTiles({
 
       const externalDashboard = convertToExternalDashboard(dashboard, {
         hidePromql: !isPromqlEnabled(context),
+        hideAdhoc: true,
       });
       const allTiles = externalDashboard.tiles;
 
