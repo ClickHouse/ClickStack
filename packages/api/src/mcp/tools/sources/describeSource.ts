@@ -91,6 +91,7 @@ type DescribeProgress = {
 async function describeSourceSchema(
   context: McpContext,
   sourceId: string,
+  metricName: string | undefined,
   signal: AbortSignal,
   progress: DescribeProgress,
 ): Promise<ToolResult> {
@@ -118,7 +119,14 @@ async function describeSourceSchema(
   }
 
   if (source.kind === SourceKind.Promql) {
-    return describePromqlSource({ teamId, source, meta, signal, progress });
+    return describePromqlSource({
+      teamId,
+      source,
+      metricName,
+      meta,
+      signal,
+      progress,
+    });
   }
 
   if (
@@ -593,9 +601,17 @@ export function registerDescribeSource({
           .describe(
             'The source ID to describe. Get this from clickstack_list_sources.',
           ),
+        metricName: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'PromQL sources only: list the label names of this metric. ' +
+              'Without it, a PromQL source on a ClickHouse table lists metric names only.',
+          ),
       }),
     },
-    async ({ sourceId }) => {
+    async ({ sourceId, metricName }) => {
       const progress: DescribeProgress = {};
 
       const span = trace.getActiveSpan();
@@ -629,7 +645,14 @@ export function registerDescribeSource({
       let outcome: TimeoutOutcome<ToolResult>;
       try {
         outcome = await runWithTimeout(
-          signal => describeSourceSchema(context, sourceId, signal, progress),
+          signal =>
+            describeSourceSchema(
+              context,
+              sourceId,
+              metricName,
+              signal,
+              progress,
+            ),
           { timeoutMs: DESCRIBE_TIMEOUT_MS, graceMs: DESCRIBE_BACKSTOP_MS },
         );
       } catch (e) {

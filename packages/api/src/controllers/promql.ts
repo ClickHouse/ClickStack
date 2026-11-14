@@ -256,22 +256,28 @@ async function fetchPrometheusData<T extends z.ZodTypeAny>(
 
 export type PromqlLabelCatalog = {
   backend: PromqlBackend;
-  labelNames: string[];
+  /** Without `metricName`, only a Prometheus endpoint lists label names. */
+  labelNames?: string[];
   metricNames: string[];
 };
 
 /**
- * Lists the label names and metric names a PromQL source holds in
- * [startMs, endMs], at most `limit` of each. Returns `limit + 1` entries when
- * there are more, so callers can tell the list was cut. A ClickHouse source
- * reads them through the Prometheus HTTP API where resolveClickhouseLabelBackend
- * allows it, and with SQL otherwise.
+ * Lists the metric names a PromQL source holds, and label names: of
+ * `metricName` when given, else of every series on a Prometheus endpoint. At
+ * most `limit` of each; returns `limit + 1` entries when there are more, so
+ * callers can tell the list was cut.
+ *
+ * A Prometheus endpoint answers for [startMs, endMs]. A ClickHouse TimeSeries
+ * table is read with SQL on its tags table, without the window, whatever
+ * backend evaluates its queries: the window costs a pass over every series
+ * id, on the HTTP API too, which large tables can't afford (#3648).
  */
 export async function getPromqlLabelCatalog({
   teamId,
   source,
   startMs,
   endMs,
+  metricName,
   limit,
   signal,
 }: {
@@ -279,10 +285,10 @@ export async function getPromqlLabelCatalog({
   source: {
     connection: { toString(): string };
     from: { databaseName: string; tableName: string };
-    promqlBackend?: PromqlSourceBackend;
   };
   startMs: number;
   endMs: number;
+  metricName?: string;
   limit: number;
   signal?: AbortSignal;
 }): Promise<PromqlLabelCatalog> {
@@ -295,51 +301,30 @@ export async function getPromqlLabelCatalog({
     throw new Error('Connection not found');
   }
 
-  const params = {
-    start: String(startMs / 1000),
-    end: String(endMs / 1000),
-    limit: String(limit + 1),
-  };
-  const fetchCatalog = (fetchLabels: (path: string) => Promise<string[]>) =>
-    Promise.all([
-      fetchLabels('/labels'),
-      fetchLabels('/label/__name__/values'),
-    ]);
-
   if (connection.isPrometheusEndpoint) {
-    const [labelNames, metricNames] = await fetchCatalog(path =>
+    const params = {
+      start: String(startMs / 1000),
+      end: String(endMs / 1000),
+      limit: String(limit + 1),
+    };
+    const fetchLabels = (path: string, extra: Record<string, string> = {}) =>
       fetchPrometheusData(
         connection.host,
         `/api/v1${path}`,
-        params,
+        { ...params, ...extra },
         labelListSchema,
         signal,
-      ),
-    );
-    return { backend: 'prometheus', labelNames, metricNames };
-  }
-
-  const { databaseName, tableName } = source.from;
-  const labelBackend = await resolveClickhouseLabelBackend({
-    connection,
-    databaseName,
-    tableName,
-    promqlBackend: source.promqlBackend,
-  });
-  if (labelBackend === 'clickhouse-http') {
-    const [labelNames, metricNames] = await fetchCatalog(path => {
-      const { upstream, headers } = clickhousePrometheusRequest(connection);
-      return fetchPrometheusData(
-        upstream,
-        `${CLICKHOUSE_PROMETHEUS_API_PREFIX}${path}`,
-        { ...params, database: databaseName, table: tableName },
-        labelListSchema,
-        signal,
-        headers,
-        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
       );
-    });
-    return { backend: 'clickhouse', labelNames, metricNames };
+    const [labelNames, metricNames] = await Promise.all([
+      fetchLabels(
+        '/labels',
+        metricName != null
+          ? { 'match[]': `{__name__=${JSON.stringify(metricName)}}` }
+          : {},
+      ),
+      fetchLabels('/label/__name__/values'),
+    ]);
+    return { backend: 'prometheus', labelNames, metricNames };
   }
 
   const args = {
@@ -350,15 +335,14 @@ export async function getPromqlLabelCatalog({
       requestTimeout: PROMETHEUS_FETCH_TIMEOUT_MS,
     }),
     connectionId: connection.id,
-    databaseName,
-    tableName,
-    startMs,
-    endMs,
+    databaseName: source.from.databaseName,
+    tableName: source.from.tableName,
     limit: limit + 1,
     signal,
   };
+  // No startMs/endMs: without them neither lookup reads the time ranges.
   const [labelNames, metricNames] = await Promise.all([
-    queryLabelNames(args),
+    metricName != null ? queryLabelNames({ ...args, metricName }) : undefined,
     queryLabelValues({ ...args, labelName: '__name__' }),
   ]);
   return { backend: 'clickhouse', labelNames, metricNames };

@@ -1778,7 +1778,7 @@ const mcpPromqlLabelFilterSchema = z
     ),
     label: PromqlLabelDashboardFilterSchema.shape.label.describe(
       'Label whose values fill the dropdown, e.g. "job". ' +
-        'clickstack_describe_source lists the label names of a promql source.',
+        'clickstack_describe_source with metricName lists the label names of a metric in a promql source.',
     ),
     match: PromqlLabelDashboardFilterSchema.shape.match.describe(
       'Optional series selector narrowing which series the values come from, ' +

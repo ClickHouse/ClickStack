@@ -29,6 +29,7 @@ export function timeSeriesSqlUsage(table: string): string {
 }
 
 export const PROMQL_SOURCE_USAGE =
-  `${PROMQL_QUERY_USAGE} Call clickstack_describe_source to list label names ` +
-  'and metric names. A PromQL source with backend "clickhouse" is a ' +
+  `${PROMQL_QUERY_USAGE} Call clickstack_describe_source to list metric names, ` +
+  "and with metricName to list that metric's label names. A PromQL source " +
+  'with backend "clickhouse" is a ' +
   `ClickHouse TimeSeries table; to inspect its raw tags and samples, ${timeSeriesSqlUsage('<table>')}`;

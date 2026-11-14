@@ -9,7 +9,7 @@ A source with kind "promql" holds Prometheus metrics, from a Prometheus-compatib
 
 Discovery workflow:
   1. clickstack_list_sources: find the source with kind "promql" and its backend ("prometheus" or "clickhouse").
-  2. clickstack_describe_source(sourceId): lists its metric names and label names.
+  2. clickstack_describe_source(sourceId): lists its metric names. clickstack_describe_source(sourceId, metricName): lists that metric's label names.
   3. clickstack_promql(sourceId, expression, startTime, endTime): run the expression. The default queryType "range" returns time series rows; queryType "instant" evaluates once at endTime and returns one row per series with a column per label (use it for "what is the value right now" and top-N questions).
   4. To keep a chart, save it as a PromQL tile (see "PROMQL TILES" in the create_dashboard prompt) and validate it with clickstack_query_tile. A tile with the same expression and granularity returns the same rows clickstack_promql did.
 
@@ -48,6 +48,6 @@ Sources with kind "promql" hold Prometheus metrics. Chart them with PROMQL tiles
 
   - displayType works as for builder tiles. line, stacked_bar and stacked_line plot every expression; number, table, pie and bar query only the first and can set queryType "instant" to evaluate once at the end of the range.
   - legendTemplate names each series from its labels, e.g. "{{job}} / {{instance}}".
-  - Filter with a PROMETHEUS_LABEL dashboard filter: { "type": "PROMETHEUS_LABEL", "name": "Job", "sourceId": "<promql source id>", "label": "job", "variableName": "job" }. Tiles reference it in a matcher: {job=~"$job"} (multi-select) or {job="$job"} with maxSelections: 1. clickstack_describe_source lists the label names.
+  - Filter with a PROMETHEUS_LABEL dashboard filter: { "type": "PROMETHEUS_LABEL", "name": "Job", "sourceId": "<promql source id>", "label": "job", "variableName": "job" }. Tiles reference it in a matcher: {job=~"$job"} (multi-select) or {job="$job"} with maxSelections: 1. clickstack_describe_source with metricName lists a metric's label names.
   - Draft each expression with clickstack_promql first, then validate the saved tile with clickstack_query_tile. PromQL tiles cannot have alerts.
   - Fetch the query_guide prompt for the PromQL syntax notes (rate(), histogram_quantile, the $__rate_interval macro).`;

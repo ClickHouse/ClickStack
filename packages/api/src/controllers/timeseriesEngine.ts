@@ -312,12 +312,20 @@ export async function queryLabelValues({
  */
 export async function queryLabelNames({
   limit,
+  metricName,
   ...args
-}: TimeSeriesTagsQueryArgs): Promise<string[]> {
+}: TimeSeriesTagsQueryArgs & {
+  /** Only this metric's series; the tags table is sorted by metric name. */
+  metricName?: string;
+}): Promise<string[]> {
   // The engine keeps `__name__` in `metric_name`, not `tags`, so it is folded
   // back in explicitly.
   const value = chSql`arrayJoin(arrayConcat([${{ String: '__name__' }}], mapKeys(${{ Identifier: 'tags' }})))`;
   const conditions = await getSeriesFilterConditions(args);
+  if (metricName != null)
+    conditions.push(
+      chSql`${{ Identifier: 'metric_name' }} = ${{ String: metricName }}`,
+    );
 
   return queryDistinctTagsValues({ ...args, value, conditions, limit });
 }
