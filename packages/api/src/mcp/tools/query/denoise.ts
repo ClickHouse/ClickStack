@@ -229,6 +229,7 @@ export async function denoiseSearchResults(
   const isNoisy = buildNoisyBodyMatcher(
     patterns.map(p => p.pattern),
     noisyTemplates,
+    { masked: true },
   );
   const filteredRows = rows.filter(row => {
     const bodyValue = row[bodyColumnKey];
