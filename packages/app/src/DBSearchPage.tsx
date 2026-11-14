@@ -3003,6 +3003,7 @@ function DBSearchPageContent() {
                                 source={traceRedMetricsSource}
                                 isReady={isReady}
                                 queryKeyPrefix={RED_QUERY_KEY_PREFIX}
+                                throughputQueryKeyPrefix={QUERY_KEY_PREFIX}
                                 onTimeRangeSelect={handleTimeRangeSelect}
                                 onFocusSeries={handleFocusSeries}
                               />
