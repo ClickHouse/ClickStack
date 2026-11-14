@@ -112,11 +112,13 @@ export function errorsConfig(
           valueExpression: '',
         },
         {
-          // Guard the empty-bucket 0/0 (which becomes NaN and breaks the
-          // auto-scaled y-axis). error_spans is a countIf over the same rows as
-          // total_spans = count(), so the ratio can't exceed 1; no clamp needed.
+          // A GROUP BY time bucket is only emitted when it has rows, so
+          // total_spans is always >= 1 in the result set (missing buckets are
+          // gap-filled to 0 client-side, not in SQL). error_spans is a countIf
+          // over those same rows, so the ratio stays in [0, 1] with no
+          // divide-by-zero to guard, matching how HttpTab divides its rate.
           alias: 'Error rate',
-          valueExpression: `if(${TOTAL_SPANS_ALIAS} > 0, ${ERROR_SPANS_ALIAS} / ${TOTAL_SPANS_ALIAS}, 0)`,
+          valueExpression: `${ERROR_SPANS_ALIAS} / ${TOTAL_SPANS_ALIAS}`,
         },
       ],
       displayType: DisplayType.Line,
@@ -150,8 +152,8 @@ export function errorsConfig(
 // positional palette slot (chart-red) the pins exist to avoid, with no test or
 // type failure to catch it.
 const DURATION_AVG_ALIAS = 'Avg';
-const DURATION_P95_ALIAS = 'p95';
-const DURATION_P99_ALIAS = 'p99';
+const DURATION_P95_ALIAS = 'P95';
+const DURATION_P99_ALIAS = 'P99';
 
 /**
  * Pin the Duration percentiles to stable, cool palette hues so latency never
