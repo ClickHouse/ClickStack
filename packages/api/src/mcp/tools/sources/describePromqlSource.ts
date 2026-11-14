@@ -71,7 +71,7 @@ export async function describePromqlSource({
         ? ['Pass metricName to list the label names of one metric.']
         : []),
       // A metric's label names always include __name__.
-      ...(labelNames?.length === 0
+      ...(metricName != null && labelNames?.length === 0
         ? [`No series has the metric name ${JSON.stringify(metricName)}.`]
         : []),
     ];

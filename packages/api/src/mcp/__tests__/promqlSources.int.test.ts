@@ -279,6 +279,19 @@ describe('MCP PromQL sources', () => {
       }
     });
 
+    it('adds no metric-name note when an endpoint has no labels in the window', async () => {
+      const source = await createPrometheusSource();
+      mockFetch.mockImplementation(async () => prometheusResponse([]));
+
+      const result = await callTool(client, 'clickstack_describe_source', {
+        sourceId: source._id.toString(),
+      });
+
+      const output = JSON.parse(getFirstText(result));
+      expect(output.labelNames).toEqual([]);
+      expect(output.note).toBeUndefined();
+    });
+
     it('still returns the source config when the label lookup fails', async () => {
       const source = await createPrometheusSource();
       mockFetch.mockRejectedValue(new Error('fetch failed'));
