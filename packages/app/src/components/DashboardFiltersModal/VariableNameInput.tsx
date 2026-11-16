@@ -16,6 +16,8 @@ interface VariableNameInputProps {
   label?: string;
   /** Replaces the tooltip, for filters whose name isn't a referenceable variable. */
   description?: string;
+  /** What validation errors call the field, e.g. "name". */
+  noun?: string;
 }
 
 export const VariableNameInput = ({
@@ -23,6 +25,7 @@ export const VariableNameInput = ({
   otherFilters,
   label = 'Variable name',
   description,
+  noun,
 }: VariableNameInputProps) => {
   const { errors } = useFormState({ control });
   const filterName = useWatch({ control, name: 'name' });
@@ -42,7 +45,7 @@ export const VariableNameInput = ({
         data-testid="filter-variable-name-input"
         {...control.register('variableName', {
           validate: value =>
-            validateVariableName({ value, otherFilters }) ?? true,
+            validateVariableName({ value, otherFilters, noun }) ?? true,
         })}
       />
     </CustomInputWrapper>

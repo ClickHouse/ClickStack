@@ -2607,6 +2607,18 @@ describe('filters', () => {
       );
     });
 
+    it('names the field by the given noun', () => {
+      const other = [variableFilter({ name: 'Env', variableName: 'env' })];
+      const validate = (value: string) =>
+        validateVariableName({ value, otherFilters: other, noun: 'name' });
+
+      expect(validate('')).toBe('Name is required');
+      expect(validate('1env')).toMatch(/^Names must start with a letter/);
+      expect(validate('env')).toBe(
+        'This name is used by another filter on this dashboard (Env)',
+      );
+    });
+
     it('compares names case-sensitively', () => {
       expect(
         validateVariableName({

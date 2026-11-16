@@ -192,6 +192,7 @@ export const AdhocFilterEditForm = ({
         control={control}
         otherFilters={otherFilters}
         label="Unique name"
+        noun="name"
         description="Identifies this filter's conditions in the URL. Ad hoc filters can't be referenced as variables in tile queries."
       />
     </>

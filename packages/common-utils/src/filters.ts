@@ -1490,6 +1490,7 @@ export function getPendingFilterValuesVariables(
 export function validateVariableName({
   value,
   otherFilters,
+  noun = 'variable name',
 }: {
   value: string | undefined;
   otherFilters: {
@@ -1497,16 +1498,19 @@ export function validateVariableName({
     variableName?: string;
     isVariableEnabled?: boolean;
   }[];
+  /** What the messages call the field, for filters whose name isn't a variable. */
+  noun?: string;
 }): string | undefined {
+  const capitalized = noun.charAt(0).toUpperCase() + noun.slice(1);
   const trimmed = (value ?? '').trim();
   if (!trimmed) {
-    return 'Variable name is required';
+    return `${capitalized} is required`;
   }
   if (trimmed.length > DASHBOARD_VARIABLE_NAME_MAX_LENGTH) {
-    return `Variable name must be ${DASHBOARD_VARIABLE_NAME_MAX_LENGTH} characters or fewer`;
+    return `${capitalized} must be ${DASHBOARD_VARIABLE_NAME_MAX_LENGTH} characters or fewer`;
   }
   if (!DASHBOARD_VARIABLE_NAME_PATTERN_ANCHORED.test(trimmed)) {
-    return 'Variable names must start with a letter and may contain only letters, numbers, and underscores';
+    return `${capitalized}s must start with a letter and may contain only letters, numbers, and underscores`;
   }
   const clash = otherFilters.find(
     other =>
@@ -1514,7 +1518,7 @@ export function validateVariableName({
       getFilterVariableName(other) === trimmed,
   );
   if (clash) {
-    return `This variable name is used by another filter on this dashboard (${clash.name})`;
+    return `This ${noun} is used by another filter on this dashboard (${clash.name})`;
   }
   return undefined;
 }

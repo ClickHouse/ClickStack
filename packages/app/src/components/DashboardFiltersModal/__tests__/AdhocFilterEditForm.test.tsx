@@ -4,6 +4,7 @@ import {
   DashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { AdhocFilterEditForm } from '@/components/DashboardFiltersModal/AdhocFilterEditForm';
 import {
@@ -46,6 +47,7 @@ function Harness({
 }) {
   const { control, setValue } = useForm<FilterFormValues>({
     defaultValues: toFormValues(filter),
+    mode: 'onChange',
   });
   return (
     <AdhocFilterEditForm
@@ -82,6 +84,23 @@ describe('AdhocFilterEditForm', () => {
     expect(screen.queryByText('Variable name')).not.toBeInTheDocument();
     expect(
       screen.getByText(/can't be referenced as variables/),
+    ).toBeInTheDocument();
+  });
+
+  it('calls the field a name, not a variable, in its errors', async () => {
+    renderForm(adhoc(), [
+      adhoc({ id: 'a2', name: 'Other', variableName: 'taken' }),
+    ]);
+
+    await userEvent.type(
+      screen.getByTestId('filter-variable-name-input'),
+      'taken',
+    );
+
+    expect(
+      await screen.findByText(
+        'This name is used by another filter on this dashboard (Other)',
+      ),
     ).toBeInTheDocument();
   });
 
