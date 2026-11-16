@@ -854,7 +854,7 @@ export function validateDashboardFilterQueries(
  * Why a SQL query filter's template can't expand, or undefined when it can.
  * The SQL itself is not parsed: ClickHouse syntax is only checked when it runs.
  */
-function validateSqlQueryFilterTemplate(
+export function validateSqlQueryFilterTemplate(
   sqlTemplate: string,
   variables: ChartVariable[],
 ): string | undefined {
