@@ -6546,7 +6546,7 @@ describe('External API v2 Dashboards - new format', () => {
 
         expect(response.status).toBe(400);
         expect(JSON.stringify(response.body)).toContain(
-          `PROMETHEUS_LABEL filters require a PromQL source. The following source IDs are not PromQL sources: ${traceSource._id.toString()}`,
+          `The following filter source IDs do not exist or are not a kind of source the filter supports: ${traceSource._id.toString()}`,
         );
       });
 
@@ -6556,8 +6556,26 @@ describe('External API v2 Dashboards - new format', () => {
 
         expect(response.status).toBe(400);
         expect(JSON.stringify(response.body)).toContain(
-          `Could not find the following source IDs: ${sourceId}`,
+          `The following filter source IDs do not exist or are not a kind of source the filter supports: ${sourceId}`,
         );
+      });
+
+      it('accepts a GET response PUT back after its source was deleted', async () => {
+        const dashboard = await createTestDashboard({
+          filters: [
+            {
+              ...omit(promqlFilterInput(), 'sourceId'),
+              source: new ObjectId().toString(),
+            },
+          ],
+        });
+        const { data } = (
+          await authRequest('get', `${BASE_URL}/${dashboard._id}`).expect(200)
+        ).body;
+
+        await authRequest('put', `${BASE_URL}/${dashboard._id}`)
+          .send({ ...omit(data, 'id'), name: 'Renamed' })
+          .expect(200);
       });
 
       it.each([
@@ -8710,7 +8728,7 @@ describe('External API v2 Dashboards - new format', () => {
     });
 
     it('rejects an ad hoc filter applying to a source of the wrong kind', async () => {
-      await authRequest('post', BASE_URL)
+      const response = await authRequest('post', BASE_URL)
         .send(
           createMockDashboard(traceSource._id.toString(), {
             filters: [
@@ -8725,6 +8743,8 @@ describe('External API v2 Dashboards - new format', () => {
           }),
         )
         .expect(400);
+
+      expect(response.body.message).toContain(promqlSource._id.toString());
     });
 
     it('rejects ad hoc saved values with an unknown operator', async () => {

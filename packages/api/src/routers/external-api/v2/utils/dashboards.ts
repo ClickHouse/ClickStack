@@ -14,8 +14,8 @@ import {
   validateDashboardTileContainerRefs,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import {
-  isAdhocFilter,
   isPrometheusLabelFilter,
+  isQueryExpressionFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
@@ -1319,9 +1319,9 @@ function getMissingSources(
   }
 
   for (const filter of filters ?? []) {
-    // Ad hoc filters' sources are checked with the stored filter's references
-    // skipped; see `validateDashboardTiles`.
-    if ('sourceId' in filter) sourceIds.add(filter.sourceId);
+    // PROMETHEUS_LABEL and ADHOC sources are checked with the stored filter's
+    // references skipped; see `validateDashboardTiles`.
+    if (isQueryExpressionFilter(filter)) sourceIds.add(filter.sourceId);
   }
 
   const existingSourceIds = new Set(
@@ -1832,8 +1832,8 @@ export async function validateDashboardTiles(
     return `Tiles with formulas require a Metric, Log, or Trace source. The following source IDs are not formula-capable: ${formulaIncompatibleSources.join(', ')}`;
   }
 
-  // PromQL tiles and PROMETHEUS_LABEL filters query through their source's
-  // connection and TimeSeries table, which only a PromQL source carries.
+  // PromQL tiles query through their source's connection and TimeSeries
+  // table, which only a PromQL source carries.
   const promqlTileError = getNonPromqlSourceError(
     sources,
     getChangedPromqlTileSourceIds(tiles, existingTiles),
@@ -1841,24 +1841,20 @@ export async function validateDashboardTiles(
   );
   if (promqlTileError != null) return promqlTileError;
 
-  const promqlLabelFilters = (filters ?? []).filter(isPrometheusLabelFilter);
-  const promqlLabelFilterError = getNonPromqlSourceError(
-    sources,
-    promqlLabelFilters.map(f => f.sourceId),
-    'PROMETHEUS_LABEL filters',
-  );
-  if (promqlLabelFilterError != null) return promqlLabelFilterError;
-
-  // As in the internal API, references the stored filter already made are not
+  // PROMETHEUS_LABEL and ADHOC filters need live sources of the right kind. As
+  // in the internal API, references the stored filter already made are not
   // re-checked, so a since-deleted source doesn't block unrelated saves.
-  const adhocFilterError = getFilterSourceRefError(
+  const filterSourceError = getFilterSourceRefError(
     getChangedFilterSourceRefs(
-      (filters ?? []).filter(isAdhocFilter),
+      // Create bodies carry no filter IDs; an empty one matches no stored filter.
+      (filters ?? []).map(filter =>
+        translateExternalFilterToFilter({ id: '', ...filter }),
+      ),
       existingFilters,
     ),
     sources,
   );
-  if (adhocFilterError != null) return adhocFilterError;
+  if (filterSourceError != null) return filterSourceError;
 
   if (missingOnClickDashboards.length > 0) {
     return `Could not find the following onClick dashboard IDs: ${missingOnClickDashboards.join(', ')}`;
