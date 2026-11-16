@@ -11,6 +11,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+  installAll,
   isValidServerName,
   listTeams,
   mcpClients,
@@ -239,6 +240,39 @@ describe('teamServers', () => {
   });
 });
 
+describe('installAll', () => {
+  it('writes every server to every client and reports each entry', () => {
+    const calls: string[] = [];
+    const client = (id: string, failOn?: string) =>
+      ({
+        id,
+        install: (s: { name: string; teamId?: string }) => {
+          if (s.name === failOn) throw new Error('disk full');
+          calls.push(`${id}:${s.name}:${s.teamId}`);
+        },
+      }) as unknown as ReturnType<typeof mcpClients>[number];
+    const servers = teamServers(server, [
+      { id: 'a', name: 'Demo', isCurrent: true },
+      { id: 'b', name: 'Prod', isCurrent: false },
+    ]);
+    const results = installAll(
+      [client('cursor'), client('codex', 'clickstack-demo')],
+      servers,
+    );
+    expect(calls).toEqual([
+      'cursor:clickstack-demo:a',
+      'cursor:clickstack-prod:b',
+      'codex:clickstack-prod:b',
+    ]);
+    expect(results.map(r => [r.client.id, r.name, r.error])).toEqual([
+      ['cursor', 'clickstack-demo', undefined],
+      ['cursor', 'clickstack-prod', undefined],
+      ['codex', 'clickstack-demo', 'disk full'],
+      ['codex', 'clickstack-prod', undefined],
+    ]);
+  });
+});
+
 describe('isValidServerName', () => {
   it('rejects names that would break a TOML table header', () => {
     expect(isValidServerName('clickstack-prd_2')).toBe(true);
@@ -272,7 +306,12 @@ describe('listTeams', () => {
     id: 1,
     result: {
       isError: true,
-      content: [{ type: 'text', text: 'MCP error -32602: Tool not found' }],
+      content: [
+        {
+          type: 'text',
+          text: 'MCP error -32602: Tool clickstack_list_teams not found',
+        },
+      ],
     },
   })}\n\n`;
 
@@ -294,9 +333,44 @@ describe('listTeams', () => {
   });
 
   it('throws when the tool exists but fails', async () => {
-    respondText(toolError.replace('Tool not found', 'database timeout'));
+    respondText(
+      toolError.replace(
+        'Tool clickstack_list_teams not found',
+        'user not found',
+      ),
+    );
     await expect(listTeams('https://example.com', 'k')).rejects.toThrow(
-      /database timeout/,
+      /user not found/,
+    );
+  });
+
+  const rpcError = (message: string) =>
+    `event: message\ndata: ${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: -32602, message },
+    })}\n\n`;
+
+  it('reads a JSON-RPC unknown-tool error as no team listing', async () => {
+    respondText(rpcError('Tool clickstack_list_teams not found'));
+    await expect(listTeams('https://example.com', 'k')).resolves.toEqual([]);
+  });
+
+  it('throws on any other JSON-RPC error', async () => {
+    respondText(rpcError('Invalid arguments'));
+    await expect(listTeams('https://example.com', 'k')).rejects.toThrow(
+      /Invalid arguments/,
+    );
+  });
+
+  it('skips other SSE messages and throws on a malformed team list', async () => {
+    const notice = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/message' })}\n\n`;
+    const teams = [{ id: 'a', name: 'Demo', isCurrent: true }];
+    respondText(notice + sse(JSON.stringify({ teams })));
+    await expect(listTeams('https://example.com', 'k')).resolves.toEqual(teams);
+    respondText(sse('not json'));
+    await expect(listTeams('https://example.com', 'k')).rejects.toThrow(
+      /unexpected team list/,
     );
   });
 

@@ -3,6 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import type { MeTeam } from '@/api/client';
+
 // Same server name the Team Settings snippets use, so a reinstall replaces
 // an entry added by hand instead of adding a second one.
 export const DEFAULT_MCP_SERVER_NAME = 'clickstack';
@@ -21,11 +23,7 @@ export interface McpServer {
   teamId?: string;
 }
 
-export interface McpTeam {
-  id: string;
-  name: string;
-  isCurrent: boolean;
-}
+export type McpTeam = MeTeam & { isCurrent: boolean };
 
 export interface McpClient {
   id: 'claude-code' | 'codex' | 'cursor' | 'vscode';
@@ -109,30 +107,41 @@ export async function listTeams(
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  // The endpoint answers with an SSE stream; take the reply to our request.
   const text = await res.text();
-  // The endpoint answers with a one-message SSE stream.
-  const message =
-    text
-      .split('\n')
-      .find(line => line.startsWith('data:'))
-      ?.slice(5) ?? text;
-  const { result, error } = JSON.parse(message);
-  // Only an unknown tool means "no team listing". The SDK reports it as an
-  // error result (or a -32601/-32602 error); any other error is a failure.
+  const messages = text
+    .split('\n')
+    .filter(line => line.startsWith('data:'))
+    .map(line => line.slice(5));
+  let reply: { result?: any; error?: any } | undefined;
+  for (const message of messages.length > 0 ? messages : [text]) {
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed?.result || parsed?.error) reply = parsed;
+    } catch {
+      // Not our reply; a missing one is reported below.
+    }
+  }
+  if (!reply) throw new Error('unexpected response');
+  const { result, error } = reply;
+  // Only an unknown tool means "no team listing". Any other error is a
+  // failed listing, including other "not found" or invalid-params errors.
   const failure: string | undefined = result?.isError
     ? String(result.content?.[0]?.text ?? 'tool error')
     : error
       ? String(error.message ?? 'error')
       : undefined;
   if (failure != null) {
-    const unknownTool =
-      /tool .*not found/i.test(failure) ||
-      error?.code === -32601 ||
-      error?.code === -32602;
-    if (unknownTool) return [];
+    if (/clickstack_list_teams not found/i.test(failure)) return [];
     throw new Error(failure);
   }
-  const { teams } = JSON.parse(result.content[0].text);
+  let teams: unknown;
+  try {
+    teams = JSON.parse(result.content[0].text).teams;
+  } catch {
+    // Handled with a non-array result below.
+  }
+  if (!Array.isArray(teams)) throw new Error('unexpected team list');
   // The id ends up in a header value and, with several teams, a server name.
   return (teams as McpTeam[]).filter(
     t =>
@@ -164,6 +173,34 @@ export function teamServers(server: McpServer, teams: McpTeam[]): McpServer[] {
       teamId: t.id,
     };
   });
+}
+
+export interface InstallResult {
+  client: McpClient;
+  /** Server entry name this result is for. */
+  name: string;
+  error?: string;
+}
+
+/** Writes every server to every client, one result per entry. */
+export function installAll(
+  clients: McpClient[],
+  servers: McpServer[],
+): InstallResult[] {
+  return clients.flatMap(client =>
+    servers.map(server => {
+      try {
+        client.install(server);
+        return { client, name: server.name };
+      } catch (e) {
+        return {
+          client,
+          name: server.name,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    }),
+  );
 }
 
 function onPath(command: string): boolean {

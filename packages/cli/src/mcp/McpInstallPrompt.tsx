@@ -5,6 +5,8 @@ import Spinner from 'ink-spinner';
 
 import Choice from '@/mcp/Choice';
 import {
+  installAll,
+  type InstallResult,
   type KeyIdentity,
   listTeams,
   type McpClient,
@@ -14,13 +16,6 @@ import {
   verifyKey,
 } from '@/mcp/install';
 import { isValidUrl } from '@/utils/url';
-
-export interface InstallResult {
-  client: McpClient;
-  /** Server entry name this result is for. */
-  name: string;
-  error?: string;
-}
 
 type Step = 'appUrl' | 'key' | 'checking' | 'team' | 'agents' | 'confirm';
 
@@ -47,7 +42,7 @@ export default function McpInstallPrompt({
   const [identity, setIdentity] = useState<KeyIdentity | null>(null);
   const [teams, setTeams] = useState<McpTeam[]>([]);
   const [picked, setPicked] = useState<McpTeam[]>([]);
-  const [teamsFailed, setTeamsFailed] = useState(false);
+  const [teamsError, setTeamsError] = useState<string | null>(null);
   const [chosen, setChosen] = useState(clients);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,22 +54,7 @@ export default function McpInstallPrompt({
   useInput(
     (input, inkKey) => {
       if (inkKey.return || input.toLowerCase() === 'y') {
-        finish(
-          chosen.flatMap(client =>
-            servers.map(server => {
-              try {
-                client.install(server);
-                return { client, name: server.name };
-              } catch (e) {
-                return {
-                  client,
-                  name: server.name,
-                  error: e instanceof Error ? e.message : String(e),
-                };
-              }
-            }),
-          ),
-        );
+        finish(installAll(chosen, servers));
       } else if (inkKey.escape || input.toLowerCase() === 'n') {
         finish(null);
       }
@@ -104,14 +84,17 @@ export default function McpInstallPrompt({
     if (!cleaned) return;
     setKey(cleaned);
     setError(null);
+    setTeamsError(null);
     setStep('checking');
     try {
       setIdentity(await verifyKey(appUrl, cleaned));
       // A failed listing must not block the install or look like one team.
-      const found = await listTeams(appUrl, cleaned).catch(() => null);
-      setTeamsFailed(found == null);
-      setTeams(found ?? []);
-      setStep(found && found.length > 1 ? 'team' : afterTeam);
+      const found = await listTeams(appUrl, cleaned).catch((e: unknown) => {
+        setTeamsError(e instanceof Error ? e.message : String(e));
+        return [];
+      });
+      setTeams(found);
+      setStep(found.length > 1 ? 'team' : afterTeam);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setKey('');
@@ -164,9 +147,10 @@ export default function McpInstallPrompt({
         </Text>
       )}
 
-      {teamsFailed && step !== 'key' && (
+      {teamsError && step !== 'key' && (
         <Text color="yellow">
-          Could not list teams. The server will use the key&apos;s default team.
+          Could not list teams ({teamsError}). The server will use the
+          key&apos;s default team.
         </Text>
       )}
 
@@ -190,8 +174,8 @@ export default function McpInstallPrompt({
           title="Agents to set up:"
           items={clients}
           label={c => c.label}
-          onSubmit={picked => {
-            setChosen(picked);
+          onSubmit={chosenClients => {
+            setChosen(chosenClients);
             setStep('confirm');
           }}
           onCancel={() => finish(null)}

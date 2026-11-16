@@ -34,10 +34,11 @@ import { isValidUrl } from '@/utils/url';
 import { uploadSourcemaps } from '@/sourcemaps';
 import {
   DEFAULT_MCP_SERVER_NAME,
+  type InstallResult,
   isValidServerName,
   mcpClients,
 } from '@/mcp/install';
-import McpInstallPrompt, { type InstallResult } from '@/mcp/McpInstallPrompt';
+import McpInstallPrompt from '@/mcp/McpInstallPrompt';
 
 // ---- Standalone interactive login for `hdx auth login` -------------
 
@@ -567,7 +568,7 @@ mcp
     if (!isValidServerName(opts.name)) {
       _origError(
         chalk.red(
-          '--name can only contain letters, numbers, hyphens, and underscores.\n',
+          '--name must start with a letter or number and contain only letters, numbers, hyphens, and underscores.\n',
         ),
       );
       process.exit(1);
