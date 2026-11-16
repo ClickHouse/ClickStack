@@ -170,6 +170,7 @@ export const LogSource = Source.discriminator<ILogSource>(
     spanIdExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
@@ -222,6 +223,7 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     spanLinksValueExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
