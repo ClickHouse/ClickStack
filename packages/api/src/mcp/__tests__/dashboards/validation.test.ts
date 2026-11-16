@@ -11,6 +11,7 @@ import {
   getRawSqlMissingSourceError,
   getRawSqlTileMacroWarnings,
   getRawSqlTilesMissingRequiredSource,
+  getSavedFilterValueWarnings,
   getTileVariableWarnings,
 } from '@/mcp/tools/dashboards/validation';
 import type {
@@ -980,5 +981,33 @@ describe('getFilterVariableWarnings', () => {
         'Filter "Environment": Failed to parse macro arguments',
       ]);
     });
+  });
+});
+
+describe('getSavedFilterValueWarnings', () => {
+  const filters = [
+    { type: 'DATA_SOURCE' as const, name: 'Traces', variableName: 'traces' },
+    { type: 'CONNECTION' as const, name: 'Cluster', variableName: 'conn' },
+  ];
+
+  it('accepts saved values for data source and connection variables', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [
+          { type: 'variable', name: 'traces', values: ['s1'] },
+          { type: 'variable', name: 'conn', values: ['c1'] },
+        ],
+        filters,
+      ),
+    ).toEqual([]);
+  });
+
+  it('warns about a saved value no filter declares', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [{ type: 'variable', name: 'nope', values: ['x'] }],
+        filters,
+      ),
+    ).toHaveLength(1);
   });
 });

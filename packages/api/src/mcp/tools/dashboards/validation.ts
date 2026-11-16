@@ -7,6 +7,8 @@ import {
   isAdhocConditionSupported,
   isFilterVariableEnabled,
   validateSqlQueryFilterTemplate,
+  isReferenceVariableFilterType,
+  pairWithVariableNames,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
@@ -264,7 +266,8 @@ export function getFilterVariableWarnings(
  * `name` matches no filter of its kind, or an ad hoc condition its filter's
  * source type can't express, is silently ignored when the dashboard loads, so
  * it looks like a saved default but never applies. Warn so the agent can fix
- * it.
+ * it. Data source and connection variables count as variable-enabled filters,
+ * though they are not text variables.
  */
 export function getSavedFilterValueWarnings(
   savedFilterValues: DashboardFilterValue[] | undefined,
@@ -273,11 +276,16 @@ export function getSavedFilterValueWarnings(
     | undefined,
 ): string[] {
   if (!savedFilterValues?.length) return [];
-  const declaredNames = new Set(
-    getDashboardVariableDeclarations(filters).map(
+  const declaredNames = new Set([
+    ...getDashboardVariableDeclarations(filters).map(
       declaration => declaration.name,
     ),
-  );
+    ...pairWithVariableNames(
+      (filters ?? []).filter(filter =>
+        isReferenceVariableFilterType(filter.type),
+      ),
+    ).map(({ name }) => name),
+  ]);
   const adhocSourceTypeByName = new Map(
     (filters ?? []).flatMap(filter =>
       filter.type === 'ADHOC' && filter.sourceType

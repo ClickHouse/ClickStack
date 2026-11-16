@@ -3,7 +3,6 @@ import {
   isFilterBroadcastEnabled,
   isFilterRequired,
   isFilterVariableEnabled,
-  isReferenceVariableFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AlertErrorType,
@@ -239,24 +238,8 @@ export function translateExternalChartToTileConfig(
   };
 }
 
-/** Filter types the external API and MCP don't expose yet. */
-export type ExternalCompatibleDashboardFilter = Exclude<
-  DashboardFilter,
-  { type: 'DATA_SOURCE' | 'CONNECTION' }
->;
-
-/** The filters the external API and MCP may read. */
-export function getExternalCompatibleFilters(
-  filters: DashboardFilter[] | undefined,
-): ExternalCompatibleDashboardFilter[] {
-  return (filters ?? []).filter(
-    (filter): filter is ExternalCompatibleDashboardFilter =>
-      !isReferenceVariableFilter(filter),
-  );
-}
-
 export function translateFilterToExternalFilter(
-  filter: ExternalCompatibleDashboardFilter,
+  filter: DashboardFilter,
 ): ExternalDashboardFilterWithId {
   // Omitted from responses unless the filter is required, so a GET response
   // can be PUT back verbatim.
@@ -285,6 +268,15 @@ export function translateFilterToExternalFilter(
         ...omit(filter, 'connection', ...omittedKeys),
         connectionId: filter.connection.toString(),
       };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connection'),
+        ...(filter.connection ? { connectionId: filter.connection } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     case 'QUERY_EXPRESSION': {
       // Ignore variableName and appliesToSourceIds if the filter is not in a mode that uses them
@@ -326,6 +318,15 @@ export function translateExternalFilterToFilter(
 
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connectionId'),
+        ...(filter.connectionId ? { connection: filter.connectionId } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     default:
       filter satisfies never;

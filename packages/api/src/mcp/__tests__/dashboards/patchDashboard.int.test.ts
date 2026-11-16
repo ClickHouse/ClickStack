@@ -1400,4 +1400,76 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
       expect(tile.config.showOperandSeries).toBe(false);
     });
   });
+
+  describe('reference variables', () => {
+    const createDashboard = () =>
+      new Dashboard({
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            id: 'tile',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 3,
+            config: {
+              name: 'Tile',
+              source: ctx.traceSource._id.toString(),
+              displayType: 'line',
+              select: [{ aggFn: 'count', valueExpression: '' }],
+              where: '',
+            },
+          },
+        ],
+        filters: [
+          {
+            id: 'ds-filter',
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+            minSelections: 1,
+            maxSelections: 1,
+            isBroadcastEnabled: false,
+            isVariableEnabled: true,
+          },
+        ],
+        team: ctx.team._id,
+      }).save();
+
+    const patchSource = (dashboardId: string, sourceId: string) =>
+      callTool(ctx.client!, 'clickstack_patch_dashboard', {
+        dashboardId,
+        tileId: 'tile',
+        tile: {
+          name: 'Tile',
+          config: {
+            displayType: 'line',
+            sourceId,
+            select: [{ aggFn: 'count' }],
+          },
+        },
+      });
+
+    it('patches a tile to read from a declared data source variable', async () => {
+      const dashboard = await createDashboard();
+
+      const result = await patchSource(dashboard._id.toString(), '$traces');
+
+      expect(result.isError).toBeFalsy();
+      const stored = await Dashboard.findById(dashboard._id).lean();
+      expect(stored?.tiles[0].config).toMatchObject({ source: '$traces' });
+    });
+
+    it('rejects a patch referencing an undeclared variable', async () => {
+      const dashboard = await createDashboard();
+
+      const result = await patchSource(dashboard._id.toString(), '$nope');
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain(
+        'does not name a data source variable',
+      );
+    });
+  });
 });

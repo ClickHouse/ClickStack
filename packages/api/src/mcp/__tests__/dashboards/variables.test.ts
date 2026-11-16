@@ -1,10 +1,16 @@
+import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 
 import {
+  type ReferenceTargets,
   resolveDashboardVariables,
+  resolveTileVariableReferences,
   withResolvedFilterVariableNames,
 } from '@/mcp/tools/dashboards/variables';
-import type { ExternalDashboardFilterWithId } from '@/utils/zod';
+import type {
+  ExternalDashboardFilterWithId,
+  ExternalDashboardTileWithId,
+} from '@/utils/zod';
 
 const sourceId = new mongoose.Types.ObjectId().toString();
 
@@ -320,5 +326,145 @@ describe('withResolvedFilterVariableNames', () => {
     expect(withResolvedFilterVariableNames([noExplicitName])).toEqual([
       { ...noExplicitName, variableName: 'Deploy_Env' },
     ]);
+  });
+});
+
+describe('resolveTileVariableReferences', () => {
+  const objectId = () => new mongoose.Types.ObjectId().toString();
+  const connectionId = objectId();
+  const traceSourceId = objectId();
+  const targets: ReferenceTargets = {
+    sources: [
+      { id: traceSourceId, kind: SourceKind.Trace, connection: connectionId },
+    ],
+    connectionIds: new Set([connectionId]),
+  };
+
+  const referenceVariableFields = {
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  } as const;
+  const connectionVariable: ExternalDashboardFilterWithId = {
+    ...referenceVariableFields,
+    id: objectId(),
+    type: 'CONNECTION',
+    name: 'Connection',
+    variableName: 'conn',
+  };
+  const tracesVariable = (
+    connection?: string,
+  ): ExternalDashboardFilterWithId => ({
+    ...referenceVariableFields,
+    id: objectId(),
+    type: 'DATA_SOURCE',
+    name: 'Traces source',
+    variableName: 'traces',
+    allowedSourceKinds: [SourceKind.Trace],
+    connectionId: connection,
+  });
+
+  const builderTile: ExternalDashboardTileWithId = {
+    id: 'builder',
+    name: 'Builder',
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 3,
+    config: {
+      displayType: 'number',
+      sourceId: '$traces',
+      select: [{ aggFn: 'count', where: '' }],
+    },
+  };
+  const rawSqlTile: ExternalDashboardTileWithId = {
+    id: 'raw-sql',
+    name: 'Raw SQL',
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 3,
+    config: {
+      configType: 'sql',
+      displayType: 'table',
+      connectionId: '$conn',
+      sqlTemplate: 'SELECT 1',
+    },
+  };
+
+  const resolve = (
+    tile: ExternalDashboardTileWithId,
+    filters: ExternalDashboardFilterWithId[],
+    selections: Record<string, string[]>,
+  ) =>
+    resolveTileVariableReferences(
+      tile,
+      filters,
+      Object.entries(selections).map(([name, values]) => ({ name, values })),
+      [],
+      targets,
+    );
+
+  it("resolves a connection reference to the variable's selection", () => {
+    const result = resolve(rawSqlTile, [connectionVariable], {
+      conn: [connectionId],
+    });
+
+    expect(result).toEqual({
+      tile: {
+        ...rawSqlTile,
+        config: { ...rawSqlTile.config, connectionId },
+      },
+    });
+  });
+
+  it('resolves a source on the connection its connection variable selects', () => {
+    const result = resolve(
+      builderTile,
+      [connectionVariable, tracesVariable('$conn')],
+      { conn: [connectionId], traces: [traceSourceId] },
+    );
+
+    expect(result).toEqual({
+      tile: {
+        ...builderTile,
+        config: { ...builderTile.config, sourceId: traceSourceId },
+      },
+    });
+  });
+
+  it.each<{
+    case: string;
+    tile: ExternalDashboardTileWithId;
+    filters: ExternalDashboardFilterWithId[];
+    selections: Record<string, string[]>;
+    variable: string;
+  }>([
+    {
+      case: 'a source selection that is not a source',
+      tile: builderTile,
+      filters: [tracesVariable()],
+      selections: { traces: [connectionId] },
+      variable: '$traces',
+    },
+    {
+      case: 'a source variable whose connection variable has no selection',
+      tile: builderTile,
+      filters: [connectionVariable, tracesVariable('$conn')],
+      selections: { traces: [traceSourceId] },
+      variable: '$conn',
+    },
+    {
+      case: 'a connection selection that is not a connection',
+      tile: rawSqlTile,
+      filters: [connectionVariable],
+      selections: { conn: [traceSourceId] },
+      variable: '$conn',
+    },
+  ])('rejects $case', ({ tile, filters, selections, variable }) => {
+    expect(resolve(tile, filters, selections)).toEqual({
+      error: expect.stringContaining(`${variable} variable`),
+    });
   });
 });
