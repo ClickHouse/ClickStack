@@ -19,6 +19,7 @@ jest.mock('@/config', () => ({
       connection: 'Local ClickHouse',
       from: { databaseName: 'default', tableName: 'metrics_ts' },
       timestampValueExpression: 'timestamp',
+      promqlBackend: 'clickhouse-http',
     },
   ]),
   get IS_PROMQL_ENABLED() {
@@ -73,6 +74,7 @@ describe('setupTeamDefaults', () => {
         kind: SourceKind.Promql,
         connection: 'conn-1',
         from: { databaseName: 'default', tableName: 'metrics_ts' },
+        promqlBackend: 'clickhouse-http',
       }),
     );
   });

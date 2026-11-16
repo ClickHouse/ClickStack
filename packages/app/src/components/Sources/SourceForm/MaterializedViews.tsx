@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Controller, useFieldArray, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
   Box,
   Button,
-  Divider,
   Flex,
   Grid,
   Group,
@@ -349,7 +349,7 @@ function MaterializedViewFormSection({
         mvIndex={mvIndex}
         setValue={setValue}
       />
-      <Divider />
+      <Separator size="xs" />
     </Stack>
   );
 }

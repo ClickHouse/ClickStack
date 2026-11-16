@@ -8,7 +8,7 @@ export const HEALTH_THRESHOLDS = {
   errorRateRatio: 2,
   /** ...and at least this many percentage points higher. */
   errorRateMinDeltaPp: 1,
-  /** high_error_rate, and critical when combined with error_rate_up. */
+  /** high_error_rate: current error rate at or above this. */
   highErrorRate: 0.05,
   /** latency_up: p95 at least this multiple of the comparison... */
   latencyRatio: 1.5,
@@ -34,24 +34,25 @@ export type HealthFlag =
   | 'latency_up'
   | 'traffic_drop'
   | 'missing_service'
-  // Context for the reader; these never change status.
+  // Context only; these do not count as a crossed threshold.
   | 'traffic_spike'
   | 'new_service'
   | 'low_volume'
   // Set by the report: a shown error group is new or growing.
   | 'new_errors';
 
-const DEGRADING_FLAGS: ReadonlySet<HealthFlag> = new Set<HealthFlag>([
+const THRESHOLD_FLAGS: ReadonlySet<HealthFlag> = new Set<HealthFlag>([
   'error_rate_up',
   'high_error_rate',
   'latency_up',
   'traffic_drop',
   'missing_service',
 ]);
-export type HealthStatus = 'critical' | 'degraded' | 'healthy';
+
+export const crossedThreshold = (flags: readonly HealthFlag[]) =>
+  flags.some(f => THRESHOLD_FLAGS.has(f));
 
 export type ServiceAssessment = {
-  status: HealthStatus;
   flags: HealthFlag[];
   score: number;
   deltas: {
@@ -60,12 +61,6 @@ export type ServiceAssessment = {
     p95Ratio: number | null;
     p95DeltaMs: number | null;
   };
-};
-
-export const STATUS_ORDER: Record<HealthStatus, number> = {
-  critical: 0,
-  degraded: 1,
-  healthy: 2,
 };
 
 const errorRate = (s: WindowStats) =>
@@ -157,16 +152,7 @@ export function assessService(
     flags.push('traffic_drop');
   }
 
-  const status: HealthStatus =
-    flags.includes('error_rate_up') &&
-    curRate >= HEALTH_THRESHOLDS.highErrorRate
-      ? 'critical'
-      : flags.some(f => DEGRADING_FLAGS.has(f))
-        ? 'degraded'
-        : 'healthy';
-
   return {
-    status,
     flags,
     // Too few requests to judge, so it should not outrank real services.
     score: flags.includes('low_volume')
@@ -177,7 +163,7 @@ export function assessService(
 }
 
 /**
- * Orders services within a status. Sums how far each metric moved the wrong
+ * Orders services by magnitude. Sums how far each metric moved the wrong
  * way, then scales by log volume so a busy service outranks a quiet one with
  * the same shift. Error points are percentage points; latency and traffic are
  * log2 ratios, so doubling p95 weighs the same as +2pp errors.
@@ -202,7 +188,8 @@ export function compareAssessments(
   b: { assessment: ServiceAssessment; errors: number; requests: number },
 ): number {
   return (
-    STATUS_ORDER[a.assessment.status] - STATUS_ORDER[b.assessment.status] ||
+    Number(crossedThreshold(b.assessment.flags)) -
+      Number(crossedThreshold(a.assessment.flags)) ||
     b.assessment.score - a.assessment.score ||
     b.errors - a.errors ||
     b.requests - a.requests

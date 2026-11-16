@@ -712,6 +712,36 @@ describe('DashboardFilterSchema query-expression variant', () => {
   });
 });
 
+describe('DashboardFilterSchema ad hoc variant', () => {
+  const adhocFilter = {
+    id: 'f1',
+    type: 'ADHOC' as const,
+    name: 'Conditions',
+    sourceType: 'sql' as const,
+    sources: ['source-1'],
+    isVariableEnabled: true as const,
+  };
+
+  it('keeps the condition that narrows its suggestions', () => {
+    const filter = {
+      ...adhocFilter,
+      where: 'Namespace IN ($namespace)',
+      whereLanguage: 'sql' as const,
+    };
+    expect(DashboardFilterSchema.parse(filter)).toEqual(filter);
+  });
+
+  it('rejects a PromQL condition language', () => {
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...adhocFilter,
+        where: 'up',
+        whereLanguage: 'promql',
+      }).success,
+    ).toBe(false);
+  });
+});
+
 // Preset dashboards are broadcast-only, so the preset schema extends the
 // query-expression variant rather than the union — a static filter is
 // unrepresentable rather than rejected by a refinement.
@@ -918,6 +948,43 @@ describe('PromqlSourceSchema.minAutoGranularity', () => {
   it('rejects a malformed interval', () => {
     expect(parse('1 fortnight').success).toBe(false);
     expect(parse('minute').success).toBe(false);
+  });
+});
+
+describe('PromqlSourceSchema.promqlBackend', () => {
+  const base = {
+    id: 'source-1',
+    kind: 'promql' as const,
+    name: 'Prometheus',
+    connection: 'conn-1',
+    from: { databaseName: 'default', tableName: 'metrics_ts' },
+    timestampValueExpression: 'timestamp',
+  };
+  const parse = (promqlBackend: unknown) =>
+    PromqlSourceSchema.safeParse({ ...base, promqlBackend });
+
+  it.each(['auto', 'clickhouse-http', 'table-function'])(
+    'accepts %s',
+    value => {
+      const result = parse(value);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.promqlBackend).toBe(value);
+      }
+    },
+  );
+
+  it('accepts an absent setting', () => {
+    const result = parse(undefined);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.promqlBackend).toBeUndefined();
+    }
+  });
+
+  it('rejects anything else', () => {
+    expect(parse('http').success).toBe(false);
+    expect(parse('').success).toBe(false);
   });
 });
 

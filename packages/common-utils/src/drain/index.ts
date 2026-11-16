@@ -17,5 +17,6 @@ export {
   minePatterns,
 } from './mine-patterns';
 export { Node } from './node';
+export { buildNoisyBodyMatcher, selectNoisyPatterns } from './noisy-matcher';
 export type { AddLogMessageResult, ExtractedParameter } from './template-miner';
 export { TemplateMiner } from './template-miner';

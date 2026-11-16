@@ -1,17 +1,22 @@
+import { useMemo } from 'react';
 import { Controller, UseFormSetValue, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
+import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { getAdhocFilterSourceKinds } from '@hyperdx/common-utils/dist/filters';
 import {
   AdhocFilterSourceType,
   DashboardFilter,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
-import { Box, Divider, SegmentedControl } from '@mantine/core';
+import { Box, SegmentedControl } from '@mantine/core';
 
 import { CheckBoxControlled } from '@/components/InputControlled';
+import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
 import { SourceMultiSelectControlled } from '@/components/SourceMultiSelect';
 import { IS_PROMQL_ENABLED } from '@/config';
 import { useSources } from '@/source';
 
+import { TOOLTIP_PORTAL_TARGET } from './constants';
 import { CustomInputWrapper } from './CustomInputWrapper';
 import { FilterFormControl, FilterFormValues } from './filterFormState';
 import { VariableNameInput } from './VariableNameInput';
@@ -35,11 +40,18 @@ export const AdhocFilterEditForm = ({
   otherFilters,
 }: AdhocFilterEditFormProps) => {
   const { data: allSources } = useSources();
-  const [sourceType, isBroadcastEnabled] = useWatch({
+  const [sourceType, isBroadcastEnabled, sourceIds] = useWatch({
     control,
-    name: ['sourceType', 'isBroadcastEnabled'],
+    name: ['sourceType', 'isBroadcastEnabled', 'sources'],
   });
   const allowedSourceKinds = getAdhocFilterSourceKinds(sourceType);
+  const tableConnections = useMemo(
+    () =>
+      (allSources ?? [])
+        .filter(source => sourceIds?.includes(source.id))
+        .map(tcFromSource),
+    [allSources, sourceIds],
+  );
   // Kept visible for a saved PromQL filter so its source type can be changed
   const showSourceType =
     sourceType === 'promql' ||
@@ -107,8 +119,26 @@ export const AdhocFilterEditForm = ({
           }}
         />
       </CustomInputWrapper>
+      {sourceType === 'sql' && (
+        <CustomInputWrapper
+          label="Keys and values filter"
+          tooltipText="Optional condition used to filter the rows from which keys and values are suggested. May reference the dashboard's other variables."
+        >
+          <SearchWhereInput
+            tableConnections={tableConnections}
+            control={control}
+            name="where"
+            languageName="whereLanguage"
+            allowMultiline={true}
+            sqlPlaceholder="Filter for keys and values"
+            lucenePlaceholder="Filter for keys and values"
+            enableVariables
+            parentRef={TOOLTIP_PORTAL_TARGET}
+          />
+        </CustomInputWrapper>
+      )}
 
-      <Divider />
+      <Separator size="xs" />
       <CheckBoxControlled
         control={control}
         name="isBroadcastEnabled"
@@ -139,7 +169,7 @@ export const AdhocFilterEditForm = ({
           </CustomInputWrapper>
         </Box>
       )}
-      <Divider />
+      <Separator size="xs" />
       <VariableNameInput control={control} otherFilters={otherFilters} />
     </>
   );

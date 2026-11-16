@@ -43,6 +43,7 @@ import {
   getPreviousAlertHistories,
   getScheduledWindowStart,
   parseAlertData,
+  partitionPreviousMapsByAlert,
   processAlert,
 } from '@/tasks/checkAlerts';
 import {
@@ -4875,6 +4876,7 @@ describe('checkAlerts', () => {
           description: 'generic webhook description',
           body: JSON.stringify({
             text: '{{link}} | {{title}}',
+            note: '{{note}}',
           }),
           headers: {
             // @ts-expect-error type mismatch due to mongoose typing
@@ -4958,6 +4960,7 @@ describe('checkAlerts', () => {
           threshold: 1,
           dashboardId: dashboard.id,
           tileId: '17quud',
+          note: 'Check the api pods',
         },
         {
           taskType: AlertTaskType.TILE,
@@ -5027,6 +5030,7 @@ describe('checkAlerts', () => {
         redirect: 'manual',
         body: JSON.stringify({
           text: `http://app:8080/dashboards/${dashboard.id}?from=1700170200000&granularity=5+minute&to=1700174700000&highlightedTileId=17quud | 🚨 Alert for "My Dashboard - Logs Count" - 3 meets or exceeds 1`,
+          note: 'Check the api pods',
         }),
         // Idempotency-Key is always injected last (cannot be overridden by user headers)
         // and is a stable objectHash of {eventId, startTime, endTime, state}.
@@ -5037,6 +5041,7 @@ describe('checkAlerts', () => {
           'Idempotency-Key': expect.any(String),
         }),
         signal: expect.any(AbortSignal),
+        dispatcher: expect.anything(),
       });
     });
 
@@ -6927,6 +6932,132 @@ describe('checkAlerts', () => {
         call[1].text.includes('My Search'),
       );
       expect(resolutionCall).toBeDefined();
+    });
+
+    describe('with a previous-history map shared by every alert in the tick', () => {
+      const now = new Date('2023-11-16T22:12:00.000Z');
+
+      const setupGroupedAlertBesideFiringAlert = async () => {
+        const setup = await setupSavedSearchAlertTest();
+        const { team, webhook, source, savedSearch } = setup;
+        const alertConfig = {
+          source: AlertSource.SAVED_SEARCH,
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+          interval: '5m',
+          thresholdType: AlertThresholdType.ABOVE,
+          threshold: 1,
+          savedSearchId: savedSearch.id,
+        } as const;
+        const savedSearchDetails = {
+          taskType: AlertTaskType.SAVED_SEARCH,
+          savedSearch,
+        } as const;
+
+        const grouped = await createAlertDetails(
+          team,
+          source,
+          { ...alertConfig, groupBy: 'ServiceName' },
+          savedSearchDetails,
+        );
+        const firing = await createAlertDetails(
+          team,
+          source,
+          alertConfig,
+          savedSearchDetails,
+        );
+        await AlertHistory.create({
+          alert: firing.alert.id,
+          createdAt: new Date('2023-11-16T22:05:00.000Z'),
+          state: AlertState.ALERT,
+          fired: true,
+          counts: 1,
+          lastValues: [],
+        });
+
+        return { ...setup, grouped, firing };
+      };
+
+      // Mirrors CheckAlertTask.execute(): load one shared map, then split it.
+      const evaluateGroupedAlert = async ({
+        grouped,
+        firing,
+        connection,
+        clickhouseClient,
+        teamWebhooksById,
+      }: Awaited<ReturnType<typeof setupGroupedAlertBesideFiringAlert>>) => {
+        const shared = await getPreviousAlertHistories(
+          [grouped.alert.id, firing.alert.id],
+          now,
+        );
+        expect(shared.get(firing.alert.id)?.state).toBe(AlertState.ALERT);
+
+        const [task] = partitionPreviousMapsByAlert([
+          {
+            alerts: [
+              { ...grouped, previousMap: shared },
+              { ...firing, previousMap: shared },
+            ],
+            conn: connection,
+            now,
+          },
+        ]);
+        await processAlert(
+          now,
+          task.alerts[0],
+          clickhouseClient,
+          connection.id,
+          alertProvider,
+          teamWebhooksById,
+        );
+
+        return AlertHistory.find({ alert: grouped.alert.id }).sort({
+          createdAt: 1,
+        });
+      };
+
+      it("does not write an empty-group history from another alert's ALERT state", async () => {
+        const setup = await setupGroupedAlertBesideFiringAlert();
+        await bulkInsertLogs(
+          [1, 2].map(() => ({
+            ServiceName: 'service-a',
+            Timestamp: new Date('2023-11-16T22:05:00.000Z'),
+            SeverityText: 'error',
+            Body: 'Error from service-a',
+          })),
+        );
+
+        const histories = await evaluateGroupedAlert(setup);
+
+        expect(histories.map(h => [h.group, h.state])).toEqual([
+          ['ServiceName:service-a', AlertState.ALERT],
+        ]);
+      });
+
+      it('records every empty bucket when only another alert is firing', async () => {
+        const setup = await setupGroupedAlertBesideFiringAlert();
+        await AlertHistory.create({
+          alert: setup.grouped.alert.id,
+          createdAt: new Date('2023-11-16T21:55:00.000Z'),
+          state: AlertState.OK,
+          group: 'ServiceName:service-a',
+          counts: 0,
+          lastValues: [],
+        });
+
+        const histories = await evaluateGroupedAlert(setup);
+
+        const latest = histories[histories.length - 1];
+        expect(histories).toHaveLength(2);
+        expect(latest.group).toBeUndefined();
+        expect(latest.state).toBe(AlertState.OK);
+        expect(
+          latest.lastValues.map(v => [v.startTime.toISOString(), v.count]),
+        ).toEqual([
+          ['2023-11-16T21:55:00.000Z', 0],
+          ['2023-11-16T22:00:00.000Z', 0],
+          ['2023-11-16T22:05:00.000Z', 0],
+        ]);
+      });
     });
 
     // The sample rows quoted in the message body carry no group predicate, so
