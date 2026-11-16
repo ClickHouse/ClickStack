@@ -1582,6 +1582,23 @@ describe('orderByAfterRemovingSelectItem', () => {
     ).toBe('"http.method" DESC');
   });
 
+  it('drops a sort on an alias written without quotes', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '`message` ASC, Timestamp DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+  });
+
   it('keeps a comma inside a backtick-quoted sort name', () => {
     expect(
       orderByAfterRemovingSelectItem(

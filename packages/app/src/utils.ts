@@ -1291,10 +1291,11 @@ export const orderByAfterRemovingSelectItem = (
   if (alias == null) {
     return orderBy;
   }
-  const quoted = `"${alias}"`;
+  // An alias can be written bare, double-quoted, or backtick-quoted in ORDER BY
+  const aliasKeys = new Set([alias, `"${alias}"`, `\`${alias}\``]);
   const keys = splitAndTrimWithBracket(orderBy);
   const kept = keys.filter(
-    key => key.replace(/\s+(ASC|DESC)$/i, '') !== quoted,
+    key => !aliasKeys.has(key.replace(/\s+(ASC|DESC)$/i, '')),
   );
   if (kept.length === keys.length) {
     return orderBy;
