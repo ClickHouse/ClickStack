@@ -70,6 +70,7 @@ mikeshi42
 milansanjeev
 mkaesz
 motsc
+mrkaye97 wants to implement improvements to ClickStack
 niladrix719
 peter-leonov-ch
 pttydou wants to improve FE type safety
