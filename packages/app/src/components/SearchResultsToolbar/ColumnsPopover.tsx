@@ -30,6 +30,7 @@ import { isColumnInSelect, withMapKeyAlias } from '@/utils';
 
 import {
   clauseApplyDisabled,
+  clauseDirty,
   ClausePopover,
   clauseResetDisabled,
   storedClause,
@@ -130,6 +131,7 @@ export function ColumnsPopover({
       }}
       resetDisabled={clauseResetDisabled(draft, defaultValue)}
       applyDisabled={clauseApplyDisabled(draft)}
+      dirty={clauseDirty(draft, value, defaultValue)}
       onApply={() => {
         const submitted = storedClause(draft, value, defaultValue);
         const next = storedColumns(submitted);
@@ -200,7 +202,8 @@ export function ColumnsPopover({
           </Group>
           <Text size="xs" c="dimmed">
             Select a column, or type an expression such as{' '}
-            <Code>upper(Body) as message</Code>, then click Add.
+            <Code>upper(Body) as message</Code> and add it to the list. Then
+            click Apply.
           </Text>
         </Stack>
       )}

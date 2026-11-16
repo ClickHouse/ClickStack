@@ -1,7 +1,8 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useRef, useState } from 'react';
 import { Button, Group, Popover, SegmentedControl, Stack } from '@mantine/core';
 
 import { SplitValueButton } from '@/components/SplitValueButton/SplitValueButton';
+import { useConfirm } from '@/useConfirm';
 
 export type ClauseMode = 'pick' | 'sql';
 
@@ -28,6 +29,13 @@ export const clauseResetDisabled = matchesDefault;
 
 export const clauseApplyDisabled = (draft: string) => draft.trim() === '';
 
+/** Apply would write a different clause than the one currently stored. */
+export const clauseDirty = (
+  draft: string,
+  value: string,
+  defaultValue: string,
+) => storedClause(draft, value, defaultValue) !== value;
+
 const MODE_OPTIONS = [
   { label: 'Fields', value: 'pick' },
   { label: 'SQL', value: 'sql' },
@@ -35,7 +43,8 @@ const MODE_OPTIONS = [
 
 /**
  * A toolbar button that edits one query clause in a popover. Edits stay in a
- * draft owned by the caller until Apply, so closing the popover discards them.
+ * draft owned by the caller until Apply. Closing a draft that would change the
+ * stored clause asks first. Cancel discards it without asking.
  */
 export function ClausePopover({
   name,
@@ -44,6 +53,7 @@ export function ClausePopover({
   dimmed,
   title,
   initialMode,
+  dirty,
   onOpen,
   onApply,
   onReset,
@@ -65,6 +75,8 @@ export function ClausePopover({
   title: string;
   /** The tab to show each time the popover opens. */
   initialMode: ClauseMode;
+  /** The draft would change the stored clause, so closing asks first. */
+  dirty: boolean;
   /** Reset the caller's draft to the current value. */
   onOpen: () => void;
   onApply: () => void;
@@ -77,13 +89,32 @@ export function ClausePopover({
   renderSql: (apply: () => void) => ReactNode;
   'data-testid': string;
 }) {
+  const confirm = useConfirm();
   const [opened, setOpened] = useState(false);
   const [mode, setMode] = useState<ClauseMode>(initialMode);
+  // The confirm dialog sits outside this popover, so its own clicks look like
+  // another dismiss. Ignore those while it is open.
+  const confirmingRef = useRef(false);
 
   const open = () => {
     onOpen();
     setMode(initialMode);
     setOpened(true);
+  };
+
+  const requestClose = () => {
+    if (confirmingRef.current) return;
+    if (!dirty) {
+      setOpened(false);
+      return;
+    }
+    confirmingRef.current = true;
+    void confirm('Discard unsaved changes?', 'Discard', {
+      variant: 'danger',
+    }).then(discard => {
+      confirmingRef.current = false;
+      if (discard) setOpened(false);
+    });
   };
 
   const apply = () => {
@@ -95,7 +126,9 @@ export function ClausePopover({
   return (
     <Popover
       opened={opened}
-      onChange={setOpened}
+      onChange={next => {
+        if (!next) requestClose();
+      }}
       position="bottom-start"
       width={440}
       shadow="md"
@@ -108,7 +141,7 @@ export function ClausePopover({
           count={count}
           dimmed={dimmed}
           title={title}
-          onClick={() => (opened ? setOpened(false) : open())}
+          onClick={() => (opened ? requestClose() : open())}
           data-testid={testId}
         />
       </Popover.Target>

@@ -4,6 +4,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { ColumnsPopover } from '@/components/SearchResultsToolbar/ColumnsPopover';
 
+const confirm = jest.fn();
+jest.mock('@/useConfirm', () => ({ useConfirm: () => confirm }));
+
 jest.mock('@/components/SQLEditor/SQLInlineEditor', () => ({
   __esModule: true,
   default: ({
@@ -46,7 +49,15 @@ function renderPopover(
 const openPopover = () =>
   fireEvent.click(screen.getByTestId('search-columns-button'));
 
+const closePopover = () =>
+  fireEvent.click(screen.getByTestId('search-columns-button'));
+
 describe('ColumnsPopover', () => {
+  beforeEach(() => {
+    confirm.mockReset();
+    confirm.mockResolvedValue(true);
+  });
+
   it('shows the column count and falls back to the default SELECT', () => {
     renderPopover({ value: '' });
     expect(screen.getByTestId('search-columns-button')).toHaveAccessibleName(
@@ -244,6 +255,12 @@ describe('ColumnsPopover', () => {
     expect(onApply).toHaveBeenCalledWith('count()', ['Timestamp', 'Body']);
   });
 
+  it('says Apply is what updates the search', async () => {
+    renderPopover();
+    openPopover();
+    expect(await screen.findByText(/Then click Apply/)).toBeInTheDocument();
+  });
+
   it('discards the draft on cancel', async () => {
     const { onApply } = renderPopover();
     openPopover();
@@ -257,5 +274,94 @@ describe('ColumnsPopover', () => {
     openPopover();
     expect(await screen.findByLabelText('Remove Body')).toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('closes an unchanged list without asking', async () => {
+    renderPopover();
+    openPopover();
+    expect(
+      await screen.findByTestId('search-columns-button-popover'),
+    ).toBeInTheDocument();
+    closePopover();
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('search-columns-button-popover'),
+      ).not.toBeInTheDocument(),
+    );
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('asks before discarding a column edit', async () => {
+    const { onApply } = renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByLabelText('Remove Body'));
+
+    confirm.mockResolvedValueOnce(false);
+    closePopover();
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(confirm).toHaveBeenCalledWith(
+      'Discard unsaved changes?',
+      'Discard',
+      {
+        variant: 'danger',
+      },
+    );
+    expect(
+      screen.getByTestId('search-columns-button-popover'),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Remove Body')).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValueOnce(true);
+    closePopover();
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('search-columns-button-popover'),
+      ).not.toBeInTheDocument(),
+    );
+    openPopover();
+    expect(await screen.findByLabelText('Remove Body')).toBeInTheDocument();
+  });
+
+  it('asks when a click outside would discard a column edit', async () => {
+    renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByLabelText('Remove Body'));
+    confirm.mockResolvedValueOnce(false);
+    fireEvent.mouseDown(document.documentElement);
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(
+      screen.getByTestId('search-columns-button-popover'),
+    ).toBeInTheDocument();
+  });
+
+  it('ignores a second dismiss while the discard dialog is open', async () => {
+    let settle: (discard: boolean) => void = () => {};
+    confirm.mockImplementation(
+      () =>
+        new Promise<boolean>(resolve => {
+          settle = resolve;
+        }),
+    );
+    renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByLabelText('Remove Body'));
+    closePopover();
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+
+    fireEvent.mouseDown(document.documentElement);
+    closePopover();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByTestId('search-columns-button-popover'),
+    ).toBeInTheDocument();
+
+    settle(false);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('search-columns-button-popover'),
+      ).toBeInTheDocument(),
+    );
   });
 });
