@@ -4085,6 +4085,39 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       expect(storedAfter?.savedFilterValues).toEqual([adhocValue]);
     });
 
+    it('saves back a filter whose source was deleted since it was stored', async () => {
+      const dashboard = await new Dashboard({
+        name: 'Deleted source',
+        tiles: [],
+        team: ctx.team._id,
+        filters: [
+          {
+            ...adhocFilter(),
+            id: 'adhoc-1',
+            sources: [
+              ctx.traceSource._id.toString(),
+              '65f5e4a3b9e77c001a999999',
+            ],
+            isBroadcastEnabled: true,
+            isVariableEnabled: true,
+          },
+        ],
+      }).save();
+      const id = dashboard._id.toString();
+      const read = parse(
+        await callTool(ctx.client!, 'clickstack_get_dashboard', { id }),
+      );
+
+      const saved = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id,
+        name: 'Renamed',
+        tiles: [],
+        filters: read.filters,
+      });
+
+      expect(saved.isError).toBeFalsy();
+    });
+
     it('warns about saved conditions that no ad hoc filter, or not its source type, can apply', async () => {
       const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
         name: 'Bad defaults',

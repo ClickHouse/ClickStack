@@ -324,6 +324,7 @@ async function updateDashboard({
     tiles: tilesWithId,
     filters,
     existingTiles: existingDashboard.tiles ?? [],
+    existingFilters: existingDashboard.filters ?? [],
     containers: effectiveContainers,
   });
   if (validationError) {
