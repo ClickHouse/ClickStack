@@ -114,6 +114,7 @@ describe('usePresetDashboardFilters', () => {
       referenceVariableValues: new Map(),
       resolvedFilters: [],
       unresolvedReferenceVariablesByFilterId: new Map(),
+      incompatibleReferenceVariablesByFilterId: new Map(),
       adhocConditionsByFilterId: new Map(),
       setAdhocConditions: jest.fn(),
       applyAdhocAction: jest.fn(),

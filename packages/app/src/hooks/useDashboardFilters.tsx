@@ -348,24 +348,33 @@ const useDashboardFilters = (
   }, [filterValueEntries, filters, sources]);
 
   // Filters as they query: source and connection variable references replaced
-  // by the selections. Unselected references are left as written.
-  const { resolvedFilters, unresolvedReferenceVariablesByFilterId } =
-    useMemo(() => {
-      const resolved = filters.map(filter =>
-        resolveFilterReferences(filter, referenceVariableValues),
+  // by the selections. Unselected references, and those selecting a source the
+  // field can't use, are left as written.
+  const {
+    resolvedFilters,
+    unresolvedReferenceVariablesByFilterId,
+    incompatibleReferenceVariablesByFilterId,
+  } = useMemo(() => {
+    const sourceKindById = new Map(
+      sources?.map(source => [source.id, source.kind]),
+    );
+    const resolved = filters.map(filter =>
+      resolveFilterReferences(filter, referenceVariableValues, sourceKindById),
+    );
+    const byFilterId = (key: 'unresolvedVariables' | 'incompatibleVariables') =>
+      new Map(
+        resolved
+          .filter(result => result[key].length > 0)
+          .map(result => [result.filter.id, result[key]]),
       );
-      return {
-        resolvedFilters: resolved.map(({ filter }) => filter),
-        unresolvedReferenceVariablesByFilterId: new Map(
-          resolved
-            .filter(({ unresolvedVariables }) => unresolvedVariables.length > 0)
-            .map(({ filter, unresolvedVariables }) => [
-              filter.id,
-              unresolvedVariables,
-            ]),
-        ),
-      };
-    }, [filters, referenceVariableValues]);
+    return {
+      resolvedFilters: resolved.map(({ filter }) => filter),
+      unresolvedReferenceVariablesByFilterId: byFilterId('unresolvedVariables'),
+      incompatibleReferenceVariablesByFilterId: byFilterId(
+        'incompatibleVariables',
+      ),
+    };
+  }, [filters, referenceVariableValues, sources]);
 
   /** Returns the set of rendered filter conditions corresponding to filters matching the given predicate */
   const getFiltersQueriesFor = useCallback(
@@ -485,8 +494,14 @@ const useDashboardFilters = (
     referenceVariableValues,
     /** The filters with their reference variable references resolved, in filter order. */
     resolvedFilters,
-    /** The unselected reference variables each filter's fields reference, by filter ID. */
+    /**
+     * The reference variables each filter's fields reference that leave it
+     * nothing to query, by filter ID: unselected, or in
+     * `incompatibleReferenceVariablesByFilterId`.
+     */
     unresolvedReferenceVariablesByFilterId,
+    /** The reference variables selecting a source a filter's field can't use, by filter ID. */
+    incompatibleReferenceVariablesByFilterId,
     /** Each ad hoc filter's current conditions, keyed by `filter.id`. */
     adhocConditionsByFilterId,
     /** Replace the conditions of an ad hoc filter, by its ID */

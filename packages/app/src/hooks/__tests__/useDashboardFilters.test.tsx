@@ -1621,5 +1621,48 @@ describe('useDashboardFilters', () => {
       ).toEqual(["toString(ServiceName) IN ('api')"]);
       expect(result.current.getFilterQueriesForSource('src-2')).toEqual([]);
     });
+
+    it("leaves a filter unresolved while the variable selects a source it can't use", () => {
+      const logsOrMetrics: DashboardFilter = {
+        ...dataSourceFilter,
+        allowedSourceKinds: [SourceKind.Log, SourceKind.Metric],
+      };
+      const adhocFilter: DashboardFilter = {
+        id: 'adhoc',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['$logs'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      };
+      const sources = [
+        {
+          id: 'metric-1',
+          name: 'Metrics',
+          kind: SourceKind.Metric,
+          connection: 'conn-a',
+        },
+      ];
+      mockState = [{ type: 'variable', name: 'logs', values: ['metric-1'] }];
+      const { result } = renderHook(() =>
+        useDashboardFilters([logsOrMetrics, scopedFilter, adhocFilter], {
+          sources,
+        }),
+      );
+
+      expect(result.current.resolvedFilters[1]).toMatchObject({
+        source: 'metric-1',
+      });
+      expect(result.current.resolvedFilters[2]).toMatchObject({
+        sources: ['$logs'],
+      });
+      expect(result.current.unresolvedReferenceVariablesByFilterId).toEqual(
+        new Map([['adhoc', ['logs']]]),
+      );
+      expect(result.current.incompatibleReferenceVariablesByFilterId).toEqual(
+        new Map([['adhoc', ['logs']]]),
+      );
+    });
   });
 });

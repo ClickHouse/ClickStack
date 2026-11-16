@@ -30,6 +30,7 @@ import {
   DashboardFilterLabel,
   FilterCaution,
   FilterEffect,
+  getIncompatibleVariablesTooltip,
   getPendingVariablesTooltip,
 } from '@/components/DashboardFilterLabel';
 import { FilterPill, getFilterOperatorDisplay } from '@/components/FilterPill';
@@ -58,6 +59,8 @@ type AdhocDashboardFilterProps = {
    * they have a selection the filter has no sources to suggest keys from.
    */
   unresolvedVariables?: string[];
+  /** Those of `unresolvedVariables` selecting a source the filter can't use. */
+  incompatibleVariables?: string[];
 };
 
 const NO_VARIABLES: string[] = [];
@@ -72,6 +75,7 @@ export function AdhocDashboardFilter({
   variables,
   unsatisfiedRequiredFilters,
   unresolvedVariables = NO_VARIABLES,
+  incompatibleVariables = NO_VARIABLES,
 }: AdhocDashboardFilterProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -112,7 +116,12 @@ export function AdhocDashboardFilter({
     : undefined;
   const disabledReason = dependsOn ?? suggestionsWhere.error;
   const isDisabled = !!disabledReason || unresolvedVariables.length > 0;
-  const allPendingVariables = [...unresolvedVariables, ...pendingVariables];
+  const allPendingVariables = [
+    ...unresolvedVariables.filter(
+      name => !incompatibleVariables.includes(name),
+    ),
+    ...pendingVariables,
+  ];
 
   const toggleAdding = () => {
     if (isDisabled) return;
@@ -151,9 +160,12 @@ export function AdhocDashboardFilter({
             testId={`dashboard-filter-pending-variable-${filter.name}`}
           />
         )}
-        {suggestionsWhere.error && (
+        {(suggestionsWhere.error || incompatibleVariables.length > 0) && (
           <FilterCaution
-            label={suggestionsWhere.error}
+            label={
+              suggestionsWhere.error ??
+              getIncompatibleVariablesTooltip(incompatibleVariables)
+            }
             testId={`dashboard-filter-error-${filter.name}`}
             variant="danger"
           />

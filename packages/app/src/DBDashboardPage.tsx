@@ -1994,6 +1994,7 @@ function DBDashboardPage({
     referenceVariableValues,
     resolvedFilters,
     unresolvedReferenceVariablesByFilterId,
+    incompatibleReferenceVariablesByFilterId,
     unsatisfiedRequiredFilters,
   } = useDashboardFilters(filters, { sources });
   // Tiles as they query, by ID: source and connection variable references
@@ -3425,6 +3426,9 @@ function DBDashboardPage({
           referenceVariableValues={referenceVariableValues}
           unresolvedReferenceVariablesByFilterId={
             unresolvedReferenceVariablesByFilterId
+          }
+          incompatibleReferenceVariablesByFilterId={
+            incompatibleReferenceVariablesByFilterId
           }
         />
       )}

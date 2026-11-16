@@ -332,20 +332,45 @@ export function restoreConfigReferences<T extends ReferenceHoldingConfig>(
  * selected IDs. An unselected reference is left as written, so it matches no
  * tile's source rather than widening a list to every tile, and is reported in
  * `unresolvedVariables`.
+ *
+ * With `sourceKindById`, a reference that selects a source of a kind its field
+ * can't use is treated the same way, and also reported in
+ * `incompatibleVariables`.
  */
 export function resolveFilterReferences<T extends DashboardFilter>(
   filter: T,
   values: ReferenceVariableValues | undefined,
-): { filter: T; unresolvedVariables: string[] } {
+  sourceKindById?: ReadonlyMap<string, SourceKind>,
+): {
+  filter: T;
+  unresolvedVariables: string[];
+  incompatibleVariables: string[];
+} {
+  const incompatible = new Set<string>();
+  let resolved = filter;
+  for (const field of getFilterReferenceFields(filter)) {
+    resolved = mapReferenceFields(resolved, [field.key], value => {
+      const id = resolveVariableReference(value, values);
+      if (!id) return value;
+      const kind = sourceKindById?.get(id);
+      if (
+        field.target === 'source' &&
+        kind != null &&
+        !field.acceptedKinds.includes(kind)
+      ) {
+        const name = parseVariableReference(value);
+        if (name != null) incompatible.add(name);
+        return value;
+      }
+      return id;
+    });
+  }
   const keys = getFilterReferenceFields(filter).map(({ key }) => key);
   return {
-    filter: mapReferenceFields(
-      filter,
-      keys,
-      value => resolveVariableReference(value, values) || value,
-    ),
+    filter: resolved,
     unresolvedVariables: getReferencedVariables(filter, keys).filter(
-      name => !values?.get(name),
+      name => !values?.get(name) || incompatible.has(name),
     ),
+    incompatibleVariables: [...incompatible],
   };
 }

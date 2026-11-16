@@ -27,6 +27,7 @@ import {
   DashboardFilterLabel,
   FilterCaution,
   FilterEffect,
+  getIncompatibleVariablesTooltip,
   getPendingVariablesTooltip,
 } from './components/DashboardFilterLabel';
 import { FilterLinkToggle } from './components/FilterLinkToggle';
@@ -179,10 +180,13 @@ interface DashboardFilterProps {
   /** The selected ID of each data source and connection variable, by name. */
   referenceVariableValues?: ReferenceVariableValues;
   /**
-   * The unselected reference variables each filter's fields reference, by
-   * filter ID. `filters` are otherwise expected with their references resolved.
+   * The reference variables each filter's fields reference that leave it
+   * nothing to query, by filter ID. `filters` are otherwise expected with
+   * their references resolved.
    */
   unresolvedReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
+  /** The subset of those selecting a source the filter can't use. */
+  incompatibleReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
 }
 
 const DashboardFilters = ({
@@ -196,6 +200,7 @@ const DashboardFilters = ({
   unsatisfiedRequiredFilters,
   referenceVariableValues,
   unresolvedReferenceVariablesByFilterId,
+  incompatibleReferenceVariablesByFilterId,
 }: DashboardFilterProps) => {
   // "Link" mode (opt-in, off by default): each dropdown's values are narrowed by
   // the others' selections. Off by default because contingent value lookups
@@ -235,8 +240,14 @@ const DashboardFilters = ({
   return (
     <Group align="start">
       {filters.map(filter => {
+        const incompatibleVariables =
+          incompatibleReferenceVariablesByFilterId?.get(filter.id) ?? [];
         const unresolvedVariables =
           unresolvedReferenceVariablesByFilterId?.get(filter.id) ?? [];
+        // Variables with no selection yet, as opposed to an unusable one
+        const unselectedVariables = unresolvedVariables.filter(
+          name => !incompatibleVariables.includes(name),
+        );
         if (isDataSourceFilter(filter)) {
           return (
             <DataSourceDashboardFilter
@@ -268,6 +279,7 @@ const DashboardFilters = ({
               variables={variables}
               unsatisfiedRequiredFilters={unsatisfiedRequiredFilters}
               unresolvedVariables={unresolvedVariables}
+              incompatibleVariables={incompatibleVariables}
             />
           );
         }
@@ -285,7 +297,7 @@ const DashboardFilters = ({
         // Only a queried dropdown has a values query that can await a
         // variable's selection, besides any data source variable it reads from.
         const pendingVariables = [
-          ...unresolvedVariables,
+          ...unselectedVariables,
           ...(isQueryExpressionFilter(filter)
             ? getPendingFilterValuesVariables(filter, variables)
             : []),
@@ -295,8 +307,15 @@ const DashboardFilters = ({
             key={filter.id}
             filter={filter}
             isLoading={isLoadingValues}
-            isError={erroredFilterIds?.has(filter.id) ?? false}
-            errorMessage={filterErrorMessages?.get(filter.id)}
+            isError={
+              incompatibleVariables.length > 0 ||
+              (erroredFilterIds?.has(filter.id) ?? false)
+            }
+            errorMessage={
+              incompatibleVariables.length > 0
+                ? getIncompatibleVariablesTooltip(incompatibleVariables)
+                : filterErrorMessages?.get(filter.id)
+            }
             pendingVariables={pendingVariables}
             onChange={values => onSetFilterValue(filter.id, values)}
             values={queriedFilterValues?.values}

@@ -170,6 +170,21 @@ describe('AdhocDashboardFilter', () => {
     expect(onChange).toHaveBeenCalledWith([]);
   });
 
+  it("reports a data source variable selecting a source it can't use", () => {
+    renderFilter([existing], filter, {
+      unresolvedVariables: ['ds'],
+      incompatibleVariables: ['ds'],
+    });
+
+    expect(
+      screen.getByTestId('dashboard-filter-error-Conditions'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('dashboard-filter-pending-variable-Conditions'),
+    ).not.toBeInTheDocument();
+    expect(addButton()).toHaveAttribute('aria-disabled', 'true');
+  });
+
   it('edits a condition from its pill', async () => {
     const onChange = renderFilter([
       existing,
