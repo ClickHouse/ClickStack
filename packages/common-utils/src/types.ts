@@ -2738,6 +2738,11 @@ export const LogSourceSchema = BaseSourceSchema.extend({
   implicitColumnExpression: z.string().optional(),
   knownColumnsListExpression: z.string().optional(),
   /**
+   * Comma-separated expressions that together identify one row. When set, the
+   * row side panel looks rows up by these instead of table metadata.
+   */
+  rowKeyExpression: z.string().optional(),
+  /**
    * @deprecated Application-side SQL predicate AND'd into every query against
    * the source. Not a security boundary; bypassable by direct table SELECT.
    * For hard tenant isolation, use a ClickHouse ROW POLICY at the DB level:
@@ -2791,6 +2796,8 @@ export const TraceSourceSchema = BaseSourceSchema.extend({
   spanLinksValueExpression: z.string().optional(),
   implicitColumnExpression: z.string().optional(),
   knownColumnsListExpression: z.string().optional(),
+  /** See `rowKeyExpression` on `LogSourceSchema`. */
+  rowKeyExpression: z.string().optional(),
   displayedTimestampValueExpression: z.string().optional(),
   highlightedTraceAttributeExpressions:
     HighlightedAttributeExpressionsSchema.optional(),

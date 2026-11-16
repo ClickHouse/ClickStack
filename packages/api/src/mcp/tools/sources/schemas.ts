@@ -254,6 +254,15 @@ const mcpSaveSourceSchema = z.object({
         'targets, used instead of SELECT * when fetching full rows. Column ' +
         'names only, no expressions or aliases. Omit to select all columns.',
     ),
+  rowKeyExpression: z
+    .string()
+    .optional()
+    .describe(
+      'Log and trace sources. Comma-separated expressions that together ' +
+        'identify one row, e.g. the partition key, primary key, _block_number ' +
+        'and _block_offset. When set, the row side panel looks rows up by ' +
+        'these only. Omit to detect keys from table metadata.',
+    ),
   orderByExpression: z
     .string()
     .optional()

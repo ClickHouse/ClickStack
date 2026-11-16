@@ -11,6 +11,7 @@ import { useColumns } from '@/hooks/useMetadata';
 import {
   DEFAULT_DATABASE,
   KNOWN_COLUMNS_EXPRESSION_HELP_TEXT,
+  ROW_KEY_EXPRESSION_HELP_TEXT,
   SERVICE_VERSION_EXPRESSION_HELP_TEXT,
 } from './constants';
 import { ExpressionFormRow } from './ExpressionFormRow';
@@ -376,6 +377,22 @@ export function TraceTableModelForm(props: TableModelProps) {
           control={control}
           name="knownColumnsListExpression"
           placeholder="Timestamp, Body, ServiceName"
+          disableKeywordAutocomplete
+        />
+      </FormRow>
+      <FormRow
+        label="Row key expression"
+        helpText={ROW_KEY_EXPRESSION_HELP_TEXT}
+      >
+        <SQLInlineEditorControlled
+          tableConnection={{
+            databaseName,
+            tableName,
+            connectionId,
+          }}
+          control={control}
+          name="rowKeyExpression"
+          placeholder="ServiceName, Timestamp, _block_number, _block_offset"
           disableKeywordAutocomplete
         />
       </FormRow>
