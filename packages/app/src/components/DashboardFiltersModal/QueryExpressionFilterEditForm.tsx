@@ -61,7 +61,11 @@ export const QueryExpressionFilterEditForm = ({
   showVariableOptions,
 }: QueryExpressionFilterEditFormProps) => {
   const sourceId = useWatch({ control, name: 'source' });
-  const { data: source } = useSource({ id: useResolvedReference(sourceId) });
+  // A data source variable can select a source of a kind this filter can't use
+  const { data: source } = useSource({
+    id: useResolvedReference(sourceId),
+    kinds: QUERY_EXPRESSION_FILTER_SOURCE_KINDS,
+  });
 
   const metricType = useWatch({ control, name: 'sourceMetricType' });
   const tableName = source && getMetricTableName(source, metricType);

@@ -102,8 +102,9 @@ const toVariableItem = (name: string): ComboboxItem => {
 
 /**
  * A source picker's items, preceded by a "Variables" group of the data source
- * variables it can offer. A variable is offered only if every kind it can
- * resolve to is allowed, so no selection can produce an unusable source.
+ * variables it can offer. A variable is offered if at least one kind it can
+ * resolve to is allowed; a selection of another kind shows as an error where
+ * the reference is used.
  */
 export function useWithSourceVariableItems(
   sourceItems: ComboboxItem[] | SourceSelectGroup[],

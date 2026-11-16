@@ -292,6 +292,7 @@ describe('SourceSelectControlled (data source variables)', () => {
   const VARIABLES = [
     sourceVariable('logs_source', [SourceKind.Log]),
     sourceVariable('any_source', [SourceKind.Log, SourceKind.Promql]),
+    sourceVariable('prom_source', [SourceKind.Promql]),
   ];
 
   function VariableHarness({
@@ -312,14 +313,15 @@ describe('SourceSelectControlled (data source variables)', () => {
     );
   }
 
-  it('offers only variables whose every kind the picker allows', async () => {
+  it('offers only variables with at least one kind the picker allows', async () => {
     asMock(useSources).mockReturnValue({ data: SOURCES });
     renderWithMantine(<VariableHarness allowSourceVariables />);
     await userEvent.click(screen.getByPlaceholderText('Data Source'));
 
     expect(await screen.findByText('Variables')).toBeInTheDocument();
     expect(screen.getByText('$logs_source')).toBeInTheDocument();
-    expect(screen.queryByText('$any_source')).not.toBeInTheDocument();
+    expect(screen.getByText('$any_source')).toBeInTheDocument();
+    expect(screen.queryByText('$prom_source')).not.toBeInTheDocument();
   });
 
   it('puts unsectioned sources under their own header after the variables', async () => {

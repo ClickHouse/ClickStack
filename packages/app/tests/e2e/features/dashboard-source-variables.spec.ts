@@ -8,6 +8,7 @@ import { SERVICES } from '../seed-clickhouse';
 import { expect, test } from '../utils/base-test';
 import {
   DEFAULT_LOGS_SOURCE_NAME,
+  DEFAULT_METRICS_SOURCE_NAME,
   DEFAULT_TRACES_SOURCE_NAME,
 } from '../utils/constants';
 
@@ -183,6 +184,60 @@ test.describe(
         await expect(dashboardPage.getNumberTileValue(0)).toBeVisible({
           timeout: 30000,
         });
+      });
+    });
+
+    // A filter edit can leave other filters with a variable they can't always
+    // use. It still saves, and the filter shows an error while it can't.
+    test("saves a kind other filters can't use, and flags them while it's selected", async ({
+      page,
+    }) => {
+      await test.step('An ad hoc filter reads from a logs variable', async () => {
+        await dashboardPage.createNewDashboard();
+        await dashboardPage.openEditFiltersModal();
+        await dashboardPage.addDataSourceFilterToDashboard(
+          'Logs source',
+          ['Logs'],
+          'logs',
+        );
+        await dashboardPage.addAdhocFilterToDashboard('Conditions', ['$logs']);
+      });
+
+      await test.step('Metrics can be added to the variable', async () => {
+        await dashboardPage.openEditFilterForm('Logs source');
+        await page.getByTestId('filter-allowed-source-kinds-input').click();
+        await dashboardPage.getFilterOption('OTel metrics').click();
+        await dashboardPage.getFilterNameInput().click();
+        await page.getByTestId('save-filter-button').click();
+        await dashboardPage.closeFiltersModal();
+        await expect(page.getByText('Unable to save dashboard')).toHaveCount(0);
+      });
+
+      await test.step('Selecting a metric source flags the ad hoc filter', async () => {
+        await dashboardPage.selectReferenceFilterValue(
+          'Logs source',
+          DEFAULT_METRICS_SOURCE_NAME,
+        );
+        await expect(
+          dashboardPage.getFilterErrorIcon('Conditions'),
+        ).toBeVisible();
+
+        await dashboardPage.selectReferenceFilterValue(
+          'Logs source',
+          DEFAULT_LOGS_SOURCE_NAME,
+        );
+        await expect(
+          dashboardPage.getFilterErrorIcon('Conditions'),
+        ).toHaveCount(0);
+      });
+
+      await test.step('The added kind was saved', async () => {
+        await page.reload();
+        await dashboardPage.waitForLoaded();
+        await dashboardPage.getFilterSelectByName('Logs source').click();
+        await expect(
+          dashboardPage.getFilterOption(DEFAULT_METRICS_SOURCE_NAME),
+        ).toBeVisible();
       });
     });
   },

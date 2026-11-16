@@ -82,10 +82,14 @@ export const AdhocFilterEditForm = ({
         resolveVariableReference(id, referenceVariableValues),
       ),
     );
+    // A data source variable can select a source of a kind this filter can't use
+    const kinds = getAdhocFilterSourceKinds(sourceType);
     return (allSources ?? [])
-      .filter(source => resolvedIds.has(source.id))
+      .filter(
+        source => resolvedIds.has(source.id) && kinds.includes(source.kind),
+      )
       .map(tcFromSource);
-  }, [allSources, sourceIds, referenceVariableValues]);
+  }, [allSources, sourceIds, referenceVariableValues, sourceType]);
   // Kept visible for a saved PromQL filter so its source type can be changed
   const showSourceType =
     sourceType === 'promql' ||
