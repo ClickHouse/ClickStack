@@ -187,6 +187,8 @@ export async function computeAliasWithClauses(
       source.kind === SourceKind.Log || source.kind === SourceKind.Trace
         ? source.implicitColumnExpression
         : undefined,
+    bodyExpression:
+      source.kind === SourceKind.Log ? source.bodyExpression : undefined,
     useTextIndexForImplicitColumn:
       source.kind === SourceKind.Log || source.kind === SourceKind.Trace
         ? source.useTextIndexForImplicitColumn
