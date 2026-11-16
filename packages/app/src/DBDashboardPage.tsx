@@ -3603,6 +3603,7 @@ function DBDashboardPage({
           showVariableOptions
           showRequiredFilterOptions
           variables={variables}
+          dateRange={searchedTimeRange}
         />
       )}
     </ReferenceVariablesProvider>

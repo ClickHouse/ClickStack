@@ -3,6 +3,7 @@ import {
   DashboardFilter,
   PromqlLabelDashboardFilter,
   SourceKind,
+  SqlQueryDashboardFilter,
   StaticListDashboardFilter,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
@@ -13,6 +14,7 @@ import { useDashboardFilterValues } from '@/hooks/useDashboardFilterValues';
 
 const mockGetKeyValues = jest.fn();
 const mockLabelValues = jest.fn();
+const mockClickhouseQuery = jest.fn();
 let mockSourcesData: Partial<TSource>[];
 
 // Only the PromQL client is stubbed; the rest of the module stays real,
@@ -23,6 +25,12 @@ jest.mock('@/api', () => ({
   prometheusApi: {
     labelValues: (...args: unknown[]) => mockLabelValues(...args),
   },
+}));
+
+jest.mock('@/clickhouse', () => ({
+  __esModule: true,
+  ...jest.requireActual('@/clickhouse'),
+  getClickhouseClient: () => ({ query: mockClickhouseQuery }),
 }));
 
 // Untyped factories, so partial mocks need no unsafe type assertions.
@@ -69,6 +77,17 @@ describe('useDashboardFilterValues', () => {
     variableName: 'job',
   };
 
+  const sqlQueryFilter: SqlQueryDashboardFilter = {
+    id: 'sql1',
+    type: 'SQL_QUERY',
+    name: 'Region',
+    connection: 'clickhouse-conn',
+    sqlTemplate: 'SELECT region FROM regions',
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'region',
+  };
+
   const queriedFilter: DashboardFilter = {
     id: 'queried1',
     type: 'QUERY_EXPRESSION',
@@ -105,6 +124,10 @@ describe('useDashboardFilterValues', () => {
     ];
     mockLabelValues.mockReset();
     mockLabelValues.mockResolvedValue({ status: 'success', data: ['api'] });
+    mockClickhouseQuery.mockReset();
+    mockClickhouseQuery.mockResolvedValue({
+      json: async () => ({ data: [{ value: 'us' }, { value: 'eu' }] }),
+    });
     mockGetKeyValues.mockReset();
     mockGetKeyValues.mockImplementation(({ keys }: { keys: string[] }) =>
       Promise.resolve(
@@ -177,6 +200,26 @@ describe('useDashboardFilterValues', () => {
 
     expect(result.current.data.get('promql1')).toEqual({
       values: ['api'],
+      isLoading: false,
+    });
+    expect(result.current.isError).toBe(false);
+  });
+
+  it('merges SQL query values into the same map', async () => {
+    const { result } = renderHook(
+      () =>
+        useDashboardFilterValues({
+          filters: [staticFilter, sqlQueryFilter],
+          dateRange: mockDateRange,
+          variables: [],
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+    expect(result.current.data.get('sql1')).toEqual({
+      values: ['us', 'eu'],
       isLoading: false,
     });
     expect(result.current.isError).toBe(false);

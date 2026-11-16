@@ -27,9 +27,11 @@ import {
   isRenderablePinnedFilter,
   mergeAdhocConditions,
   parseQuery,
+  renderSqlQueryFilterValuesQuery,
   resolveFilterValuesWhere,
   resolvePromqlLabelFilterMatch,
   serializeFilterState,
+  SQL_QUERY_FILTER_VALUES_LIMIT,
   validateDashboardFilterQueries,
   validateSavedFilterValues,
   validateSavedQuery,
@@ -1224,6 +1226,90 @@ describe('filters', () => {
       );
       expect(resolved.match).toBe('up{job=~"$nope"}');
       expect(resolved.error).toBeUndefined();
+    });
+  });
+
+  describe('renderSqlQueryFilterValuesQuery', () => {
+    const dateRange: [Date, Date] = [new Date(1000), new Date(2000)];
+    const svc = (values: string[]): ChartVariable => ({
+      name: 'svc',
+      expression: 'ServiceName',
+      values,
+    });
+
+    it('reads the first column as strings, capped', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env, count() FROM envs GROUP BY env',
+          variables: [],
+          dateRange,
+        }),
+      ).toEqual({
+        sql: `SELECT toString(tupleElement(tuple(*), 1)) AS value FROM (\nSELECT env, count() FROM envs GROUP BY env\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
+        params: {},
+      });
+    });
+
+    it('sends the time range when a time macro reads it', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM envs WHERE $__timeFilter(ts)',
+          variables: [],
+          dateRange,
+        }).params,
+      ).toEqual({ startDateMilliseconds: 1000, endDateMilliseconds: 2000 });
+    });
+
+    it('sends only the time params the SQL reads', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate:
+            'SELECT env FROM envs WHERE ts >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})',
+          variables: [],
+          dateRange,
+        }).params,
+      ).toEqual({ startDateMilliseconds: 1000 });
+    });
+
+    it('strips a trailing semicolon', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: '  SELECT env FROM envs;  ',
+        variables: [],
+        dateRange,
+      });
+      expect(sql).toContain('(\nSELECT env FROM envs\n)');
+    });
+
+    it('expands time macros and other filters', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate:
+          'SELECT env FROM envs WHERE $__timeFilter(ts) AND $__filter(svc, $svc)',
+        variables: [svc(['api'])],
+        dateRange,
+      });
+      expect(sql).toContain('{startDateMilliseconds:Int64}');
+      expect(sql).toContain("svc IN ('api')");
+      expect(sql).not.toContain('$');
+    });
+
+    it('throws when the template uses a source macro', () => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM $__sourceTable',
+          variables: [],
+          dateRange,
+        }),
+      ).toThrow(/have no source/);
+    });
+
+    it('throws when a macro names an unknown variable', () => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM envs WHERE $__filter(env, $missing)',
+          variables: [svc([])],
+          dateRange,
+        }),
+      ).toThrow(/unknown variable/);
     });
   });
 

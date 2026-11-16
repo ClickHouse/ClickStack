@@ -3,6 +3,7 @@ import * as SQLParser from 'node-sql-parser';
 import { escapeSqlString, replaceJsonExpressions } from '@/core/utils';
 import { getSourceDependentMacrosUsed, replaceMacros } from '@/macros';
 import { parse } from '@/queryParser';
+import { RawSqlQueryParam } from '@/rawSqlParams';
 import {
   AdhocDashboardFilter,
   AdhocFilterCondition,
@@ -860,17 +861,65 @@ export function validateSqlQueryFilterTemplate(
   variables: ChartVariable[],
 ): string | undefined {
   try {
-    const sourceMacros = getSourceDependentMacrosUsed(sqlTemplate);
-    if (sourceMacros.length > 0) {
-      return `SQL query filters have no source, so ${sourceMacros
-        .map(macro => `$__${macro}`)
-        .join(' and ')} cannot be used`;
-    }
-    replaceMacros({ sqlTemplate, variables });
+    expandSqlQueryFilterTemplate(sqlTemplate, variables);
     return undefined;
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }
+}
+
+/** Expand a SQL query filter's macros and variables. Throws when it can't. */
+function expandSqlQueryFilterTemplate(
+  sqlTemplate: string,
+  variables: ChartVariable[] | undefined,
+): string {
+  const sourceMacros = getSourceDependentMacrosUsed(sqlTemplate);
+  if (sourceMacros.length > 0) {
+    throw new Error(
+      `SQL query filters have no source, so ${sourceMacros
+        .map(macro => `$__${macro}`)
+        .join(' and ')} cannot be used`,
+    );
+  }
+  return replaceMacros({ sqlTemplate, variables });
+}
+
+/** Most dropdown values a SQL query filter reads from its query. */
+export const SQL_QUERY_FILTER_VALUES_LIMIT = 10_000;
+
+/**
+ * The query that lists a SQL query filter's dropdown values: the first column
+ * of the filter's SQL as strings, in the order the SQL returns them, capped at
+ * `SQL_QUERY_FILTER_VALUES_LIMIT` rows. Each row has a single `value` column.
+ *
+ * Throws when the template can't expand.
+ */
+export function renderSqlQueryFilterValuesQuery({
+  sqlTemplate,
+  variables,
+  dateRange,
+}: {
+  sqlTemplate: string;
+  variables: ChartVariable[] | undefined;
+  dateRange: [Date, Date];
+}): { sql: string; params: Record<string, number> } {
+  const sql = expandSqlQueryFilterTemplate(sqlTemplate, variables)
+    .trim()
+    .replace(/;+$/, '');
+  // The SQL goes on its own lines so a trailing `--` comment can't swallow the
+  // closing parenthesis.
+  const timeParams = {
+    [RawSqlQueryParam.startDateMilliseconds]: dateRange[0].getTime(),
+    [RawSqlQueryParam.endDateMilliseconds]: dateRange[1].getTime(),
+  };
+  return {
+    sql: `SELECT toString(tupleElement(tuple(*), 1)) AS value FROM (\n${sql}\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
+    // Only the params the SQL reads, so a query that ignores the time range
+    // keeps its cache key, and isn't re-run, when the range changes.
+    params: Object.fromEntries(
+      Object.entries(timeParams).filter(([name]) => sql.includes(`{${name}:`)),
+    ),
+  };
 }
 
 /** Derive the default `variableName` for a filter from its display name. */
