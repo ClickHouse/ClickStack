@@ -5,6 +5,7 @@ import { Handle, Node, NodeProps, NodeToolbar, Position } from '@xyflow/react';
 
 import { ServiceAggregation } from '@/hooks/useServiceMap';
 
+import { formatServiceMapDimensions } from './dimensions';
 import { ServiceMapMetricContext } from './ServiceMapMetricContext';
 import ServiceMapTooltip from './ServiceMapTooltip';
 import {
@@ -23,6 +24,8 @@ export type ServiceMapNodeData = ServiceAggregation & {
   // scale node size.
   maxThroughput: number;
   isSingleTrace?: boolean;
+  // The extra group-by SQL expressions behind `dimensions`.
+  groupBy: string[];
   // Name of the service the map is currently focused on (if any), so a node can
   // tell whether it is the focused one and show the matching CTA.
   focusedService?: string;
@@ -36,6 +39,8 @@ export default function ServiceMapNode(
   const { data } = props;
   const {
     serviceName,
+    dimensions,
+    groupBy,
     incomingRequests: {
       totalRequests: totalIncomingRequestCount,
       errorPercentage,
@@ -83,6 +88,7 @@ export default function ServiceMapNode(
     totalIncomingRequestCount + outgoingRequests,
     maxThroughput,
   );
+  const dimensionsLabel = formatServiceMapDimensions(dimensions);
 
   return (
     <>
@@ -95,6 +101,8 @@ export default function ServiceMapNode(
           source={source}
           dateRange={dateRange}
           serviceName={serviceName}
+          dimensions={dimensions}
+          groupBy={groupBy}
           isSingleTrace={isSingleTrace}
           isFocused={focusedService === serviceName}
           onFocus={
@@ -133,6 +141,15 @@ export default function ServiceMapNode(
           </div>
         </div>
         <Text size="xxs">{serviceName}</Text>
+        {dimensionsLabel ? (
+          <Text
+            size="xxs"
+            c="var(--color-text-muted)"
+            data-testid="service-map-node-dimensions"
+          >
+            {dimensionsLabel}
+          </Text>
+        ) : null}
       </div>
     </>
   );

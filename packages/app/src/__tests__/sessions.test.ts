@@ -14,6 +14,7 @@ import {
   buildRRWebStreamChartConfig,
   buildSessionsQueryFilters,
   fetchServiceScopeFilters,
+  getRRWebTimestampExpression,
 } from '@/sessions';
 
 jest.mock('@hyperdx/common-utils/dist/core/renderChartConfig', () => ({
@@ -39,14 +40,55 @@ describe('buildRRWebStreamChartConfig', () => {
     limit: 1000000,
     offset: 0,
     getSessionSourceFieldExpression,
+    preciseTimestampExpression: 'Timestamp',
   });
 
   it('orders by timestamp with numeric offset and chunk tiebreaks', () => {
     // Chunks of one rrweb event share a single timestamp, so without the
     // tiebreaks ClickHouse can return them in arbitrary order and the replay
-    // reassembly gets scrambled (hyperdxio/hyperdx#2569). The casts matter
+    // reassembly gets scrambled (ClickHouse/ClickStack#2569). The casts matter
     // too: the attributes are strings, and lexicographically '10' < '2'.
+    // `Timestamp` comes before the offset because older SDKs restart the
+    // offset on every page load, and TimestampTime only has seconds.
     expect(config.orderBy).toBe(
+      "TimestampTime ASC, Timestamp ASC, toUInt64OrZero(LogAttributes['rr-web.offset']) ASC, toUInt64OrZero(LogAttributes['rr-web.chunk']) ASC",
+    );
+  });
+
+  it('does not repeat the timestamp when the source already uses Timestamp', () => {
+    const jsonConfig = buildRRWebStreamChartConfig({
+      source: { ...config, timestampValueExpression: 'Timestamp' },
+      serviceName: 'my-service',
+      sessionId: 'session-1',
+      startDate: new Date(1000),
+      endDate: new Date(2000),
+      limit: 1000000,
+      offset: 0,
+      getSessionSourceFieldExpression,
+      preciseTimestampExpression: 'Timestamp',
+    });
+    expect(jsonConfig.orderBy).toBe(
+      "Timestamp ASC, toUInt64OrZero(LogAttributes['rr-web.offset']) ASC, toUInt64OrZero(LogAttributes['rr-web.chunk']) ASC",
+    );
+  });
+
+  it('falls back to the source timestamp for tables without Timestamp', () => {
+    const fallbackConfig = buildRRWebStreamChartConfig({
+      source: config,
+      serviceName: 'my-service',
+      sessionId: 'session-1',
+      startDate: new Date(1000),
+      endDate: new Date(2000),
+      limit: 1000000,
+      offset: 0,
+      getSessionSourceFieldExpression,
+      preciseTimestampExpression: 'TimestampTime',
+    });
+    expect(fallbackConfig.select).toContainEqual({
+      valueExpression: 'TimestampTime',
+      alias: 'ts',
+    });
+    expect(fallbackConfig.orderBy).toBe(
       "TimestampTime ASC, toUInt64OrZero(LogAttributes['rr-web.offset']) ASC, toUInt64OrZero(LogAttributes['rr-web.chunk']) ASC",
     );
   });
@@ -60,6 +102,7 @@ describe('buildRRWebStreamChartConfig', () => {
           alias: 'tcks',
         },
         { valueExpression: "LogAttributes['rr-web.event']", alias: 'ev' },
+        { valueExpression: 'Timestamp', alias: 'ts' },
       ]),
     );
   });
@@ -70,6 +113,92 @@ describe('buildRRWebStreamChartConfig', () => {
     );
     expect(config.dateRange).toEqual([new Date(1000), new Date(2000)]);
     expect(config.limit).toEqual({ limit: 1000000, offset: 0 });
+  });
+
+  it('looks up OTel sessions by session.id', () => {
+    const otelConfig = buildRRWebStreamChartConfig({
+      source: config,
+      serviceName: 'my-service',
+      sessionId: 'session-1',
+      sessionIdKey: 'session.id',
+      startDate: new Date(1000),
+      endDate: new Date(2000),
+      limit: 1000000,
+      offset: 0,
+      getSessionSourceFieldExpression,
+      preciseTimestampExpression: 'Timestamp',
+    });
+    expect(otelConfig.where).toBe(
+      'ServiceName:"my-service" AND LogAttributes.session.id:"session-1"',
+    );
+  });
+});
+
+describe('getRRWebTimestampExpression', () => {
+  const source = {
+    from: { databaseName: 'default', tableName: 'hyperdx_sessions' },
+    timestampValueExpression: 'TimestampTime',
+    connection: 'conn',
+  };
+
+  function metadataWithColumns(columns: string[] | Error) {
+    const metadata = new Metadata(
+      new ClickhouseClient({ host: '' }),
+      new MetadataCache(),
+    );
+    const getColumns = jest.spyOn(metadata, 'getColumns');
+    if (columns instanceof Error) {
+      getColumns.mockRejectedValue(columns);
+    } else {
+      getColumns.mockResolvedValue(
+        columns.map(name => ({
+          name,
+          type: name === 'Timestamp' ? 'DateTime64(9)' : 'String',
+          codec_expression: '',
+          comment: '',
+          default_expression: '',
+          default_type: '',
+          ttl_expression: '',
+        })),
+      );
+    }
+    return { metadata, getColumns };
+  }
+
+  it('uses Timestamp when the session table has it', async () => {
+    const { metadata, getColumns } = metadataWithColumns([
+      'Timestamp',
+      'TimestampTime',
+      'Body',
+    ]);
+    expect(await getRRWebTimestampExpression(source, metadata)).toBe(
+      'Timestamp',
+    );
+    expect(getColumns).toHaveBeenCalledWith({
+      databaseName: 'default',
+      tableName: 'hyperdx_sessions',
+      connectionId: 'conn',
+    });
+  });
+
+  it("falls back to the source's first timestamp without Timestamp", async () => {
+    const { metadata } = metadataWithColumns(['TimestampTime', 'Body']);
+    expect(
+      await getRRWebTimestampExpression(
+        { ...source, timestampValueExpression: 'TimestampTime, EventTime' },
+        metadata,
+      ),
+    ).toBe('TimestampTime');
+  });
+
+  it('falls back instead of failing when the columns lookup fails', async () => {
+    const { metadata } = metadataWithColumns(new Error('DESCRIBE failed'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await getRRWebTimestampExpression(source, metadata)).toBe(
+      'TimestampTime',
+    );
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

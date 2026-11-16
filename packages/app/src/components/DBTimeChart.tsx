@@ -61,9 +61,11 @@ import {
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useResultColumnFilterKeys } from '@/hooks/useResultColumnFilterKeys';
 import { useChartNumberFormats, useSource } from '@/source';
+import { useTimeZoneLinkParam } from '@/timeZoneOverride';
 import type { NumberFormat, TileFilterHandler } from '@/types';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -551,24 +553,31 @@ function DBTimeChartComponent({
     { enabled: showMVOptimizationIndicator || showDateRangeIndicator },
   );
 
-  const { data, isLoading, isError, error, isPlaceholderData, isSuccess } =
-    useQueriedChartConfig(queriedConfig, {
-      placeholderData: (prev: any) => prev,
-      queryKey: [
-        queryKeyPrefix,
-        queriedConfig,
-        'chunked',
-        {
-          disableQueryChunking,
-          enableParallelQueries,
-          parallelizeWhenPossible: me?.team?.parallelizeWhenPossible,
-        },
-      ],
-      enabled: enabled && !isLoadingMe,
-      enableQueryChunking: !disableQueryChunking,
-      enableParallelQueries:
-        enableParallelQueries && me?.team?.parallelizeWhenPossible,
-    });
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isError,
+    error,
+    isPlaceholderData,
+    isSuccess,
+  } = useQueriedChartConfig(queriedConfig, {
+    placeholderData: (prev: any) => prev,
+    queryKey: [
+      queryKeyPrefix,
+      queriedConfig,
+      'chunked',
+      {
+        disableQueryChunking,
+        enableParallelQueries,
+        parallelizeWhenPossible: me?.team?.parallelizeWhenPossible,
+      },
+    ],
+    enabled: enabled && !isLoadingMe,
+    enableQueryChunking: !disableQueryChunking,
+    enableParallelQueries:
+      enableParallelQueries && me?.team?.parallelizeWhenPossible,
+  });
 
   const previousPeriodChartConfig: ChartConfigWithDateRange = useMemo(() => {
     const previousPeriodDateRange =
@@ -598,13 +607,16 @@ function DBTimeChartComponent({
     previousPeriodChartConfig.dateRange,
   ]);
 
-  const { data: previousPeriodData, isLoading: isPreviousPeriodLoading } =
-    useQueriedChartConfig(previousPeriodChartConfig, {
-      placeholderData: (prev: any) => prev,
-      queryKey: [queryKeyPrefix, previousPeriodChartConfig, 'chunked'],
-      enabled: !!(enabled && config.compareToPreviousPeriod),
-      enableQueryChunking: true,
-    });
+  const {
+    data: previousPeriodData,
+    isLoading: isPreviousPeriodLoading,
+    isFetching: isPreviousPeriodFetching,
+  } = useQueriedChartConfig(previousPeriodChartConfig, {
+    placeholderData: (prev: any) => prev,
+    queryKey: [queryKeyPrefix, previousPeriodChartConfig, 'chunked'],
+    enabled: !!(enabled && config.compareToPreviousPeriod),
+    enableQueryChunking: true,
+  });
 
   const isLoadingOrPlaceholder =
     isLoading ||
@@ -612,6 +624,9 @@ function DBTimeChartComponent({
     !data?.isComplete ||
     (config.compareToPreviousPeriod && !previousPeriodData?.isComplete) ||
     isPlaceholderData;
+  // Unlike isLoadingOrPlaceholder, this goes false once both queries settle,
+  // even if one errors, so the empty state can't get stuck loading.
+  const isFetchingAnyPeriod = isFetching || isPreviousPeriodFetching;
 
   const { formatByColumn, chartFormat: axisNumberFormat } =
     useChartNumberFormats(queriedConfig, data?.meta);
@@ -786,6 +801,7 @@ function DBTimeChartComponent({
       : undefined;
   }, [activeClickPayload]);
 
+  const addTimeZone = useTimeZoneLinkParam();
   const buildSearchUrl = useCallback(
     (seriesKey?: string, seriesValue?: number) => {
       // Raw SQL charts are not supported for drill-down as we don't know the source which is being used.
@@ -901,15 +917,17 @@ function DBTimeChartComponent({
         seconds: convertGranularityToSeconds(granularity),
       });
 
-      return buildEventsSearchUrl({
+      const url = buildEventsSearchUrl({
         source,
         config: expandedConfig,
         dateRange: [from, to],
         groupFilters,
         valueRangeFilter,
       });
+      return url && addTimeZone(url);
     },
     [
+      addTimeZone,
       clickedActiveLabelDate,
       config,
       granularity,
@@ -1083,9 +1101,7 @@ function DBTimeChartComponent({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : resultFormattingError ? (
@@ -1098,9 +1114,7 @@ function DBTimeChartComponent({
           }
         />
       ) : graphResults.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isFetchingAnyPeriod} />
       ) : (
         <>
           {/* Pinned (click-locked) tooltip; hover is handled in MemoChart. */}

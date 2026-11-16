@@ -30,7 +30,6 @@ import {
   parseTimestampToMs,
   resolveConditionalColor,
   sortingStateToOrderByString,
-  splitClauseList,
   stripTrailingSlash,
   useQueryHistory,
   withMapKeyAlias,
@@ -1537,16 +1536,6 @@ describe('isColumnInSelect', () => {
   });
 });
 
-describe('splitClauseList', () => {
-  it('keeps a comma inside a backtick-quoted name', () => {
-    expect(splitClauseList('Timestamp, `a,b`, Body')).toEqual([
-      'Timestamp',
-      '`a,b`',
-      'Body',
-    ]);
-  });
-});
-
 describe('orderByAfterRemovingSelectItem', () => {
   const item = `ResourceAttributes['service.name'] AS "service.name"`;
 
@@ -1656,8 +1645,7 @@ describe('getColorFromCSSToken', () => {
       throw new Error('getComputedStyle unavailable');
     });
 
-    // Defaults to HyperDX in jsdom because the document has no
-    // theme-clickstack class.
+    // Falls back to the semantic palette when the CSS var cannot be read.
     expect(getColorFromCSSToken('chart-success')).toBe('#3ca951');
     expect(getColorFromCSSToken('chart-warning')).toBe('#efb118');
     expect(getColorFromCSSToken('chart-error')).toBe('#ff725c');

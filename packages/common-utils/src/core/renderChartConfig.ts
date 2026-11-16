@@ -2,7 +2,13 @@ import isPlainObject from 'lodash/isPlainObject';
 import * as SQLParser from 'node-sql-parser';
 import SqlString from 'sqlstring';
 
-import { ChSql, chSql, concatChSql, wrapChSqlIfNotEmpty } from '@/clickhouse';
+import {
+  ChSql,
+  chSql,
+  concatChSql,
+  isCHIntegerType,
+  wrapChSqlIfNotEmpty,
+} from '@/clickhouse';
 import { stripTypeWrappers } from '@/core/eventDeltas';
 import { compileFormulaAst, FormulaAst, validateFormula } from '@/core/formula';
 import {
@@ -376,18 +382,15 @@ const fastifySQL = ({
   }
 };
 
-function generateHasSqlForKvItemsColumn(
-  column: string,
-  key: string,
+// keySql/valueSql are SQL literals taken verbatim from the parsed condition.
+// The parser's `.value` keeps escape sequences undecoded, so re-escaping it
+// with SqlString would double-escape quotes and backslashes.
+function kvItemsConcatSql(
+  keySql: string,
   separator: string,
-  value: string,
+  valueSql: string,
 ): string {
-  return SqlString.format('has(??, concat(?, ?, ?))', [
-    column,
-    key,
-    separator,
-    value,
-  ]);
+  return `concat(${keySql}, ${SqlString.format('?', [separator])}, ${valueSql})`;
 }
 
 export const rewriteSqlFilterWithKvItems = (
@@ -432,11 +435,11 @@ export const rewriteSqlFilterWithKvItems = (
       ) {
         return;
       }
-      const mapKey: string = idxNode.value;
+      const keySql = parser.exprToSQL(idxNode);
       const info = textIndexInfoLookup.get(mapColumn)?.kv;
       if (!info) return;
 
-      let values: string[];
+      const valueNodes: { value: string }[] = [];
       if (op === '=') {
         const right = node.right;
         if (
@@ -445,11 +448,10 @@ export const rewriteSqlFilterWithKvItems = (
         ) {
           return;
         }
-        values = [right.value];
+        valueNodes.push(right);
       } else {
         const right = node.right;
         if (right?.type !== 'expr_list' || !Array.isArray(right.value)) return;
-        const collected: string[] = [];
         for (const item of right.value) {
           if (
             item?.type !== 'single_quote_string' ||
@@ -457,45 +459,35 @@ export const rewriteSqlFilterWithKvItems = (
           ) {
             return;
           }
-          collected.push(item.value);
+          valueNodes.push(item);
         }
-        values = collected;
       }
       // Bail on empty values: `Map['k']='' ` also matches absent keys because
       // Map(String, String)'s subscript default is '', which `has(items, 'k=')`
       // alone does not preserve. Same rationale for empty entries in IN lists.
-      if (values.length === 0 || values.some(v => v === '')) return;
+      if (valueNodes.length === 0 || valueNodes.some(v => v.value === '')) {
+        return;
+      }
+      const valueSqls = valueNodes.map(v => parser.exprToSQL(v));
+
+      const columnSql = SqlString.format('??', [info.columnName]);
+      const concatSql = (valueSql: string) =>
+        kvItemsConcatSql(keySql, info.separator, valueSql);
 
       let replacement: string;
-      if (values.length === 1) {
-        replacement = generateHasSqlForKvItemsColumn(
-          info.columnName,
-          mapKey,
-          info.separator,
-          values[0],
-        );
+      if (valueSqls.length === 1) {
+        replacement = `has(${columnSql}, ${concatSql(valueSqls[0])})`;
       } else if (info.useHasAny) {
         // ClickHouse >= 26.5 supports `hasAny` over the direct_read map items
         // column in a single call.
-        replacement = `hasAny(${SqlString.format('??', [
-          info.columnName,
-        ])}, array(${values
-          .map(v =>
-            SqlString.format('concat(?, ?, ?)', [mapKey, info.separator, v]),
-          )
+        replacement = `hasAny(${columnSql}, array(${valueSqls
+          .map(concatSql)
           .join(', ')}))`;
       } else {
         // Backport branches (26.2/26.3/26.4) support `has` but not `hasAny` over
         // the items column, so we fall back to a chain of `has(...) OR ...`.
-        replacement = `(${values
-          .map(v =>
-            generateHasSqlForKvItemsColumn(
-              info.columnName,
-              mapKey,
-              info.separator,
-              v,
-            ),
-          )
+        replacement = `(${valueSqls
+          .map(v => `has(${columnSql}, ${concatSql(v)})`)
           .join(' OR ')})`;
       }
 
@@ -1274,7 +1266,13 @@ function renderFrom({
   );
 }
 
-async function renderWhereExpressionStr({
+/**
+ * Render a where condition as a SQL string: Lucene is serialized against the
+ * table's schema, and the result is rewritten to use materialized columns
+ * where the table has them. Used by chart rendering and by any caller that
+ * needs the same SQL outside a chart config.
+ */
+export async function renderWhereExpressionStr({
   condition,
   language,
   metadata,
@@ -2019,6 +2017,44 @@ async function getComputedMetricColumns(
   };
 }
 
+/**
+ * WHERE for a metric source CTE. OTLP sets bit 0 of Flags
+ * (FLAG_NO_RECORDED_VALUE) on a point that has no value, such as a Prometheus
+ * staleness marker. The ClickHouse exporter stores that point as zeros, so it
+ * is left out before any aggregation or delta reads it. A series that comes
+ * back after a marker is then compared with its last real point, so a counter
+ * that restarted behind the marker is clamped like any other counter reset
+ * (see the Sum Source CTE). The gauge and sum CTEs already read Flags, but
+ * HyperDX does not require it on histogram tables, and none of them need it
+ * to be an integer. So a table without an integer Flags column (or a failed
+ * column lookup) is read as before. Nullable is excluded too:
+ * `bitAnd(NULL, 1) = 0` is NULL and would drop the row.
+ */
+async function renderMetricWhere(
+  chartConfig: BuilderChartConfigWithOptDateRangeEx,
+  metadata: Metadata,
+): Promise<ChSql> {
+  const where = await renderWhere(chartConfig, metadata);
+  let hasFlags = false;
+  try {
+    const flags = await metadata.getColumn({
+      databaseName: chartConfig.from.databaseName,
+      tableName: chartConfig.from.tableName,
+      column: 'Flags',
+      connectionId: chartConfig.connection,
+    });
+    hasFlags =
+      flags != null &&
+      isCHIntegerType(flags.type) &&
+      !flags.type.includes('Nullable(');
+  } catch (e) {
+    console.warn('Failed to look up the Flags column of a metric table', e);
+  }
+  return hasFlags
+    ? concatChSql(' AND ', where, chSql`bitAnd(Flags, 1) = 0`)
+    : where;
+}
+
 async function translateMetricChartConfig(
   chartConfig: BuilderChartConfigWithOptDateRangeEx,
   metadata: Metadata,
@@ -2078,7 +2114,7 @@ async function translateMetricChartConfig(
       minGranularitySeconds: chartConfig.minGranularitySeconds,
     });
 
-    const where = await renderWhere(
+    const where = await renderMetricWhere(
       {
         ...chartConfig,
         from: {
@@ -2184,7 +2220,7 @@ async function translateMetricChartConfig(
     // Render the where clause to limit data selection on the source CTE but also search forward/back one
     // bucket window to ensure that there is enough data to compute a reasonable value on the ends of the
     // series.
-    const where = await renderWhere(
+    const where = await renderMetricWhere(
       {
         ...chartConfig,
         from: {
@@ -2480,7 +2516,7 @@ async function translateMetricChartConfig(
           minGranularitySeconds: cteChartConfig.minGranularitySeconds,
         })
       : undefined;
-    const where = await renderWhere(cteChartConfig, metadata);
+    const where = await renderMetricWhere(cteChartConfig, metadata);
 
     // Time bucket grouping is being handled separately, so make sure to ignore the granularity
     // logic for histograms specifically.
