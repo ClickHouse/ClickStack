@@ -23,6 +23,7 @@ import {
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
 import { substitutePromqlChartConfigTemplates } from '@hyperdx/common-utils/dist/macros';
+import { getReferenceVariableFilters } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   BroadcastFilter,
   BuilderChartConfigWithDateRange,
@@ -218,7 +219,8 @@ export type TilePreviewFilters = {
  * Applies the parent dashboard's filter selections to a tile preview.
  *
  * With `applySelections` off, the preview runs as an alert would: no broadcast
- * filters, empty variable selections, and no required-filter block.
+ * filters, empty variable selections, and no required-filter block other than
+ * the reference variables the tile can't be queried without.
  */
 export function resolveTilePreviewFilters({
   config,
@@ -227,9 +229,12 @@ export function resolveTilePreviewFilters({
   variables,
   unsatisfiedRequiredFilters,
   applySelections,
+  referenceVariableNames,
 }: {
   config: ChartConfigWithDateRange;
   sourceId: string | undefined;
+  /** The data source and connection variables the tile's stored config references. */
+  referenceVariableNames?: readonly string[];
   filters: BroadcastFilter[] | undefined;
   variables: ChartVariable[] | undefined;
   unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
@@ -242,10 +247,17 @@ export function resolveTilePreviewFilters({
   });
 
   if (!applySelections) {
+    // Without a selection, a variable the tile's source or connection
+    // references leaves nothing to query, so it still blocks.
+    const referenced = new Set(referenceVariableNames);
     return {
       filters: undefined,
       variables: previewVariables,
-      missingRequiredFilterNames: [],
+      missingRequiredFilterNames: getReferenceVariableFilters(
+        unsatisfiedRequiredFilters,
+      )
+        .filter(({ name }) => referenced.has(name))
+        .map(({ filter }) => filter.name),
     };
   }
 
@@ -265,6 +277,7 @@ export function resolveTilePreviewFilters({
       sourceId,
       unsatisfiedRequiredFilters,
       referencedVariables: previewVariables,
+      referenceVariableNames,
     }),
   };
 }

@@ -521,7 +521,7 @@ describe('ChartPreviewPanel', () => {
 
       expect(
         screen.getByText(
-          'Missing required filters: Service, Environment. Select a value for each required filter, or turn off “Apply filters” to preview this tile without them.',
+          'Missing required filters or variables: Service, Environment. Select a value for each required filter, or turn off “Apply filters” to preview this tile without them.',
         ),
       ).toBeInTheDocument();
       expect(screen.queryByTestId('db-time-chart')).not.toBeInTheDocument();
@@ -544,7 +544,7 @@ describe('ChartPreviewPanel', () => {
 
       expect(screen.getByTestId('db-time-chart')).toBeInTheDocument();
       expect(
-        screen.queryByText(/Missing required filters/),
+        screen.queryByText(/Missing required filters or variables/),
       ).not.toBeInTheDocument();
     });
   });

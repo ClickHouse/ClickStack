@@ -1,7 +1,9 @@
-import { Controller, useFormState } from 'react-hook-form';
+import { Controller, useFormState, useWatch } from 'react-hook-form';
 import { DashboardFilter, SourceKind } from '@hyperdx/common-utils/dist/types';
-import { Group, MultiSelect } from '@mantine/core';
+import { Alert, Group, MultiSelect } from '@mantine/core';
+import { IconAlertTriangle } from '@tabler/icons-react';
 
+import { getInterchangeableSourceKind } from '@/components/ChartEditor/utils';
 import { SOURCE_KIND_LABELS } from '@/components/Sources/SourceForm/constants';
 import { SOURCE_KIND_ICONS } from '@/components/sourceSelectUtils';
 import { IS_PROMQL_ENABLED } from '@/config';
@@ -26,6 +28,10 @@ export const DataSourceFilterEditForm = ({
   otherFilters,
 }: DataSourceFilterEditFormProps) => {
   const { errors } = useFormState({ control });
+  const allowedSourceKinds = useWatch({ control, name: 'allowedSourceKinds' });
+  const hasMixedKinds =
+    (allowedSourceKinds?.length ?? 0) > 1 &&
+    getInterchangeableSourceKind(allowedSourceKinds) == null;
 
   return (
     <>
@@ -59,6 +65,19 @@ export const DataSourceFilterEditForm = ({
           )}
         />
       </CustomInputWrapper>
+
+      {hasMixedKinds && (
+        <Alert
+          variant="warning"
+          icon={<IconAlertTriangle size={16} />}
+          data-testid="filter-mixed-source-kinds-warning"
+        >
+          These kinds support different chart options, such as metrics and
+          formulas. A tile built while one kind is selected may not load when
+          the variable is switched to another, and a new tile can&apos;t be
+          saved until a source is selected.
+        </Alert>
+      )}
 
       <VariableNameInput control={control} otherFilters={otherFilters} />
     </>

@@ -796,6 +796,34 @@ describe('resolveTilePreviewFilters', () => {
       }).missingRequiredFilterNames,
     ).toEqual([]);
   });
+
+  it('still blocks on a referenced source variable while the filters are turned off', () => {
+    const sourceVariable: DashboardFilter = {
+      id: 'f3',
+      type: 'DATA_SOURCE',
+      name: 'Logs source',
+      allowedSourceKinds: [SourceKind.Log],
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'logs',
+      minSelections: 1,
+      maxSelections: 1,
+    };
+    const unsatisfiedRequiredFilters = [requiredFilter, sourceVariable];
+
+    expect(
+      resolve({
+        config: rawSqlWithFiltersMacro,
+        unsatisfiedRequiredFilters,
+        applySelections: false,
+        referenceVariableNames: ['logs'],
+      }).missingRequiredFilterNames,
+    ).toEqual(['Logs source']);
+    expect(
+      resolve({ unsatisfiedRequiredFilters, applySelections: false })
+        .missingRequiredFilterNames,
+    ).toEqual([]);
+  });
 });
 
 describe('withBroadcastFilters', () => {

@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback } from 'react';
 import { UseControllerProps, useWatch } from 'react-hook-form';
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
 import {
@@ -22,10 +22,11 @@ import {
 
 import SelectControlled from '@/components/SelectControlled';
 import {
-  SOURCE_KIND_ICONS,
+  getSourceOptionIcon,
   sourceSelectFilter,
   useFilteredSortedSourceItems,
   useSourceKindMap,
+  useWithSourceVariableItems,
 } from '@/components/sourceSelectUtils';
 import { useSources } from '@/source';
 
@@ -161,6 +162,7 @@ function SourceSelectControlledComponent({
   allowedSourceKinds,
   connectionId,
   isSourceAllowed,
+  allowSourceVariables = false,
   comboboxProps,
   ...props
 }: {
@@ -174,6 +176,8 @@ function SourceSelectControlledComponent({
   connectionId?: string;
   /** Extra per-source gate for restrictions a kind can't express. */
   isSourceAllowed?: (source: TSource) => boolean;
+  /** Whether to offer the dashboard's data source variables. */
+  allowSourceVariables?: boolean;
 } & UseControllerProps<any> &
   SelectProps) {
   const { data } = useSources();
@@ -182,23 +186,18 @@ function SourceSelectControlledComponent({
     name: props.name,
   });
 
-  const selectedSourceKind = useMemo(
-    () => data?.find(s => s.id === selectedSourceId)?.kind,
-    [data, selectedSourceId],
-  );
+  const sourceKindMap = useSourceKindMap(data);
 
-  const leftIcon = SOURCE_KIND_ICONS[selectedSourceKind ?? ''] ?? (
+  const leftIcon = getSourceOptionIcon(selectedSourceId, sourceKindMap) ?? (
     <IconStack size={16} />
   );
-
-  const sourceKindMap = useSourceKindMap(data);
 
   // Mantine passes `checked` to renderOption for the currently selected
   // option; render a trailing check so the active source is obvious in the
   // dropdown (the closed input only shows the kind icon + label).
   const renderOption = useCallback(
     ({ option, checked }: { option: ComboboxItem; checked?: boolean }) => {
-      const icon = SOURCE_KIND_ICONS[sourceKindMap.get(option.value) ?? ''];
+      const icon = getSourceOptionIcon(option.value, sourceKindMap);
       return (
         <Group gap="xs" wrap="nowrap" w="100%">
           {icon}
@@ -219,6 +218,10 @@ function SourceSelectControlledComponent({
     isSourceAllowed,
     groupBySection: true,
   });
+  const items = useWithSourceVariableItems(sourceItems, {
+    enabled: allowSourceVariables,
+    allowedSourceKinds,
+  });
 
   const hasSelection = !!selectedSourceId;
   const hasMenu =
@@ -233,7 +236,7 @@ function SourceSelectControlledComponent({
     >
       <SelectControlled
         {...props}
-        data={sourceItems}
+        data={items}
         comboboxProps={{
           withinPortal: false,
           width: 'max-content',

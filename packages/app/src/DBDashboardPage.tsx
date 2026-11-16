@@ -165,6 +165,7 @@ import ResourceTerraformPopover from '@/components/Iac/ResourceTerraformPopover'
 import { InlineNameInput } from '@/components/InlineNameInput/InlineNameInput';
 import { PageHeader } from '@/components/PageHeader';
 import { PageLayout } from '@/components/PageLayout';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
 import { TimePicker } from '@/components/TimePicker';
 import {
@@ -3306,7 +3307,10 @@ function DBDashboardPage({
   // `<PageLayout>` return shallow and prevents the tile-grid tree below
   // from being wrapped in an extra indentation level.
   const dashboardBody = (
-    <>
+    <ReferenceVariablesProvider
+      filters={filters}
+      values={referenceVariableValues}
+    >
       <Head>
         <title>{title}</title>
       </Head>
@@ -3601,7 +3605,7 @@ function DBDashboardPage({
           variables={variables}
         />
       )}
-    </>
+    </ReferenceVariablesProvider>
   );
 
   return (
