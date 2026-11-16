@@ -41,6 +41,7 @@ import { useMetadataWithSettings } from '@/hooks/useMetadata';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useQueryAttribution } from '@/queryAttribution';
 import { useSource } from '@/source';
+import { useWithDisplayTimeZone } from '@/useDisplayTimeZone';
 import { queryPromqlChartConfig } from '@/utils/promqlChartQuery';
 import {
   DEFAULT_TIME_WINDOWS_SECONDS,
@@ -478,7 +479,7 @@ function flattenData(data: TData | undefined): TQueryFnData | null {
 }
 
 export default function useOffsetPaginatedQuery(
-  config: ChartConfigWithOptTimestamp,
+  configProp: ChartConfigWithOptTimestamp,
   {
     isLive,
     keepPreviousData,
@@ -494,6 +495,7 @@ export default function useOffsetPaginatedQuery(
     enableSmallFirstWindow?: boolean;
   } = {},
 ) {
+  const config = useWithDisplayTimeZone(configProp);
   const { data: meData, isLoading: isLoadingMe } = api.useMe();
   const key = queryKeyFn(queryKeyPrefix, config, meData?.team?.queryTimeout);
   const queryClient = useQueryClient();

@@ -361,6 +361,75 @@ describe('replaceMacros', () => {
   });
 });
 
+describe('replaceMacros global variables', () => {
+  const dateRange: [Date, Date] = [new Date(1500), new Date(3601500)];
+
+  it.each([
+    ['$__from', '1500'],
+    ['${__from}', '1500'],
+    ['${__to}', '3601500'],
+    ["'${__from:date}'", "'1970-01-01T00:00:01.500Z'"],
+    ["'${__to:date:iso}'", "'1970-01-01T01:00:01.500Z'"],
+    ['${__from:date:seconds}', '1'],
+    ['$__range', '3600s'],
+    ['${__range_s}', '3600'],
+    ['$__range_ms', '3600000'],
+    ["'${__timezone}'", "'UTC'"],
+    ["'${__url_time_range}'", "'from=1500&to=3601500'"],
+  ])('expands %s', (sqlTemplate, expected) => {
+    expect(replaceMacros({ sqlTemplate, dateRange })).toBe(expected);
+  });
+
+  it('leaves the longer macros sharing a prefix alone', () => {
+    expect(replaceMacros({ sqlTemplate: '$__fromTime_ms', dateRange })).toBe(
+      'fromUnixTimestamp64Milli({startDateMilliseconds:Int64})',
+    );
+  });
+
+  it('uses the query params without a date range, so validation sees a time filter', () => {
+    expect(replaceMacros({ sqlTemplate: '${__from:date:iso} ${__to}' })).toBe(
+      '{startDateMilliseconds:Int64} {endDateMilliseconds:Int64}',
+    );
+  });
+
+  it('expands the configured time zone and rejects one that is not a zone name', () => {
+    expect(
+      replaceMacros({
+        sqlTemplate: "'${__timezone}'",
+        timeZone: 'America/New_York',
+      }),
+    ).toBe("'America/New_York'");
+    expect(() =>
+      replaceMacros({ sqlTemplate: '$__timezone', timeZone: "x' OR 1=1" }),
+    ).toThrow("Invalid time zone 'x' OR 1=1'");
+  });
+
+  it('encodes selected variables as a URL param that cannot end the SQL string', () => {
+    expect(
+      replaceMacros({
+        sqlTemplate: "'${__all_variables}'",
+        variables: [variable('svc', ["a'b"]), EMPTY_SERVICE],
+      }),
+    ).toBe(
+      "'filters=%5B%7B%22type%22%3A%22variable%22%2C%22name%22%3A%22svc%22%2C%22values%22%3A%5B%22a%27b%22%5D%7D%5D'",
+    );
+  });
+
+  it('rejects unsupported formats', () => {
+    expect(() =>
+      replaceMacros({ sqlTemplate: '${__from:date:YYYY}', dateRange }),
+    ).toThrow("Unsupported format 'date:YYYY'");
+    expect(() =>
+      replaceMacros({ sqlTemplate: '${__range:raw}', dateRange }),
+    ).toThrow('takes no format');
+  });
+
+  it('is detected by hasMacro in either form', () => {
+    expect(hasMacro('WHERE ts >= ${__from:date:seconds}', 'from')).toBe(true);
+    expect(hasMacro('WHERE ts >= $__fromTime', 'from')).toBe(false);
+  });
+});
+
 describe('replaceMacros with variables', () => {
   const variables = [
     { name: 'service', expression: 'ServiceName', values: ['api', 'web'] },

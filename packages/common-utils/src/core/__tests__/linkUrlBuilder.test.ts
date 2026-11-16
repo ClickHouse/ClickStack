@@ -903,6 +903,46 @@ describe('renderOnClickExternal', () => {
     }
   });
 
+  it('expands Grafana global variables alongside row columns', () => {
+    const onClick: OnClickExternal = {
+      type: 'external',
+      urlTemplate:
+        'https://grafana.example.com/d/abc?svc={{ServiceName}}&${__url_time_range}&tz=${__timezone}&start=${__from:date:iso}&${__all_variables}#$__to',
+    };
+    const result = renderOnClickExternal({
+      onClick,
+      row: { ServiceName: 'checkout' },
+      dateRange: [new Date(1000), new Date(61000)],
+      timeZone: 'Etc/GMT+5',
+      variables: [
+        { name: 'env', values: ["it's"] },
+        { name: 'empty', values: [] },
+      ],
+    });
+    expect(result).toEqual({
+      ok: true,
+      url:
+        'https://grafana.example.com/d/abc?svc=checkout&from=1000&to=61000&tz=Etc%2FGMT%2B5' +
+        '&start=1970-01-01T00:00:01.000Z' +
+        '&filters=%5B%7B%22type%22%3A%22variable%22%2C%22name%22%3A%22env%22%2C%22values%22%3A%5B%22it%27s%22%5D%7D%5D' +
+        '#61000',
+    });
+  });
+
+  it('reports an unsupported global variable format', () => {
+    const result = renderOnClickExternal({
+      onClick: {
+        type: 'external',
+        urlTemplate: 'https://example.com/?t=${__from:date:YYYY}',
+      },
+      row: {},
+      dateRange: [new Date(0), new Date(1)],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.error).toContain("Unsupported format 'date:YYYY'");
+  });
+
   it('allows http URLs', () => {
     const onClick: OnClickExternal = {
       type: 'external',

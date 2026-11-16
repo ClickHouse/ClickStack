@@ -330,6 +330,7 @@ export default function DBTableChart({
   const getRowAction = useOnClickLinkBuilder({
     onClick: config.onClick,
     dateRange: queriedConfig.dateRange,
+    variables: config.variables,
   });
 
   return (

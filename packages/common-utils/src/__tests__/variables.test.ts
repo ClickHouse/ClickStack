@@ -1470,6 +1470,24 @@ describe('filterReferencedVariables', () => {
     );
   });
 
+  it('keeps every variable when the SQL or a link reads ${__all_variables}', () => {
+    expect(
+      filterReferencedVariables(rawSqlConfig("'$__all_variables'"), variables),
+    ).toEqual(variables);
+    expect(
+      filterReferencedVariables(
+        {
+          ...rawSqlConfig('SELECT 1'),
+          onClick: {
+            type: 'external',
+            urlTemplate: 'https://example.com/?${__all_variables}',
+          },
+        },
+        variables,
+      ),
+    ).toEqual(variables);
+  });
+
   it('keeps the variables a PromQL expression references', () => {
     expect(
       filterReferencedVariables(

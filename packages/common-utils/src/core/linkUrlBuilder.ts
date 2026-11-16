@@ -1,5 +1,11 @@
 import { FilterState, filtersToQuery } from '@/filters';
+import {
+  expandLinkGlobalVariables,
+  GlobalVariableContext,
+} from '@/globalVariables';
+import { MacroExpansionError } from '@/macroErrors';
 import type {
+  ChartVariable,
   Filter,
   OnClick,
   OnClickDashboard,
@@ -23,18 +29,20 @@ export type LinkBuildResult =
 function renderOrError(
   template: string,
   rowData: Record<string, unknown>,
+  globals: GlobalVariableContext,
   options?: { encodeValues?: boolean },
 ): { ok: true; value: string } | { ok: false; error: string } {
   try {
+    const expanded = expandLinkGlobalVariables(template, globals, options);
     const value = options?.encodeValues
-      ? renderUrlTemplate(template, rowData)
-      : renderLinkTemplate(template, rowData);
+      ? renderUrlTemplate(expanded, rowData)
+      : renderLinkTemplate(expanded, rowData);
     return { ok: true, value };
   } catch (err) {
     const message =
       err instanceof MissingTemplateVariableError
         ? `Row has no column '${err.variable}'`
-        : err instanceof LinkTemplateError
+        : err instanceof LinkTemplateError || err instanceof MacroExpansionError
           ? err.message
           : String(err);
     return {
@@ -54,12 +62,13 @@ function renderOrError(
 function renderFilterTemplates(
   templates: OnClickFilterTemplate[] | undefined,
   row: Record<string, unknown>,
+  globals: GlobalVariableContext,
 ): { ok: true; filters: Filter[] } | { ok: false; error: string } {
   if (!templates || templates.length === 0) return { ok: true, filters: [] };
 
   const state: FilterState = {};
   for (const template of templates) {
-    const rendered = renderOrError(template.template, row);
+    const rendered = renderOrError(template.template, row, globals);
     if (!rendered.ok) return rendered;
 
     if (state[template.expression]) {
@@ -84,13 +93,18 @@ export function renderOnClickSearch({
   sourceIds,
   sourceIdsByName,
   dateRange,
+  timeZone,
+  variables,
 }: {
   onClick: OnClickSearch;
   row: Record<string, unknown>;
   sourceIds: Set<string>;
   sourceIdsByName: Map<string, string[]>;
   dateRange: [Date, Date];
+  timeZone?: string;
+  variables?: ChartVariable[];
 }): LinkBuildResult {
+  const globals = { dateRange, timeZone, variables };
   let sourceId;
   if (onClick.target.mode === 'id') {
     if (!sourceIds.has(onClick.target.id)) {
@@ -102,7 +116,11 @@ export function renderOnClickSearch({
     sourceId = onClick.target.id;
   } else {
     // Render the source name template
-    const sourceNameRenderResult = renderOrError(onClick.target.template, row);
+    const sourceNameRenderResult = renderOrError(
+      onClick.target.template,
+      row,
+      globals,
+    );
     if (!sourceNameRenderResult.ok) return sourceNameRenderResult;
 
     // Find the matching source's ID
@@ -132,7 +150,7 @@ export function renderOnClickSearch({
 
   let where = '';
   if (onClick.whereTemplate) {
-    const whereResult = renderOrError(onClick.whereTemplate, row);
+    const whereResult = renderOrError(onClick.whereTemplate, row, globals);
     if (!whereResult.ok) return whereResult;
     where = whereResult.value;
   }
@@ -146,7 +164,11 @@ export function renderOnClickSearch({
     to: String(dateRange[1].getTime()),
   });
 
-  const filterRenderResult = renderFilterTemplates(onClick.filters, row);
+  const filterRenderResult = renderFilterTemplates(
+    onClick.filters,
+    row,
+    globals,
+  );
   if (!filterRenderResult.ok) return filterRenderResult;
 
   if (filterRenderResult.filters.length > 0) {
@@ -168,13 +190,18 @@ export function renderOnClickDashboard({
   dashboardIds,
   dashboardIdsByName,
   dateRange,
+  timeZone,
+  variables,
 }: {
   onClick: OnClickDashboard;
   row: Record<string, unknown>;
   dashboardIds: Set<string>;
   dashboardIdsByName: Map<string, string[]>;
   dateRange: [Date, Date];
+  timeZone?: string;
+  variables?: ChartVariable[];
 }): LinkBuildResult {
+  const globals = { dateRange, timeZone, variables };
   let dashboardId;
   if (onClick.target.mode === 'id') {
     if (!dashboardIds.has(onClick.target.id)) {
@@ -189,6 +216,7 @@ export function renderOnClickDashboard({
     const dashboardNameRenderResult = renderOrError(
       onClick.target.template,
       row,
+      globals,
     );
     if (!dashboardNameRenderResult.ok) return dashboardNameRenderResult;
 
@@ -220,7 +248,7 @@ export function renderOnClickDashboard({
   // Render the dashboard's global WHERE condition, if any
   let where = '';
   if (onClick.whereTemplate) {
-    const whereResult = renderOrError(onClick.whereTemplate, row);
+    const whereResult = renderOrError(onClick.whereTemplate, row, globals);
     if (!whereResult.ok) return whereResult;
     where = whereResult.value;
   }
@@ -232,7 +260,11 @@ export function renderOnClickDashboard({
     to: String(dateRange[1].getTime()),
   });
 
-  const filterRenderResult = renderFilterTemplates(onClick.filters, row);
+  const filterRenderResult = renderFilterTemplates(
+    onClick.filters,
+    row,
+    globals,
+  );
   if (!filterRenderResult.ok) return filterRenderResult;
 
   if (filterRenderResult.filters.length > 0) {
@@ -269,13 +301,19 @@ function isAllowedExternalUrl(url: string): boolean {
 export function renderOnClickExternal({
   onClick,
   row,
+  dateRange,
+  timeZone,
+  variables,
 }: {
   onClick: OnClickExternal;
   row: Record<string, unknown>;
-}): LinkBuildResult {
-  const rendered = renderOrError(onClick.urlTemplate, row, {
-    encodeValues: true,
-  });
+} & GlobalVariableContext): LinkBuildResult {
+  const rendered = renderOrError(
+    onClick.urlTemplate,
+    row,
+    { dateRange, timeZone, variables },
+    { encodeValues: true },
+  );
   if (!rendered.ok) return rendered;
 
   const url = rendered.value.trim();

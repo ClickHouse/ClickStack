@@ -54,6 +54,9 @@ const sqlSchema = z.object({
         '  $__timeInterval(column) — time bucket expression: toStartOfInterval(toDateTime(column), INTERVAL ...)\n' +
         '  $__timeInterval_ms(column) — same with millisecond precision\n' +
         '  $__interval_s — raw interval in seconds\n' +
+        '  ${__from} / ${__to} — start/end epoch ms; ${__from:date:iso} / ${__from:date:seconds} for other formats\n' +
+        '  $__range / $__range_s / $__range_ms — range length as 3600s / seconds / milliseconds\n' +
+        "  ${__timezone} — the viewer's IANA time zone (UTC here); quote it\n" +
         '  $__filters — dashboard filter conditions (resolves to 1=1 when no filters)\n' +
         "  $__sourceTable — the source's database.table. Requires sourceId.\n" +
         '  {intervalSeconds:Int64} / {intervalMilliseconds:Int64} — bucket size parameters\n\n' +

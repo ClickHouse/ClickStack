@@ -50,6 +50,7 @@ import { useMetadataWithSettings } from '@/hooks/useMetadata';
 import { useQueryAttribution } from '@/queryAttribution';
 import { useSource } from '@/source';
 import { ChartQueryResult } from '@/types';
+import { useWithDisplayTimeZone } from '@/useDisplayTimeZone';
 import { stripClientSideConfigFields } from '@/utils/chartConfig';
 import {
   queryPromqlChartConfig,
@@ -358,10 +359,11 @@ export function appendChunk(
  * - `data.isComplete` indicates whether all chunks have been fetched.
  */
 export function useQueriedChartConfig(
-  config: ChartConfigWithOptDateRange,
+  configProp: ChartConfigWithOptDateRange,
   options?: Partial<UseQueryOptions<TQueryFnData>> &
     AdditionalUseQueriedChartConfigOptions,
 ) {
+  const config = useWithDisplayTimeZone(configProp);
   const { enabled = true } = options ?? {};
   const clickhouseClient = useClickhouseClient();
   const attribution = useQueryAttribution();
@@ -501,9 +503,10 @@ export function useQueriedChartConfig(
 }
 
 export function useRenderedSqlChartConfig(
-  config: ChartConfigWithOptDateRange,
+  configProp: ChartConfigWithOptDateRange,
   options?: Partial<UseQueryOptions<string>>,
 ) {
+  const config = useWithDisplayTimeZone(configProp);
   const { enabled = true } = options ?? {};
 
   const metadata = useMetadataWithSettings();

@@ -775,6 +775,10 @@ SQL TEMPLATE REFERENCE:
     $__fromTime / $__toTime    start/end as DateTime values
     $__fromTime_ms / $__toTime_ms  start/end as DateTime64 values
     $__interval_s              raw interval in seconds
+    \${__from} / \${__to}        Grafana globals: start/end epoch ms; :date:iso or :date:seconds formats
+    $__range / $__range_s / $__range_ms  range length as "3600s" / seconds / ms
+    \${__timezone}              viewer's IANA time zone (UTC for alerts); quote it
+    \${__url_time_range}        from=<ms>&to=<ms>;  \${__all_variables}  filters=<variable selections>
     $__filters                 dashboard filter conditions (resolves to 1=1 when none).
                                REQUIRES sourceId on the tile. Without it, filters never apply.
     $__sourceTable             the source's \`database\`.\`table\`.
@@ -967,6 +971,10 @@ For configType: "sql" tiles, write ClickHouse SQL with template macros:
     $__fromTime / $__toTime    start/end as DateTime values
     $__fromTime_ms / $__toTime_ms  start/end as DateTime64 values
     $__interval_s              raw interval in seconds (for arithmetic)
+    \${__from} / \${__to}        Grafana globals: start/end epoch ms; :date:iso or :date:seconds formats
+    $__range / $__range_s / $__range_ms  range length as "3600s" / seconds / ms
+    \${__timezone}              viewer's IANA time zone (UTC for alerts); quote it
+    \${__url_time_range}        from=<ms>&to=<ms>;  \${__all_variables}  filters=<variable selections>
     $__filters                 dashboard filter conditions (1=1 when none).
                                REQUIRES sourceId on the tile. Set sourceId (unless the
                                query reads multiple tables) so dashboard filters apply.
@@ -1325,7 +1333,7 @@ Destination types:
   { type: "dashboard", target, whereLanguage, whereTemplate?, filters? }
     Opens another ClickStack dashboard owned by the same team.
   { type: "external",  urlTemplate }
-    Opens an arbitrary external URL in a new tab (e.g. a Grafana or Langfuse dashboard, a runbook). The urlTemplate is rendered against the clicked row and the rendered value must be an absolute http(s) URL. It takes no target, whereLanguage, whereTemplate, or filters, and references no ClickStack source or dashboard.
+    Opens an arbitrary external URL in a new tab (e.g. a Grafana or Langfuse dashboard, a runbook). The urlTemplate is rendered against the clicked row and the rendered value must be an absolute http(s) URL. Every link template also expands the Grafana globals \${__from}, \${__to}, \${__from:date:iso}, $__range, \${__timezone}, \${__url_time_range} (from=<ms>&to=<ms>) and \${__all_variables} (filters=<variable selections>). It takes no target, whereLanguage, whereTemplate, or filters, and references no ClickStack source or dashboard.
 
 Target shape, how the destination is identified:
   target: { mode: "id", id: "<object-id>" }

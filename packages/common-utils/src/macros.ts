@@ -8,10 +8,16 @@ import {
 } from './core/promql';
 import { injectPromqlLabelMatchers } from './core/promqlLabelInjection';
 import { splitAndTrimWithBracket } from './core/utils';
+import {
+  expandGlobalVariable,
+  GLOBAL_VARIABLES,
+  GlobalVariableName,
+} from './globalVariables';
 import { MacroExpansionError, MalformedMacroArgsError } from './macroErrors';
 import { RawSqlQueryParam, renderQueryParam } from './rawSqlParams';
 import {
   ChartVariable,
+  DateRange,
   DisplayType,
   MetricsDataType,
   MetricsDataTypeSchema,
@@ -204,6 +210,7 @@ export type MacroName =
   | (typeof MACROS)[number]['name']
   | 'filters'
   | 'sourceTable'
+  | GlobalVariableName
   | VariableMacroName;
 
 const FILTERS_MACRO_DESCRIPTION =
@@ -243,6 +250,12 @@ export const MACRO_SUGGESTIONS: MacroSuggestion[] = [
     minArgs: 0,
     maxArgs: 0,
     description: `The selected metrics source's ${type} table, fully qualified.`,
+  })),
+  ...GLOBAL_VARIABLES.map(({ name, minArgs, maxArgs, description }) => ({
+    name,
+    minArgs,
+    maxArgs,
+    description,
   })),
 ];
 
@@ -293,6 +306,8 @@ export const TIME_RANGE_MACROS = [
   'toTime',
   'fromTime_ms',
   'toTime_ms',
+  'from',
+  'to',
 ] as const;
 
 /**
@@ -372,7 +387,7 @@ export function getSourceTableMacroArgCounts(sqlTemplate: string): number[] {
 
 function findMacros(input: string, name: MacroName): MacroMatch[] {
   // eslint-disable-next-line security/detect-non-literal-regexp
-  const pattern = new RegExp(`\\$__${name}\\b`, 'g');
+  const pattern = new RegExp(`\\$\\{?__${name}\\b`, 'g');
   const matches: MacroMatch[] = [];
 
   for (const match of input.matchAll(pattern)) {
@@ -414,13 +429,22 @@ export function replaceMacros(
   chartConfig: Pick<
     RawSqlChartConfig,
     'sqlTemplate' | 'from' | 'metricTables' | 'variables'
-  >,
+  > &
+    Partial<Pick<DateRange, 'dateRange' | 'timeZone'>>,
   filtersSQL?: string,
 ): string {
-  const { from, metricTables, variables } = chartConfig;
+  const { from, metricTables, variables, dateRange, timeZone } = chartConfig;
 
   const allMacros: Macro[] = [
     ...MACROS,
+    ...GLOBAL_VARIABLES.map(({ name, minArgs, maxArgs, description }) => ({
+      name,
+      minArgs,
+      maxArgs,
+      description,
+      replace: (args: string[]) =>
+        expandGlobalVariable(name, { dateRange, timeZone, variables }, args),
+    })),
     {
       name: 'filters',
       minArgs: 0,

@@ -225,7 +225,7 @@ export function findBalancedParens(input: string, start: number): number {
  *
  * At each `$` the scanner tries, in order:
  * 1. a known `$__<name>` macro (longest match, requiring a non-word char after the name so `$__filter` never matches the prefix of `$__filters`),
- * 2. a `${name}` / `${name:format}` reference, then a
+ * 2. a known macro in braces, `${__<name>}` / `${__<name>:format}`, then a `${name}` / `${name:format}` reference, then a
  * 3. bare `$name` reference (maximal munch). Anything else is plain text, and an unknown `$__x` is emitted verbatim.
  *
  * `onMalformed` controls what happens when a macro's argument list has no
@@ -346,6 +346,26 @@ export function scanTemplateTokens(
     // Attempt to match a braced `${var}` or `${var:format}` reference
     if (input.charAt(i + 1) === '{') {
       const closeIndex = input.indexOf('}', i + 2); // no escaping because variable names can't contain `}` or `\`
+
+      // Grafana's braced macro form, `${__from}` / `${__from:date:iso}`, whose format is the macro's argument
+      const braced = closeIndex > 0 ? input.slice(i + 2, closeIndex) : '';
+      const colon = braced.indexOf(':');
+      const bracedMacro = braced.startsWith('__')
+        ? braced.slice(2, colon < 0 ? undefined : colon)
+        : undefined;
+      if (bracedMacro && macroNames.includes(bracedMacro)) {
+        flushText();
+        tokens.push({
+          kind: 'macro',
+          name: bracedMacro,
+          args: colon < 0 ? [] : [braced.slice(colon + 1)],
+          raw: input.slice(i, closeIndex + 1),
+          inStringLiteral,
+        });
+        i = closeIndex + 1;
+        continue;
+      }
+
       const match =
         closeIndex > 0
           ? input.slice(i + 2, closeIndex).match(BRACED_REFERENCE_REGEX)
@@ -1391,6 +1411,9 @@ export function filterReferencedVariables(
   config: ChartConfigWithOptDateRange | SavedChartConfig,
   variables: ChartVariable[],
 ): ChartVariable[] {
+  // `${__all_variables}` reads every variable, from the SQL or a link template.
+  if (/\$\{?__all_variables\b/.test(JSON.stringify(config))) return variables;
+
   let names: string[];
   if ('configType' in config && config.configType === 'sql') {
     names = getReferencedVariableNames(config.sqlTemplate);

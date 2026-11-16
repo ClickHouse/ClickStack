@@ -2065,6 +2065,9 @@ export type DateRange = {
   // `convertDateRangeToGranularityString`. PromQL also reads it as the
   // source's scrape interval for `$__rate_interval`. Never persisted.
   minGranularitySeconds?: number;
+  // Runtime-only IANA zone the user views times in, read by raw SQL's
+  // `${__timezone}`. Unset (e.g. alerts) means UTC. Never persisted.
+  timeZone?: string;
 };
 
 export type ChartConfigWithDateRange = ChartConfig & DateRange;

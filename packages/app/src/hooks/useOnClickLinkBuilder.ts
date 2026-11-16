@@ -5,12 +5,18 @@ import {
   renderOnClickExternal,
   renderOnClickSearch,
 } from '@hyperdx/common-utils/dist/core/linkUrlBuilder';
-import { isSearchableSource, OnClick } from '@hyperdx/common-utils/dist/types';
+import {
+  ChartVariable,
+  isSearchableSource,
+  OnClick,
+} from '@hyperdx/common-utils/dist/types';
 import { notifications } from '@mantine/notifications';
 
 import { useDashboards } from '@/dashboard';
 import { useSources } from '@/source';
+import { getLocalTimeZone } from '@/timeZone';
 import { useTimeZoneLinkParam } from '@/timeZoneOverride';
+import { useDisplayTimeZone } from '@/useDisplayTimeZone';
 
 /**
  * The action a row click should take. `url` is set when the row's
@@ -49,13 +55,17 @@ export type RowAction = {
 export function useOnClickLinkBuilder({
   onClick,
   dateRange,
+  variables,
 }: {
   onClick: OnClick | undefined;
   dateRange: [Date, Date];
+  /** The dashboard's variables, read by `${__all_variables}`. */
+  variables?: ChartVariable[];
 }): ((row: Record<string, unknown>) => RowAction) | null {
   const { data: sources } = useSources();
   const { data: dashboards } = useDashboards();
   const addTimeZone = useTimeZoneLinkParam();
+  const timeZone = useDisplayTimeZone() ?? getLocalTimeZone();
 
   const [sourceIdsByName, sourceIds, sourceNamesById] = useMemo(() => {
     const idsByName = new Map<string, string[]>();
@@ -113,6 +123,8 @@ export function useOnClickLinkBuilder({
               sourceIds,
               sourceIdsByName,
               dateRange,
+              timeZone,
+              variables,
             })
           : onClick.type === 'dashboard'
             ? renderOnClickDashboard({
@@ -121,8 +133,16 @@ export function useOnClickLinkBuilder({
                 dashboardIds,
                 dashboardIdsByName,
                 dateRange,
+                timeZone,
+                variables,
               })
-            : renderOnClickExternal({ onClick, row });
+            : renderOnClickExternal({
+                onClick,
+                row,
+                dateRange,
+                timeZone,
+                variables,
+              });
 
       if (renderResult.ok) {
         return {
@@ -163,6 +183,8 @@ export function useOnClickLinkBuilder({
     sourceIdsByName,
     sourceNamesById,
     dateRange,
+    timeZone,
+    variables,
     dashboardIds,
     dashboardIdsByName,
     dashboardNamesById,
