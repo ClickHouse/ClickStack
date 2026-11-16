@@ -1711,7 +1711,11 @@ function getSourceConnectionMismatches(
   sources: SourceForValidation[],
   tiles: ExternalDashboardTileWithId[],
   filters: DashboardFilter[],
+  existingTiles: DashboardDocument['tiles'] = [],
 ): string[] {
+  const existingConfigById = new Map(
+    existingTiles.map(tile => [tile.id, tile.config]),
+  );
   const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
   const variableConnectionByName = new Map(
     getSourceVariableDeclarations(filters).map(({ name, connection }) => [
@@ -1735,6 +1739,19 @@ function getSourceConnectionMismatches(
       tile.config.sourceId
     ) {
       const { connectionId, sourceId } = tile.config;
+      // Like other variable references, one the update leaves as it was
+      // isn't checked again; the dashboard shows the mismatch instead
+      const existingConfig = tile.id
+        ? existingConfigById.get(tile.id)
+        : undefined;
+      if (
+        parseVariableReference(sourceId) != null &&
+        existingConfig != null &&
+        Reflect.get(existingConfig, 'source') === sourceId &&
+        Reflect.get(existingConfig, 'connection') === connectionId
+      ) {
+        continue;
+      }
       const sourceConnection = getSourceConnection(sourceId);
       // A connection reference is only known once selected, so compare two
       // IDs, or two references, but not one of each
@@ -1759,7 +1776,10 @@ export type TileValidationContext = {
   tiles: ExternalDashboardTileWithId[];
   /** Filters to check for missing source IDs (create/full-update paths). */
   filters?: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[];
-  /** Existing internal tiles for scoping heatmap change detection (update paths). */
+  /**
+   * Existing internal tiles for scoping heatmap change detection and the
+   * variable reference check (update paths).
+   */
   existingTiles?: DashboardDocument['tiles'];
   /**
    * Existing internal filters (update paths). Their source references aren't
@@ -1792,12 +1812,21 @@ export async function validateDashboardTiles(
     return tileRefIssues.join('; ');
   }
 
+  // Stored IDs are kept so that the references an update leaves as they were
+  // can be told apart from the ones it adds, which are the only ones checked
   const referenceFilters = filters
-    ? convertExternalFiltersToInternal(filters)
+    ? convertExternalFiltersToInternal(
+        filters,
+        new Set(existingFilters?.map(filter => filter.id)),
+      )
     : (existingFilters ?? []);
   const variableReferenceError = getVariableReferenceError(
-    convertExternalTilesToInternal(tiles),
+    convertExternalTilesToInternal(
+      tiles,
+      new Set(existingTiles?.map(tile => tile.id)),
+    ),
     referenceFilters,
+    existingTiles && { tiles: existingTiles, filters: existingFilters },
   );
   if (variableReferenceError) {
     return variableReferenceError;
@@ -1828,6 +1857,7 @@ export async function validateDashboardTiles(
     sources,
     tiles,
     referenceFilters,
+    existingTiles,
   );
   if (sourceConnectionMismatches.length > 0) {
     return `The following source IDs do not match the specified connections: ${sourceConnectionMismatches.join(', ')}`;

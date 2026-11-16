@@ -49,8 +49,8 @@ import {
 
 const SOURCE_VARIABLE_REFERENCE_NOTE =
   'May instead be `$name`, a reference to a DATA_SOURCE filter (variable) on this ' +
-  'dashboard, so viewers can switch the source; the variable must only offer kinds ' +
-  'this field accepts.';
+  'dashboard, so viewers can switch the source; the variable must offer at least ' +
+  'one kind this field accepts.';
 
 const SOURCE_ID_DESCRIPTION = `Source ID - call clickstack_list_sources. ${SOURCE_VARIABLE_REFERENCE_NOTE}`;
 

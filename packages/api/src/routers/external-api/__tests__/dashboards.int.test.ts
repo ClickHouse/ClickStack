@@ -8752,6 +8752,96 @@ describe('External API v2 Dashboards - new format', () => {
         .expect(200);
     });
 
+    // Only references an update adds are checked, so editing a variable
+    // doesn't fail on the tiles that already use it.
+    it('accepts a PUT whose filter change leaves stored references unsatisfied', async () => {
+      const variable = { ...dataSourceFilter, connectionId: undefined };
+      const created = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [makeExternalTile({ sourceId: '$traces' })],
+          tags: [],
+          filters: [variable],
+        })
+        .expect(200);
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      const url = `${BASE_URL}/${created.body.data.id}`;
+      const [storedVariable] = fetched.body.data.filters;
+
+      await authRequest('put', url)
+        .send({
+          ...fetched.body.data,
+          filters: [
+            { ...storedVariable, allowedSourceKinds: [SourceKind.Promql] },
+          ],
+        })
+        .expect(200);
+      await authRequest('put', url)
+        .send({ ...fetched.body.data, filters: [] })
+        .expect(200);
+
+      const res = await authRequest('put', url)
+        .send({
+          ...fetched.body.data,
+          filters: [],
+          tiles: [
+            ...fetched.body.data.tiles,
+            makeExternalTile({ sourceId: '$nope' }),
+          ],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a data source variable/);
+    });
+
+    it("accepts a PUT that moves a raw SQL tile's data source variable to another connection", async () => {
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: config.CLICKHOUSE_HOST,
+        username: config.CLICKHOUSE_USER,
+        password: config.CLICKHOUSE_PASSWORD,
+      });
+      const created = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [
+            {
+              ...rawSqlTile,
+              config: {
+                ...rawSqlTile.config,
+                connectionId: connection._id.toString(),
+                sourceId: '$traces',
+              },
+            },
+          ],
+          tags: [],
+          filters: [
+            { ...dataSourceFilter, connectionId: connection._id.toString() },
+          ],
+        })
+        .expect(200);
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      const [storedVariable] = fetched.body.data.filters;
+
+      await authRequest('put', `${BASE_URL}/${created.body.data.id}`)
+        .send({
+          ...fetched.body.data,
+          filters: [
+            {
+              ...storedVariable,
+              connectionId: otherConnection._id.toString(),
+            },
+          ],
+        })
+        .expect(200);
+    });
+
     it('deletes the alert of a tile that moves to a data source variable', async () => {
       const tile = makeExternalTile({ sourceId: traceSource._id.toString() });
       const created = await authRequest('post', BASE_URL)

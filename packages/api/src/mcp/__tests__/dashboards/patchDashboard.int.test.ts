@@ -1471,5 +1471,15 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
         'does not name a data source variable',
       );
     });
+
+    it('accepts a patch that keeps a reference the dashboard no longer satisfies', async () => {
+      const dashboard = await createDashboard();
+      await patchSource(dashboard._id.toString(), '$traces');
+      await Dashboard.updateOne({ _id: dashboard._id }, { filters: [] });
+
+      const result = await patchSource(dashboard._id.toString(), '$traces');
+
+      expect(result.isError).toBeFalsy();
+    });
   });
 });
