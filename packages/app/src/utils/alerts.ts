@@ -4,7 +4,6 @@ import {
   differenceInMinutes,
   sub,
 } from 'date-fns';
-import _ from 'lodash';
 import { z } from 'zod';
 import { formatTileAlertDisplayName } from '@hyperdx/common-utils/dist/alerts';
 import { Granularity } from '@hyperdx/common-utils/dist/core/utils';
