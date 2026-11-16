@@ -276,8 +276,12 @@ export function validateDashboardFilterFieldGating<
     }
 
     if (filter.type === 'ADHOC' && filter.sourceType === 'promql') {
-      for (const field of ['where', 'whereLanguage'] as const) {
-        if (filter[field] === undefined) continue;
+      const fields = [
+        ['where', filter.where],
+        ['whereLanguage', filter.whereLanguage],
+      ] as const;
+      for (const [field, value] of fields) {
+        if (value === undefined) continue;
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `Filter "${filter.name}" sets ${field}, which only ad hoc filters with sourceType "sql" use; drop ${field}`,
