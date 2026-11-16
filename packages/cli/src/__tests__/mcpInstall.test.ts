@@ -15,6 +15,7 @@ import {
   listTeams,
   mcpClients,
   mcpUrl,
+  teamServers,
   upsertCodexServer,
   upsertJsonServer,
   verifyKey,
@@ -195,6 +196,33 @@ describe('mcpClients', () => {
         'clickstack-prd'
       ].headers,
     ).toEqual({ Authorization: 'Bearer hdx_org_abc' });
+  });
+});
+
+describe('teamServers', () => {
+  const team = (id: string, name: string) => ({ id, name, isCurrent: false });
+
+  it('keeps the name for one team and for no team', () => {
+    expect(teamServers(server, [])).toEqual([{ ...server, teamId: undefined }]);
+    expect(teamServers(server, [team('a', 'Demo')])).toEqual([
+      { ...server, teamId: 'a' },
+    ]);
+  });
+
+  it('names one entry per team, falling back to the id on a clash', () => {
+    expect(
+      teamServers(server, [
+        team('a', 'Prod EU'),
+        team('b', 'Demo!'),
+        team('c', 'demo'),
+        team('d', '***'),
+      ]).map(s => [s.name, s.teamId]),
+    ).toEqual([
+      ['clickstack-prod-eu', 'a'],
+      ['clickstack-b', 'b'],
+      ['clickstack-c', 'c'],
+      ['clickstack-d', 'd'],
+    ]);
   });
 });
 

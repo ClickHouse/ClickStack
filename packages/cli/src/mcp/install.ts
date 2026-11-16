@@ -118,9 +118,37 @@ export async function listTeams(
   // An unknown tool comes back as an error result, not an HTTP error.
   if (!result || result.isError) return [];
   const { teams } = JSON.parse(result.content[0].text);
+  // The id ends up in a header value and, with several teams, a server name.
   return (teams as McpTeam[]).filter(
-    t => typeof t.id === 'string' && typeof t.name === 'string',
+    t =>
+      typeof t.id === 'string' &&
+      isValidServerName(t.id) &&
+      typeof t.name === 'string',
   );
+}
+
+/**
+ * One server per chosen team. A single team (or none) keeps the server's
+ * name; several teams get `<name>-<team>` each.
+ */
+export function teamServers(server: McpServer, teams: McpTeam[]): McpServer[] {
+  if (teams.length <= 1) return [{ ...server, teamId: teams[0]?.id }];
+  const slugs = teams.map(t =>
+    t.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, ''),
+  );
+  return teams.map((t, i) => {
+    const slug = slugs[i];
+    // Use the id when the name has no usable characters or two teams share it.
+    const unique = slug && slugs.indexOf(slug) === slugs.lastIndexOf(slug);
+    return {
+      ...server,
+      name: `${server.name}-${unique ? slug : t.id}`,
+      teamId: t.id,
+    };
+  });
 }
 
 function onPath(command: string): boolean {

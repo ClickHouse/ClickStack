@@ -10,6 +10,7 @@ import {
   type McpClient,
   type McpTeam,
   mcpUrl,
+  teamServers,
   verifyKey,
 } from '@/mcp/install';
 import { isValidUrl } from '@/utils/url';
@@ -43,7 +44,7 @@ export default function McpInstallPrompt({
   const [key, setKey] = useState('');
   const [identity, setIdentity] = useState<KeyIdentity | null>(null);
   const [teams, setTeams] = useState<McpTeam[]>([]);
-  const [team, setTeam] = useState<McpTeam | null>(null);
+  const [picked, setPicked] = useState<McpTeam[]>([]);
   const [teamsFailed, setTeamsFailed] = useState(false);
   const [chosen, setChosen] = useState(clients);
   const [error, setError] = useState<string | null>(null);
@@ -56,11 +57,10 @@ export default function McpInstallPrompt({
   useInput(
     (input, inkKey) => {
       if (inkKey.return || input.toLowerCase() === 'y') {
-        const server = { name, url: mcpUrl(appUrl), key, teamId: team?.id };
         finish(
           chosen.map(client => {
             try {
-              client.install(server);
+              servers.forEach(server => client.install(server));
               return { client };
             } catch (e) {
               return {
@@ -77,6 +77,9 @@ export default function McpInstallPrompt({
     { isActive: step === 'confirm' },
   );
 
+  const servers = teamServers({ name, url: mcpUrl(appUrl), key }, picked);
+  // Enter must always keep one team, even if the server marks none as current.
+  const defaultTeam = teams.find(t => t.isCurrent) ?? teams[0];
   const afterTeam: Step = clients.length > 1 ? 'agents' : 'confirm';
 
   const submitAppUrl = () => {
@@ -164,15 +167,14 @@ export default function McpInstallPrompt({
 
       {step === 'team' && (
         <Choice
-          title="Team this server queries:"
+          multi
+          title="Teams to add a server for (one entry per team):"
           items={teams}
           label={t => (t.isCurrent ? `${t.name} (default)` : t.name)}
-          initial={Math.max(
-            0,
-            teams.findIndex(t => t.isCurrent),
-          )}
-          onSubmit={([picked]) => {
-            setTeam(picked);
+          initial={teams.indexOf(defaultTeam)}
+          isChecked={t => t === defaultTeam}
+          onSubmit={chosenTeams => {
+            setPicked(chosenTeams);
             setStep(afterTeam);
           }}
           onCancel={() => finish(null)}
@@ -203,10 +205,15 @@ export default function McpInstallPrompt({
             .
           </Text>
           <Text> </Text>
-          <Text>
-            Add the ClickStack MCP server as "{name}"
-            {team && ` for team ${team.name}`} to:
-          </Text>
+          <Text>Add the ClickStack MCP server as:</Text>
+          {servers.map((s, i) => (
+            <Text key={s.name}>
+              {' '}
+              - {s.name}
+              {picked[i] && ` (team ${picked[i].name})`}
+            </Text>
+          ))}
+          <Text>to:</Text>
           {chosen.map(c => (
             <Text key={c.id}> - {c.label}</Text>
           ))}

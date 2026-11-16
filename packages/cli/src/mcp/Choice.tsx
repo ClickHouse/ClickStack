@@ -11,6 +11,7 @@ export default function Choice<T>({
   label,
   initial = 0,
   multi = false,
+  isChecked = () => true,
   onSubmit,
   onCancel,
 }: {
@@ -19,11 +20,13 @@ export default function Choice<T>({
   label: (item: T) => string;
   initial?: number;
   multi?: boolean;
+  /** Which items start ticked in a `multi` list. Defaults to all. */
+  isChecked?: (item: T) => boolean;
   onSubmit: (chosen: T[]) => void;
   onCancel: () => void;
 }) {
   const [cursor, setCursor] = useState(initial);
-  const [checked, setChecked] = useState(() => items.map(() => true));
+  const [checked, setChecked] = useState(() => items.map(isChecked));
 
   useInput((input, key) => {
     if (key.upArrow || input === 'k') setCursor(c => Math.max(0, c - 1));
