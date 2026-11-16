@@ -642,6 +642,99 @@ describe('DBEditTimeChartForm - Add/delete alerts for display type Number', () =
     ).not.toBeInTheDocument();
   });
 
+  describe('opened from a tile alert button', () => {
+    // Runnable, like a saved tile: the tile editor runs it on open.
+    const tileConfig: SavedChartConfig = {
+      ...defaultChartConfig,
+      displayType: DisplayType.Number,
+      select: [
+        {
+          aggFn: 'avg',
+          aggCondition: '',
+          aggConditionLanguage: 'lucene' as const,
+          valueExpression: 'Value',
+          metricType: MetricsDataType.Gauge,
+          metricName: 'test.metric.gauge',
+        },
+      ],
+    };
+
+    const renderFromAlertButton = (
+      props: Partial<React.ComponentProps<typeof DBEditTimeChartForm>> = {},
+    ) =>
+      renderAlertComponent({
+        chartConfig: tileConfig,
+        autoRun: true,
+        defaultAlertPanelOpened: true,
+        ...props,
+      });
+
+    it('runs the chart and starts on a new alert', async () => {
+      renderFromAlertButton();
+
+      expect(await screen.findByText('Number Chart')).toBeInTheDocument();
+      expect(screen.getByTestId('alert-panel')).toContainElement(
+        screen.getByTestId('alert-details'),
+      );
+      // The new alert has no webhook yet, which the first run ignores.
+      expect(
+        screen.queryByText("Webhook ID can't be empty"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId('select-webhook')).not.toHaveFocus();
+      expect(
+        screen.getByTestId('alert-panel-confirm-button'),
+      ).toHaveTextContent('Add alert');
+      expect(screen.getByTestId('alert-display-name-input')).toHaveValue(
+        'Test Chart',
+      );
+    });
+
+    it('starts on a new alert for a chart it cannot run yet', async () => {
+      // No source to run against, so nothing runs on open.
+      renderFromAlertButton({
+        chartConfig: { ...tileConfig, source: 'missing-source' },
+      });
+
+      expect(await screen.findByTestId('alert-panel')).toContainElement(
+        screen.getByTestId('alert-details'),
+      );
+    });
+
+    it('ignores the new alert on a first run by hand', async () => {
+      // As on a tile with nothing to run on open, like raw SQL with no source.
+      renderFromAlertButton({ autoRun: false });
+
+      await userEvent.click(
+        await screen.findByTestId('chart-run-query-button'),
+      );
+
+      expect(await screen.findByText('Number Chart')).toBeInTheDocument();
+      expect(
+        screen.queryByText("Webhook ID can't be empty"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId('select-webhook')).not.toHaveFocus();
+    });
+
+    it('discards that alert when its panel is closed', async () => {
+      renderFromAlertButton();
+
+      await userEvent.click(
+        await screen.findByTestId('close-alert-panel-button'),
+      );
+
+      expect(screen.queryByTestId('alert-details')).not.toBeInTheDocument();
+      expect(screen.getByTestId('alert-button')).toHaveTextContent('Add alert');
+    });
+
+    it('adds no alert where the editor offers none', async () => {
+      renderFromAlertButton({ dashboardId: undefined });
+
+      expect(await screen.findByText('Number Chart')).toBeInTheDocument();
+      expect(screen.queryByTestId('alert-panel')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('alert-details')).not.toBeInTheDocument();
+    });
+  });
+
   describe('with an existing alert', () => {
     const renderWithExistingAlert = (
       alert: NonNullable<SavedChartConfig['alert']>,
@@ -670,6 +763,17 @@ describe('DBEditTimeChartForm - Add/delete alerts for display type Number', () =
       );
 
       await userEvent.click(screen.getByTestId('alert-button'));
+
+      expect(screen.getByTestId('alert-panel')).toContainElement(
+        screen.getByTestId('alert-details'),
+      );
+      expect(
+        screen.getByTestId('alert-panel-confirm-button'),
+      ).toHaveTextContent('Update alert');
+    });
+
+    it('starts on it when opened from a tile alert button', () => {
+      renderWithExistingAlert(completeAlert, { defaultAlertPanelOpened: true });
 
       expect(screen.getByTestId('alert-panel')).toContainElement(
         screen.getByTestId('alert-details'),
