@@ -1,7 +1,12 @@
 import * as SQLParser from 'node-sql-parser';
 
 import { escapeSqlString, replaceJsonExpressions } from '@/core/utils';
-import { getSourceDependentMacrosUsed, replaceMacros } from '@/macros';
+import {
+  getSourceDependentMacrosUsed,
+  hasMacro,
+  INTERVAL_MACROS,
+  replaceMacros,
+} from '@/macros';
 import { parse } from '@/queryParser';
 import { RawSqlQueryParam } from '@/rawSqlParams';
 import {
@@ -877,6 +882,16 @@ function expandSqlQueryFilterTemplate(
   if (sourceMacros.length > 0) {
     throw new Error(
       `SQL query filters have no source, so ${sourceMacros
+        .map(macro => `$__${macro}`)
+        .join(' and ')} cannot be used`,
+    );
+  }
+  const intervalMacros = INTERVAL_MACROS.filter(macro =>
+    hasMacro(sqlTemplate, macro),
+  );
+  if (intervalMacros.length > 0) {
+    throw new Error(
+      `SQL query filters have no time buckets, so ${intervalMacros
         .map(macro => `$__${macro}`)
         .join(' and ')} cannot be used`,
     );

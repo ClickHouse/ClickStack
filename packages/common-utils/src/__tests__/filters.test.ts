@@ -1302,6 +1302,20 @@ describe('filters', () => {
       ).toThrow(/have no source/);
     });
 
+    it.each([
+      'SELECT toStartOfInterval(Timestamp, INTERVAL $__interval_s second) FROM logs',
+      'SELECT $__timeInterval(Timestamp) FROM logs',
+      'SELECT $__timeInterval_ms(Timestamp) FROM logs',
+    ])('throws when the template uses an interval macro: %s', sqlTemplate => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate,
+          variables: [],
+          dateRange,
+        }),
+      ).toThrow(/have no time buckets/);
+    });
+
     it('throws when a macro names an unknown variable', () => {
       expect(() =>
         renderSqlQueryFilterValuesQuery({

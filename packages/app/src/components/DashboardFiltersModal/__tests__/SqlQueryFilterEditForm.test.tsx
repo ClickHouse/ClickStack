@@ -1,4 +1,4 @@
-import { useForm } from 'react-hook-form';
+import { RegisterOptions, useForm } from 'react-hook-form';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -8,6 +8,7 @@ import {
   toFormValues,
 } from '@/components/DashboardFiltersModal/filterFormState';
 import { SqlQueryFilterEditForm } from '@/components/DashboardFiltersModal/SqlQueryFilterEditForm';
+import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
 
 const mockUseSqlQueryFilterValues = jest.fn();
 const mockCompletionLabels: string[] = [];
@@ -31,10 +32,12 @@ jest.mock('@/components/SQLEditor/SQLEditor', () => ({
   SQLEditorControlled: ({
     control,
     name,
+    rules,
     additionalCompletions,
   }: {
     control: FilterFormControl;
     name: 'sqlTemplate';
+    rules?: RegisterOptions<FilterFormValues, 'sqlTemplate'>;
     additionalCompletions?: { label: string }[];
   }) => {
     mockCompletionLabels.splice(
@@ -42,35 +45,50 @@ jest.mock('@/components/SQLEditor/SQLEditor', () => ({
       mockCompletionLabels.length,
       ...(additionalCompletions ?? []).map(c => c.label),
     );
-    return <textarea data-testid="sql-input" {...control.register(name)} />;
+    return (
+      <textarea data-testid="sql-input" {...control.register(name, rules)} />
+    );
   },
 }));
 
 const valuesResult = ({
   values = [],
   error,
+  isFetching = false,
 }: {
   values?: string[];
   error?: string;
+  isFetching?: boolean;
 }) => ({
   data: new Map([['preview', { values, isLoading: false }]]),
   filterErrorMessages: new Map(error ? [['preview', error]] : []),
   isLoading: false,
+  isFetching,
   isError: !!error,
 });
 
+const cloudVariable = { name: 'cloud', expression: 'cloud', values: [] };
+
 function Harness() {
-  const { control } = useForm<FilterFormValues>({
+  const { control, handleSubmit } = useForm<FilterFormValues>({
     defaultValues: { ...toFormValues(), type: 'SQL_QUERY' },
   });
-  return <SqlQueryFilterEditForm control={control} otherFilters={[]} />;
+  return (
+    <SqlVariablesProvider variables={[cloudVariable]}>
+      <SqlQueryFilterEditForm control={control} otherFilters={[]} />
+      <button type="button" onClick={handleSubmit(() => {})}>
+        Save
+      </button>
+    </SqlVariablesProvider>
+  );
 }
 
-const renderForm = async () => {
+const renderForm = async (sql = 'SELECT env FROM envs') => {
   renderWithMantine(<Harness />);
   const user = userEvent.setup();
   await user.type(screen.getByTestId('connection-input'), 'conn1');
-  await user.type(screen.getByTestId('sql-input'), 'SELECT env FROM envs');
+  // `{` starts a user-event key descriptor, so it must be doubled.
+  await user.type(screen.getByTestId('sql-input'), sql.replace(/{/g, '{{'));
   return user;
 };
 
@@ -82,15 +100,57 @@ describe('SqlQueryFilterEditForm', () => {
     );
   });
 
-  it('suggests time macros but not macros that need a source', () => {
+  it('suggests time macros but not source or interval macros', () => {
     renderWithMantine(<Harness />);
 
     expect(mockCompletionLabels).toContain('$__timeFilter');
     expect(
       mockCompletionLabels.filter(label =>
-        /^\$__(sourceTable|filters)(\(|$)/.test(label),
+        /^\$__(sourceTable|filters|timeInterval|timeInterval_ms|interval_s)(\(|$)/.test(
+          label,
+        ),
       ),
     ).toEqual([]);
+  });
+
+  it('accepts a query that references a known variable', async () => {
+    const user = await renderForm(
+      'SELECT env FROM envs WHERE $__filter(cloud, $cloud)',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(screen.queryByText(/unknown variable/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['an unknown variable', 'SELECT env FROM envs WHERE $__filter(env, $own)'],
+    ['a source macro', 'SELECT env FROM $__sourceTable'],
+    ['an interval macro', 'SELECT $__interval_s FROM envs'],
+  ])('rejects a query that uses %s', async (_, sql) => {
+    const user = await renderForm(sql);
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(
+      await screen.findByText(/unknown variable|cannot be used/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the loader, not the last values, while a re-run fetches', async () => {
+    mockUseSqlQueryFilterValues.mockReturnValue(
+      valuesResult({ values: ['prod', 'dev'], isFetching: true }),
+    );
+    const user = await renderForm();
+
+    await user.click(screen.getByTestId('filter-sql-preview-button'));
+
+    expect(screen.getByTestId('filter-sql-preview')).toHaveTextContent(
+      'Running query',
+    );
+    expect(
+      screen.queryByTestId('filter-sql-preview-values'),
+    ).not.toBeInTheDocument();
   });
 
   it('disables the preview until there is a connection and a query', async () => {

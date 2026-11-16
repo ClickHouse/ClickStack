@@ -1,6 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useFormState, useWatch } from 'react-hook-form';
-import { MACRO_SUGGESTIONS } from '@hyperdx/common-utils/dist/macros';
+import { validateSqlQueryFilterTemplate } from '@hyperdx/common-utils/dist/filters';
+import {
+  INTERVAL_MACROS,
+  MACRO_SUGGESTIONS,
+  SOURCE_DEPENDENT_MACROS,
+} from '@hyperdx/common-utils/dist/macros';
 import {
   DashboardFilter,
   SqlQueryDashboardFilter,
@@ -29,8 +34,13 @@ const PREVIEW_VALUES_SHOWN = 20;
 /** Characters of each value the preview shows before truncating it. */
 const PREVIEW_VALUE_MAX_LENGTH = 20;
 
-/** Macros that need a source, which a SQL query filter doesn't have. */
-const SOURCE_MACROS = new Set(['filters', 'sourceTable']);
+/**
+ * Macros a SQL query filter can't expand: it has no source, and no time buckets.
+ */
+const UNSUPPORTED_MACROS = new Set<string>([
+  ...SOURCE_DEPENDENT_MACROS,
+  ...INTERVAL_MACROS,
+]);
 
 const PLACEHOLDER_SQL = `SELECT DISTINCT env
 FROM default.environments
@@ -57,7 +67,7 @@ export const SqlQueryFilterEditForm = ({
     () => [
       ...MACRO_SUGGESTIONS.filter(
         // `sourceTable(gauge)` etc. are per-metric variants of `sourceTable`.
-        macro => !SOURCE_MACROS.has(macro.name.split('(')[0]),
+        macro => !UNSUPPORTED_MACROS.has(macro.name.split('(')[0]),
       ).map(toMacroCompletion),
       ...buildSqlVariableCompletions(variables),
     ],
@@ -104,9 +114,16 @@ export const SqlQueryFilterEditForm = ({
             control={control}
             name="sqlTemplate"
             rules={{
-              validate: (value: unknown) =>
-                (typeof value === 'string' && value.trim().length > 0) ||
-                'This field is required',
+              validate: (value: unknown) => {
+                if (typeof value !== 'string' || !value.trim()) {
+                  return 'This field is required';
+                }
+                // `variables` leaves out this filter's own, so a reference to
+                // it is rejected as unknown.
+                return (
+                  validateSqlQueryFilterTemplate(value, variables ?? []) ?? true
+                );
+              },
             }}
             height="150px"
             enableLineWrapping
@@ -170,7 +187,7 @@ const SqlQueryFilterPreview = ({
     ],
     [connection, sqlTemplate],
   );
-  const { data, filterErrorMessages, isLoading, isError } =
+  const { data, filterErrorMessages, isLoading, isFetching, isError } =
     useSqlQueryFilterValues({
       filters,
       dateRange: dateRange ?? lastHour,
@@ -178,7 +195,9 @@ const SqlQueryFilterPreview = ({
     });
   const values = data.get('preview')?.values ?? [];
 
-  if (isLoading) {
+  // While a re-run loads, the previous query's values stand in as placeholder
+  // data, so isLoading alone would show them as this query's results.
+  if (isLoading || isFetching) {
     return (
       <Group gap="xs" data-testid="filter-sql-preview">
         <Loader size="xs" />
