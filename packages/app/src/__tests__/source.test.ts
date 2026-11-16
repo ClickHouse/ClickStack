@@ -889,4 +889,12 @@ describe('NetFlow source inference', () => {
       outIfExpression: '',
     });
   });
+  it('clears a stale full-text and timestamp mapping when the table has none', async () => {
+    expect(
+      await infer(['Bytes', 'Packets', 'SrcAddr', 'DstAddr']),
+    ).toMatchObject({
+      implicitColumnExpression: '',
+      timestampValueExpression: '',
+    });
+  });
 });

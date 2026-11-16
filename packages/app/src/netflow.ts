@@ -153,6 +153,7 @@ export function buildNetflowQueryConfigs({
   const coveredSeconds = `least(${bucketStart} + ${bucketSeconds}, ${dateRange[1].getTime() / 1000}) - greatest(${bucketStart}, ${dateRange[0].getTime() / 1000})`;
   const dimensions = getNetflowDimensions(source);
   const protocol = dimensions.protocol;
+  const quickFilterCondition = buildNetflowWhere(source, filters);
   const base = {
     from: source.from,
     connection: source.connection,
@@ -164,9 +165,12 @@ export function buildNetflowQueryConfigs({
     alignDateRangeToGranularity: false,
     where,
     whereLanguage,
+    // An empty SQL filter would still trigger the text-index metadata lookup on every query.
     filters: [
       ...extraFilters,
-      { type: 'sql' as const, condition: buildNetflowWhere(source, filters) },
+      ...(quickFilterCondition
+        ? [{ type: 'sql' as const, condition: quickFilterCondition }]
+        : []),
     ],
   };
   // Keep result aliases separate from common mapped column names: ClickHouse substitutes aliases in WHERE and sibling expressions.

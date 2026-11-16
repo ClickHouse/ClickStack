@@ -88,6 +88,7 @@ export function TableSourceForm({
   isNew = false,
   defaultName = '',
   defaultKind = SourceKind.Log,
+  lockKind = false,
   onCancel,
 }: {
   sourceId?: string;
@@ -97,6 +98,8 @@ export function TableSourceForm({
   isNew?: boolean;
   defaultName?: string;
   defaultKind?: SourceKind;
+  /** Hides the source kind selector so the form can only create `defaultKind`. */
+  lockKind?: boolean;
 }) {
   const { data: source } = useSource({ id: sourceId });
   const { data: connections } = useConnections();
@@ -659,52 +662,54 @@ export function TableSourceForm({
             maxLength={256}
           />
         </FormRow>
-        <FormRow label={'Source Data Type'}>
-          <Controller
-            control={control}
-            name="kind"
-            render={({ field: { onChange, value } }) => (
-              <Radio.Group
-                value={value}
-                onChange={v => onChange(v)}
-                withAsterisk
-              >
-                <Group>
-                  <Radio
-                    value={SourceKind.Log}
-                    label={SOURCE_KIND_LABELS[SourceKind.Log]}
-                  />
-                  <Radio
-                    value={SourceKind.Trace}
-                    label={SOURCE_KIND_LABELS[SourceKind.Trace]}
-                  />
-                  {IS_METRICS_ENABLED && (
+        {!lockKind && (
+          <FormRow label={'Source Data Type'}>
+            <Controller
+              control={control}
+              name="kind"
+              render={({ field: { onChange, value } }) => (
+                <Radio.Group
+                  value={value}
+                  onChange={v => onChange(v)}
+                  withAsterisk
+                >
+                  <Group>
                     <Radio
-                      value={SourceKind.Metric}
-                      label={SOURCE_KIND_LABELS[SourceKind.Metric]}
+                      value={SourceKind.Log}
+                      label={SOURCE_KIND_LABELS[SourceKind.Log]}
                     />
-                  )}
-                  {IS_SESSIONS_ENABLED && (
                     <Radio
-                      value={SourceKind.Session}
-                      label={SOURCE_KIND_LABELS[SourceKind.Session]}
+                      value={SourceKind.Trace}
+                      label={SOURCE_KIND_LABELS[SourceKind.Trace]}
                     />
-                  )}
-                  {IS_PROMQL_ENABLED && (
+                    {IS_METRICS_ENABLED && (
+                      <Radio
+                        value={SourceKind.Metric}
+                        label={SOURCE_KIND_LABELS[SourceKind.Metric]}
+                      />
+                    )}
+                    {IS_SESSIONS_ENABLED && (
+                      <Radio
+                        value={SourceKind.Session}
+                        label={SOURCE_KIND_LABELS[SourceKind.Session]}
+                      />
+                    )}
+                    {IS_PROMQL_ENABLED && (
+                      <Radio
+                        value={SourceKind.Promql}
+                        label={SOURCE_KIND_LABELS[SourceKind.Promql]}
+                      />
+                    )}
                     <Radio
-                      value={SourceKind.Promql}
-                      label={SOURCE_KIND_LABELS[SourceKind.Promql]}
+                      value={SourceKind.Netflow}
+                      label={SOURCE_KIND_LABELS[SourceKind.Netflow]}
                     />
-                  )}
-                  <Radio
-                    value={SourceKind.Netflow}
-                    label={SOURCE_KIND_LABELS[SourceKind.Netflow]}
-                  />
-                </Group>
-              </Radio.Group>
-            )}
-          />
-        </FormRow>
+                  </Group>
+                </Radio.Group>
+              )}
+            />
+          </FormRow>
+        )}
         <FormRow label={'Server Connection'}>
           <ConnectionSelectControlled control={control} name={`connection`} />
         </FormRow>

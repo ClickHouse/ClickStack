@@ -196,6 +196,17 @@ describe('NetFlow queries', () => {
     expect(configs.topSourceAddresses.limit).toEqual({ limit: 10 });
   });
 
+  it('adds no SQL filter when no quick filter is set', () => {
+    const configs = buildNetflowQueryConfigs({
+      source,
+      dateRange,
+      filters: {},
+    });
+    for (const config of Object.values(configs)) {
+      expect(config?.filters).toEqual([]);
+    }
+  });
+
   it.each(['lucene', 'sql'] as const)(
     'combines %s search with quick filters on every chart',
     whereLanguage => {

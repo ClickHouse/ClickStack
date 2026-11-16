@@ -379,9 +379,11 @@ export async function inferTableSourceConfig({
     return {
       ...baseConfig,
       kind: SourceKind.Netflow,
-      ...(names.has('TimeReceived')
-        ? { timestampValueExpression: 'TimeReceived' }
-        : {}),
+      // Like the column mappings below, these come back empty when the new table has nothing to infer.
+      timestampValueExpression: names.has('TimeReceived')
+        ? 'TimeReceived'
+        : (primaryKeyTimestampColumn?.name ?? ''),
+      implicitColumnExpression: '',
       defaultTableSelectExpression: selected.join(', ') || '*',
       // A mapping for a column the table lacks is returned empty so that switching tables clears it.
       ...Object.fromEntries(

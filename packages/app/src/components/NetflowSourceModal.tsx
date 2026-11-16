@@ -57,6 +57,7 @@ export default function NetflowSourceModal({
         sourceId={mode === 'edit' ? sourceId : undefined}
         defaultName="NetFlow"
         defaultKind={SourceKind.Netflow}
+        lockKind
         onCreate={onCreate}
         onSave={onClose}
         onCancel={onClose}

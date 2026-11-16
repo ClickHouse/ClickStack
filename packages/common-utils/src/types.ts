@@ -2937,7 +2937,9 @@ export function isMetricSource(source: TSource): source is TMetricSource {
 export function isPromqlSource(source: TSource): source is TPromqlSource {
   return source.kind === SourceKind.Promql;
 }
-export function isSearchableSource(source: TSource): boolean {
+export function isSearchableSource(
+  source: TSource,
+): source is TLogSource | TTraceSource | TNetflowSource {
   return (
     isLogSource(source) || isTraceSource(source) || isNetflowSource(source)
   );

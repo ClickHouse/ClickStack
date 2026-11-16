@@ -1,4 +1,4 @@
-import { KeyboardEventHandler, memo, ReactElement, useState } from 'react';
+import { KeyboardEventHandler, ReactElement, useState } from 'react';
 import { Button, Menu } from '@mantine/core';
 
 import { NETFLOW_DIMENSION_LABELS, NetflowFilterField } from '@/netflow';
@@ -30,7 +30,7 @@ type Props = {
   | { label: string; onSelect?: (excluded: boolean) => void }
 );
 
-export default memo(function NetflowFilterMenu(props: Props) {
+export default function NetflowFilterMenu(props: Props) {
   const [opened, setOpened] = useState(false);
   const [activated, setActivated] = useState(false);
   const { value, allowEmpty = false, target } = props;
@@ -85,4 +85,4 @@ export default memo(function NetflowFilterMenu(props: Props) {
       </Menu.Dropdown>
     </Menu>
   );
-});
+}

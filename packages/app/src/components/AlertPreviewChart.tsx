@@ -11,9 +11,7 @@ import {
   ChartConfigWithDateRange,
   DisplayType,
   Filter,
-  isLogSource,
-  isNetflowSource,
-  isTraceSource,
+  isSearchableSource,
   SearchCondition,
   SearchConditionLanguage,
   TSource,
@@ -63,7 +61,7 @@ export const AlertPreviewChart = ({
   const resolvedSelect =
     (select && select.trim().length > 0
       ? select
-      : isLogSource(source) || isTraceSource(source) || isNetflowSource(source)
+      : isSearchableSource(source)
         ? source.defaultTableSelectExpression
         : undefined) ?? '';
 

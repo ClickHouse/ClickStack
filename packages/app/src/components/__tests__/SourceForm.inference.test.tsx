@@ -159,6 +159,14 @@ describe('Source form asynchronous inference', () => {
     },
   );
 
+  it('hides the source kind selector when the kind is locked', () => {
+    renderWithMantine(
+      <TableSourceForm isNew lockKind defaultKind={SourceKind.Netflow} />,
+    );
+    expect(screen.queryByRole('radio', { name: 'Logs' })).toBeNull();
+    expect(screen.getByLabelText('from.tableName')).toBeInTheDocument();
+  });
+
   it('ignores a NetFlow response that arrives after the user selects Logs', async () => {
     const oldRequest = deferred();
     const latestRequest = deferred();

@@ -1,5 +1,10 @@
-import { SourceKind, SourceSchemaNoId } from '@hyperdx/common-utils/dist/types';
+import {
+  SourceKind,
+  SourceSchema,
+  SourceSchemaNoId,
+} from '@hyperdx/common-utils/dist/types';
 
+import { getNetflowKeyColumns } from '@/mcp/tools/sources/netflowKeyColumns';
 import {
   buildMcpSaveSourceSchema,
   buildSourceInput,
@@ -69,6 +74,27 @@ describe('MCP source schema', () => {
     expect(SourceSchemaNoId.parse(buildSourceInput(updated))).toMatchObject({
       name: 'Renamed',
       ...mappings,
+    });
+  });
+
+  it('reports every NetFlow mapping as a key column', () => {
+    const source = SourceSchema.parse({
+      ...buildSourceInput(mcpSaveSourceSchema.parse(input)),
+      id: 'source-id',
+    });
+    if (source.kind !== SourceKind.Netflow) throw new Error('Expected NetFlow');
+    expect(getNetflowKeyColumns(source)).toEqual({
+      bytes: 'Bytes',
+      packets: 'Packets',
+      samplingRate: 'SamplingRate',
+      srcAddr: 'SrcAddr',
+      dstAddr: 'DstAddr',
+      srcPort: 'SrcPort',
+      dstPort: 'DstPort',
+      protocol: 'Proto',
+      exporter: 'ExporterName',
+      inIf: 'InIfName',
+      outIf: 'OutIfName',
     });
   });
 
