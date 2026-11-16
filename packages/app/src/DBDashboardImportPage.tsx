@@ -338,10 +338,17 @@ function FileSelection({
             details={
               <Stack gap={0}>
                 {filterQueryWarnings.map(warning => (
-                  <Text key={warning.filterId} c="yellow">
-                    {warning.filterName}: invalid {warning.language} query:{' '}
-                    {warning.where}
-                  </Text>
+                  <Stack key={warning.filterId} gap={0}>
+                    <Text c="yellow">
+                      {warning.filterName}: invalid {warning.language} query:{' '}
+                      {warning.where}
+                    </Text>
+                    {warning.detail && (
+                      <Text c="yellow" size="sm">
+                        {warning.detail}
+                      </Text>
+                    )}
+                  </Stack>
                 ))}
               </Stack>
             }
