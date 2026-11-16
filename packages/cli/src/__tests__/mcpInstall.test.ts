@@ -189,6 +189,19 @@ describe('mcpClients', () => {
     ).toEqual(headers);
   });
 
+  it('reports an entry as present only once it is installed', () => {
+    const has = (id: string, name: string) =>
+      mcpClients(dir, 'linux')
+        .find(c => c.id === id)!
+        .has(name);
+    for (const id of ['cursor', 'vscode', 'codex']) {
+      expect(has(id, 'clickstack-prd')).toBe(false);
+      install(id);
+      expect(has(id, 'clickstack-prd')).toBe(true);
+      expect(has(id, 'clickstack')).toBe(false);
+    }
+  });
+
   it('writes no team header when no team was chosen', () => {
     install('cursor');
     expect(
@@ -278,6 +291,13 @@ describe('listTeams', () => {
   it('returns no teams when the server has no team listing', async () => {
     respondText(toolError);
     await expect(listTeams('https://example.com', 'k')).resolves.toEqual([]);
+  });
+
+  it('throws when the tool exists but fails', async () => {
+    respondText(toolError.replace('Tool not found', 'database timeout'));
+    await expect(listTeams('https://example.com', 'k')).rejects.toThrow(
+      /database timeout/,
+    );
   });
 
   it('throws when the listing failed, so it is not read as one team', async () => {

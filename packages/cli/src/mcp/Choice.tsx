@@ -1,16 +1,12 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 
-/**
- * Arrow-key list. Single choice submits the highlighted item on Enter; with
- * `multi`, Space toggles items and Enter submits the checked ones.
- */
+/** Arrow-key checklist. Space toggles items and Enter submits the ticked ones. */
 export default function Choice<T>({
   title,
   items,
   label,
   initial = 0,
-  multi = false,
   isChecked = () => true,
   onSubmit,
   onCancel,
@@ -19,28 +15,28 @@ export default function Choice<T>({
   items: T[];
   label: (item: T) => string;
   initial?: number;
-  multi?: boolean;
-  /** Which items start ticked in a `multi` list. Defaults to all. */
+  /** Which items start ticked. Defaults to all. */
   isChecked?: (item: T) => boolean;
   onSubmit: (chosen: T[]) => void;
   onCancel: () => void;
 }) {
   const [cursor, setCursor] = useState(initial);
   const [checked, setChecked] = useState(() => items.map(isChecked));
+  const [noneTicked, setNoneTicked] = useState(false);
 
   useInput((input, key) => {
     if (key.upArrow || input === 'k') setCursor(c => Math.max(0, c - 1));
     if (key.downArrow || input === 'j') {
       setCursor(c => Math.min(items.length - 1, c + 1));
     }
-    if (multi && input === ' ') {
+    if (input === ' ') {
+      setNoneTicked(false);
       setChecked(c => c.map((on, i) => (i === cursor ? !on : on)));
     }
     if (key.return) {
-      const chosen = multi
-        ? items.filter((_, i) => checked[i])
-        : [items[cursor]];
+      const chosen = items.filter((_, i) => checked[i]);
       if (chosen.length > 0) onSubmit(chosen);
+      else setNoneTicked(true);
     }
     if (key.escape) onCancel();
   });
@@ -51,15 +47,13 @@ export default function Choice<T>({
       {items.map((item, i) => (
         <Text key={i} color={i === cursor ? 'green' : undefined}>
           {i === cursor ? '▸ ' : '  '}
-          {multi && (checked[i] ? '[x] ' : '[ ] ')}
+          {checked[i] ? '[x] ' : '[ ] '}
           {label(item)}
         </Text>
       ))}
       <Text> </Text>
-      <Text dimColor>
-        {multi ? 'Space to toggle, Enter to continue' : 'Enter to select'}, Esc
-        to cancel
-      </Text>
+      {noneTicked && <Text color="yellow">Select at least one.</Text>}
+      <Text dimColor>Space to toggle, Enter to continue, Esc to cancel</Text>
     </Box>
   );
 }

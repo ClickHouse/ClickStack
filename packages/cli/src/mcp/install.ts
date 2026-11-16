@@ -33,6 +33,8 @@ export interface McpClient {
   /** Where the key ends up, shown to the user after install. */
   location: string;
   detect: () => boolean;
+  /** Whether an entry with this name is already configured. */
+  has: (name: string) => boolean;
   install: (server: McpServer) => void;
 }
 
@@ -114,9 +116,22 @@ export async function listTeams(
       .split('\n')
       .find(line => line.startsWith('data:'))
       ?.slice(5) ?? text;
-  const { result } = JSON.parse(message);
-  // An unknown tool comes back as an error result, not an HTTP error.
-  if (!result || result.isError) return [];
+  const { result, error } = JSON.parse(message);
+  // Only an unknown tool means "no team listing". The SDK reports it as an
+  // error result (or a -32601/-32602 error); any other error is a failure.
+  const failure: string | undefined = result?.isError
+    ? String(result.content?.[0]?.text ?? 'tool error')
+    : error
+      ? String(error.message ?? 'error')
+      : undefined;
+  if (failure != null) {
+    const unknownTool =
+      /tool .*not found/i.test(failure) ||
+      error?.code === -32601 ||
+      error?.code === -32602;
+    if (unknownTool) return [];
+    throw new Error(failure);
+  }
   const { teams } = JSON.parse(result.content[0].text);
   // The id ends up in a header value and, with several teams, a server name.
   return (teams as McpTeam[]).filter(
@@ -201,7 +216,7 @@ function tomlString(value: string): string {
 /** Replaces the `[mcp_servers.<name>]` table (and its subtables) in Codex's config.toml. */
 export function upsertCodexServer(file: string, server: McpServer): void {
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
-  const header = new RegExp(`^\\[mcp_servers\\.${server.name}(\\.|\\])`);
+  const header = codexTableHeader(server.name);
   const kept: string[] = [];
   let skipping = false;
   // shortcut: line-based table removal, no TOML parser. Fine for tables we
@@ -237,6 +252,22 @@ function vscodeUserDir(home: string, platform: NodeJS.Platform): string {
   return path.join(home, '.config', 'Code', 'User');
 }
 
+function readJsonObject(file: string): Record<string, any> {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf-8')) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function hasKey(servers: unknown, name: string): boolean {
+  return servers != null && Object.hasOwn(servers, name);
+}
+
+function codexTableHeader(name: string): RegExp {
+  return new RegExp(`^\\[mcp_servers\\.${name}(\\.|\\])`);
+}
+
 function runClaude(args: string[]): void {
   const res = spawnSync('claude', args, { encoding: 'utf-8' });
   if (res.error || res.status !== 0) {
@@ -261,6 +292,13 @@ export function mcpClients(
       label: 'Claude Code',
       location: 'Claude Code user config (~/.claude.json)',
       detect: () => onPath('claude'),
+      has: name => {
+        const config = readJsonObject(path.join(home, '.claude.json'));
+        return (
+          hasKey(config.mcpServers, name) ||
+          hasKey(config.projects?.[process.cwd()]?.mcpServers, name)
+        );
+      },
       install: server => {
         const { name, url } = server;
         // `mcp add` refuses to overwrite, so drop any earlier entry first. A
@@ -291,6 +329,12 @@ export function mcpClients(
       label: 'Codex',
       location: codexConfig,
       detect: () => fs.existsSync(path.dirname(codexConfig)) || onPath('codex'),
+      has: name =>
+        fs.existsSync(codexConfig) &&
+        fs
+          .readFileSync(codexConfig, 'utf-8')
+          .split('\n')
+          .some(line => codexTableHeader(name).test(line.trim())),
       install: server => upsertCodexServer(codexConfig, server),
     },
     {
@@ -298,6 +342,7 @@ export function mcpClients(
       label: 'Cursor',
       location: cursorConfig,
       detect: () => fs.existsSync(path.dirname(cursorConfig)),
+      has: name => hasKey(readJsonObject(cursorConfig).mcpServers, name),
       install: server =>
         upsertJsonServer(cursorConfig, 'mcpServers', server.name, {
           url: server.url,
@@ -309,6 +354,7 @@ export function mcpClients(
       label: 'VS Code',
       location: vscodeConfig,
       detect: () => fs.existsSync(vscodeDir),
+      has: name => hasKey(readJsonObject(vscodeConfig).servers, name),
       install: server =>
         upsertJsonServer(vscodeConfig, 'servers', server.name, {
           type: 'http',

@@ -17,6 +17,8 @@ import { isValidUrl } from '@/utils/url';
 
 export interface InstallResult {
   client: McpClient;
+  /** Server entry name this result is for. */
+  name: string;
   error?: string;
 }
 
@@ -58,17 +60,20 @@ export default function McpInstallPrompt({
     (input, inkKey) => {
       if (inkKey.return || input.toLowerCase() === 'y') {
         finish(
-          chosen.map(client => {
-            try {
-              servers.forEach(server => client.install(server));
-              return { client };
-            } catch (e) {
-              return {
-                client,
-                error: e instanceof Error ? e.message : String(e),
-              };
-            }
-          }),
+          chosen.flatMap(client =>
+            servers.map(server => {
+              try {
+                client.install(server);
+                return { client, name: server.name };
+              } catch (e) {
+                return {
+                  client,
+                  name: server.name,
+                  error: e instanceof Error ? e.message : String(e),
+                };
+              }
+            }),
+          ),
         );
       } else if (inkKey.escape || input.toLowerCase() === 'n') {
         finish(null);
@@ -167,7 +172,6 @@ export default function McpInstallPrompt({
 
       {step === 'team' && (
         <Choice
-          multi
           title="Teams to add a server for (one entry per team):"
           items={teams}
           label={t => (t.isCurrent ? `${t.name} (default)` : t.name)}
@@ -183,7 +187,6 @@ export default function McpInstallPrompt({
 
       {step === 'agents' && (
         <Choice
-          multi
           title="Agents to set up:"
           items={clients}
           label={c => c.label}
@@ -206,13 +209,23 @@ export default function McpInstallPrompt({
           </Text>
           <Text> </Text>
           <Text>Add the ClickStack MCP server as:</Text>
-          {servers.map((s, i) => (
-            <Text key={s.name}>
-              {' '}
-              - {s.name}
-              {picked[i] && ` (team ${picked[i].name})`}
-            </Text>
-          ))}
+          {servers.map((s, i) => {
+            const replaced = chosen.filter(c => c.has(s.name));
+            return (
+              <Text key={s.name}>
+                {' '}
+                - {s.name}
+                {picked[i] && ` (team ${picked[i].name})`}
+                {replaced.length > 0 && (
+                  <Text color="yellow">
+                    {' '}
+                    replaces the existing entry in{' '}
+                    {replaced.map(c => c.label).join(', ')}
+                  </Text>
+                )}
+              </Text>
+            );
+          })}
           <Text>to:</Text>
           {chosen.map(c => (
             <Text key={c.id}> - {c.label}</Text>

@@ -608,11 +608,11 @@ mcp
       process.stdout.write('Cancelled. No configs were changed.\n');
       return;
     }
-    for (const { client, error } of done) {
+    for (const { client, name, error } of done) {
       process.stdout.write(
         error
-          ? chalk.red(`✗ ${client.label}: ${error}\n`)
-          : chalk.green(`✓ ${client.label}`) +
+          ? chalk.red(`✗ ${client.label}: ${name}: ${error}\n`)
+          : chalk.green(`✓ ${client.label}: ${name}`) +
               chalk.dim(` (key stored in ${client.location})\n`),
       );
     }
