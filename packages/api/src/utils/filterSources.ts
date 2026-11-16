@@ -10,10 +10,11 @@ type FilterWithOptionalId<T = DashboardFilter> = T extends unknown
   ? Omit<T, 'id'> & { id?: string }
   : never;
 
-type FilterSourceRef = { id: string; kinds: SourceKind[] };
+/** A source a reference points at, and the kinds it must be. */
+export type SourceRef = { id: string; kinds: SourceKind[] };
 
 /** The sources a filter reads from, each with the kinds it must be. */
-function getFilterSourceRefs(filter: FilterWithOptionalId): FilterSourceRef[] {
+function getFilterSourceRefs(filter: FilterWithOptionalId): SourceRef[] {
   if (isPrometheusLabelFilter(filter)) {
     return [{ id: filter.source, kinds: [SourceKind.Promql] }];
   }
@@ -33,8 +34,8 @@ function getFilterSourceRefs(filter: FilterWithOptionalId): FilterSourceRef[] {
 export function getChangedFilterSourceRefs(
   filters: FilterWithOptionalId[] = [],
   existingFilters: DashboardFilter[] = [],
-): FilterSourceRef[] {
-  const refKey = ({ id, kinds }: FilterSourceRef) => `${id}:${kinds.join(',')}`;
+): SourceRef[] {
+  const refKey = ({ id, kinds }: SourceRef) => `${id}:${kinds.join(',')}`;
   const existingRefsById = new Map(
     existingFilters.map(filter => [
       filter.id,
@@ -50,23 +51,30 @@ export function getChangedFilterSourceRefs(
   );
 }
 
+/** The referenced source IDs that are missing or of the wrong kind, once each. */
+export function getInvalidSourceIds(
+  refs: SourceRef[],
+  sources: { _id: { toString(): string }; kind: SourceKind }[],
+): string[] {
+  const kindById = new Map(sources.map(s => [s._id.toString(), s.kind]));
+  const invalid = refs
+    .filter(({ id, kinds }) => {
+      const kind = kindById.get(id);
+      return kind === undefined || !kinds.includes(kind);
+    })
+    .map(({ id }) => id);
+  return [...new Set(invalid)];
+}
+
 /**
  * An error naming the referenced sources that are missing or of the wrong
  * kind, or null when there are none.
  */
 export function getFilterSourceRefError(
-  refs: FilterSourceRef[],
-  sources: { _id: { toString(): string }; kind: SourceKind }[],
+  refs: SourceRef[],
+  sources: Parameters<typeof getInvalidSourceIds>[1],
 ): string | null {
-  const kindById = new Map(sources.map(s => [s._id.toString(), s.kind]));
-  const invalid = new Set(
-    refs
-      .filter(({ id, kinds }) => {
-        const kind = kindById.get(id);
-        return kind === undefined || !kinds.includes(kind);
-      })
-      .map(({ id }) => id),
-  );
-  if (invalid.size === 0) return null;
-  return `The following filter source IDs do not exist or are not a kind of source the filter supports: ${[...invalid].join(', ')}`;
+  const invalid = getInvalidSourceIds(refs, sources);
+  if (invalid.length === 0) return null;
+  return `The following filter source IDs do not exist or are not a kind of source the filter supports: ${invalid.join(', ')}`;
 }

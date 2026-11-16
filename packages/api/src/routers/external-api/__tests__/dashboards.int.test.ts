@@ -8693,6 +8693,38 @@ describe('External API v2 Dashboards - new format', () => {
         .expect(400);
     });
 
+    it.each([
+      ['where', { where: 'job:api' }],
+      ['whereLanguage', { whereLanguage: 'sql' }],
+    ])('rejects %s on a PromQL ad hoc filter', async (field, overrides) => {
+      const response = await authRequest('post', BASE_URL)
+        .send(
+          createMockDashboard(traceSource._id.toString(), {
+            filters: [omit({ ...promqlAdhocFilter(), ...overrides }, 'id')],
+          }),
+        )
+        .expect(400);
+
+      expect(response.body.message).toContain(`sets ${field}`);
+    });
+
+    it('drops a stored where from a PromQL ad hoc filter, so GET -> PUT round-trips', async () => {
+      const dashboard = await createTestDashboard({
+        filters: [
+          { ...promqlAdhocFilter(), where: 'job:api', whereLanguage: 'lucene' },
+        ],
+      });
+      const { data } = (
+        await authRequest('get', `${BASE_URL}/${dashboard._id}`).expect(200)
+      ).body;
+      expect(data.filters[0]).not.toHaveProperty('where');
+      expect(data.filters[0]).not.toHaveProperty('whereLanguage');
+
+      await authRequest('put', `${BASE_URL}/${dashboard._id}`)
+        .send(omit(data, 'id'))
+        .expect(200);
+    });
+
     it('rejects an ad hoc filter over a missing source', async () => {
       const missing = new ObjectId().toString();
       const response = await authRequest('post', BASE_URL)

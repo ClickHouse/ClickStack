@@ -36,7 +36,6 @@ import {
   isLogSource,
   isOnClickDashboardById,
   isOnClickSearchById,
-  isPromqlSource,
   isTraceSource,
   NumberTileColorCondition,
   NumberTileColorConditionSchema,
@@ -44,6 +43,7 @@ import {
   RawSqlSavedChartConfig,
   resolveChartPaletteToken,
   SavedChartConfig,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { SearchConditionLanguageSchema as whereLanguageSchema } from '@hyperdx/common-utils/dist/types';
 import { pick } from 'lodash';
@@ -65,6 +65,7 @@ import {
 import {
   getChangedFilterSourceRefs,
   getFilterSourceRefError,
+  getInvalidSourceIds,
 } from '@/utils/filterSources';
 import logger from '@/utils/logger';
 import {
@@ -1363,25 +1364,6 @@ function getHeatmapTilesWithIncompatibleSources(
 }
 
 /**
- * Returns an error message string if any of the referenced source IDs is not
- * a valid PromQL source, or null if all of them are. `subject` names what
- * referenced them, e.g. "PromQL tiles".
- */
-function getNonPromqlSourceError(
-  sources: SourceForValidation[],
-  referencedSourceIds: string[],
-  subject: string,
-): string | null {
-  const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
-  const invalid = [...new Set(referencedSourceIds)].filter(id => {
-    const source = sourceById.get(id);
-    return source === undefined || !isPromqlSource(source);
-  });
-  if (invalid.length === 0) return null;
-  return `${subject} require a PromQL source. The following source IDs are not PromQL sources: ${invalid.join(', ')}`;
-}
-
-/**
  * Returns source IDs referenced by formula tiles that exist but are not
  * formula-capable. Formulas render on metric and log/trace sources; other
  * kinds (e.g. session) are deliberately gated off via the shared
@@ -1834,12 +1816,16 @@ export async function validateDashboardTiles(
 
   // PromQL tiles query through their source's connection and TimeSeries
   // table, which only a PromQL source carries.
-  const promqlTileError = getNonPromqlSourceError(
+  const nonPromqlTileSourceIds = getInvalidSourceIds(
+    getChangedPromqlTileSourceIds(tiles, existingTiles).map(id => ({
+      id,
+      kinds: [SourceKind.Promql],
+    })),
     sources,
-    getChangedPromqlTileSourceIds(tiles, existingTiles),
-    'PromQL tiles',
   );
-  if (promqlTileError != null) return promqlTileError;
+  if (nonPromqlTileSourceIds.length > 0) {
+    return `PromQL tiles require a PromQL source. The following source IDs are not PromQL sources: ${nonPromqlTileSourceIds.join(', ')}`;
+  }
 
   // PROMETHEUS_LABEL and ADHOC filters need live sources of the right kind. As
   // in the internal API, references the stored filter already made are not

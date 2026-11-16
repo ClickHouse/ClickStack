@@ -268,7 +268,10 @@ export function translateFilterToExternalFilter(
       return omit(filter, ...omittedKeys);
 
     case 'ADHOC':
-      return filter;
+      // Only sql filters read `where`; the internal API may have stored one.
+      return filter.sourceType === 'promql'
+        ? omit(filter, 'where', 'whereLanguage')
+        : filter;
 
     case 'PROMETHEUS_LABEL':
       return {

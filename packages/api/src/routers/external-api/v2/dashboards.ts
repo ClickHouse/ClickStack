@@ -2859,13 +2859,13 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           type: string
  *           description: |
  *             Optional condition narrowing the rows keys and values are suggested
- *             from. sql filters only; never applied to tiles. May reference the
- *             dashboard's variables.
+ *             from. Never applied to tiles. May reference the dashboard's
+ *             variables. sql filters only: rejected when sourceType is promql.
  *           example: "ServiceName:api"
  *         whereLanguage:
  *           type: string
  *           enum: [sql, lucene]
- *           description: Language of the where condition
+ *           description: Language of the where condition. Rejected when sourceType is promql.
  *           example: "lucene"
  *         appliesToSourceIds:
  *           type: array
