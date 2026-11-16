@@ -6,20 +6,36 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { screen, waitFor } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
-import { TimelineChart } from '@/components/TimelineChart';
-import useOffsetPaginatedQuery from '@/hooks/useOffsetPaginatedQuery';
-import useRowWhere from '@/hooks/useRowWhere';
-
-import { RowSidePanelContext } from '../DBRowSidePanel';
+import { RowSidePanelContext } from '@/components/DBRowSidePanel';
 import {
+  computeCollapseAll,
+  computeCollapseOneLevel,
+  computeExpandOneLevel,
+  computeToggleCollapse,
   DBTraceWaterfallChartContainer,
   getDescendantIds,
   SpanRow,
+  TraceTotalDurationStat,
   useEventsAroundFocus,
-} from '../DBTraceWaterfallChart';
+} from '@/components/DBTraceWaterfallChart';
+import { TimelineChart } from '@/components/TimelineChart';
+import { TRACE_WATERFALL_ROW_LIMIT } from '@/components/traceWaterfallLimits';
+import {
+  TraceTriggerRow,
+  useBrowserTraceEvents,
+} from '@/hooks/useBrowserTraceEvents';
+import { useColumns } from '@/hooks/useMetadata';
+import useOffsetPaginatedQuery from '@/hooks/useOffsetPaginatedQuery';
+import useRowWhere from '@/hooks/useRowWhere';
+import { getChartColorError, getChartColorSuccess } from '@/utils';
 
 // Mock setup
+jest.mock('@/components/traceWaterfallLimits', () => ({
+  TRACE_WATERFALL_ROW_LIMIT: 3,
+  TRACE_WATERFALL_FETCH_LIMIT: 4,
+}));
 jest.mock('@/components/TimelineChart', () => {
   const flattenText = (value: React.ReactNode): string => {
     if (value == null || typeof value === 'boolean') {
@@ -55,31 +71,79 @@ jest.mock('@/components/TimelineChart', () => {
     );
   };
   mockComponent.latestProps = {};
-  return { TimelineChart: mockComponent };
+
+  const MockTimelineMinimap = function MockTimelineMinimap(props: any) {
+    MockTimelineMinimap.latestProps = props;
+    return <div data-testid="timeline-minimap">TimelineMinimap</div>;
+  };
+  MockTimelineMinimap.latestProps = {};
+
+  return { TimelineChart: mockComponent, TimelineMinimap: MockTimelineMinimap };
 });
 
 jest.mock('@/hooks/useOffsetPaginatedQuery');
 jest.mock('@/hooks/useRowWhere');
+jest.mock('@/hooks/useMetadata', () => ({
+  ...jest.requireActual('@/hooks/useMetadata'),
+  useColumns: jest.fn(),
+}));
 jest.mock('../DBRowDataPanel', () => ({
   getJSONColumnNames: jest.fn().mockReturnValue([]),
 }));
+jest.mock('@/hooks/useBrowserTraceEvents', () => ({
+  useBrowserTraceEvents: jest.fn(),
+}));
+const mockUseBrowserTraceEvents = jest.mocked(useBrowserTraceEvents);
+const passBrowserTraceEventsThrough: typeof useBrowserTraceEvents = ({
+  logRows,
+}) => ({ logRows, resourceTimingBySpanId: new Map(), triggerRow: undefined });
+
+// Lightweight stub: the real SearchWhereInput renders SearchInputV2, which
+// pulls in useMe()/metadata hooks that require a QueryClientProvider not present
+// in this harness. We only care that the right inputs render, so stub it to a
+// plain element carrying the data-testid.
+jest.mock('@/components/SearchInput/SearchWhereInput', () => ({
+  __esModule: true,
+  default: ({ 'data-testid': dataTestId, name }: any) => (
+    <div data-testid={dataTestId ?? `${name}-input`}>{name}</div>
+  ),
+  getStoredLanguage: () => 'lucene',
+}));
+
+const makeWaterfallSearchState = () => ({
+  traceWhere: '',
+  logWhere: '',
+  traceWhereLanguage: '',
+  logWhereLanguage: '',
+  clear: jest.fn(),
+  isFilterActive: false,
+  isFilterExpanded: false,
+  setIsFilterExpanded: jest.fn(),
+  onSubmit: jest.fn(),
+});
+
+const mockUseWaterfallSearchState: jest.Mock = jest.fn(
+  makeWaterfallSearchState,
+);
 
 jest.mock('@/hooks/useWaterfallSearchState', () => ({
   __esModule: true,
-  default: () => ({
-    traceWhere: '',
-    logWhere: '',
-    clear: jest.fn(),
-    isFilterActive: false,
-    isFilterExpanded: false,
-    setIsFilterExpanded: jest.fn(),
-    onSubmit: jest.fn(),
-  }),
+  default: (...args: any[]) => mockUseWaterfallSearchState(...args),
 }));
 
 const mockUseOffsetPaginatedQuery = useOffsetPaginatedQuery as jest.Mock;
 const mockUseRowWhere = useRowWhere as jest.Mock;
+const mockUseColumns = useColumns as jest.Mock;
 const MockTimelineChart = TimelineChart as any;
+
+// Mirrors useColumns, which is disabled, so never loading, without a table.
+const setupColumnsMock = (state: { data?: object[]; isLoading?: boolean }) =>
+  mockUseColumns.mockImplementation(({ tableName }: { tableName: string }) =>
+    tableName ? { isLoading: false, ...state } : { isLoading: false },
+  );
+
+const selectsSeverityNumber = (query: { select: Array<{ alias?: string }> }) =>
+  query.select.some(s => s.alias === 'SeverityNumber');
 
 describe('DBTraceWaterfallChartContainer', () => {
   // Common test data
@@ -115,11 +179,15 @@ describe('DBTraceWaterfallChartContainer', () => {
     connection: 'conn2',
   };
 
+  // Wide enough to contain every span/log timestamp used by the tests below
+  // (06:00:00-07:00:00) with margin on both sides, so a span ending at the
+  // window's upper edge does not trip the lower-bound marker unless a test
+  // asks for that.
   const mockDateRange = [
-    new Date('2024-01-01T00:00:00.000Z'),
-    new Date('2024-01-01T01:00:00.000Z'),
+    new Date('2024-01-01T05:00:00.000Z'),
+    new Date('2024-01-01T08:00:00.000Z'),
   ] as [Date, Date];
-  const mockFocusDate = new Date('2024-01-01T00:30:00.000Z');
+  const mockFocusDate = new Date('2024-01-01T06:30:00.000Z');
   const mockTraceId = 'test-trace-id';
 
   // Sample data
@@ -158,25 +226,32 @@ describe('DBTraceWaterfallChartContainer', () => {
   // Reset mocks before each test
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseBrowserTraceEvents.mockImplementation(passBrowserTraceEventsThrough);
     mockUseRowWhere.mockReturnValue(() => ({ where: 'row-id', aliasWith: [] }));
     MockTimelineChart.latestProps = {};
+    mockUseWaterfallSearchState.mockReturnValue(makeWaterfallSearchState());
+    setupColumnsMock({ data: [] });
   });
 
   // Helper functions
   const renderComponent = (
     logTableSource: typeof mockLogTableSource | null = mockLogTableSource,
     traceId: string = mockTraceId,
+    props: Partial<
+      React.ComponentProps<typeof DBTraceWaterfallChartContainer>
+    > = {},
   ) => {
     return renderWithMantine(
-      <RowSidePanelContext.Provider value={{}}>
+      <RowSidePanelContext value={{}}>
         <DBTraceWaterfallChartContainer
           traceTableSource={mockTraceTableSource}
           logTableSource={logTableSource}
           traceId={traceId}
           dateRange={mockDateRange}
           focusDate={mockFocusDate}
+          {...props}
         />
-      </RowSidePanelContext.Provider>,
+      </RowSidePanelContext>,
     );
   };
 
@@ -186,31 +261,62 @@ describe('DBTraceWaterfallChartContainer', () => {
     });
   };
 
+  // Content-based query mock. The waterfall runs, per source, a filtered query
+  // (with a computed `__hdx_hidden` column) plus an unfiltered fallback query
+  // that only fires when the filtered query errors. Keying responses off the
+  // query shape (table, before/after window, presence of the filter column,
+  // enabled flag) rather than call order keeps the mock stable as the number of
+  // queries changes.
+  //
+  // - `traceError`/`logError`: fatal — every query for that source fails.
+  // - `traceFilterError`/`logFilterError`: only the *filtered* query fails, so
+  //   the unfiltered fallback still returns data.
   const setupQueryMocks = (options: {
     traceData?: typeof mockTraceData | typeof emptyData;
-    logData?: typeof mockLogData | typeof emptyData;
+    logData?: { data: object[]; meta: object[] };
+    traceError?: Error;
+    logError?: Error;
+    traceFilterError?: Error;
+    logFilterError?: Error;
     isFetching?: boolean;
   }) => {
     const {
       traceData = emptyData,
       logData = emptyData,
+      traceError,
+      logError,
+      traceFilterError,
+      logFilterError,
       isFetching = false,
     } = options;
 
     mockUseOffsetPaginatedQuery.mockReset();
+    mockUseOffsetPaginatedQuery.mockImplementation((query: any, opts: any) => {
+      // Disabled queries never fire (mirrors react-query).
+      if (opts?.enabled === false) {
+        return { data: undefined, isFetching: false, error: undefined };
+      }
+      const isLog = query?.from?.tableName === 'log_table';
+      const isBefore = query?.dateRangeStartInclusive === true;
+      const isFiltered =
+        Array.isArray(query?.select) &&
+        query.select.some((s: any) => s?.alias === '__hdx_hidden');
 
-    // Use mockImplementation to handle all calls consistently
-    let callCount = 0;
-    mockUseOffsetPaginatedQuery.mockImplementation(() => {
-      const responses = [
-        { data: traceData, isFetching, error: undefined }, // trace before
-        { data: emptyData, isFetching, error: undefined }, // trace after
-        { data: logData, isFetching, error: undefined }, // log before
-        { data: emptyData, isFetching, error: undefined }, // log after
-      ];
-      const response = responses[callCount % responses.length];
-      callCount++;
-      return response;
+      const fatal = isLog ? logError : traceError;
+      if (fatal) {
+        return { data: undefined, isFetching, error: fatal };
+      }
+      const filterErr = isLog ? logFilterError : traceFilterError;
+      if (filterErr && isFiltered) {
+        return { data: undefined, isFetching, error: filterErr };
+      }
+
+      const data = isLog ? logData : traceData;
+      return {
+        data: isBefore ? data : emptyData,
+        isFetching,
+        error: undefined,
+      };
     });
   };
 
@@ -249,6 +355,376 @@ describe('DBTraceWaterfallChartContainer', () => {
     expect(MockTimelineChart.latestProps.rows[1]).toBeTruthy(); // Log row
   });
 
+  it.each([
+    ['whose span was never exported', 'unsent-span'],
+    ['without a span id', ''],
+  ])('renders a log %s at the root', async (_, SpanId) => {
+    setupQueryMocks({
+      traceData: mockTraceData,
+      logData: { ...mockLogData, data: [{ ...mockLogData.data[0], SpanId }] },
+    });
+
+    renderComponent();
+    await waitForLoading();
+
+    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+  });
+
+  it.each([
+    ['error', () => getChartColorError()],
+    ['warn', () => getChartColorSuccess()],
+  ])('colors a %s log bar', async (SeverityText, expectedColor) => {
+    setupQueryMocks({
+      traceData: mockTraceData,
+      logData: {
+        ...mockLogData,
+        data: [{ ...mockLogData.data[0], SeverityText }],
+      },
+    });
+
+    renderComponent();
+    await waitForLoading();
+
+    const logRow = MockTimelineChart.latestProps.rows.find(
+      (row: { type?: string }) => row.type === SourceKind.Log,
+    );
+    expect(logRow.events[0].backgroundColor).toBe(expectedColor());
+  });
+
+  it('renders total duration computed from all fetched spans', async () => {
+    setupQueryMocks({ traceData: mockTraceData });
+    renderComponent(null); // No log table source
+    await waitForLoading();
+
+    const stats = screen.getByTestId('trace-total-stats');
+    // mockTraceData has one span, Duration: 0.1 (seconds) -> 100ms wall clock
+    expect(stats.textContent?.trim()).toBe('· Total duration: 100ms');
+  });
+
+  it('excludes correlated logs from the total duration computation', async () => {
+    const laterLogData = {
+      data: [
+        {
+          ...mockLogData.data[0],
+          // Far later than the span's own end (start + 100ms) -- if logs were
+          // wrongly included in the MAX(end) computation, this would blow up
+          // the reported duration.
+          Timestamp: '2024-01-01T07:00:00.000000000Z',
+        },
+      ],
+      meta: [{ totalCount: 1 }],
+    };
+
+    setupQueryMocks({
+      traceData: mockTraceData,
+      logData: laterLogData,
+    });
+
+    renderComponent(); // With log table source
+    await waitForLoading();
+
+    const stats = screen.getByTestId('trace-total-stats');
+    expect(stats.textContent?.trim()).toBe('· Total duration: 100ms');
+  });
+
+  it('computes total duration as the wall-clock span across multiple non-overlapping spans', async () => {
+    const multiSpanData = {
+      data: [
+        {
+          Body: 'first span',
+          Timestamp: '2024-01-01T06:00:00.000000000Z',
+          Duration: 0.1, // ends at +100ms
+          SpanId: 'span-1',
+          ParentSpanId: '',
+          ServiceName: 'test-service',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+        } as SpanRow,
+        {
+          Body: 'second span',
+          Timestamp: '2024-01-01T06:00:01.000000000Z', // starts 1s after the first
+          Duration: 0.5, // ends at +1.5s from the first span's start
+          SpanId: 'span-2',
+          ParentSpanId: '',
+          ServiceName: 'test-service',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+        } as SpanRow,
+      ],
+      meta: [{ totalCount: 2 }],
+    };
+
+    setupQueryMocks({ traceData: multiSpanData });
+    renderComponent(null);
+    await waitForLoading();
+
+    const stats = screen.getByTestId('trace-total-stats');
+    // MIN(start) = 06:00:00.000, MAX(start+duration) = 06:00:01.500 -> 1500ms
+    expect(stats.textContent?.trim()).toBe('· Total duration: 1.5s');
+  });
+
+  it('computes total duration as the true max end time even when a later-processed span ends earlier (overlapping spans)', async () => {
+    const overlappingSpanData = {
+      data: [
+        {
+          Body: 'outer span',
+          Timestamp: '2024-01-01T06:00:00.000000000Z',
+          Duration: 1.0, // ends at +1000ms -- this is the actual max end
+          SpanId: 'span-1',
+          ParentSpanId: '',
+          ServiceName: 'test-service',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+        } as SpanRow,
+        {
+          Body: 'inner span',
+          Timestamp: '2024-01-01T06:00:00.100000000Z', // starts 100ms after the outer span
+          Duration: 0.2, // ends at +300ms -- earlier than the outer span's end, but processed last
+          SpanId: 'span-2',
+          ParentSpanId: 'span-1',
+          ServiceName: 'test-service',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+        } as SpanRow,
+      ],
+      meta: [{ totalCount: 2 }],
+    };
+
+    setupQueryMocks({ traceData: overlappingSpanData });
+    renderComponent(null);
+    await waitForLoading();
+
+    const stats = screen.getByTestId('trace-total-stats');
+    // A "last row wins" bug would report the inner span's earlier end (300ms)
+    // instead of the true MAX(end) across all spans (1000ms).
+    expect(stats.textContent?.trim()).toBe('· Total duration: 1s');
+  });
+
+  it('does not change when the Spans chip hides spans from the visible timeline (reflects all fetched spans, not the visible subset)', async () => {
+    setupQueryMocks({
+      traceData: mockTraceData,
+      logData: mockLogData,
+    });
+    renderComponent(); // With log table source, so the chart stays mounted
+    await waitForLoading();
+
+    const statsBefore = screen.getByTestId('trace-total-stats').textContent;
+    expect(statsBefore?.trim()).toBe('· Total duration: 100ms');
+
+    await userEvent.click(screen.getByTestId('show-spans-chip'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('trace-total-stats').textContent).toBe(
+        statsBefore,
+      );
+    });
+  });
+
+  it('does not render the total duration stat when there are no spans', async () => {
+    setupQueryMocks({ logData: mockLogData });
+    renderComponent();
+    await waitForLoading();
+
+    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(screen.queryByTestId('trace-total-stats')).not.toBeInTheDocument();
+  });
+
+  it('appends + on the duration label when the fetch window was truncated', () => {
+    renderWithMantine(
+      <TraceTotalDurationStat totalDurationMs={100} isTruncated={true} />,
+    );
+    expect(screen.getByTestId('trace-total-stats').textContent?.trim()).toBe(
+      '· Total duration: 100ms+',
+    );
+  });
+
+  it('shows the lower-bound marker when the trace query exceeds the row cap', async () => {
+    const span = {
+      Body: 'capped span',
+      Timestamp: '2024-01-01T06:00:00.000000000Z',
+      Duration: 0.1,
+      SpanId: 'span-1',
+      ParentSpanId: '',
+      ServiceName: 'test-service',
+      HyperDXEventType: 'span' as const,
+      type: 'trace',
+    };
+    setupQueryMocks({
+      traceData: {
+        data: Array.from({ length: TRACE_WATERFALL_ROW_LIMIT + 1 }, () => span),
+        meta: [{ totalCount: TRACE_WATERFALL_ROW_LIMIT + 1 }],
+      },
+    });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-total-stats').textContent?.trim()).toBe(
+      '· Total duration: 100ms+',
+    );
+  });
+
+  it('marks the duration when the earliest span has a parent that was not loaded', async () => {
+    const childInsideWindow = {
+      data: [
+        {
+          ...mockTraceData.data[0],
+          // Seconds inside 05:00:00-08:00:00. The parent started before the
+          // window, so the query never returned it.
+          Timestamp: '2024-01-01T06:00:00.000000000Z',
+          SpanId: 'span-child',
+          ParentSpanId: 'missing-root',
+        },
+        {
+          ...mockTraceData.data[0],
+          Body: 'later span',
+          Timestamp: '2024-01-01T06:00:01.000000000Z',
+          Duration: 0.1,
+          SpanId: 'span-later',
+          ParentSpanId: 'span-child',
+        },
+      ],
+      meta: [{ totalCount: 2 }],
+    };
+    setupQueryMocks({ traceData: childInsideWindow });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-total-stats').textContent?.trim()).toBe(
+      '· Total duration: 1.1s+',
+    );
+  });
+
+  it('does not mark the duration when the earliest span has a parent that was loaded', async () => {
+    const skewedChildFirst = {
+      data: [
+        {
+          ...mockTraceData.data[0],
+          Timestamp: '2024-01-01T06:00:00.000000000Z',
+          SpanId: 'span-child',
+          ParentSpanId: 'span-parent',
+        },
+        {
+          ...mockTraceData.data[0],
+          Body: 'parent span',
+          Timestamp: '2024-01-01T06:00:00.050000000Z',
+          SpanId: 'span-parent',
+          ParentSpanId: '',
+        },
+      ],
+      meta: [{ totalCount: 2 }],
+    };
+    setupQueryMocks({ traceData: skewedChildFirst });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-total-stats').textContent?.trim()).toBe(
+      '· Total duration: 150ms',
+    );
+  });
+
+  it("marks the duration as a lower bound when a span ends at/after the fetch window's upper edge", async () => {
+    const spanAtWindowEdge = {
+      data: [
+        {
+          ...mockTraceData.data[0],
+          // Ends exactly at mockDateRange's upper edge (08:00:00): starts at
+          // 07:59:59.900 + Duration 0.1s.
+          Timestamp: '2024-01-01T07:59:59.900000000Z',
+        },
+      ],
+      meta: [{ totalCount: 1 }],
+    };
+    setupQueryMocks({ traceData: spanAtWindowEdge });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-total-stats').textContent?.trim()).toBe(
+      '· Total duration: 100ms+',
+    );
+  });
+
+  it('skips an unparseable timestamp when another span is valid', async () => {
+    const mixed = {
+      data: [
+        {
+          ...mockTraceData.data[0],
+          Timestamp: 'not-a-timestamp',
+          SpanId: 'span-bad',
+          ParentSpanId: '',
+        },
+        {
+          ...mockTraceData.data[0],
+          Timestamp: '2024-01-01T06:00:00.000000000Z',
+          Duration: 0.1,
+          SpanId: 'span-good',
+          ParentSpanId: '',
+        },
+      ],
+      meta: [{ totalCount: 2 }],
+    };
+    setupQueryMocks({ traceData: mixed });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-total-stats').textContent?.trim()).toBe(
+      '· Total duration: 100ms',
+    );
+  });
+
+  it('does not render the total duration stat when every timestamp is unparseable', async () => {
+    const invalid = {
+      data: [
+        {
+          ...mockTraceData.data[0],
+          Timestamp: 'not-a-timestamp',
+        },
+      ],
+      meta: [{ totalCount: 1 }],
+    };
+    setupQueryMocks({ traceData: invalid });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.queryByTestId('trace-total-stats')).not.toBeInTheDocument();
+  });
+
+  it('keeps the fetched duration when a span is flagged hidden', async () => {
+    const hiddenSpanData = {
+      data: [
+        {
+          Body: 'visible span',
+          Timestamp: '2024-01-01T06:00:00.000000000Z',
+          Duration: 0.1,
+          SpanId: 'span-visible',
+          ParentSpanId: '',
+          ServiceName: 'test-service',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+          __hdx_hidden: false,
+        } as SpanRow,
+        {
+          Body: 'hidden span',
+          Timestamp: '2024-01-01T06:00:01.000000000Z',
+          Duration: 0.5,
+          SpanId: 'span-hidden',
+          ParentSpanId: '',
+          ServiceName: 'test-service',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+          __hdx_hidden: true,
+        } as SpanRow,
+      ],
+      meta: [{ totalCount: 2 }],
+    };
+
+    setupQueryMocks({ traceData: hiddenSpanData });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-total-stats').textContent?.trim()).toBe(
+      '· Total duration: 1.5s',
+    );
+  });
   it('renders empty state when no data is available', async () => {
     mockUseOffsetPaginatedQuery.mockReturnValue({
       data: emptyData,
@@ -289,7 +765,7 @@ describe('DBTraceWaterfallChartContainer', () => {
           HyperDXEventType: 'span' as const,
           type: 'trace',
           SpanAttributes: {
-            'http.url': 'https://api.example.com/users',
+            'http.url': 'https://example-api.clickhouse.com/users',
             'http.method': 'GET',
             'http.status_code': 200,
           },
@@ -307,8 +783,602 @@ describe('DBTraceWaterfallChartContainer', () => {
 
     expect(MockTimelineChart.latestProps.rows[0]).toBeTruthy();
     expect(
-      screen.getByText('http span https://api.example.com/users'),
+      screen.getByText('http span https://example-api.clickhouse.com/users'),
     ).toBeInTheDocument();
+  });
+
+  const apiUrl = 'https://example-api.clickhouse.com/users?id=1';
+  it.each([
+    [{ 'url.full': apiUrl }, `test span ${apiUrl}`],
+    // An RPC span is named after its method, which the URL repeats.
+    [{ 'rpc.system.name': 'grpc', 'url.full': apiUrl }, 'test span'],
+  ])('labels a span with %p as %p', async (SpanAttributes, label) => {
+    setupQueryMocks({
+      traceData: {
+        data: [{ ...mockTraceData.data[0], SpanAttributes }],
+        meta: [{ totalCount: 1 }],
+      },
+    });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  const findRow = (type: string) =>
+    MockTimelineChart.latestProps.rows.find(
+      (row: { type?: string }) => row.type === type,
+    );
+
+  it('builds the tooltip and title of a span with a URL and of a log', async () => {
+    setupQueryMocks({
+      traceData: {
+        data: [
+          { ...mockTraceData.data[0], SpanAttributes: { 'url.full': apiUrl } },
+        ],
+        meta: [{ totalCount: 1 }],
+      },
+      logData: {
+        data: [{ ...mockLogData.data[0], ServiceName: 'test-service' }],
+        meta: [{ totalCount: 1 }],
+      },
+    });
+    renderComponent();
+    await waitForLoading();
+
+    const spanRow = findRow(SourceKind.Trace);
+    expect(spanRow.events[0].tooltip).toBe(
+      `test span ${apiUrl} took 100.0000ms  | Started at Jan 1 1:00:00.000 AM`,
+    );
+    const spanLabel = renderWithMantine(spanRow.label);
+    expect(
+      spanLabel.getByTitle(`test-service test span ${apiUrl}`),
+    ).toBeInTheDocument();
+    expect(
+      spanLabel.queryByLabelText('Correlated Log Line'),
+    ).not.toBeInTheDocument();
+
+    const logRow = findRow(SourceKind.Log);
+    expect(logRow.events[0].tooltip).toBe(
+      'test log took 0.0000ms | Status: warn | Started at Jan 1 1:00:00.000 AM',
+    );
+    const logLabel = renderWithMantine(logRow.label);
+    expect(logLabel.getByTitle('test-service')).toHaveTextContent(
+      'test-service test log',
+    );
+    expect(logLabel.getByLabelText('Correlated Log Line')).toBeInTheDocument();
+  });
+
+  // Main drew icons only for exact lowercase 'error'/'warn' and counted only
+  // SeverityText 'error'.
+  it.each([
+    [{ SeverityNumber: 17, SeverityText: 'info' }, ['Error'], '1 error'],
+    [{ SeverityText: 'Warning' }, ['Warning'], '0 errors'],
+    [{}, [], '0 errors'],
+  ])('marks log %p with icons %p and %s', async (log, icons, errors) => {
+    setupQueryMocks({
+      traceData: mockTraceData,
+      logData: {
+        data: [{ ...mockLogData.data[0], SeverityText: undefined, ...log }],
+        meta: [{ totalCount: 1 }],
+      },
+    });
+    renderComponent();
+    await waitForLoading();
+
+    expect(screen.getByText(errors)).toBeInTheDocument();
+    const logRow = MockTimelineChart.latestProps.rows.find(
+      (row: { type?: string }) => row.type === SourceKind.Log,
+    );
+    const label = renderWithMantine(logRow.label);
+    expect(
+      ['Error', 'Warning'].filter(icon => label.queryByLabelText(icon)),
+    ).toEqual(icons);
+  });
+
+  it.each([
+    ['has it', [true], { data: [{ name: 'SeverityNumber', type: 'UInt8' }] }],
+    ['lacks it', [false], { data: [{ name: 'SeverityText', type: 'String' }] }],
+    // A failed lookup still shows logs, just without SeverityNumber.
+    ['failed', [false], {}],
+    // Held until the columns settle so a changed select can't run it twice.
+    ['is loading', [], { isLoading: true }],
+  ])(
+    'when the log column lookup %s, enabled log queries select SeverityNumber: %p',
+    (_name, expected, columns) => {
+      setupColumnsMock(columns);
+      setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+      renderComponent();
+
+      const selects = mockUseOffsetPaginatedQuery.mock.calls
+        .filter(
+          ([query, opts]) =>
+            query?.from?.tableName === 'log_table' && opts?.enabled,
+        )
+        .map(([query]) => selectsSeverityNumber(query));
+      expect([...new Set(selects)]).toEqual(expected);
+    },
+  );
+
+  it('renders a trace without a log source', async () => {
+    // Without a log table the lookup is disabled, so it must not hold the chart.
+    setupColumnsMock({ isLoading: true });
+    setupQueryMocks({ traceData: mockTraceData });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(MockTimelineChart.latestProps.rows).toHaveLength(1);
+  });
+
+  it('renders Spans and Logs chips when log source is present', async () => {
+    setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+    renderComponent();
+    await waitForLoading();
+
+    expect(screen.getByTestId('show-spans-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('show-logs-chip')).toBeInTheDocument();
+  });
+
+  it('does not render Logs chip when no log source', async () => {
+    setupQueryMocks({ traceData: mockTraceData });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByTestId('show-spans-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('show-logs-chip')).not.toBeInTheDocument();
+  });
+
+  it('hides log rows when Logs chip is toggled off', async () => {
+    const user = userEvent.setup();
+    setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+    renderComponent();
+    await waitForLoading();
+
+    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+
+    const showLogsChip = screen.getByTestId('show-logs-chip');
+    await user.click(showLogsChip);
+
+    await waitFor(() => {
+      expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    });
+  });
+
+  it('hides span rows when Spans chip is toggled off', async () => {
+    const user = userEvent.setup();
+    setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+    renderComponent();
+    await waitForLoading();
+
+    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+
+    const showSpansChip = screen.getByTestId('show-spans-chip');
+    await user.click(showSpansChip);
+
+    await waitFor(() => {
+      expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    });
+  });
+
+  it('renders depth controls when the trace has collapsible spans', async () => {
+    // Distinct row ids per span so the parent/child tree is preserved (the
+    // default mock collapses every row onto the same id).
+    mockUseRowWhere.mockReturnValue((row: any) => ({
+      where: `where-${row?.SpanId ?? 'x'}`,
+      aliasWith: [],
+    }));
+
+    const nestedTraceData = {
+      data: [
+        {
+          Body: 'parent span',
+          Timestamp: '2024-01-01T06:00:00.000000000Z',
+          Duration: 0.2,
+          SpanId: 'span-1',
+          ParentSpanId: '',
+          ServiceName: 'svc-a',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+        } as SpanRow,
+        {
+          Body: 'child span',
+          Timestamp: '2024-01-01T06:00:00.050000000Z',
+          Duration: 0.1,
+          SpanId: 'span-2',
+          ParentSpanId: 'span-1',
+          ServiceName: 'svc-b',
+          HyperDXEventType: 'span' as const,
+          type: 'trace',
+        } as SpanRow,
+      ],
+      meta: [{ totalCount: 2 }],
+    };
+
+    setupQueryMocks({ traceData: nestedTraceData });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.getByLabelText('Expand all')).toBeInTheDocument();
+    expect(screen.getByLabelText('Collapse all')).toBeInTheDocument();
+    expect(screen.getByLabelText('Expand one level')).toBeInTheDocument();
+    expect(screen.getByLabelText('Collapse one level')).toBeInTheDocument();
+  });
+
+  it('does not render depth controls for a flat trace', async () => {
+    setupQueryMocks({ traceData: mockTraceData });
+    renderComponent(null);
+    await waitForLoading();
+
+    expect(screen.queryByLabelText('Expand all')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Collapse all')).not.toBeInTheDocument();
+  });
+
+  it('keeps rendering spans when the correlated-log filter errors', async () => {
+    // A log filter that references a column the log table lacks is the trigger.
+    mockUseWaterfallSearchState.mockReturnValue({
+      ...makeWaterfallSearchState(),
+      isFilterActive: true,
+      isFilterExpanded: true,
+      logWhere: "StatusCode = 'Error'",
+    });
+    setupQueryMocks({
+      traceData: mockTraceData,
+      logFilterError: new Error('Missing columns: StatusCode'),
+    });
+
+    renderComponent(); // with log source
+    await waitForLoading();
+
+    // Valid spans still render — the log failure did not blank the chart.
+    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    // The full-chart error block is NOT shown.
+    expect(
+      screen.queryByText('An error occurred while fetching trace data:'),
+    ).not.toBeInTheDocument();
+    // The log failure is surfaced inline under the logs filter instead.
+    expect(screen.getByTestId('log-filter-error')).toBeInTheDocument();
+  });
+
+  it('keeps rendering spans (unfiltered) when the spans filter errors', async () => {
+    // A spans filter is a computed column inside the trace query, so an invalid
+    // one fails the query. We fall back to unfiltered spans instead of blanking.
+    mockUseWaterfallSearchState.mockReturnValue({
+      ...makeWaterfallSearchState(),
+      isFilterActive: true,
+      isFilterExpanded: true,
+      traceWhere: "StatusCode = 'Error'",
+    });
+    setupQueryMocks({
+      traceData: mockTraceData,
+      traceFilterError: new Error('Missing column: Nope'),
+    });
+
+    renderComponent(null); // no log source, to isolate the spans path
+    await waitForLoading();
+
+    // Spans still render (unfiltered fallback) — chart is not blanked.
+    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(
+      screen.queryByText('An error occurred while fetching trace data:'),
+    ).not.toBeInTheDocument();
+    // The span filter failure is surfaced inline under the spans filter.
+    expect(screen.getByTestId('trace-filter-error')).toBeInTheDocument();
+  });
+
+  it('renders the full-chart error block when the base trace query errors', async () => {
+    // No filter active, so a trace query error is fatal (nothing to show).
+    setupQueryMocks({
+      traceError: new Error('Trace query boom'),
+      logData: mockLogData,
+    });
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('An error occurred while fetching trace data:'),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText('Trace query boom')).toBeInTheDocument();
+    // The chart itself is replaced by the error block.
+    expect(screen.queryByTestId('timeline-chart')).not.toBeInTheDocument();
+  });
+
+  it('renders separate span and log filter inputs when a log source exists', async () => {
+    mockUseWaterfallSearchState.mockReturnValue({
+      ...makeWaterfallSearchState(),
+      isFilterExpanded: true,
+    });
+    setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+
+    renderComponent(); // with log source
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-search-input')).toBeInTheDocument();
+    expect(screen.getByTestId('log-search-input')).toBeInTheDocument();
+  });
+
+  it('renders only the span filter input when there is no log source', async () => {
+    mockUseWaterfallSearchState.mockReturnValue({
+      ...makeWaterfallSearchState(),
+      isFilterExpanded: true,
+    });
+    setupQueryMocks({ traceData: mockTraceData });
+
+    renderComponent(null); // no log source
+    await waitForLoading();
+
+    expect(screen.getByTestId('trace-search-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('log-search-input')).not.toBeInTheDocument();
+  });
+
+  describe('browser trace events', () => {
+    const spanStartMs = Date.parse('2024-01-01T06:00:00.000Z');
+    const responseEnd = {
+      epochMs: spanStartMs + 20,
+      name: 'responseEnd',
+      attributes: { duration: '19.2ms' },
+    };
+    const mockTimingMarkers = () =>
+      mockUseBrowserTraceEvents.mockImplementation(({ logRows }) => ({
+        logRows,
+        resourceTimingBySpanId: new Map([['span-1', [responseEnd]]]),
+        triggerRow: undefined,
+      }));
+
+    it('draws span events, then timing dots, on the span and not on its log, and none with span events off', async () => {
+      mockTimingMarkers();
+      setupQueryMocks({
+        traceData: {
+          data: [
+            {
+              ...mockTraceData.data[0],
+              SpanEvents: [
+                {
+                  Timestamp: '2024-01-01T06:00:00.050000000Z',
+                  Name: 'exception',
+                  Attributes: { 'exception.message': 'boom' },
+                },
+                {
+                  Timestamp: '2024-01-01T06:00:00.075000000Z',
+                  Name: 'cache miss',
+                  Attributes: {},
+                },
+              ],
+            },
+          ],
+          meta: [{ totalCount: 1 }],
+        },
+        logData: mockLogData,
+      });
+      renderComponent();
+      await waitForLoading();
+
+      expect(findRow(SourceKind.Trace).events[0].markers).toEqual([
+        {
+          timestamp: 50,
+          epochMs: spanStartMs + 50,
+          name: 'exception',
+          attributes: { 'exception.message': 'boom' },
+        },
+        {
+          timestamp: 75,
+          epochMs: spanStartMs + 75,
+          name: 'cache miss',
+          attributes: {},
+        },
+        { timestamp: 20, ...responseEnd },
+      ]);
+      expect(findRow(SourceKind.Log).events[0].markers).toEqual([]);
+
+      await userEvent.click(screen.getByTestId('show-span-events-chip'));
+      await waitFor(() => {
+        expect(findRow(SourceKind.Trace).events[0].markers).toEqual([]);
+      });
+    });
+
+    it('draws timing dots on a span without span events', async () => {
+      mockTimingMarkers();
+      setupQueryMocks({ traceData: mockTraceData });
+      renderComponent(null);
+      await waitForLoading();
+
+      expect(findRow(SourceKind.Trace).events[0].markers).toEqual([
+        { timestamp: 20, ...responseEnd },
+      ]);
+    });
+
+    it('renders the log rows the hook keeps', async () => {
+      mockUseBrowserTraceEvents.mockImplementation(() => ({
+        logRows: [],
+        resourceTimingBySpanId: new Map(),
+        triggerRow: undefined,
+      }));
+      setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+      renderComponent();
+      await waitForLoading();
+
+      expect(MockTimelineChart.latestProps.rows).toHaveLength(1);
+      expect(screen.getByText('1 span,')).toBeInTheDocument();
+    });
+
+    it('holds the hook while the trace fetches', () => {
+      setupQueryMocks({ traceData: mockTraceData, isFetching: true });
+      renderComponent();
+
+      expect(mockUseBrowserTraceEvents).toHaveBeenLastCalledWith(
+        expect.objectContaining({ enabled: false }),
+      );
+    });
+
+    it('passes the trace, its log rows, the selection and the hint', async () => {
+      const hint = {
+        timestamp: mockLogData.data[0].Timestamp,
+        spanId: 'span-1',
+        body: 'test log',
+      };
+      setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+      renderComponent(mockLogTableSource, mockTraceId, {
+        highlightedRowWhere: 'selected-row',
+        initialRowHighlightHint: hint,
+      });
+      await waitForLoading();
+
+      expect(mockUseBrowserTraceEvents).toHaveBeenLastCalledWith({
+        traceRows: [expect.objectContaining({ SpanId: 'span-1' })],
+        logRows: [expect.objectContaining({ Body: 'test log' })],
+        logSource: mockLogTableSource,
+        traceId: mockTraceId,
+        highlightedRowWhere: 'selected-row',
+        initialRowHighlightHint: hint,
+        foldTimingRows: true,
+        enabled: true,
+      });
+    });
+
+    const lastFold = () =>
+      mockUseBrowserTraceEvents.mock.lastCall?.[0].foldTimingRows;
+
+    it.each(['show-span-events-chip', 'show-spans-chip'])(
+      'keeps the timing rows while %s is off',
+      async chip => {
+        setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+        renderComponent();
+        await waitForLoading();
+
+        await userEvent.click(screen.getByTestId(chip));
+        await waitFor(() => expect(lastFold()).toBe(false));
+      },
+    );
+
+    it('keeps the timing rows under a log filter', async () => {
+      mockUseWaterfallSearchState.mockReturnValue({
+        ...makeWaterfallSearchState(),
+        logWhere: 'EventName:"browser.resource_timing"',
+      });
+      setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+      renderComponent();
+      await waitForLoading();
+
+      expect(lastFold()).toBe(false);
+    });
+
+    it('keeps the timing rows when the log list is capped', async () => {
+      setupQueryMocks({
+        traceData: mockTraceData,
+        logData: {
+          data: Array.from(
+            { length: TRACE_WATERFALL_ROW_LIMIT + 1 },
+            () => mockLogData.data[0],
+          ),
+          meta: [{ totalCount: TRACE_WATERFALL_ROW_LIMIT + 1 }],
+        },
+      });
+      renderComponent();
+      await waitForLoading();
+
+      expect(lastFold()).toBe(false);
+    });
+
+    it('sends the same log queries whether or not the source has browser event fields', () => {
+      const logQueries = (logSource: TLogSource) => {
+        mockUseOffsetPaginatedQuery.mockClear();
+        renderComponent(logSource).unmount();
+        return mockUseOffsetPaginatedQuery.mock.calls
+          .filter(([query]) => query?.from?.tableName === 'log_table')
+          .map(([query, opts]) => [query, opts?.enabled]);
+      };
+      setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+      const correlatedSource = {
+        ...mockLogTableSource,
+        traceIdExpression: 'TraceId',
+        spanIdExpression: 'SpanId',
+      };
+
+      const withEventFields = logQueries({
+        ...correlatedSource,
+        eventNameExpression: 'EventName',
+        eventAttributesExpression: 'LogAttributes',
+      });
+
+      expect(withEventFields.some(([, enabled]) => enabled)).toBe(true);
+      expect(withEventFields).toEqual(logQueries(correlatedSource));
+      expect(JSON.stringify(withEventFields)).not.toContain('EventName');
+    });
+
+    describe('triggered-by row', () => {
+      const triggeredBy = 'Triggered by: Clicked testid=checkout · 3ms before';
+      const triggerRow: TraceTriggerRow = {
+        Timestamp: mockTraceData.data[0].Timestamp,
+        Body: '',
+        SpanId: '',
+        type: SourceKind.Log,
+        id: 'click-row',
+        aliasWith: [],
+        __hdx_hidden: false,
+        triggeredBy,
+      };
+      const mockTriggerRow = () =>
+        mockUseBrowserTraceEvents.mockImplementation(({ logRows }) => ({
+          logRows,
+          resourceTimingBySpanId: new Map(),
+          triggerRow,
+        }));
+      const rowTypes = () =>
+        MockTimelineChart.latestProps.rows.map(
+          (row: { id: string; type?: string }) => `${row.type}:${row.id}`,
+        );
+
+      it('comes first, labeled as the triggering click, and opens the click log', async () => {
+        mockTriggerRow();
+        const onClick = jest.fn();
+        setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+        renderComponent(mockLogTableSource, mockTraceId, { onClick });
+        await waitForLoading();
+
+        expect(rowTypes()).toEqual([
+          'log:click-row',
+          'trace:row-id',
+          'log:row-id',
+        ]);
+        const [row] = MockTimelineChart.latestProps.rows;
+        expect(row.events[0].tooltip).toBe(
+          `${triggeredBy} | Started at Jan 1 1:00:00.000 AM`,
+        );
+        const label = renderWithMantine(row.label);
+        expect(label.getByTitle(triggeredBy)).toHaveTextContent(triggeredBy);
+        expect(label.getByLabelText('Triggering click')).toBeInTheDocument();
+        expect(
+          label.queryByLabelText('Correlated Log Line'),
+        ).not.toBeInTheDocument();
+        expect(screen.getByText('1 span, 1 log,')).toBeInTheDocument();
+
+        await userEvent.click(label.getByTitle(triggeredBy));
+        expect(onClick).toHaveBeenCalledWith({
+          id: 'click-row',
+          type: SourceKind.Log,
+          aliasWith: [],
+        });
+      });
+
+      it('follows the Spans chip, not the Logs chip', async () => {
+        mockTriggerRow();
+        setupQueryMocks({ traceData: mockTraceData, logData: mockLogData });
+        renderComponent();
+        await waitForLoading();
+
+        await userEvent.click(screen.getByTestId('show-logs-chip'));
+        await waitFor(() => {
+          expect(rowTypes()).toEqual(['log:click-row', 'trace:row-id']);
+        });
+
+        await userEvent.click(screen.getByTestId('show-logs-chip'));
+        await userEvent.click(screen.getByTestId('show-spans-chip'));
+        await waitFor(() => {
+          expect(rowTypes()).toEqual(['log:row-id']);
+        });
+      });
+    });
   });
 });
 
@@ -351,11 +1421,15 @@ describe('useEventsAroundFocus', () => {
     beforeData?: any;
     afterData?: any;
     enabled?: boolean;
+    tableSource?: TTraceSource | TLogSource;
+    selectSeverityNumber?: boolean;
   }) => {
     const {
       beforeData = { data: [], meta: [] },
       afterData = { data: [], meta: [] },
       enabled = true,
+      tableSource = mockTableSource,
+      selectSeverityNumber,
     } = options;
 
     mockUseOffsetPaginatedQuery.mockReset();
@@ -373,16 +1447,39 @@ describe('useEventsAroundFocus', () => {
 
     const { result } = renderHook(() =>
       useEventsAroundFocus({
-        tableSource: mockTableSource,
+        tableSource,
         focusDate: mockFocusDate,
         dateRange: mockDateRange,
         traceId: mockTraceId,
         enabled,
+        selectSeverityNumber,
       }),
     );
 
     return result.current;
   };
+
+  it.each([true, false])(
+    'selects SeverityNumber from a log source only with the flag (%p), never in row ids',
+    selectSeverityNumber => {
+      const getRowWhere = jest.fn(() => ({ where: 'row-id', aliasWith: [] }));
+      mockUseRowWhere.mockReturnValue(getRowWhere);
+
+      const result = testEventsAroundFocus({
+        tableSource: { ...mockTableSource, kind: SourceKind.Log } as TLogSource,
+        selectSeverityNumber,
+        beforeData: {
+          data: [{ Body: 'log line', SeverityNumber: 17 }],
+          meta: [{ name: 'Body', type: 'String' }],
+        },
+      });
+
+      const [query] = mockUseOffsetPaginatedQuery.mock.calls[0];
+      expect(selectsSeverityNumber(query)).toBe(selectSeverityNumber);
+      expect(getRowWhere).toHaveBeenCalledWith({ Body: 'log line' });
+      expect(result.rows[0]).toMatchObject({ SeverityNumber: 17 });
+    },
+  );
 
   it('fetches events before and after focus date', () => {
     const mockBeforeData = {
@@ -423,6 +1520,60 @@ describe('useEventsAroundFocus', () => {
   it('does not fetch when disabled', () => {
     const result = testEventsAroundFocus({ enabled: false });
     expect(result.rows.length).toBe(0);
+  });
+
+  it('does not flag isTruncated when a window returns exactly the row cap', () => {
+    const exactCapData = {
+      data: new Array(TRACE_WATERFALL_ROW_LIMIT).fill(null),
+      meta: [{ totalCount: TRACE_WATERFALL_ROW_LIMIT }],
+    };
+
+    const result = testEventsAroundFocus({
+      beforeData: exactCapData,
+      afterData: { data: [], meta: [{ totalCount: 0 }] },
+    });
+
+    expect(result.isTruncated).toBe(false);
+    expect(result.rows.length).toBe(TRACE_WATERFALL_ROW_LIMIT);
+  });
+
+  it('flags isTruncated when a window returns more rows than the cap, and drops the sentinel row', () => {
+    const overCapData = {
+      data: new Array(TRACE_WATERFALL_ROW_LIMIT + 1).fill(null),
+      meta: [{ totalCount: TRACE_WATERFALL_ROW_LIMIT + 1 }],
+    };
+
+    const result = testEventsAroundFocus({
+      beforeData: overCapData,
+      afterData: { data: [], meta: [{ totalCount: 0 }] },
+    });
+
+    expect(result.isTruncated).toBe(true);
+    expect(result.rows.length).toBe(TRACE_WATERFALL_ROW_LIMIT);
+  });
+
+  it('flags isTruncated when only the after window returns more rows than the cap', () => {
+    const overCapData = {
+      data: new Array(TRACE_WATERFALL_ROW_LIMIT + 1).fill(null),
+      meta: [{ totalCount: TRACE_WATERFALL_ROW_LIMIT + 1 }],
+    };
+
+    const result = testEventsAroundFocus({
+      beforeData: { data: [{ Body: 'a' }], meta: [{ totalCount: 1 }] },
+      afterData: overCapData,
+    });
+
+    expect(result.isTruncated).toBe(true);
+    expect(result.rows.length).toBe(TRACE_WATERFALL_ROW_LIMIT + 1);
+  });
+
+  it('does not flag isTruncated when both windows return fewer rows than the cap', () => {
+    const result = testEventsAroundFocus({
+      beforeData: { data: [{ Body: 'a' }], meta: [{ totalCount: 1 }] },
+      afterData: { data: [{ Body: 'b' }], meta: [{ totalCount: 1 }] },
+    });
+
+    expect(result.isTruncated).toBe(false);
   });
 });
 
@@ -482,5 +1633,195 @@ describe('getDescendantIds', () => {
       children: [{ id: 'only', children: [] }],
     };
     expect(getDescendantIds(node)).toEqual(['only']);
+  });
+});
+
+describe('depth control helpers', () => {
+  // Build a level -> parent-ids map. Keys are intentionally passed out of order
+  // in some tests to prove the helpers sort levels themselves.
+  const makeLevels = (entries: Array<[number, string[]]>) =>
+    new Map<number, Set<string>>(
+      entries.map(([level, ids]) => [level, new Set(ids)]),
+    );
+
+  // A 3-deep tree of collapsible parents:
+  //   level 0: root
+  //   level 1: a, b
+  //   level 2: a1
+  const threeLevels = () =>
+    makeLevels([
+      [2, ['a1']],
+      [0, ['root']],
+      [1, ['a', 'b']],
+    ]);
+
+  const asSorted = (set: Set<string>) => [...set].sort();
+
+  describe('computeCollapseAll', () => {
+    it('returns an empty set for a trace with no collapsible parents', () => {
+      expect(computeCollapseAll(new Map())).toEqual(new Set());
+    });
+
+    it('flattens every parent id from every level into one set', () => {
+      expect(asSorted(computeCollapseAll(threeLevels()))).toEqual([
+        'a',
+        'a1',
+        'b',
+        'root',
+      ]);
+    });
+  });
+
+  describe('computeExpandOneLevel', () => {
+    it('returns the same set reference when nothing is collapsed', () => {
+      const collapsed = new Set<string>();
+      const result = computeExpandOneLevel(collapsed, threeLevels());
+      // Identity is relied on by the caller to skip a redundant state update.
+      expect(result).toBe(collapsed);
+    });
+
+    it('expands the shallowest collapsed level first', () => {
+      const levels = threeLevels();
+      const fullyCollapsed = new Set(['root', 'a', 'b', 'a1']);
+
+      // level 0 (root) is shallowest -> expanded first.
+      const afterOne = computeExpandOneLevel(fullyCollapsed, levels);
+      expect(asSorted(afterOne)).toEqual(['a', 'a1', 'b']);
+
+      // next shallowest collapsed level is level 1 (a, b).
+      const afterTwo = computeExpandOneLevel(afterOne, levels);
+      expect(asSorted(afterTwo)).toEqual(['a1']);
+
+      // finally level 2 (a1).
+      const afterThree = computeExpandOneLevel(afterTwo, levels);
+      expect(asSorted(afterThree)).toEqual([]);
+    });
+
+    it('skips already-expanded shallow levels', () => {
+      // Only the deepest level remains collapsed.
+      const result = computeExpandOneLevel(new Set(['a1']), threeLevels());
+      expect(asSorted(result)).toEqual([]);
+    });
+
+    it('does not mutate the input set', () => {
+      const collapsed = new Set(['root', 'a', 'b', 'a1']);
+      computeExpandOneLevel(collapsed, threeLevels());
+      expect(asSorted(collapsed)).toEqual(['a', 'a1', 'b', 'root']);
+    });
+  });
+
+  describe('computeCollapseOneLevel', () => {
+    it('collapses the deepest expanded level first', () => {
+      const levels = threeLevels();
+
+      // Nothing collapsed -> deepest level (a1) collapses first.
+      const afterOne = computeCollapseOneLevel(new Set<string>(), levels);
+      expect(asSorted(afterOne)).toEqual(['a1']);
+
+      // next deepest expanded level is level 1 (a, b).
+      const afterTwo = computeCollapseOneLevel(afterOne, levels);
+      expect(asSorted(afterTwo)).toEqual(['a', 'a1', 'b']);
+
+      // finally level 0 (root).
+      const afterThree = computeCollapseOneLevel(afterTwo, levels);
+      expect(asSorted(afterThree)).toEqual(['a', 'a1', 'b', 'root']);
+    });
+
+    it('skips already-collapsed deep levels', () => {
+      // Deepest level already collapsed -> collapse level 1 next.
+      const result = computeCollapseOneLevel(new Set(['a1']), threeLevels());
+      expect(asSorted(result)).toEqual(['a', 'a1', 'b']);
+    });
+
+    it('returns an equivalent set when everything is already collapsed', () => {
+      const fullyCollapsed = new Set(['root', 'a', 'b', 'a1']);
+      const result = computeCollapseOneLevel(fullyCollapsed, threeLevels());
+      expect(asSorted(result)).toEqual(['a', 'a1', 'b', 'root']);
+    });
+
+    it('does not mutate the input set', () => {
+      const collapsed = new Set(['a1']);
+      computeCollapseOneLevel(collapsed, threeLevels());
+      expect(asSorted(collapsed)).toEqual(['a1']);
+    });
+  });
+
+  it('expand and collapse one level are inverse across a full tree', () => {
+    const levels = threeLevels();
+
+    // Collapse everything one level at a time.
+    let state = new Set<string>();
+    state = computeCollapseOneLevel(state, levels); // a1
+    state = computeCollapseOneLevel(state, levels); // + a, b
+    state = computeCollapseOneLevel(state, levels); // + root
+    expect(asSorted(state)).toEqual(['a', 'a1', 'b', 'root']);
+
+    // Expand everything one level at a time back to empty.
+    state = computeExpandOneLevel(state, levels); // - root
+    state = computeExpandOneLevel(state, levels); // - a, b
+    state = computeExpandOneLevel(state, levels); // - a1
+    expect(asSorted(state)).toEqual([]);
+  });
+
+  describe('computeToggleCollapse', () => {
+    // A parent `p` with a nested subtree: descendants are c1, c1a, c2.
+    const node = () => ({
+      id: 'p',
+      children: [
+        { id: 'c1', children: [{ id: 'c1a', children: [] }] },
+        { id: 'c2', children: [] },
+      ],
+    });
+
+    it('collapses an expanded node (adds its id)', () => {
+      expect(
+        asSorted(computeToggleCollapse(new Set(), 'p', node(), false)),
+      ).toEqual(['p']);
+    });
+
+    it('expands a collapsed node (removes its id)', () => {
+      expect(
+        asSorted(computeToggleCollapse(new Set(['p']), 'p', node(), false)),
+      ).toEqual([]);
+    });
+
+    it('collapses the whole subtree when includeDescendants is true', () => {
+      expect(
+        asSorted(computeToggleCollapse(new Set(), 'p', node(), true)),
+      ).toEqual(['c1', 'c1a', 'c2', 'p']);
+    });
+
+    it('expands the whole subtree when includeDescendants is true', () => {
+      const collapsed = new Set(['p', 'c1', 'c1a', 'c2']);
+      expect(
+        asSorted(computeToggleCollapse(collapsed, 'p', node(), true)),
+      ).toEqual([]);
+    });
+
+    it('leaves descendants untouched when includeDescendants is false', () => {
+      // c1 stays collapsed even though the parent is toggled.
+      expect(
+        asSorted(computeToggleCollapse(new Set(['c1']), 'p', node(), false)),
+      ).toEqual(['c1', 'p']);
+    });
+
+    it('toggles only the id when the node is not found', () => {
+      expect(
+        asSorted(computeToggleCollapse(new Set(), 'missing', undefined, true)),
+      ).toEqual(['missing']);
+    });
+
+    it('toggles only the id for a leaf node with no children', () => {
+      const leaf = { id: 'leaf', children: [] };
+      expect(
+        asSorted(computeToggleCollapse(new Set(), 'leaf', leaf, true)),
+      ).toEqual(['leaf']);
+    });
+
+    it('does not mutate the input set', () => {
+      const collapsed = new Set(['other']);
+      computeToggleCollapse(collapsed, 'p', node(), true);
+      expect(asSorted(collapsed)).toEqual(['other']);
+    });
   });
 });

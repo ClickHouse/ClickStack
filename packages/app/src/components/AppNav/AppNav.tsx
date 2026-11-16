@@ -1,22 +1,14 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import Router, { useRouter } from 'next/router';
+import Script from 'next/script';
 import cx from 'classnames';
-import HyperDX from '@hyperdx/browser';
+import { Badge } from '@clickhouse/click-ui';
+import { setAttributes, setUser } from '@clickhouse/clickstack-browser';
 import { SavedSearchListApiResponse } from '@hyperdx/common-utils/dist/types';
+import { Anchor, Collapse, Flex, Group, ScrollArea, Text } from '@mantine/core';
+import { useDisclosure, useFocusTrap, useLocalStorage } from '@mantine/hooks';
 import {
-  ActionIcon,
-  Anchor,
-  Badge,
-  Collapse,
-  Flex,
-  Group,
-  ScrollArea,
-  Text,
-} from '@mantine/core';
-import { useDisclosure, useLocalStorage } from '@mantine/hooks';
-import {
-  IconArrowBarToLeft,
   IconBell,
   IconChartDots,
   IconDeviceFloppy,
@@ -28,19 +20,21 @@ import {
 } from '@tabler/icons-react';
 
 import api from '@/api';
+import { useLogomark, useWordmark } from '@/brand';
 import { AlertStatusIcon } from '@/components/AlertStatusIcon';
-import { IS_LOCAL_MODE } from '@/config';
+import { InstanceLabel } from '@/components/AppNav/InstanceLabel';
+import { useMobileNavOverlay } from '@/components/AppNav/useMobileNavOverlay';
+import { useCompactViewport } from '@/components/CompactViewport/useCompactViewport';
+import { APP_VERSION, IS_LOCAL_MODE } from '@/config';
 import { Dashboard, useDashboards } from '@/dashboard';
 import { useFavorites } from '@/favorites';
+import { setHdxIdentity } from '@/hdxDebug';
 import InstallInstructionModal from '@/InstallInstructionsModal';
 import OnboardingChecklist from '@/OnboardingChecklist';
 import { useSavedSearches } from '@/savedSearch';
-import { useLogomark, useWordmark } from '@/theme/ThemeProvider';
+import { getTimeZoneShortName } from '@/timeZone';
+import { useDisplayTimeZone } from '@/useDisplayTimeZone';
 import { UserPreferencesModal } from '@/UserPreferencesModal';
-import { useUserPreferences } from '@/useUserPreferences';
-import { useWindowSize } from '@/utils';
-
-import packageJson from '../../../package.json';
 
 import {
   AppNavCloudBanner,
@@ -53,9 +47,20 @@ import { AppNavFeedback } from './AppNavFeedback';
 
 import styles from './AppNav.module.scss';
 
-// Expose the same value Next injected at build time; fall back to package.json for dev tooling
-const APP_VERSION =
-  process.env.NEXT_PUBLIC_APP_VERSION ?? packageJson.version ?? 'dev';
+// Newest release version in the notes, inlined by next.config.mjs. Separate from
+// APP_VERSION on purpose: this one answers "what is the latest release?", which
+// is what the Help sparkle is for, while APP_VERSION answers "what build is
+// this?" and carries a build id that moves on every deploy.
+const WHATS_NEW_VERSION = process.env.NEXT_PUBLIC_WHATS_NEW_VERSION;
+
+// Reo.dev client ID for our usage tracking. USAGE_STATS_ENABLED is the opt-out.
+const REO_CLIENT_ID = '38b2e79cdb32fa7';
+
+declare global {
+  interface Window {
+    Reo?: { init: (options: { clientID: string; source?: string }) => void };
+  }
+}
 
 // Navigation link configuration
 type NavLinkConfig = {
@@ -67,10 +72,13 @@ type NavLinkConfig = {
   cloudOnly?: boolean; // Only show when not in local mode
 };
 
+const RAIL_WIDTH = 50;
+const FULL_NAV_WIDTH = 250;
+
 const NAV_LINKS: NavLinkConfig[] = [
   {
     id: 'chart',
-    label: 'Chart Explorer',
+    label: 'Chart explorer',
     href: '/chart',
     icon: <IconChartDots size={16} />,
   },
@@ -83,13 +91,13 @@ const NAV_LINKS: NavLinkConfig[] = [
   },
   {
     id: 'sessions',
-    label: 'Client Sessions',
+    label: 'Client sessions',
     href: '/sessions',
     icon: <IconDeviceLaptop size={16} />,
   },
   {
     id: 'service-map',
-    label: 'Service Map',
+    label: 'Service map',
     href: '/service-map',
     icon: <IconSitemap size={16} />,
     isBeta: true,
@@ -173,32 +181,56 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
 
   const { data: meData } = api.useMe();
 
-  const { width } = useWindowSize();
-
   const [isPreferCollapsed, setIsPreferCollapsed] = useLocalStorage<boolean>({
     key: 'isNavCollapsed',
     defaultValue: false,
   });
 
-  const isSmallScreen = (width ?? 1000) < 900;
-  const isCollapsed = isSmallScreen || isPreferCollapsed;
+  const isCompact = useCompactViewport();
+  const {
+    isOpen: isMobileNavOpen,
+    toggle: toggleMobileNav,
+    close: closeMobileNav,
+  } = useMobileNavOverlay(isCompact);
+  const collapseButtonRef = useRef<HTMLButtonElement>(null);
+  const wasMobileNavOpenRef = useRef(false);
+  // Traps Tab inside the open overlay so keys do not reach the page under the scrim.
+  const navFocusTrapRef = useFocusTrap(isMobileNavOpen);
 
-  const navWidth = isCollapsed ? 50 : 250;
-
+  // The toggle stays mounted when the overlay closes, so keyboard focus can
+  // return to it after Escape or the scrim removes itself.
   useEffect(() => {
-    HyperDX.addAction('user navigated', {
-      route: pathname,
-      query: JSON.stringify(query),
-    });
-  }, [pathname, query]);
+    if (wasMobileNavOpenRef.current && !isMobileNavOpen) {
+      collapseButtonRef.current?.focus();
+    }
+    wasMobileNavOpenRef.current = isMobileNavOpen;
+  }, [isMobileNavOpen]);
+
+  // The page layout reserves the rail width even while the overlay is open,
+  // so opening the nav does not shift the content.
+  const isRail = isCompact || isPreferCollapsed;
+  const isCollapsed = isRail && !isMobileNavOpen;
+  const navWidth = isCollapsed ? RAIL_WIDTH : FULL_NAV_WIDTH;
+  const reservedWidth = isRail ? RAIL_WIDTH : FULL_NAV_WIDTH;
+  // The in-flow rail is border-box, so its 1px border is already inside
+  // reservedWidth. The fixed nav's ghost keeps the extra pixel it had
+  // before. The overlay ghost must not, or the page shifts when it opens.
+  const ghostWidth =
+    isMobileNavOpen && !fixed ? reservedWidth : reservedWidth + 1;
 
   useEffect(() => {
     if (meData != null) {
-      HyperDX.enableAdvancedNetworkCapture();
-      HyperDX.setGlobalAttributes({
-        userEmail: meData.email,
-        userName: meData.name,
-        teamName: meData.team.name,
+      setUser({ id: meData.id, email: meData.email, name: meData.name });
+      // Un-namespaced because the Sessions page reads teamName (sessions.ts)
+      setAttributes({ teamName: meData.team.name });
+      // Fold user/team ids + per-user toggles into window.hdx for debug reports.
+      setHdxIdentity({
+        userId: meData.id,
+        teamId: meData.team.id,
+        features: {
+          usageStats: meData.usageStatsEnabled,
+          aiAssistant: meData.aiAssistantEnabled,
+        },
       });
     }
   }, [meData]);
@@ -258,9 +290,8 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
     { close: closeUserPreferences, open: openUserPreferences },
   ] = useDisclosure(false);
 
-  const {
-    userPreferences: { isUTC },
-  } = useUserPreferences();
+  const timeZone = useDisplayTimeZone();
+  const timeZoneShortName = timeZone && getTimeZoneShortName(timeZone);
 
   const [
     showInstallInstructions,
@@ -290,7 +321,8 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
       pathname?.startsWith('/dashboards/') ||
       pathname === '/services' ||
       pathname === '/clickhouse' ||
-      pathname === '/kubernetes';
+      pathname === '/kubernetes' ||
+      pathname === '/llm';
 
     if (!isDashboardsPathname) return false;
 
@@ -310,25 +342,36 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
   ]);
 
   return (
-    <AppNavContext.Provider value={{ isCollapsed, pathname }}>
-      {fixed && (
+    <AppNavContext value={{ isCollapsed, pathname }}>
+      {(fixed || isMobileNavOpen) && (
         <div
           className={styles.navGhost}
           style={{
-            width: navWidth + 1,
-            minWidth: navWidth + 1,
+            width: ghostWidth,
+            minWidth: ghostWidth,
           }}
         ></div>
+      )}
+      {isMobileNavOpen && (
+        <button
+          type="button"
+          className={styles.navScrim}
+          aria-label="Close navigation"
+          onClick={closeMobileNav}
+        />
       )}
       <InstallInstructionModal
         show={showInstallInstructions}
         onHide={closeInstallInstructions}
       />
       <div
+        ref={navFocusTrapRef}
         data-testid="app-nav"
         className={cx(styles.nav, {
-          [styles.navFixed]: fixed,
+          [styles.navFixed]: fixed || isMobileNavOpen,
+          [styles.navOverlay]: isMobileNavOpen,
           [styles.navCollapsed]: isCollapsed,
+          [styles.navCompactRail]: isCompact && !isMobileNavOpen,
         })}
         style={{ width: navWidth }}
       >
@@ -343,33 +386,64 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
               {isCollapsed ? (
                 <div className={styles.logoIconWrapper}>{logomark}</div>
               ) : (
-                <Group gap="xs" align="center">
+                <Group
+                  gap="xs"
+                  align="center"
+                  wrap="nowrap"
+                  style={{ minWidth: 0 }}
+                >
                   {wordmark}
-                  {isUTC && (
-                    <Badge
-                      size="xs"
-                      color="gray"
-                      variant="light"
-                      fw="normal"
-                      title="Showing time in UTC"
-                    >
-                      UTC
-                    </Badge>
-                  )}
+                  {/* Label and UTC badge are mutually exclusive - showing both
+                      would be redundant and crowd this already-tight row. */}
+                  <InstanceLabel
+                    fallback={
+                      timeZoneShortName && (
+                        <Badge
+                          size="sm"
+                          text={timeZoneShortName}
+                          state="neutral"
+                          title={`Showing time in ${timeZoneShortName}`}
+                        />
+                      )
+                    }
+                  />
                 </Group>
               )}
             </Link>
-            <ActionIcon
-              variant="subtle"
-              size="sm"
+            {/* click-ui 0.12 has no sidebar-left icon, so the glyph is
+                inlined. Chrome matches IconButton type="primary" size="sm". */}
+            <button
+              ref={collapseButtonRef}
+              type="button"
               className={cx(styles.collapseButton, {
                 [styles.collapseButtonCollapsed]: isCollapsed,
               })}
-              title="Collapse/Expand Navigation"
-              onClick={() => setIsPreferCollapsed((v: boolean) => !v)}
+              title="Collapse/expand navigation"
+              aria-label="Collapse/expand navigation"
+              aria-expanded={!isCollapsed}
+              data-autofocus={isMobileNavOpen ? true : undefined}
+              onClick={() =>
+                isCompact
+                  ? toggleMobileNav()
+                  : setIsPreferCollapsed((v: boolean) => !v)
+              }
             >
-              <IconArrowBarToLeft size={16} />
-            </ActionIcon>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+              >
+                <path
+                  fill="currentColor"
+                  d="M20.25 5C20.25 4.30921 19.6908 3.75 19 3.75H10.752H9.25195H5C4.30921 3.75 3.75 4.30921 3.75 5V19C3.75 19.6908 4.30921 20.25 5 20.25H9.25195H10.752H19C19.6908 20.25 20.25 19.6908 20.25 19V5ZM21.75 19C21.75 20.5192 20.5192 21.75 19 21.75H5C3.48079 21.75 2.25 20.5192 2.25 19V5C2.25 3.48079 3.48079 2.25 5 2.25H19C20.5192 2.25 21.75 3.48079 21.75 5V19Z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M9.25195 3.75V20.25H10.752V3.75H9.25195Z"
+                />
+              </svg>
+            </button>
           </div>
         </div>
         <ScrollArea
@@ -390,7 +464,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
 
             {/* Saved Searches */}
             <AppNavLink
-              label="Saved Searches"
+              label="Saved searches"
               href="/search/list"
               icon={<IconDeviceFloppy size={16} />}
               isActive={isSavedSearchActive}
@@ -407,7 +481,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
                     <Text size="xs" c="dimmed" pl="lg" pr="xs" py={4} lh={1.4}>
                       No favorites. Star on{' '}
                       <Anchor component={Link} href="/search/list" size="xs">
-                        Saved Searches
+                        Saved searches
                       </Anchor>
                       .
                     </Text>
@@ -460,22 +534,11 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
               </Collapse>
             )}
 
-            {!isCollapsed && (
-              <Text size="xs" px="lg" py="xs" fw="lighter" fs="italic">
-                Saved searches and dashboards have moved! Try the{' '}
-                <Anchor component={Link} href="/search/list">
-                  Saved Searches
-                </Anchor>{' '}
-                or{' '}
-                <Anchor component={Link} href="/dashboards/list">
-                  Dashboards
-                </Anchor>{' '}
-                page.
-              </Text>
-            )}
-
             {/* Help */}
-            <AppNavHelpMenu version={APP_VERSION} />
+            <AppNavHelpMenu
+              version={APP_VERSION}
+              whatsNewVersion={WHATS_NEW_VERSION}
+            />
 
             {/* Feedback */}
             <AppNavFeedback />
@@ -483,7 +546,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
             {/* Team Settings (Cloud only) */}
             {!IS_LOCAL_MODE && (
               <AppNavLink
-                label="Team Settings"
+                label="Team settings"
                 href="/team"
                 icon={<IconSettings size={16} />}
               />
@@ -523,10 +586,17 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
             onClickUserPreferences={openUserPreferences}
             logoutUrl={IS_LOCAL_MODE ? null : `/api/logout`}
           />
-          {meData && meData.usageStatsEnabled && (
-            <img
-              referrerPolicy="no-referrer-when-downgrade"
-              src="https://static.scarf.sh/a.png?x-pxid=bbc99c42-7a75-4eee-9fb9-2b161fc4acd6"
+          {meData?.usageStatsEnabled && (
+            <Script
+              id="reo-beacon"
+              strategy="afterInteractive"
+              src={`https://static.reo.dev/${REO_CLIENT_ID}/reo.js`}
+              onLoad={() => {
+                window.Reo?.init({
+                  clientID: REO_CLIENT_ID,
+                  source: 'internal',
+                });
+              }}
             />
           )}
         </div>
@@ -535,6 +605,6 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
         opened={UserPreferencesOpen}
         onClose={closeUserPreferences}
       />
-    </AppNavContext.Provider>
+    </AppNavContext>
   );
 }

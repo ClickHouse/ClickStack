@@ -1,24 +1,29 @@
 <p align="center">
   <a href="https://hyperdx.io">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="./.github/images/logo_dark.png#gh-dark-mode-only">
-      <img alt="hyperdx logo" src="./.github/images/logo_light.png#gh-light-mode-only">
-    </picture>
+    <img alt="ClickStack logo" src="./packages/app/public/favicons/clickstack/favicon.svg" width="128">
   </a>
 </p>
 
----
-
-# HyperDX
-
-[HyperDX](https://hyperdx.io), a core component of
-[ClickStack](https://clickhouse.com/use-cases/observability), helps engineers
-quickly figure out why production is broken by making it easy to search &
-visualize logs and traces on top of any ClickHouse cluster (imagine Kibana, for
-ClickHouse).
+<h1 align="center">ClickStack</h1>
 
 <p align="center">
-  <a href="https://clickhouse.com/docs/use-cases/observability/clickstack/overview">Documentation</a> • <a href="https://hyperdx.io/discord">Chat on Discord</a>  • <a href="https://play.hyperdx.io/search">Live Demo</a>  • <a href="https://github.com/hyperdxio/hyperdx/issues/new">Bug Reports</a> • <a href="./CONTRIBUTING.md">Contributing</a> • <a href="https://clickhouse.com/use-cases/observability">Website</a>
+  <a href="https://github.com/ClickHouse/ClickStack/stargazers"><img src="https://badgen.net/github/stars/ClickHouse/ClickStack?label=%E2%98%85" alt="GitHub stars" /></a>
+  <img src="https://badgen.net/github/license/ClickHouse/ClickStack" alt="License" />
+  <a href="https://github.com/ClickHouse/ClickStack/actions/workflows/release.yml"><img src="https://github.com/ClickHouse/ClickStack/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
+  <a href="https://hyperdx.io/discord"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="Join the ClickStack Discord" /></a>
+</p>
+
+<p align="center">
+  <a href="https://trendshift.io/repositories/2030?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-2030" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/2030" alt="ClickHouse%2FClickStack | Trendshift" width="250" height="55"/></a>
+</p>
+
+[ClickStack](https://clickhouse.com/use-cases/observability) (formerly HyperDX)
+helps engineers quickly figure out why production is broken by making it easy to
+search & visualize logs and traces on top of any ClickHouse cluster (imagine
+Kibana, for ClickHouse).
+
+<p align="center">
+  <a href="https://clickhouse.com/docs/use-cases/observability/clickstack/overview">Documentation</a> • <a href="https://hyperdx.io/discord">Chat on Discord</a>  • <a href="https://play.hyperdx.io/search">Live Demo</a>  • <a href="https://github.com/ClickHouse/ClickStack/issues/new">Bug Reports</a> • <a href="./CONTRIBUTING.md">Contributing</a> • <a href="https://clickhouse.com/use-cases/observability">Website</a>
 </p>
 
 - 🕵️ Correlate/search logs, metrics, session replays and traces all in one place
@@ -37,16 +42,16 @@ ClickHouse).
 <br/>
 <img alt="Search logs and traces all in one place" src="./.github/images/search_splash.png" title="Search logs and traces all in one place">
 
-## Spinning Up HyperDX
+## Spinning Up ClickStack
 
-HyperDX can be deployed as part of ClickStack, which includes ClickHouse,
-HyperDX, OpenTelemetry Collector and MongoDB.
+The all-in-one image bundles ClickHouse, the ClickStack UI, the OpenTelemetry
+Collector and MongoDB.
 
 ```bash
-docker run -p 8080:8080 -p 4317:4317 -p 4318:4318 docker.hyperdx.io/hyperdx/hyperdx-all-in-one
+docker run -p 8080:8080 -p 4317:4317 -p 4318:4318 docker.clickhouse.com/clickhouse/clickstack-all-in-one
 ```
 
-Afterwards, you can visit http://localhost:8080 to access the HyperDX UI.
+Afterwards, you can visit http://localhost:8080 to access the ClickStack UI.
 
 If you already have an existing ClickHouse instance, want to use a single
 container locally, or are looking for production deployment instructions, you
@@ -61,18 +66,18 @@ can view the different deployment options in our
 
 ### Hosted ClickHouse Cloud
 
-You can also deploy HyperDX with ClickHouse Cloud, you can
+You can also deploy ClickStack with ClickHouse Cloud, you can
 [sign up for free](https://console.clickhouse.cloud/signUp) and get started in
 just minutes.
 
 ## Instrumenting Your App
 
-To get logs, metrics, traces, session replay, etc into HyperDX, you'll need to
-instrument your app to collect and send telemetry data over to your HyperDX
-instance.
+To get logs, metrics, traces, session replay, etc into ClickStack, you'll need
+to instrument your app to collect and send telemetry data over to your
+ClickStack instance.
 
 We provide a set of SDKs and integration options to make it easier to get
-started with HyperDX, such as
+started with ClickStack, such as
 [Browser](https://clickhouse.com/docs/use-cases/observability/clickstack/sdks/browser),
 [Node.js](https://clickhouse.com/docs/use-cases/observability/clickstack/sdks/nodejs),
 and
@@ -83,7 +88,7 @@ You can find the full list in
 
 **OpenTelemetry**
 
-Additionally, HyperDX is compatible with
+Additionally, ClickStack is compatible with
 [OpenTelemetry](https://opentelemetry.io/), a vendor-neutral standard for
 instrumenting your application backed by CNCF. Supported languages/platforms
 include:
@@ -101,8 +106,28 @@ include:
 
 (Full list [here](https://opentelemetry.io/docs/instrumentation/))
 
-Once HyperDX is running, you can point your OpenTelemetry SDK to the
+Once ClickStack is running, you can point your OpenTelemetry SDK to the
 OpenTelemetry collector spun up at `http://localhost:4318`.
+
+## ClickStack CLI
+
+Prefer the terminal? [`@hyperdx/cli`](./packages/cli) provides an interactive
+TUI and CLI (`hdx`) for working with your ClickStack data without leaving the
+shell:
+
+```bash
+npm install -g @hyperdx/cli
+hdx auth login
+hdx tui
+```
+
+- 🖥️ Interactive TUI — search, live tail, and trace waterfalls with vim-style
+  keybindings
+- 📊 Render dashboard tiles and ad-hoc charts as ANSI output in the terminal
+- 🤖 Agent-friendly: raw SQL queries, NDJSON output, and Drain log pattern
+  mining for scripts and AI agents
+
+See the [CLI README](./packages/cli#readme) for the full command reference.
 
 ## Contributing
 
@@ -110,10 +135,18 @@ We welcome all contributions! There's many ways to contribute to the project,
 including but not limited to:
 
 - Opening a PR ([Contribution Guide](./CONTRIBUTING.md))
-- [Submitting feature requests or bugs](https://github.com/hyperdxio/hyperdx/issues/new)
+- [Submitting feature requests or bugs](https://github.com/ClickHouse/ClickStack/issues/new)
 - Improving our product or contribution documentation
-- Voting on [open issues](https://github.com/hyperdxio/hyperdx/issues) or
+- Voting on [open issues](https://github.com/ClickHouse/ClickStack/issues) or
   contributing use cases to a feature request
+
+**Pull requests.** Issues, bug reports and discussion stay open to everyone. For
+code we now use [Vouch](https://github.com/mitchellh/vouch): a maintainer has to
+vouch for you before your first pull request gets reviewed. AI tools make it
+cheap to open a plausible-looking PR with no understanding behind it, and
+reviewing those crowds out the contributions we want to spend time on. There's
+nothing to request up front: open your first PR and a maintainer vouches for you
+on it. See [Getting vouched](./CONTRIBUTING.md#getting-vouched).
 
 ## Motivation
 
@@ -132,22 +165,22 @@ a few ways:
 3. They requiring hopping from tool to tool (logs, session replay, APM,
    exceptions, etc.) to stitch together the clues yourself.
 
-We hope you give HyperDX in ClickStack a try and let us know how we're doing!
+We hope you give ClickStack a try and let us know how we're doing!
 
 ## Contact
 
-- [Open an Issue](https://github.com/hyperdxio/hyperdx/issues/new)
+- [Open an Issue](https://github.com/ClickHouse/ClickStack/issues/new)
 - [Discord](https://discord.gg/FErRRKU78j)
 - [Email](mailto:support@hyperdx.io)
 
-## HyperDX Usage Data
+## ClickStack Usage Data
 
-HyperDX collects anonymized usage data for open source deployments. This data
+ClickStack collects anonymized usage data for open source deployments. This data
 supports our mission for observability to be available to any team and helps
 support our open source product run in a variety of different environments.
 While we hope you will continue to support our mission in this way, you may opt
 out of usage data collection by setting the `USAGE_STATS_ENABLED` environment
-variable to `false`. Thank you for supporting the development of HyperDX!
+variable to `false`. Thank you for supporting the development of ClickStack!
 
 ## License
 

@@ -12,10 +12,16 @@ const API_PORT = process.env.HDX_E2E_API_PORT || '21000';
 const APP_PORT = process.env.HDX_E2E_APP_PORT || '21300';
 const APP_LOCAL_PORT = process.env.HDX_E2E_APP_LOCAL_PORT || '21200';
 
+// next dev loads .env.development, which sets HYPERDX_API_KEY, so without this the
+// e2e Next server and browser export HyperDX's own telemetry to collector ports that
+// do not exist in e2e. The failed exports add retries and load to parallel runs.
+const NO_SELF_TELEMETRY = 'HDX_EXPORTER_ENABLED=false';
+
 // Timeout configuration constants (in milliseconds)
 const TEST_TIMEOUT_MS = 60 * 1000; // 60 seconds per test
 const API_SERVER_STARTUP_TIMEOUT_MS = 120 * 1000; // 2 minutes for API to start
-const APP_SERVER_STARTUP_TIMEOUT_MS = 180 * 1000; // 3 minutes for Next.js build + start
+// The Next.js build alone exceeds 3 minutes on the 4-vCPU runner fork PRs use.
+const APP_SERVER_STARTUP_TIMEOUT_MS = 360 * 1000;
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -30,10 +36,25 @@ export default defineConfig({
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
   forbidOnly: !!process.env.CI,
-  /* Retry on CI only */
-  retries: process.env.CI ? 2 : 1,
-  /* Use multiple workers on CI for faster execution */
-  workers: process.env.CI ? 2 : undefined,
+  /* Retry on CI only. Overridable via E2E_RETRIES (e.g. the nightly zero-retry
+   * flake hunt). Honours an explicit 0; an unset/blank/negative/non-integer
+   * value falls back to the default rather than silently coercing to 0. */
+  retries: (() => {
+    const raw = process.env.E2E_RETRIES;
+    const parsed = raw ? Number(raw) : NaN;
+    if (Number.isInteger(parsed) && parsed >= 0) return parsed;
+    return process.env.CI ? 2 : 1;
+  })(),
+  /* Use multiple workers on CI for faster execution. CI e2e shards run on
+   * 8-core runners (see .github/workflows/e2e-tests.yml), so 4 workers leave
+   * headroom for the app + ClickHouse + Mongo. Override with E2E_WORKERS
+   * (a positive integer); anything else falls back to the default. */
+  workers: (() => {
+    const raw = process.env.E2E_WORKERS;
+    const parsed = raw ? Number(raw) : NaN;
+    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
+    return process.env.CI ? 4 : undefined;
+  })(),
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
   reporter: [
     ['html'],
@@ -54,6 +75,9 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     /* Record video on failure */
     video: 'retain-on-failure',
+    // Otherwise Chromium takes navigator.language from the host locale, so
+    // number and date formatting would vary between machines.
+    locale: 'en-US',
   },
 
   /* Global test timeout - CI needs more time than local */
@@ -80,7 +104,7 @@ export default defineConfig({
         // Full-stack mode: Start API and App servers (infrastructure started separately)
         {
           // Connections/sources come from env (injected by run-e2e.js from e2e-fixtures.json)
-          command: `cd ../api && ${process.env.MONGO_URI ? `MONGO_URI="${process.env.MONGO_URI}"` : ''} DOTENV_CONFIG_PATH=.env.e2e npx ts-node --transpile-only -r tsconfig-paths/register -r dotenv-expand/config -r @hyperdx/node-opentelemetry/build/src/tracing src/index.ts`,
+          command: `cd ../api && ${process.env.MONGO_URI ? `MONGO_URI="${process.env.MONGO_URI}"` : ''} DOTENV_CONFIG_PATH=.env.e2e npx ts-node --transpile-only -r tsconfig-paths/register -r dotenv-expand/config -r ./src/telemetry.ts src/index.ts`,
           port: parseInt(API_PORT, 10),
           reuseExistingServer: !process.env.CI,
           timeout: API_SERVER_STARTUP_TIMEOUT_MS,
@@ -90,8 +114,8 @@ export default defineConfig({
         {
           // Full UI: Alerts + Dashboards. Not local mode; Alerts enabled;
           command: USE_DEV
-            ? `SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e next dev --webpack`
-            : `SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e yarn build && SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e yarn start`,
+            ? `${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true NEXT_PUBLIC_ENABLE_ADHOC_FILTERS=true next dev --webpack`
+            : `${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true NEXT_PUBLIC_ENABLE_ADHOC_FILTERS=true yarn build && ${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true NEXT_PUBLIC_ENABLE_ADHOC_FILTERS=true yarn start`,
           port: parseInt(APP_PORT, 10),
           reuseExistingServer: !process.env.CI,
           timeout: APP_SERVER_STARTUP_TIMEOUT_MS,
@@ -102,8 +126,8 @@ export default defineConfig({
     : {
         // Local mode: Frontend only
         command: USE_DEV
-          ? `NEXT_PUBLIC_IS_LOCAL_MODE=true PORT=${APP_LOCAL_PORT} NEXT_DIST_DIR=.next-e2e next dev --webpack`
-          : `NEXT_PUBLIC_IS_LOCAL_MODE=true NEXT_DIST_DIR=.next-e2e yarn build && NEXT_PUBLIC_IS_LOCAL_MODE=true PORT=${APP_LOCAL_PORT} NEXT_DIST_DIR=.next-e2e yarn start`,
+          ? `${NO_SELF_TELEMETRY} NEXT_PUBLIC_IS_LOCAL_MODE=true PORT=${APP_LOCAL_PORT} NEXT_DIST_DIR=.next-e2e next dev --webpack`
+          : `${NO_SELF_TELEMETRY} NEXT_PUBLIC_IS_LOCAL_MODE=true NEXT_DIST_DIR=.next-e2e yarn build && ${NO_SELF_TELEMETRY} NEXT_PUBLIC_IS_LOCAL_MODE=true PORT=${APP_LOCAL_PORT} NEXT_DIST_DIR=.next-e2e yarn start`,
         port: parseInt(APP_LOCAL_PORT, 10),
         reuseExistingServer: !process.env.CI,
         timeout: APP_SERVER_STARTUP_TIMEOUT_MS,

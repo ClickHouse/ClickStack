@@ -1,18 +1,27 @@
+import { withQueryAttribution } from '@hyperdx/common-utils/dist/clickhouse/node';
 import { Connection } from '@hyperdx/common-utils/dist/types';
-import { setTraceAttributes } from '@hyperdx/node-opentelemetry';
 import type { NextFunction, Request, Response } from 'express';
 import { serializeError } from 'serialize-error';
 
 import * as config from '@/config';
-import { findUserByAccessKey } from '@/controllers/user';
+import { touchOrgApiKeyLastUsed } from '@/controllers/orgApiKey';
+import { findUserByAccessKey, ORG_API_KEY_PREFIX } from '@/controllers/user';
 import type { UserDocument } from '@/models/user';
+import {
+  getActiveTraceId,
+  getCounter,
+  getStaticFeatureFlags,
+  setBusinessContext,
+} from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 
 declare global {
+  // Express type augmentation requires `namespace` + interface merging; there is
+  // no non-namespace / non-empty-interface equivalent for extending these types.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type
     interface User extends UserDocument {}
-  }
-  namespace Express {
     interface Request {
       _hdx_connection?: Connection;
     }
@@ -74,28 +83,71 @@ export function handleAuthError(
   res.redirect(303, `${config.FRONTEND_REDIRECT_BASE}/login?err=${returnErr}`);
 }
 
+export function getAccessKeyFromRequest(req: Request): string | undefined {
+  return req.headers.authorization?.split('Bearer ')[1];
+}
+
 export async function validateUserAccessKey(
   req: Request,
   res: Response,
   next: NextFunction,
 ) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.sendStatus(401);
-  }
-  const key = authHeader.split('Bearer ')[1];
+  const key = getAccessKeyFromRequest(req);
   if (!key) {
     return res.sendStatus(401);
   }
 
-  const user = await findUserByAccessKey(key);
-  if (!user) {
-    return res.sendStatus(401);
+  // Express 4 drops rejected promises from middleware, which would leave the
+  // request hanging on a database error.
+  try {
+    const user = await findUserByAccessKey(key);
+    if (!user) {
+      if (key.startsWith(ORG_API_KEY_PREFIX)) {
+        orgApiKeyAuthFailures.add(1);
+      }
+      return res.sendStatus(401);
+    }
+
+    req.user = user;
+    if (user.isVirtual) {
+      touchOrgApiKeyLastUsed(user);
+    }
+
+    // Attribute access-key authenticated requests (external API v2 + MCP HTTP)
+    // with team/user context so their traces are searchable during incidents.
+    setBusinessContext({
+      teamId: user.team?.toString(),
+      userId: user._id?.toString(),
+      email: user.email,
+      'hyperdx.user.is_virtual': user.isVirtual || undefined,
+      ...getStaticFeatureFlags(),
+    });
+  } catch (err) {
+    return next(err);
   }
 
-  req.user = user;
+  nextWithQueryAttribution(req, next);
+}
 
-  next();
+const orgApiKeyAuthFailures = getCounter('hyperdx.org_api_key.auth_failures', {
+  description:
+    'Bearer requests with an org API key that is unknown, revoked, or expired.',
+});
+
+/**
+ * Continue the request with its route recorded on any ClickHouse queries it
+ * makes. Here because every authenticated route passes through this point.
+ */
+function nextWithQueryAttribution(req: Request, next: NextFunction): void {
+  withQueryAttribution(
+    {
+      surface: 'api',
+      // Mount path, not the full URL, to keep request ids out of the log.
+      label: req.baseUrl || undefined,
+      trace: getActiveTraceId(),
+    },
+    () => next(),
+  );
 }
 
 export function isUserAuthenticated(
@@ -107,23 +159,31 @@ export function isUserAuthenticated(
     // If local app mode is enabled, skip authentication
     logger.warn('Skipping authentication in local app mode');
     req.user = {
-      // @ts-ignore
+      // @ts-expect-error local app mode uses a synthetic string id, not an ObjectId
       _id: '_local_user_',
       email: 'local-user@hyperdx.io',
-      // @ts-ignore
+      // @ts-expect-error local app mode uses a synthetic string team, not an ObjectId
       team: '_local_team_',
     };
-    return next();
+    setBusinessContext({
+      teamId: '_local_team_',
+      userId: '_local_user_',
+      'hyperdx.local_mode': true,
+      ...getStaticFeatureFlags(),
+    });
+    return nextWithQueryAttribution(req, next);
   }
 
   if (req.isAuthenticated()) {
-    // set user id as trace attribute
-    setTraceAttributes({
-      userId: req.user?._id.toString(),
-      userEmail: req.user?.email,
+    // Attach incident-remediation context to the trace and active span.
+    setBusinessContext({
+      teamId: req.user?.team?.toString(),
+      userId: req.user?._id?.toString(),
+      email: req.user?.email,
+      ...getStaticFeatureFlags(),
     });
 
-    return next();
+    return nextWithQueryAttribution(req, next);
   }
   res.sendStatus(401);
 }

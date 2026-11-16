@@ -1,3 +1,4 @@
+import { shutdown } from '@clickhouse/clickstack-node';
 import { CronJob } from 'cron';
 import minimist from 'minimist';
 import { serializeError } from 'serialize-error';
@@ -11,18 +12,21 @@ import {
   timeExec,
 } from '@/tasks/metrics';
 import PingPongTask from '@/tasks/pingPongTask';
+import ProvisionDashboardsTask from '@/tasks/provisionDashboards';
 import { asTaskArgs, HdxTask, TaskArgs, TaskName } from '@/tasks/types';
 import logger from '@/utils/logger';
 
 import { tasksTracer } from './tracer';
 
-function createTask(argv: TaskArgs): HdxTask<TaskArgs> {
+function createTask(argv: TaskArgs): HdxTask {
   const taskName = argv.taskName;
   switch (taskName) {
     case TaskName.CHECK_ALERTS:
       return new CheckAlertTask(argv);
     case TaskName.PING_PONG:
       return new PingPongTask(argv);
+    case TaskName.PROVISION_DASHBOARDS:
+      return new ProvisionDashboardsTask(argv);
     default:
       throw new Error(`Unknown task name ${taskName}`);
   }
@@ -30,7 +34,7 @@ function createTask(argv: TaskArgs): HdxTask<TaskArgs> {
 
 async function main(argv: TaskArgs): Promise<void> {
   await tasksTracer.startActiveSpan(argv.taskName || 'task', async span => {
-    const task: HdxTask<TaskArgs> = createTask(argv);
+    const task: HdxTask = createTask(argv);
     try {
       logger.info(`${task.name()} started at ${new Date()}`);
       await task.execute();
@@ -51,6 +55,27 @@ async function main(argv: TaskArgs): Promise<void> {
   });
 }
 
+let cronJob: CronJob | undefined;
+let exiting = false;
+
+// process.exit() skips the SDK's exit-time flush, so a one-shot task would
+// drop its own span and duration metric. Before init shutdown() resolves at
+// once. The first call decides the exit code: a later exception or rejection
+// must not start a second shutdown or exit with another code.
+const exitAfterShutdown = (code: number) => {
+  if (exiting) {
+    return;
+  }
+  exiting = true;
+  // Not awaited: with waitForCompletion it waits for the running tick, which
+  // may be the one that failed.
+  void cronJob?.stop();
+  // The SDK's shutdown timer does not hold the event loop open, so the
+  // process can end on its own before process.exit() runs.
+  process.exitCode = code;
+  void shutdown().finally(() => process.exit(code));
+};
+
 // Entry point
 const argv = asTaskArgs(minimist(process.argv.slice(2)));
 
@@ -66,7 +91,7 @@ const instrumentedMain = timeExec(main, duration => {
 if (!RUN_SCHEDULED_TASKS_EXTERNALLY) {
   logger.info('In-app cron job is enabled');
   // run cron job every 1 minute
-  const job = CronJob.from({
+  cronJob = CronJob.from({
     cronTime: '0 * * * * *',
     waitForCompletion: true,
     onTick: async () => instrumentedMain(argv),
@@ -80,23 +105,23 @@ if (!RUN_SCHEDULED_TASKS_EXTERNALLY) {
   logger.warn('In-app cron job is disabled');
   instrumentedMain(argv)
     .then(() => {
-      process.exit(0);
+      exitAfterShutdown(0);
     })
     .catch(err => {
       console.log(err);
       logger.error({ err: serializeError(err) }, 'Task execution failed');
-      process.exit(1);
+      exitAfterShutdown(1);
     });
 }
 
 process.on('uncaughtException', (err: Error) => {
   console.log(err);
   logger.error({ err: serializeError(err) }, 'Uncaught exception');
-  process.exit(1);
+  exitAfterShutdown(1);
 });
 
 process.on('unhandledRejection', (err: any) => {
   console.log(err);
   logger.error({ err: serializeError(err) }, 'Unhandled rejection');
-  process.exit(1);
+  exitAfterShutdown(1);
 });

@@ -1,12 +1,20 @@
-import { TeamClickHouseSettings } from '@hyperdx/common-utils/dist/types';
+import {
+  TagResourceType,
+  TeamClickHouseSettingsUpdate,
+} from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
 import * as config from '@/config';
 import type { ObjectId } from '@/models';
+import Alert from '@/models/alert';
 import Dashboard from '@/models/dashboard';
 import { SavedSearch } from '@/models/savedSearch';
 import Team, { type ITeam, type TeamDocument } from '@/models/team';
+
+export function getTeamInviteUrl(token: string) {
+  return `${config.FRONTEND_URL}/join-team?token=${token}`;
+}
 
 const LOCAL_APP_TEAM_ID = '_local_team_';
 export const LOCAL_APP_TEAM = {
@@ -17,6 +25,7 @@ export const LOCAL_APP_TEAM = {
   hookId: uuidv4(),
   apiKey: uuidv4(),
   collectorAuthenticationEnforced: false,
+  isMetricsSeriesTableEnabled: false,
   toJSON() {
     return this;
   },
@@ -94,29 +103,65 @@ export function setTeamName(teamId: ObjectId, name: string) {
 
 export function updateTeamClickhouseSettings(
   teamId: ObjectId,
-  settings: TeamClickHouseSettings,
+  settings: TeamClickHouseSettingsUpdate,
 ) {
-  return Team.findByIdAndUpdate(teamId, settings, { new: true });
+  const $set: Record<string, any> = {};
+  const $unset: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(settings)) {
+    if (value === null) {
+      $unset[key] = '';
+    } else if (value !== undefined) {
+      $set[key] = value;
+    }
+  }
+
+  const update: Record<string, any> = {};
+  if (Object.keys($set).length > 0) update.$set = $set;
+  if (Object.keys($unset).length > 0) update.$unset = $unset;
+
+  return Team.findByIdAndUpdate(teamId, update, { new: true });
 }
 
-export async function getTags(teamId: ObjectId) {
-  const [dashboardTags, savedSearchTags] = await Promise.all([
-    Dashboard.aggregate([
-      { $match: { team: teamId } },
-      { $unwind: '$tags' },
-      { $group: { _id: '$tags' } },
-    ]),
-    SavedSearch.aggregate([
-      { $match: { team: teamId } },
-      { $unwind: '$tags' },
-      { $group: { _id: '$tags' } },
-    ]),
-  ]);
+function getCollectionsWithTags(
+  resourceType?: TagResourceType,
+): Pick<mongoose.Model<unknown>, 'aggregate'>[] {
+  if (resourceType == null) {
+    return [Alert, Dashboard, SavedSearch];
+  }
 
-  return [
-    ...new Set([
-      ...dashboardTags.map(t => t._id),
-      ...savedSearchTags.map(t => t._id),
-    ]),
+  switch (resourceType) {
+    case 'alert':
+      return [Alert];
+    case 'dashboard':
+      return [Dashboard];
+    case 'savedSearch':
+      return [SavedSearch];
+    default:
+      resourceType satisfies never;
+      throw new Error(`${resourceType} is not a valid TagResourceType`);
+  }
+}
+
+/**
+ * Distinct tags applied to the team's entities. Scoped to one kind of entity
+ * when `resourceType` is given.
+ */
+export async function getTags(
+  teamId: ObjectId,
+  resourceType?: TagResourceType,
+) {
+  const distinctTagsPipeline: mongoose.PipelineStage[] = [
+    { $match: { team: teamId } },
+    { $unwind: '$tags' },
+    { $group: { _id: '$tags' } },
   ];
+
+  const tagGroups = await Promise.all(
+    getCollectionsWithTags(resourceType).map(collection =>
+      collection.aggregate<{ _id: string }>(distinctTagsPipeline),
+    ),
+  );
+
+  return [...new Set(tagGroups.flat().map(t => t._id))];
 }

@@ -1,0 +1,1457 @@
+import { ClickHouseError } from '@clickhouse/client-common';
+import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+
+import { ClickhouseClient } from '@/clickhouse';
+import * as config from '@/config';
+import {
+  bulkInsertData,
+  DEFAULT_DATABASE,
+  DEFAULT_LOGS_TABLE,
+  DEFAULT_TRACES_TABLE,
+  getLoggedInAgent,
+  getServer,
+} from '@/fixtures';
+import { MCP_REQUEST_TIMEOUT } from '@/mcp/tools/query/helpers';
+import { McpContext } from '@/mcp/tools/types';
+import Connection from '@/models/connection';
+import { Source, type SourceDocument } from '@/models/source';
+
+import { callTool, createTestClient, getFirstText } from './mcpTestUtils';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+type BreakdownOperation = {
+  service: string;
+  operation: string;
+  totalTimeMs: number;
+  calls: number;
+  inParents: number;
+  shareOfTotalTime: number;
+};
+
+/** Insert trace spans into the default otel_traces table. */
+async function bulkInsertTraces(
+  spans: {
+    Timestamp: Date;
+    TraceId: string;
+    SpanId: string;
+    ParentSpanId: string;
+    SpanName: string;
+    SpanKind: string;
+    ServiceName: string;
+    Duration: number; // nanoseconds
+    StatusCode: string;
+    StatusMessage?: string;
+    SpanAttributes?: Record<string, string>;
+  }[],
+) {
+  await bulkInsertData(
+    `${DEFAULT_DATABASE}.${DEFAULT_TRACES_TABLE}`,
+    spans.map(s => ({
+      ...s,
+      StatusMessage: s.StatusMessage ?? '',
+      SpanAttributes: s.SpanAttributes ?? {},
+      ResourceAttributes: {},
+    })),
+  );
+}
+
+/** Insert log rows into the default otel_logs table. */
+async function bulkInsertLogs(
+  logs: {
+    Timestamp: Date;
+    TraceId: string;
+    SpanId: string;
+    Body: string;
+    ServiceName: string;
+    SeverityText: string;
+  }[],
+) {
+  await bulkInsertData(`${DEFAULT_DATABASE}.${DEFAULT_LOGS_TABLE}`, logs);
+}
+
+// ─── Test suite ───────────────────────────────────────────────────────────────
+
+describe('MCP Trace Tools', () => {
+  const server = getServer();
+  let team: any;
+  let user: any;
+  let connection: any;
+  let traceSource: SourceDocument;
+  let logSource: SourceDocument;
+  let client: Client;
+
+  beforeAll(async () => {
+    await server.start();
+  });
+
+  beforeEach(async () => {
+    const result = await getLoggedInAgent(server);
+    team = result.team;
+    user = result.user;
+
+    connection = await Connection.create({
+      team: team._id,
+      name: 'Default',
+      host: config.CLICKHOUSE_HOST,
+      username: config.CLICKHOUSE_USER,
+      password: config.CLICKHOUSE_PASSWORD,
+    });
+
+    logSource = await Source.create({
+      kind: SourceKind.Log,
+      team: team._id,
+      from: {
+        databaseName: DEFAULT_DATABASE,
+        tableName: DEFAULT_LOGS_TABLE,
+      },
+      timestampValueExpression: 'Timestamp',
+      connection: connection._id,
+      name: 'Logs',
+      bodyExpression: 'Body',
+      severityTextExpression: 'SeverityText',
+      serviceNameExpression: 'ServiceName',
+      traceIdExpression: 'TraceId',
+      spanIdExpression: 'SpanId',
+    });
+
+    traceSource = await Source.create({
+      kind: SourceKind.Trace,
+      team: team._id,
+      from: {
+        databaseName: DEFAULT_DATABASE,
+        tableName: DEFAULT_TRACES_TABLE,
+      },
+      timestampValueExpression: 'Timestamp',
+      connection: connection._id,
+      name: 'Traces',
+      traceIdExpression: 'TraceId',
+      spanIdExpression: 'SpanId',
+      parentSpanIdExpression: 'ParentSpanId',
+      spanNameExpression: 'SpanName',
+      spanKindExpression: 'SpanKind',
+      durationExpression: 'Duration',
+      durationPrecision: 9,
+      serviceNameExpression: 'ServiceName',
+      statusCodeExpression: 'StatusCode',
+      statusMessageExpression: 'StatusMessage',
+      eventAttributesExpression: 'SpanAttributes',
+      logSourceId: logSource._id.toString(),
+    });
+
+    const context: McpContext = {
+      teamId: team._id.toString(),
+      userId: user._id.toString(),
+    };
+    client = await createTestClient(context);
+  });
+
+  afterEach(async () => {
+    await client.close();
+    await server.clearDBs();
+  });
+
+  afterAll(async () => {
+    await server.stop();
+  });
+
+  // ─── Schema serialization ──────────────────────────────────────────────────
+
+  describe('schema serialization', () => {
+    it('should expose clickstack_trace_waterfall with expected properties', async () => {
+      const { tools } = await client.listTools();
+      const tool = tools.find(t => t.name === 'clickstack_trace_waterfall');
+      expect(tool).toBeDefined();
+
+      const props = Object.keys(tool!.inputSchema.properties ?? {});
+      expect(props).toContain('sourceId');
+      expect(props).toContain('traceId');
+      expect(props).toContain('pickFilter');
+      expect(props).toContain('pickBy');
+      expect(props).toContain('maxSpans');
+      expect(props).toContain('includeLogs');
+      expect(tool!.inputSchema.required).toContain('sourceId');
+    });
+
+    it('should expose clickstack_trace_top_time_consuming_operations with expected properties', async () => {
+      const { tools } = await client.listTools();
+      const tool = tools.find(
+        t => t.name === 'clickstack_trace_top_time_consuming_operations',
+      );
+      expect(tool).toBeDefined();
+
+      const props = Object.keys(tool!.inputSchema.properties ?? {});
+      expect(props).toContain('sourceId');
+      expect(props).toContain('parentFilter');
+      expect(props).toContain('startTime');
+      expect(props).toContain('endTime');
+      expect(props).toContain('minParentDurationMs');
+      expect(props).toContain('topN');
+      expect(tool!.inputSchema.required).toContain('sourceId');
+      expect(tool!.inputSchema.required).toContain('parentFilter');
+      expect(tool!.inputSchema.required).toContain('startTime');
+      expect(tool!.inputSchema.required).toContain('endTime');
+    });
+  });
+
+  // ─── clickstack_trace_waterfall ───────────────────────────────────────────────
+
+  describe('clickstack_trace_waterfall', () => {
+    it('should return error for non-existent source', async () => {
+      const result = await callTool(client, 'clickstack_trace_waterfall', {
+        sourceId: '000000000000000000000000',
+      });
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('Source not found');
+    });
+
+    it('should return error for non-trace source', async () => {
+      const result = await callTool(client, 'clickstack_trace_waterfall', {
+        sourceId: logSource._id.toString(),
+      });
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('kind=');
+    });
+
+    it('should return error for invalid time range', async () => {
+      const result = await callTool(client, 'clickstack_trace_waterfall', {
+        sourceId: traceSource._id.toString(),
+        startTime: 'not-a-date',
+      });
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('Invalid');
+    });
+
+    it('should return no-match hint when no traces exist', async () => {
+      const result = await callTool(client, 'clickstack_trace_waterfall', {
+        sourceId: traceSource._id.toString(),
+        startTime: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        endTime: new Date().toISOString(),
+      });
+      expect(result.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(result));
+      expect(output.result).toBeNull();
+      expect(output.hint).toBeDefined();
+    });
+
+    describe('with seeded trace data', () => {
+      // Use unique names to avoid collisions with other test suites —
+      // otel_traces is NOT truncated between tests (see clearClickhouseTables).
+      const TRACE_ID = 'aaaabbbbccccddddeeeeffffgggghhhh';
+      const ROOT_SPAN_ID = '1111111111111111';
+      const CHILD_A_SPAN_ID = '2222222222222222';
+      const CHILD_B_SPAN_ID = '3333333333333333';
+      const WF_SVC = 'wf-test-api-gateway';
+      const WF_ROOT_OP = 'GET /wf-test/users';
+      const WF_CHILD_A_OP = 'wf-test-SELECT-users';
+      const WF_CHILD_B_OP = 'wf-test-cache.get';
+      const now = new Date();
+      const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
+
+      beforeEach(async () => {
+        await bulkInsertTraces([
+          {
+            Timestamp: fiveMinAgo,
+            TraceId: TRACE_ID,
+            SpanId: ROOT_SPAN_ID,
+            ParentSpanId: '',
+            SpanName: WF_ROOT_OP,
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: WF_SVC,
+            Duration: 500_000_000, // 500ms in ns
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 10),
+            TraceId: TRACE_ID,
+            SpanId: CHILD_A_SPAN_ID,
+            ParentSpanId: ROOT_SPAN_ID,
+            SpanName: WF_CHILD_A_OP,
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: WF_SVC,
+            Duration: 200_000_000, // 200ms in ns
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 20),
+            TraceId: TRACE_ID,
+            SpanId: CHILD_B_SPAN_ID,
+            ParentSpanId: ROOT_SPAN_ID,
+            SpanName: WF_CHILD_B_OP,
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: 'wf-test-cache-service',
+            Duration: 50_000_000, // 50ms in ns
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+      });
+
+      it('should fetch a trace by traceId and return a waterfall tree', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: TRACE_ID,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(TRACE_ID);
+        expect(output.spanCount).toBe(3);
+        expect(output.spans).toHaveLength(3);
+
+        // Root span should be first (depth 0)
+        expect(output.spans[0].depth).toBe(0);
+        expect(output.spans[0].spanId).toBe(ROOT_SPAN_ID);
+        expect(output.spans[0].serviceName).toBe(WF_SVC);
+        expect(output.spans[0].spanName).toBe(WF_ROOT_OP);
+
+        // Children should follow (depth 1)
+        const children = output.spans.filter((s: any) => s.depth === 1);
+        expect(children).toHaveLength(2);
+
+        // Summary fields
+        expect(output.rootSpan).toBeDefined();
+        expect(output.rootSpan.spanId).toBe(ROOT_SPAN_ID);
+        expect(output.totalDurationMs).toBeGreaterThan(0);
+      });
+
+      it('should auto-pick the slowest trace when traceId is omitted', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: `ServiceName:${WF_SVC}`,
+          pickBy: 'slowest',
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(TRACE_ID);
+        expect(output.spanCount).toBeGreaterThan(0);
+      });
+
+      it('should auto-pick the most recent trace', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: `ServiceName:${WF_SVC}`,
+          pickBy: 'most_recent',
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(TRACE_ID);
+      });
+
+      it('should respect maxSpans and note truncation', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: TRACE_ID,
+          maxSpans: 2,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.spanCount).toBe(2);
+        expect(output.note).toBeDefined();
+        expect(output.note).toContain('truncated');
+      });
+
+      it('should include correlated logs when includeLogs is true and logSourceId is configured', async () => {
+        // Insert correlated log rows
+        await bulkInsertLogs([
+          {
+            Timestamp: fiveMinAgo,
+            TraceId: TRACE_ID,
+            SpanId: ROOT_SPAN_ID,
+            Body: 'Handling request',
+            ServiceName: WF_SVC,
+            SeverityText: 'INFO',
+          },
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 15),
+            TraceId: TRACE_ID,
+            SpanId: CHILD_A_SPAN_ID,
+            Body: 'Executing query',
+            ServiceName: WF_SVC,
+            SeverityText: 'DEBUG',
+          },
+        ]);
+
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: TRACE_ID,
+          includeLogs: true,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.logs).toBeDefined();
+        expect(output.logsCount).toBe(2);
+        expect(output.logs[0]).toHaveProperty('spanId');
+        expect(output.logs[0]).toHaveProperty('body');
+      });
+
+      it('should omit logs when includeLogs is false', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: TRACE_ID,
+          includeLogs: false,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.logs).toBeUndefined();
+      });
+
+      it('should apply pickFilter to narrow which trace is picked', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: `ServiceName:${WF_SVC}`,
+          pickBy: 'slowest',
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(TRACE_ID);
+      });
+
+      it('should apply pickFilter with sql language', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: `ServiceName = '${WF_SVC}'`,
+          pickFilterLanguage: 'sql',
+          pickBy: 'most_recent',
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(TRACE_ID);
+        expect(output.spanCount).toBeGreaterThan(0);
+      });
+    });
+
+    // The span/log fetches are time-bounded for partition pruning.
+    // Pins both edges — the bound is honored, yet an explicit traceId older
+    // than the default window is still rescued by the first-seen probe.
+    describe('time-bounding', () => {
+      const OLD_TRACE_ID = 'dead0000beef1111cafe2222f00d3333';
+      const OLD_SVC = 'wf-oldtrace-svc';
+      const now = new Date();
+      // Two days old — far outside the default 15-minute window, but within the
+      // probe's 90-day widened range.
+      const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+
+      beforeEach(async () => {
+        await bulkInsertTraces([
+          {
+            Timestamp: twoDaysAgo,
+            TraceId: OLD_TRACE_ID,
+            SpanId: 'old_root_span01',
+            ParentSpanId: '',
+            SpanName: 'GET /wf-old/root',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: OLD_SVC,
+            Duration: 300_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: new Date(twoDaysAgo.getTime() + 10),
+            TraceId: OLD_TRACE_ID,
+            SpanId: 'old_child_span1',
+            ParentSpanId: 'old_root_span01',
+            SpanName: 'wf-old-child',
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: OLD_SVC,
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+      });
+
+      it('resolves an explicit traceId older than the default window via the first-seen probe', async () => {
+        // No startTime/endTime: the 15-min default excludes this 2-day-old
+        // trace, so only the probe can rescue it.
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: OLD_TRACE_ID,
+          includeLogs: false,
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(OLD_TRACE_ID);
+        expect(output.spanCount).toBe(2);
+      });
+
+      it('honors an explicit window that excludes the trace (returns no-spans hint)', async () => {
+        // Explicit window the old trace falls outside of: no spans come back,
+        // proving the time predicate is applied rather than ignored.
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: OLD_TRACE_ID,
+          includeLogs: false,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.result).toBeNull();
+        expect(output.hint).toContain('widen the window');
+      });
+
+      it('points an explicit-traceId miss at startTime, not "widen the window"', async () => {
+        // A traceId that does not exist: the default window is probed back 90
+        // days, finds nothing, and the hint must name the recoverable action
+        // (pass an explicit startTime) rather than the auto-pick advice.
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: 'ffffffffffffffffffffffffffffffff',
+          includeLogs: false,
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.result).toBeNull();
+        expect(output.hint).toContain('90 days');
+        expect(output.hint).toContain('startTime');
+      });
+    });
+
+    // A reused/sentinel TraceId (e.g. an all-zero id from an uninstrumented
+    // emitter) can have occurrences days apart. The probe's [min, max] window
+    // is width-clamped to the recent tail so the fetch stays bounded — it must
+    // NOT balloon back toward the 90-day probe range or stitch the old and new
+    // occurrences into one nonsense tree.
+    describe('wide-spread TraceId window clamp', () => {
+      const SENTINEL_TRACE_ID = '00000000000000000000000000000000';
+      const SENTINEL_SVC = 'wf-sentinel-svc';
+      const now = new Date();
+      const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+      const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
+
+      beforeEach(async () => {
+        await bulkInsertTraces([
+          // Old occurrence — outside the 24h clamp off the recent tail.
+          {
+            Timestamp: tenDaysAgo,
+            TraceId: SENTINEL_TRACE_ID,
+            SpanId: 'sentinel_old_span',
+            ParentSpanId: '',
+            SpanName: 'GET /sentinel/old',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: SENTINEL_SVC,
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          // Recent occurrence — a distinct 2-span tree.
+          {
+            Timestamp: fiveMinAgo,
+            TraceId: SENTINEL_TRACE_ID,
+            SpanId: 'sentinel_new_root',
+            ParentSpanId: '',
+            SpanName: 'GET /sentinel/new',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: SENTINEL_SVC,
+            Duration: 200_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 10),
+            TraceId: SENTINEL_TRACE_ID,
+            SpanId: 'sentinel_new_child',
+            ParentSpanId: 'sentinel_new_root',
+            SpanName: 'sentinel-new-child',
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: SENTINEL_SVC,
+            Duration: 50_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+      });
+
+      it('clamps the fetch window to the recent tail, excluding the far-past occurrence', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: SENTINEL_TRACE_ID,
+          includeLogs: false,
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        // Only the recent 2-span occurrence is returned; the 10-day-old span is
+        // outside the clamped window, so it is not stitched into the tree.
+        expect(output.spanCount).toBe(2);
+        expect(output.spans.map((s: any) => s.spanId)).not.toContain(
+          'sentinel_old_span',
+        );
+        expect(output.spans.filter((s: any) => s.depth === 0)).toHaveLength(1);
+        // The clamp dropped earlier spans, so the output must say so rather than
+        // silently promise the whole tree.
+        expect(output.windowNote).toContain('fetch-window cap');
+      });
+    });
+
+    // The probe fetches the trace's [min, max] extent, not a fixed lead off
+    // first-seen — so a trace whose spans span more than an hour is returned
+    // whole, spans and correlated logs alike.
+    describe('long-running trace window', () => {
+      const LONG_TRACE_ID = 'a1b2c3d4e5f60000111122223333long';
+      const LONG_SVC = 'wf-longtrace-svc';
+      const now = new Date();
+      // Root two days ago; a child span ~2h later. A fixed first-seen + 1h lead
+      // would truncate that child; the [min, max] probe keeps it.
+      const rootTs = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+      const lateTs = new Date(rootTs.getTime() + 2 * 60 * 60 * 1000);
+
+      beforeEach(async () => {
+        await bulkInsertTraces([
+          {
+            Timestamp: rootTs,
+            TraceId: LONG_TRACE_ID,
+            SpanId: 'long_root_span01',
+            ParentSpanId: '',
+            SpanName: 'GET /wf-long/root',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: LONG_SVC,
+            Duration: 7_200_000_000_000, // ~2h in ns
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: lateTs,
+            TraceId: LONG_TRACE_ID,
+            SpanId: 'long_late_span01',
+            ParentSpanId: 'long_root_span01',
+            SpanName: 'wf-long-late-child',
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: LONG_SVC,
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+        await bulkInsertLogs([
+          {
+            Timestamp: lateTs,
+            TraceId: LONG_TRACE_ID,
+            SpanId: 'long_late_span01',
+            Body: 'late log line',
+            ServiceName: LONG_SVC,
+            SeverityText: 'INFO',
+          },
+        ]);
+      });
+
+      it('returns the full tree and a late log for a trace spanning > 1h', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          traceId: LONG_TRACE_ID,
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(LONG_TRACE_ID);
+        expect(output.spanCount).toBe(2);
+        expect(output.spans.filter((s: any) => s.depth === 0)).toHaveLength(1);
+        // A fixed first-seen + 1h lead would have cut off this late child's log.
+        expect(output.logsCount).toBe(1);
+        // An 85-min spread is under the fetch-window cap, so no clamp warning.
+        expect(output.windowNote).toBeUndefined();
+      });
+    });
+
+    // Auto-pick is also probed: a picked trace is only guaranteed one span in
+    // the default window, so its root/tail can lie outside it.
+    describe('auto-pick window', () => {
+      const PICK_TRACE_ID = 'bbbb2222cccc3333dddd4444eeee5555';
+      const PICK_SVC = 'wf-autopick-old-svc';
+      const now = new Date();
+      // Root predates the default 15-min window; a child is inside it. Auto-pick
+      // finds the trace via the in-window child, but the fetch must cover the
+      // out-of-window root too.
+      const rootTs = new Date(now.getTime() - 40 * 60 * 1000);
+      const childTs = new Date(now.getTime() - 5 * 60 * 1000);
+
+      beforeEach(async () => {
+        await bulkInsertTraces([
+          {
+            Timestamp: rootTs,
+            TraceId: PICK_TRACE_ID,
+            SpanId: 'pick_root_span01',
+            ParentSpanId: '',
+            SpanName: 'GET /wf-autopick/root',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: PICK_SVC,
+            Duration: 2_400_000_000_000, // 40m in ns → picked as slowest
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: childTs,
+            TraceId: PICK_TRACE_ID,
+            SpanId: 'pick_child_span1',
+            ParentSpanId: 'pick_root_span01',
+            SpanName: 'wf-autopick-child',
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: PICK_SVC,
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+      });
+
+      it('returns the whole tree when the picked trace root predates the window', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: `ServiceName:${PICK_SVC}`,
+          pickBy: 'slowest',
+          includeLogs: false,
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(PICK_TRACE_ID);
+        // Without the auto-pick probe, only the in-window child would return,
+        // producing a false root and a spanCount of 1.
+        expect(output.spanCount).toBe(2);
+        expect(output.spans.filter((s: any) => s.depth === 0)).toHaveLength(1);
+        expect(output.rootSpan.spanId).toBe('pick_root_span01');
+      });
+
+      it('probes in auto-pick even with an explicit startTime (pick window, not a fetch bound)', async () => {
+        // Own trace + service so it's isolated from the sibling test (the
+        // traces table is not cleared between tests). startTime here is the
+        // pick window; the picked trace's root predates it, so the fetch must
+        // still probe the trace's real extent rather than honoring startTime.
+        const PICK2_TRACE_ID = 'cccc3333dddd4444eeee5555ffff6666';
+        const PICK2_SVC = 'wf-autopick-window-svc';
+        await bulkInsertTraces([
+          {
+            Timestamp: rootTs,
+            TraceId: PICK2_TRACE_ID,
+            SpanId: 'pick2_root_span01',
+            ParentSpanId: '',
+            SpanName: 'GET /wf-autopick2/root',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: PICK2_SVC,
+            Duration: 2_400_000_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: childTs,
+            TraceId: PICK2_TRACE_ID,
+            SpanId: 'pick2_child_span1',
+            ParentSpanId: 'pick2_root_span01',
+            SpanName: 'wf-autopick2-child',
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: PICK2_SVC,
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: `ServiceName:${PICK2_SVC}`,
+          pickBy: 'slowest',
+          includeLogs: false,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(PICK2_TRACE_ID);
+        expect(output.spanCount).toBe(2);
+        expect(output.rootSpan.spanId).toBe('pick2_root_span01');
+      });
+
+      it('flags a partial tree with probeNote when the extent probe fails', async () => {
+        const FAIL_TRACE_ID = 'eeee5555ffff6666aaaa7777bbbb8888';
+        const FAIL_SVC = 'wf-probe-fail-svc';
+        await bulkInsertTraces([
+          {
+            Timestamp: rootTs,
+            TraceId: FAIL_TRACE_ID,
+            SpanId: 'fail_root_span01',
+            ParentSpanId: '',
+            SpanName: 'GET /wf-probe-fail/root',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: FAIL_SVC,
+            Duration: 2_400_000_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: childTs,
+            TraceId: FAIL_TRACE_ID,
+            SpanId: 'fail_child_span1',
+            ParentSpanId: 'fail_root_span01',
+            SpanName: 'wf-probe-fail-child',
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: FAIL_SVC,
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+        const original = ClickhouseClient.prototype.query;
+        const spy = jest
+          .spyOn(ClickhouseClient.prototype, 'query')
+          .mockImplementation(function (this: ClickhouseClient, args) {
+            if (args.query.includes('AS firstSeen')) {
+              return Promise.reject(new Error('Timeout exceeded'));
+            }
+            return original.call(this, args);
+          });
+        try {
+          const result = await callTool(client, 'clickstack_trace_waterfall', {
+            sourceId: traceSource._id.toString(),
+            pickFilter: `ServiceName:${FAIL_SVC}`,
+            pickBy: 'slowest',
+            includeLogs: false,
+          });
+
+          expect(result.isError).toBeFalsy();
+          const output = JSON.parse(getFirstText(result));
+          expect(output.traceId).toBe(FAIL_TRACE_ID);
+          // Fallback window only covers the in-window child.
+          expect(output.spanCount).toBe(1);
+          expect(output.probeNote).toContain('probe failed');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('probes past an explicit endTime so a late trace tail is not dropped', async () => {
+        const PICK3_TRACE_ID = 'dddd4444eeee5555ffff6666aaaa7777';
+        const PICK3_SVC = 'wf-autopick-tail-svc';
+        const pickRootTs = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+        // > 1h past endTime, so only the forward probe margin can find it.
+        const tailTs = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+        await bulkInsertTraces([
+          {
+            Timestamp: pickRootTs,
+            TraceId: PICK3_TRACE_ID,
+            SpanId: 'pick3_root_span01',
+            ParentSpanId: '',
+            SpanName: 'GET /wf-autopick3/root',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: PICK3_SVC,
+            Duration: 7_200_000_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: tailTs,
+            TraceId: PICK3_TRACE_ID,
+            SpanId: 'pick3_tail_span1',
+            ParentSpanId: 'pick3_root_span01',
+            SpanName: 'wf-autopick3-tail',
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: PICK3_SVC,
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: `ServiceName:${PICK3_SVC}`,
+          pickBy: 'slowest',
+          includeLogs: false,
+          startTime: new Date(
+            pickRootTs.getTime() - 10 * 60 * 1000,
+          ).toISOString(),
+          endTime: new Date(
+            pickRootTs.getTime() + 10 * 60 * 1000,
+          ).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(PICK3_TRACE_ID);
+        expect(output.spanCount).toBe(2);
+        expect(output.spans.map((s: any) => s.spanId)).toContain(
+          'pick3_tail_span1',
+        );
+      });
+    });
+
+    describe('first_error pick mode', () => {
+      const ERROR_TRACE_ID = 'ffff0000eeee1111dddd2222cccc3333';
+      const now = new Date();
+      const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
+
+      beforeEach(async () => {
+        await bulkInsertTraces([
+          {
+            Timestamp: fiveMinAgo,
+            TraceId: ERROR_TRACE_ID,
+            SpanId: 'err_root_span01',
+            ParentSpanId: '',
+            SpanName: 'GET /wf-test-err/fail',
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: 'wf-test-err-svc',
+            Duration: 100_000_000,
+            StatusCode: 'STATUS_CODE_ERROR',
+            StatusMessage: 'Internal Server Error',
+          },
+        ]);
+      });
+
+      it('should auto-pick trace with an error span', async () => {
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: traceSource._id.toString(),
+          pickFilter: 'ServiceName:wf-test-err-svc',
+          pickBy: 'first_error',
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.traceId).toBe(ERROR_TRACE_ID);
+        expect(output.spanCount).toBeGreaterThan(0);
+      });
+    });
+
+    describe('logSource edge cases', () => {
+      it('should handle missing logSourceId gracefully (no logs section)', async () => {
+        // Create a trace source WITHOUT logSourceId
+        const noLogTraceSource = await Source.create({
+          kind: SourceKind.Trace,
+          team: team._id,
+          from: {
+            databaseName: DEFAULT_DATABASE,
+            tableName: DEFAULT_TRACES_TABLE,
+          },
+          timestampValueExpression: 'Timestamp',
+          connection: connection._id,
+          name: 'Traces No Log Link',
+          traceIdExpression: 'TraceId',
+          spanIdExpression: 'SpanId',
+          parentSpanIdExpression: 'ParentSpanId',
+          spanNameExpression: 'SpanName',
+          spanKindExpression: 'SpanKind',
+          durationExpression: 'Duration',
+          durationPrecision: 9,
+          serviceNameExpression: 'ServiceName',
+          statusCodeExpression: 'StatusCode',
+          statusMessageExpression: 'StatusMessage',
+          eventAttributesExpression: 'SpanAttributes',
+          // logSourceId intentionally omitted
+        });
+
+        const TRACE_ID = 'aaaabbbbccccddddeeeeffffgggghhhh';
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: noLogTraceSource._id.toString(),
+          traceId: TRACE_ID,
+          includeLogs: true,
+          startTime: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(Date.now() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        // Should succeed without a logs section
+        expect(output.logs).toBeUndefined();
+      });
+
+      it('should note when logSourceId points to a non-existent source', async () => {
+        const badLogTraceSource = await Source.create({
+          kind: SourceKind.Trace,
+          team: team._id,
+          from: {
+            databaseName: DEFAULT_DATABASE,
+            tableName: DEFAULT_TRACES_TABLE,
+          },
+          timestampValueExpression: 'Timestamp',
+          connection: connection._id,
+          name: 'Traces Bad Log Link',
+          traceIdExpression: 'TraceId',
+          spanIdExpression: 'SpanId',
+          parentSpanIdExpression: 'ParentSpanId',
+          spanNameExpression: 'SpanName',
+          spanKindExpression: 'SpanKind',
+          durationExpression: 'Duration',
+          durationPrecision: 9,
+          serviceNameExpression: 'ServiceName',
+          statusCodeExpression: 'StatusCode',
+          statusMessageExpression: 'StatusMessage',
+          eventAttributesExpression: 'SpanAttributes',
+          logSourceId: '000000000000000000000000',
+        });
+
+        const TRACE_ID = 'aaaabbbbccccddddeeeeffffgggghhhh';
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: badLogTraceSource._id.toString(),
+          traceId: TRACE_ID,
+          includeLogs: true,
+          startTime: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(Date.now() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.logsNote).toBeDefined();
+        expect(output.logsNote).toContain('not found');
+      });
+
+      it('should note when logSourceId points to a non-log source', async () => {
+        // Point logSourceId at the trace source itself (wrong kind)
+        const wrongKindTraceSource = await Source.create({
+          kind: SourceKind.Trace,
+          team: team._id,
+          from: {
+            databaseName: DEFAULT_DATABASE,
+            tableName: DEFAULT_TRACES_TABLE,
+          },
+          timestampValueExpression: 'Timestamp',
+          connection: connection._id,
+          name: 'Traces Wrong Kind Log',
+          traceIdExpression: 'TraceId',
+          spanIdExpression: 'SpanId',
+          parentSpanIdExpression: 'ParentSpanId',
+          spanNameExpression: 'SpanName',
+          spanKindExpression: 'SpanKind',
+          durationExpression: 'Duration',
+          durationPrecision: 9,
+          serviceNameExpression: 'ServiceName',
+          statusCodeExpression: 'StatusCode',
+          statusMessageExpression: 'StatusMessage',
+          eventAttributesExpression: 'SpanAttributes',
+          logSourceId: traceSource._id.toString(), // points to a trace source, not log
+        });
+
+        const TRACE_ID = 'aaaabbbbccccddddeeeeffffgggghhhh';
+        const result = await callTool(client, 'clickstack_trace_waterfall', {
+          sourceId: wrongKindTraceSource._id.toString(),
+          traceId: TRACE_ID,
+          includeLogs: true,
+          startTime: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(Date.now() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.logsNote).toBeDefined();
+        expect(output.logsNote).toContain('not "log"');
+      });
+    });
+  });
+
+  // ─── clickstack_trace_top_time_consuming_operations ───────────────────────────
+
+  describe('clickstack_trace_top_time_consuming_operations', () => {
+    it('should return error for non-existent source', async () => {
+      const result = await callTool(
+        client,
+        'clickstack_trace_top_time_consuming_operations',
+        {
+          sourceId: '000000000000000000000000',
+          parentFilter: "ServiceName = 'api-gateway'",
+          startTime: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          endTime: new Date().toISOString(),
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('Source not found');
+    });
+
+    it('should return error for non-trace source', async () => {
+      const result = await callTool(
+        client,
+        'clickstack_trace_top_time_consuming_operations',
+        {
+          sourceId: logSource._id.toString(),
+          parentFilter: "ServiceName = 'api-gateway'",
+          startTime: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          endTime: new Date().toISOString(),
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('kind=');
+    });
+
+    it('should return error for invalid time range', async () => {
+      const result = await callTool(
+        client,
+        'clickstack_trace_top_time_consuming_operations',
+        {
+          sourceId: traceSource._id.toString(),
+          parentFilter: "ServiceName = 'api-gateway'",
+          startTime: 'not-a-date',
+          endTime: new Date().toISOString(),
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('Invalid');
+    });
+
+    it('should return empty operations when no traces match', async () => {
+      const result = await callTool(
+        client,
+        'clickstack_trace_top_time_consuming_operations',
+        {
+          sourceId: traceSource._id.toString(),
+          parentFilter: "ServiceName = 'nonexistent-service'",
+          startTime: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          endTime: new Date().toISOString(),
+        },
+      );
+      expect(result.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(result));
+      expect(output.operations).toHaveLength(0);
+      expect(output.summary.hint).toContain('No matching parent traces');
+    });
+
+    describe('with seeded trace data', () => {
+      // Use unique names to avoid collisions with other test suites —
+      // otel_traces is NOT truncated between tests (see clearClickhouseTables).
+      const TRACE_ID_1 = 'aaaa1111bbbb2222cccc3333dddd4444';
+      const TRACE_ID_2 = 'eeee5555ffff6666aaaa7777bbbb8888';
+      const PARENT_SVC = 'trc-test-api-gateway';
+      const PARENT_OP = 'GET /trc-test/users';
+      const CHILD_DB_SVC = 'trc-test-db-service';
+      const CHILD_DB_OP = 'trc-test-SELECT-users';
+      const CHILD_CACHE_SVC = 'trc-test-cache-service';
+      const CHILD_CACHE_OP = 'trc-test-cache.get';
+      const now = new Date();
+      const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
+
+      beforeEach(async () => {
+        // Trace 1: api-gateway -> db-service + cache-service
+        await bulkInsertTraces([
+          // Parent span in trace 1
+          {
+            Timestamp: fiveMinAgo,
+            TraceId: TRACE_ID_1,
+            SpanId: 'root_span_0001',
+            ParentSpanId: '',
+            SpanName: PARENT_OP,
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: PARENT_SVC,
+            Duration: 800_000_000, // 800ms in ns
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          // Child: slow DB call
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 10),
+            TraceId: TRACE_ID_1,
+            SpanId: 'child_db_0001',
+            ParentSpanId: 'root_span_0001',
+            SpanName: CHILD_DB_OP,
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: CHILD_DB_SVC,
+            Duration: 600_000_000, // 600ms
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          // Child: fast cache call
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 20),
+            TraceId: TRACE_ID_1,
+            SpanId: 'child_cache_001',
+            ParentSpanId: 'root_span_0001',
+            SpanName: CHILD_CACHE_OP,
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: CHILD_CACHE_SVC,
+            Duration: 10_000_000, // 10ms
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          // Trace 2: same parent pattern, different child durations
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 1000),
+            TraceId: TRACE_ID_2,
+            SpanId: 'root_span_0002',
+            ParentSpanId: '',
+            SpanName: PARENT_OP,
+            SpanKind: 'SPAN_KIND_SERVER',
+            ServiceName: PARENT_SVC,
+            Duration: 900_000_000, // 900ms
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 1010),
+            TraceId: TRACE_ID_2,
+            SpanId: 'child_db_0002',
+            ParentSpanId: 'root_span_0002',
+            SpanName: CHILD_DB_OP,
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: CHILD_DB_SVC,
+            Duration: 700_000_000, // 700ms
+            StatusCode: 'STATUS_CODE_OK',
+          },
+          {
+            Timestamp: new Date(fiveMinAgo.getTime() + 1020),
+            TraceId: TRACE_ID_2,
+            SpanId: 'child_cache_002',
+            ParentSpanId: 'root_span_0002',
+            SpanName: CHILD_CACHE_OP,
+            SpanKind: 'SPAN_KIND_CLIENT',
+            ServiceName: CHILD_CACHE_SVC,
+            Duration: 20_000_000, // 20ms
+            StatusCode: 'STATUS_CODE_OK',
+          },
+        ]);
+      });
+
+      it('should break down child operations ranked by total time', async () => {
+        const result = await callTool(
+          client,
+          'clickstack_trace_top_time_consuming_operations',
+          {
+            sourceId: traceSource._id.toString(),
+            parentFilter: `ServiceName = '${PARENT_SVC}' AND SpanName = '${PARENT_OP}'`,
+            startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+            endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+          },
+        );
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.operations.length).toBeGreaterThanOrEqual(2);
+
+        // DB operations should be ranked first (higher total time)
+        const dbOp = output.operations.find(
+          (op: BreakdownOperation) => op.operation === CHILD_DB_OP,
+        );
+        const cacheOp = output.operations.find(
+          (op: BreakdownOperation) => op.operation === CHILD_CACHE_OP,
+        );
+        expect(dbOp).toBeDefined();
+        expect(cacheOp).toBeDefined();
+        expect(dbOp.totalTimeMs).toBeGreaterThan(cacheOp.totalTimeMs);
+
+        // DB op should appear in both parent traces
+        expect(dbOp.inParents).toBe(2);
+        expect(dbOp.calls).toBe(2);
+
+        // Each operation should have share of total time
+        expect(dbOp.shareOfTotalTime).toBeGreaterThan(0);
+        expect(dbOp.shareOfTotalTime).toBeLessThanOrEqual(1);
+      });
+
+      it('should filter by minParentDurationMs', async () => {
+        // Only trace 2 has a parent >= 850ms (900ms)
+        const result = await callTool(
+          client,
+          'clickstack_trace_top_time_consuming_operations',
+          {
+            sourceId: traceSource._id.toString(),
+            parentFilter: `ServiceName = '${PARENT_SVC}' AND SpanName = '${PARENT_OP}'`,
+            minParentDurationMs: 850, // 850ms threshold
+            startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+            endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+          },
+        );
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.operations.length).toBeGreaterThanOrEqual(1);
+
+        // Only trace 2's children should be included (1 call each)
+        const dbOp = output.operations.find(
+          (op: BreakdownOperation) => op.operation === CHILD_DB_OP,
+        );
+        expect(dbOp).toBeDefined();
+        expect(dbOp.inParents).toBe(1);
+      });
+
+      it('should respect topN parameter', async () => {
+        const result = await callTool(
+          client,
+          'clickstack_trace_top_time_consuming_operations',
+          {
+            sourceId: traceSource._id.toString(),
+            parentFilter: `ServiceName = '${PARENT_SVC}' AND SpanName = '${PARENT_OP}'`,
+            topN: 1,
+            startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+            endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+          },
+        );
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.operations).toHaveLength(1);
+        // The top operation should be the DB call (highest total time)
+        expect(output.operations[0].operation).toBe(CHILD_DB_OP);
+      });
+
+      it('should include summary with parentFilter and time range', async () => {
+        const startTime = new Date(
+          now.getTime() - 10 * 60 * 1000,
+        ).toISOString();
+        const endTime = new Date(now.getTime() + 60 * 1000).toISOString();
+
+        const result = await callTool(
+          client,
+          'clickstack_trace_top_time_consuming_operations',
+          {
+            sourceId: traceSource._id.toString(),
+            parentFilter: `ServiceName = '${PARENT_SVC}' AND SpanName = '${PARENT_OP}'`,
+            startTime,
+            endTime,
+          },
+        );
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.summary).toBeDefined();
+        expect(output.summary.parentFilter).toContain(PARENT_SVC);
+        expect(output.summary.operationsReturned).toBeGreaterThan(0);
+        expect(output.summary.grandTotalTimeMs).toBeGreaterThan(0);
+      });
+
+      it('handles a multi-column timestampValueExpression with a leading Date column', async () => {
+        await Source.updateOne(
+          { _id: traceSource._id },
+          { timestampValueExpression: 'toDate(Timestamp), Timestamp' },
+        );
+
+        const result = await callTool(
+          client,
+          'clickstack_trace_top_time_consuming_operations',
+          {
+            sourceId: traceSource._id.toString(),
+            parentFilter: `ServiceName = '${PARENT_SVC}' AND SpanName = '${PARENT_OP}'`,
+            startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+            endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+          },
+        );
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        const dbOp = output.operations.find(
+          (op: BreakdownOperation) => op.operation === CHILD_DB_OP,
+        );
+        expect(dbOp?.inParents).toBe(2);
+      });
+
+      it('should return error for invalid parentFilter SQL', async () => {
+        const result = await callTool(
+          client,
+          'clickstack_trace_top_time_consuming_operations',
+          {
+            sourceId: traceSource._id.toString(),
+            parentFilter: 'INVALID SQL @@@ SYNTAX',
+            startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+            endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+          },
+        );
+
+        expect(result.isError).toBe(true);
+        const text = getFirstText(result);
+        expect(text).toContain('Failed to compute breakdown');
+        expect(text).toContain('must be valid ClickHouse SQL');
+        expect(text).not.toContain('shorter startTime/endTime window');
+      });
+
+      it('applies the MCP time limits even when the source sets max_execution_time', async () => {
+        await Source.updateOne(
+          { _id: traceSource._id },
+          {
+            querySettings: [
+              { setting: 'max_execution_time', value: '3600' },
+              { setting: 'max_threads', value: '2' },
+            ],
+          },
+        );
+        const querySpy = jest.spyOn(ClickhouseClient.prototype, 'query');
+        try {
+          const result = await callTool(
+            client,
+            'clickstack_trace_top_time_consuming_operations',
+            {
+              sourceId: traceSource._id.toString(),
+              parentFilter: `ServiceName = '${PARENT_SVC}' AND SpanName = '${PARENT_OP}'`,
+              startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+              endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+            },
+          );
+
+          expect(result.isError).toBeFalsy();
+          const call = querySpy.mock.calls.find(([args]) =>
+            args.query.includes('parent_traces'),
+          );
+          expect(call?.[0].clickhouse_settings).toMatchObject({
+            max_execution_time: 30,
+            readonly: '2',
+            max_threads: '2',
+          });
+          const ctx: ClickhouseClient =
+            querySpy.mock.contexts[querySpy.mock.calls.indexOf(call!)];
+          expect(ctx.requestTimeoutMs).toBe(MCP_REQUEST_TIMEOUT);
+        } finally {
+          querySpy.mockRestore();
+        }
+      });
+
+      it.each([
+        ['client request timeout', new Error('Timeout error.')],
+        [
+          'ClickHouse TIMEOUT_EXCEEDED',
+          new ClickHouseError({
+            code: '159',
+            type: 'TIMEOUT_EXCEEDED',
+            message: 'Timeout exceeded: elapsed 30.001 seconds, maximum: 30',
+          }),
+        ],
+      ])('returns actionable guidance on a %s', async (_label, error) => {
+        const text = await callBreakdownWithFailingQuery(error);
+        expect(text).toContain('Failed to compute breakdown');
+        expect(text).toContain('execution-time limit');
+        expect(text).toContain('shorter startTime/endTime window');
+        expect(text).toContain('minParentDurationMs');
+        expect(text).not.toContain('must be valid ClickHouse SQL');
+      });
+
+      it('gives no query-tuning or invalid-SQL advice on a socket timeout', async () => {
+        const error: NodeJS.ErrnoException = new Error('connect ETIMEDOUT');
+        error.code = 'ETIMEDOUT';
+        const text = await callBreakdownWithFailingQuery(error);
+        expect(text).toContain('Failed to compute breakdown');
+        expect(text).not.toContain('execution-time limit');
+        expect(text).not.toContain('shorter startTime/endTime window');
+        expect(text).not.toContain('must be valid ClickHouse SQL');
+      });
+
+      async function callBreakdownWithFailingQuery(error: Error) {
+        const original = ClickhouseClient.prototype.query;
+        const querySpy = jest
+          .spyOn(ClickhouseClient.prototype, 'query')
+          .mockImplementation(function (this: ClickhouseClient, args) {
+            if (args.query.includes('parent_traces')) {
+              return Promise.reject(error);
+            }
+            return original.call(this, args);
+          });
+        try {
+          const result = await callTool(
+            client,
+            'clickstack_trace_top_time_consuming_operations',
+            {
+              sourceId: traceSource._id.toString(),
+              parentFilter: `ServiceName = '${PARENT_SVC}' AND SpanName = '${PARENT_OP}'`,
+              startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+              endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+            },
+          );
+          expect(result.isError).toBe(true);
+          return getFirstText(result);
+        } finally {
+          querySpy.mockRestore();
+        }
+      }
+    });
+  });
+});

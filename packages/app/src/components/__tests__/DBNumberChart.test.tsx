@@ -1,19 +1,24 @@
 import React from 'react';
+import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import { act, screen } from '@testing-library/react';
 
-import { useQueriedChartConfig } from '@/hooks/useChartConfig';
+import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
+import DBNumberChart from '@/components/DBNumberChart';
+import MVOptimizationIndicator from '@/components/MaterializedViews/MVOptimizationIndicator';
+import NumberTileBackgroundChart from '@/components/NumberTileBackgroundChart';
+import {
+  getMinGranularitySeconds,
+  useQueriedChartConfig,
+} from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useSource } from '@/source';
-import { formatNumber } from '@/utils';
-
-import { NumberFormat } from '../../types';
-import DateRangeIndicator from '../charts/DateRangeIndicator';
-import DBNumberChart from '../DBNumberChart';
-import MVOptimizationIndicator from '../MaterializedViews/MVOptimizationIndicator';
+import { NumberFormat } from '@/types';
+import { formatNumber, getColorFromCSSToken } from '@/utils';
 
 // Mock dependencies
 jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
+  getMinGranularitySeconds: jest.fn().mockReturnValue(undefined),
 }));
 
 jest.mock('@/hooks/useMVOptimizationExplanation', () => ({
@@ -26,7 +31,7 @@ jest.mock('@/hooks/useMVOptimizationExplanation', () => ({
 
 jest.mock('@/source', () => ({
   useSource: jest.fn().mockReturnValue({ data: null }),
-  useResolvedNumberFormat: jest
+  useSingleSeriesNumberFormat: jest
     .fn()
     .mockImplementation((config: any) => config.numberFormat),
 }));
@@ -38,6 +43,13 @@ jest.mock('@/utils', () => ({
     keys.forEach((key: string) => delete result[key]);
     return result;
   }),
+  // The renderer resolves palette tokens through getColorFromCSSToken.
+  // Return a valid CSS hex so Mantine applies it as an inline color style,
+  // letting us assert that the resolved value reaches the DOM element.
+  getColorFromCSSToken: jest.fn(() => '#00ff00'),
+  // Use the real resolver so integration tests verify the actual logic.
+  resolveConditionalColor:
+    jest.requireActual('@/utils').resolveConditionalColor,
 }));
 
 jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
@@ -45,6 +57,13 @@ jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
 );
 
 jest.mock('../charts/DateRangeIndicator', () => jest.fn(() => null));
+
+// Stub the sparkline so these tests assert only the wiring (when it mounts
+// and what props it receives); its data path is covered by its own test.
+jest.mock('../NumberTileBackgroundChart', () => ({
+  __esModule: true,
+  default: jest.fn(() => <div data-testid="number-tile-background-chart" />),
+}));
 
 describe('DBNumberChart', () => {
   const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
@@ -121,7 +140,8 @@ describe('DBNumberChart', () => {
     expect(mockFormatNumber).toHaveBeenCalledWith(1234, newFormat);
   });
 
-  it('includes numberFormat in the query key to ensure re-fetching when format changes', () => {
+  // The hook keys on the config it is handed, so a format change refetches.
+  it('hands the query hook the numberFormat and the key prefix', () => {
     const numberFormat = {
       output: 'percent' as const,
       mantissa: 2,
@@ -134,11 +154,9 @@ describe('DBNumberChart', () => {
 
     renderWithMantine(<DBNumberChart config={config} queryKeyPrefix="test" />);
 
-    const [firstCall] = mockUseQueriedChartConfig.mock.calls;
-    const [, { queryKey }] = firstCall;
-    const [, { numberFormat: queryKeyFormat }] = queryKey;
-
-    expect(queryKeyFormat).toEqual(numberFormat);
+    const [queriedConfig, options] = mockUseQueriedChartConfig.mock.calls[0];
+    expect(queriedConfig.numberFormat).toEqual(numberFormat);
+    expect(options.queryKeyPrefix).toBe('test');
   });
 
   it('displays formatted number in the UI', () => {
@@ -194,6 +212,65 @@ describe('DBNumberChart', () => {
 
     renderWithMantine(<DBNumberChart config={baseTestConfig} />);
     expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+  });
+
+  describe('refresh indicator', () => {
+    it('pulses while a refetch is showing the previous value', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [{ value: 1234 }] },
+        isLoading: false,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+      expect(
+        screen.getByTestId('number-chart-value').closest('.effect-pulse'),
+      ).not.toBeNull();
+    });
+
+    it('pulses while still loading with a value on screen', () => {
+      // useQueriedChartConfig's isLoading also covers the MV-optimization
+      // check, which can be pending while a value is shown
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [{ value: 1234 }] },
+        isLoading: true,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+      expect(
+        screen.getByTestId('number-chart-value').closest('.effect-pulse'),
+      ).not.toBeNull();
+    });
+
+    it('does not pulse once the fresh value has loaded', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [{ value: 1234 }] },
+        isLoading: false,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+      expect(
+        screen.getByTestId('number-chart-value').closest('.effect-pulse'),
+      ).toBeNull();
+    });
+
+    it('shows loading instead of the stale empty result during a refetch', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [] },
+        isLoading: false,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
+    });
   });
 
   it('handles error state correctly', () => {
@@ -303,5 +380,577 @@ describe('DBNumberChart', () => {
 
     // Verify DateRangeIndicator was not called
     expect(jest.mocked(DateRangeIndicator)).not.toHaveBeenCalled();
+  });
+
+  describe('colorRules (conditional colors)', () => {
+    const mockGetColorFromCSSToken = getColorFromCSSToken as jest.Mock;
+
+    beforeEach(() => {
+      // Each test controls the data value independently
+      mockGetColorFromCSSToken.mockImplementation(() => '#00ff00');
+    });
+
+    function setDataValue(v: number) {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [{ value: v }] },
+        isLoading: false,
+        isError: false,
+      });
+    }
+
+    it('uses static color when no rule matches (value 50, threshold ≥ 100)', () => {
+      setDataValue(50);
+      // formatNumber is mocked; make it return the raw value so we can query by text
+      mockFormatNumber.mockReturnValue('50');
+      const config = {
+        ...baseTestConfig,
+        color: 'chart-success' as const,
+        colorRules: [
+          {
+            operator: 'gte' as const,
+            value: 100,
+            color: 'chart-warning' as const,
+          },
+          {
+            operator: 'gte' as const,
+            value: 500,
+            color: 'chart-error' as const,
+          },
+        ],
+      };
+      renderWithMantine(<DBNumberChart config={config} />);
+      // resolveConditionalColor returns 'chart-success' (fallback); getColorFromCSSToken called with it
+      expect(mockGetColorFromCSSToken).toHaveBeenCalledWith('chart-success');
+    });
+
+    it('applies warning color when value is 200 (≥ 100 but < 500)', () => {
+      setDataValue(200);
+      mockFormatNumber.mockReturnValue('200');
+      const config = {
+        ...baseTestConfig,
+        color: 'chart-success' as const,
+        colorRules: [
+          {
+            operator: 'gte' as const,
+            value: 100,
+            color: 'chart-warning' as const,
+          },
+          {
+            operator: 'gte' as const,
+            value: 500,
+            color: 'chart-error' as const,
+          },
+        ],
+      };
+      renderWithMantine(<DBNumberChart config={config} />);
+      expect(mockGetColorFromCSSToken).toHaveBeenCalledWith('chart-warning');
+    });
+
+    it('applies error color when value is 1000 (both rules match, last wins)', () => {
+      setDataValue(1000);
+      mockFormatNumber.mockReturnValue('1000');
+      const config = {
+        ...baseTestConfig,
+        color: 'chart-success' as const,
+        colorRules: [
+          {
+            operator: 'gte' as const,
+            value: 100,
+            color: 'chart-warning' as const,
+          },
+          {
+            operator: 'gte' as const,
+            value: 500,
+            color: 'chart-error' as const,
+          },
+        ],
+      };
+      renderWithMantine(<DBNumberChart config={config} />);
+      expect(mockGetColorFromCSSToken).toHaveBeenCalledWith('chart-error');
+    });
+
+    it('falls back to undefined (default text color) when no static color and no rule matches', () => {
+      setDataValue(10);
+      mockFormatNumber.mockReturnValue('10');
+      const config = {
+        ...baseTestConfig,
+        // No static color set
+        colorRules: [
+          {
+            operator: 'gte' as const,
+            value: 100,
+            color: 'chart-warning' as const,
+          },
+        ],
+      };
+      renderWithMantine(<DBNumberChart config={config} />);
+      expect(mockGetColorFromCSSToken).not.toHaveBeenCalled();
+    });
+
+    it('coerces string data values (ClickHouse UInt64) to numbers for rule evaluation', () => {
+      // ClickHouse returns UInt64 as a JSON string when quote_64bit_integers is set
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [{ value: '1000' }] },
+        isLoading: false,
+        isError: false,
+      });
+      mockFormatNumber.mockReturnValue('1000');
+      const config = {
+        ...baseTestConfig,
+        color: 'chart-success' as const,
+        colorRules: [
+          {
+            operator: 'gte' as const,
+            value: 100,
+            color: 'chart-warning' as const,
+          },
+          {
+            operator: 'gte' as const,
+            value: 500,
+            color: 'chart-error' as const,
+          },
+        ],
+      };
+      renderWithMantine(<DBNumberChart config={config} />);
+      // String "1000" coerced to 1000 matches both rules; last (error) wins
+      expect(mockGetColorFromCSSToken).toHaveBeenCalledWith('chart-error');
+    });
+  });
+
+  describe('color', () => {
+    const mockGetColorFromCSSToken = getColorFromCSSToken as jest.Mock;
+
+    it('resolves a palette token through getColorFromCSSToken when config.color is set', () => {
+      const config = {
+        ...baseTestConfig,
+        color: 'chart-success' as const,
+      };
+
+      renderWithMantine(<DBNumberChart config={config} />);
+
+      expect(mockGetColorFromCSSToken).toHaveBeenCalledWith('chart-success');
+      // Verify the resolved color reaches the <Text> DOM element so a
+      // regression that drops the `c` prop or passes undefined is caught.
+      const textEl = screen.getByText('1234');
+      expect(textEl).toBeInTheDocument();
+      expect(textEl).toHaveStyle({ color: 'rgb(0, 255, 0)' });
+    });
+
+    it('does not resolve a color when config.color is unset', () => {
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+
+      expect(mockGetColorFromCSSToken).not.toHaveBeenCalled();
+      expect(screen.getByText('1234')).toBeInTheDocument();
+    });
+
+    it('skips resolution and renders the default when config.color is not a known palette token', () => {
+      const config = {
+        ...baseTestConfig,
+        // Simulate a legacy or hand-edited dashboard with an unknown
+        // value sneaking past the schema (e.g. an old hex code).
+        color: 'definitely-not-a-token' as any,
+      };
+
+      renderWithMantine(<DBNumberChart config={config} />);
+
+      expect(mockGetColorFromCSSToken).not.toHaveBeenCalled();
+      expect(screen.getByText('1234')).toBeInTheDocument();
+    });
+
+    it('migrates legacy chart-1..10 tokens to their hue-named equivalent at render time', () => {
+      // Defense in depth: in practice `normalizeDashboardTileColors` in
+      // `packages/app/src/dashboard.ts` heals legacy tokens at fetch
+      // time, so renderers should always see hue-named values. But any
+      // tile constructed in memory (e.g. from a preset or a unit test)
+      // can still carry a legacy `chart-1`, so the renderer also
+      // resolves through `resolveChartPaletteToken` before the
+      // CSS-token lookup.
+      const config = {
+        ...baseTestConfig,
+        color: 'chart-1' as any,
+      };
+
+      renderWithMantine(<DBNumberChart config={config} />);
+
+      expect(mockGetColorFromCSSToken).toHaveBeenCalledWith('chart-green');
+      const textEl = screen.getByText('1234');
+      expect(textEl).toHaveStyle({ color: 'rgb(0, 255, 0)' });
+    });
+  });
+
+  describe('auto-sized font', () => {
+    it('renders the value with a pixel-based font size so the tile can resize it', () => {
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+
+      const textEl = screen.getByText('1234');
+      const fontSize = textEl.style.fontSize;
+
+      // The value should be sized in px (set by AutoSizeNumber's
+      // ResizeObserver-driven calculation) rather than the previous
+      // hard-coded "4rem". Anything non-empty ending in "px" indicates
+      // the auto-sizing path is active.
+      expect(fontSize).toMatch(/px$/);
+    });
+
+    it('does not let the value wrap to multiple lines', () => {
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+      const textEl = screen.getByText('1234');
+      // Long numbers should shrink to fit on a single line rather
+      // than wrap and visually break the tile.
+      expect(textEl.style.whiteSpace).toBe('nowrap');
+    });
+
+    /**
+     * Drives the binary-search measurement pass by faking the DOM
+     * geometry that the AutoSizeNumber component reads:
+     *
+     *  - container.clientWidth / clientHeight  -> available tile size
+     *  - text.scrollWidth / scrollHeight       -> rendered text size at
+     *    the current font-size, modeled as proportional to the assigned
+     *    font-size in px and the length of the text (a reasonable
+     *    approximation of how a real browser would lay it out).
+     *
+     * With those mocks in place we can assert that the picked font size
+     * actually shrinks for narrow containers and grows for wide ones.
+     */
+    const installGeometryMocks = (
+      containerWidth: number,
+      containerHeight: number,
+      // px of width per character at 1px font; tweak so realistic numbers
+      // produce realistic measurements during the binary search.
+      widthPerChar = 0.6,
+    ) => {
+      const containerSpy = jest
+        .spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          return this.tagName === 'DIV' ? containerWidth : 0;
+        });
+      const containerHeightSpy = jest
+        .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          return this.tagName === 'DIV' ? containerHeight : 0;
+        });
+      const scrollWidthSpy = jest
+        .spyOn(HTMLElement.prototype, 'scrollWidth', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          if (this.tagName !== 'P') return 0;
+          const fs = parseFloat(this.style.fontSize) || 0;
+          return Math.ceil((this.textContent ?? '').length * widthPerChar * fs);
+        });
+      const scrollHeightSpy = jest
+        .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          if (this.tagName !== 'P') return 0;
+          const fs = parseFloat(this.style.fontSize) || 0;
+          // line-height: 1.1
+          return Math.ceil(fs * 1.1);
+        });
+
+      return () => {
+        containerSpy.mockRestore();
+        containerHeightSpy.mockRestore();
+        scrollWidthSpy.mockRestore();
+        scrollHeightSpy.mockRestore();
+      };
+    };
+
+    it('shrinks the font for a narrow tile so the value fits without overflow', () => {
+      const restore = installGeometryMocks(120, 80);
+      try {
+        mockUseQueriedChartConfig.mockReturnValue({
+          data: { data: [{ value: 1234567890 }] },
+          isLoading: false,
+          isError: false,
+        });
+
+        renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+
+        const textEl = screen.getByText('1234567890');
+        const fontSize = parseFloat(textEl.style.fontSize);
+
+        // Available width after padding (12 px each side) is 96 px.
+        // 10 chars * 0.6 width-per-char = 6 px/char, so the largest
+        // font size that fits is floor(96 / (10 * 0.6)) = 16 px. Picked
+        // size must be <= 16 and >= the configured min of 10 px.
+        expect(fontSize).toBeLessThanOrEqual(16);
+        expect(fontSize).toBeGreaterThanOrEqual(10);
+      } finally {
+        restore();
+      }
+    });
+
+    it('grows the font for a wide tile so the value fills the available space', () => {
+      const restore = installGeometryMocks(800, 400);
+      try {
+        renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+
+        const textEl = screen.getByText('1234');
+        const fontSize = parseFloat(textEl.style.fontSize);
+
+        // 4 chars * 0.6 = 2.4 px per font-size px, so a 800-px-wide
+        // container could theoretically fit very large fonts; the
+        // auto-sizer should clamp to the configured max (72 px).
+        expect(fontSize).toBeGreaterThanOrEqual(60);
+        expect(fontSize).toBeLessThanOrEqual(72);
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  describe('error boundary fallback', () => {
+    /**
+     * Force the auto-sizer's measurement pipeline to throw by making
+     * `clientWidth` raise an error during the layout effect. The
+     * surrounding ErrorBoundary should catch the failure and fall back
+     * to the simpler fixed-size rendering, which still shows the value
+     * (so dashboards never go blank because of a measurement bug).
+     */
+    it('falls back to a simpler text rendering if AutoSizeNumber throws', () => {
+      const containerSpy = jest
+        .spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          if (this.tagName === 'DIV') {
+            throw new Error('boom: simulated layout failure');
+          }
+          return 0;
+        });
+
+      // ErrorBoundary logs the caught error to console.error; silence
+      // it so the test output stays focused on the assertions.
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+
+        const textEl = screen.getByText('1234');
+        expect(textEl).toBeInTheDocument();
+
+        // The fallback uses Mantine's `size="4rem"` rather than an
+        // inline px font-size, so the auto-sized inline style should
+        // not be present on the rendered element.
+        expect(textEl.style.fontSize).toBe('');
+      } finally {
+        containerSpy.mockRestore();
+        errSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('background chart', () => {
+    const mockBackgroundChart =
+      NumberTileBackgroundChart as unknown as jest.Mock;
+
+    it('renders the background sparkline when backgroundChart is configured', () => {
+      const config = {
+        ...baseTestConfig,
+        backgroundChart: { type: 'area' as const },
+      };
+
+      renderWithMantine(<DBNumberChart config={config} />);
+
+      expect(
+        screen.getByTestId('number-tile-background-chart'),
+      ).toBeInTheDocument();
+      // The renderer hands the tile config and the backgroundChart settings
+      // straight through to the sparkline.
+      expect(mockBackgroundChart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config,
+          backgroundChart: { type: 'area' },
+        }),
+        undefined,
+      );
+    });
+
+    it('does not render the background sparkline when backgroundChart is unset', () => {
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+
+      expect(
+        screen.queryByTestId('number-tile-background-chart'),
+      ).not.toBeInTheDocument();
+      expect(mockBackgroundChart).not.toHaveBeenCalled();
+    });
+  });
+  describe('promql configs', () => {
+    const promqlConfig = {
+      configType: 'promql' as const,
+      displayType: DisplayType.Number,
+      promqlExpression: 'e2e_service_up',
+      connection: 'test-connection',
+      source: 'source-promql',
+      dateRange: [new Date(), new Date()] as [Date, Date],
+    };
+
+    // The instant path always reports its columns, which is what lets the tile
+    // pick `value` rather than the leading `series_name`.
+    const instantMeta = [
+      { name: 'series_name', type: 'String' },
+      { name: 'value', type: 'Float64' },
+    ];
+
+    const setInstantRows = (rows: { series_name: string; value: number }[]) => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: rows, meta: instantMeta, rows: rows.length },
+        isLoading: false,
+        isError: false,
+      });
+    };
+
+    it("floors an auto granularity at the source's minimum", () => {
+      jest.mocked(getMinGranularitySeconds).mockReturnValueOnce(300);
+
+      renderWithMantine(
+        <DBNumberChart
+          config={{
+            ...promqlConfig,
+            dateRange: [
+              new Date('2025-11-26T00:00:14.076Z'),
+              new Date('2025-11-26T01:00:14.076Z'),
+            ],
+          }}
+        />,
+      );
+
+      const queriedConfig = mockUseQueriedChartConfig.mock.calls[0][0];
+      expect(queriedConfig.granularity).toBe('5 minute');
+      expect(queriedConfig.minGranularitySeconds).toBe(300);
+    });
+
+    it('shows the value when the expression yields exactly one', () => {
+      setInstantRows([{ series_name: 'up{service="accounting"}', value: 7 }]);
+      mockFormatNumber.mockReturnValue('7');
+
+      renderWithMantine(<DBNumberChart config={promqlConfig} />);
+
+      expect(screen.getByTestId('number-chart-value')).toHaveTextContent('7');
+      expect(
+        screen.queryByTestId('multiple-values-indicator'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('reads the value column, not the leading series name', () => {
+      setInstantRows([{ series_name: 'up{service="accounting"}', value: 7 }]);
+
+      renderWithMantine(<DBNumberChart config={promqlConfig} />);
+
+      expect(mockFormatNumber).toHaveBeenCalledWith(7, undefined);
+    });
+
+    it('warns when the expression yields more than one series', () => {
+      setInstantRows([
+        { series_name: 'up{service="accounting"}', value: 1 },
+        { series_name: 'up{service="api-server"}', value: 2 },
+      ]);
+      mockFormatNumber.mockReturnValue('1');
+
+      renderWithMantine(<DBNumberChart config={promqlConfig} />);
+
+      expect(screen.getByTestId('multiple-values-indicator')).toHaveAttribute(
+        'aria-label',
+        'Query returned 2 series',
+      );
+      // Still shows the first value rather than blanking the tile.
+      expect(screen.getByTestId('number-chart-value')).toHaveTextContent('1');
+    });
+
+    it('does not warn for a non-PromQL config with several rows', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: {
+          data: [{ value: 1 }, { value: 2 }],
+          meta: [{ name: 'value', type: 'Float64' }],
+          rows: 2,
+        },
+        isLoading: false,
+        isError: false,
+      });
+      mockFormatNumber.mockReturnValue('1');
+
+      renderWithMantine(<DBNumberChart config={baseTestConfig} />);
+
+      expect(
+        screen.queryByTestId('multiple-values-indicator'),
+      ).not.toBeInTheDocument();
+    });
+
+    describe('background chart', () => {
+      const rangeConfig = {
+        ...promqlConfig,
+        promqlExpression: [
+          { expression: 'e2e_service_up', queryType: 'range' as const },
+        ],
+        backgroundChart: { type: 'area' as const },
+      };
+
+      // Whether the tile's query can be bucketed at all is the sparkline's own
+      // call, so the tile hands over its config and queries nothing extra.
+      it('hands the sparkline the tile config, and no buckets of its own', () => {
+        setInstantRows([{ series_name: 'up', value: 5 }]);
+
+        renderWithMantine(
+          <DBNumberChart config={rangeConfig} queryKeyPrefix="tile-1" />,
+        );
+
+        expect(jest.mocked(NumberTileBackgroundChart)).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: rangeConfig,
+            backgroundChart: { type: 'area' },
+            queryKeyPrefix: 'tile-1',
+          }),
+          undefined,
+        );
+        expect(mockUseQueriedChartConfig).toHaveBeenCalledTimes(1);
+      });
+
+      it("passes the tile's disabled gate on to the sparkline", () => {
+        setInstantRows([{ series_name: 'up', value: 5 }]);
+
+        renderWithMantine(
+          <DBNumberChart config={rangeConfig} enabled={false} />,
+        );
+
+        expect(jest.mocked(NumberTileBackgroundChart)).toHaveBeenCalledWith(
+          expect.objectContaining({ enabled: false }),
+          undefined,
+        );
+      });
+
+      it('draws nothing when the expression yields several series', () => {
+        setInstantRows([
+          { series_name: 'up{service="accounting"}', value: 1 },
+          { series_name: 'up{service="api-server"}', value: 2 },
+        ]);
+
+        renderWithMantine(<DBNumberChart config={rangeConfig} />);
+
+        expect(
+          screen.queryByTestId('number-tile-background-chart'),
+        ).not.toBeInTheDocument();
+      });
+    });
+
+    // Color rules already applied to PromQL tiles; what changes is that the
+    // value they match is now the current one instead of the oldest bucket.
+    it('resolves a color rule against the displayed value', () => {
+      setInstantRows([{ series_name: 'up', value: 200 }]);
+      mockFormatNumber.mockReturnValue('200');
+
+      const config = {
+        ...promqlConfig,
+        color: 'chart-success' as const,
+        colorRules: [
+          {
+            operator: 'gte' as const,
+            value: 100,
+            color: 'chart-warning' as const,
+          },
+        ],
+      };
+      renderWithMantine(<DBNumberChart config={config} />);
+
+      expect(jest.mocked(getColorFromCSSToken)).toHaveBeenCalledWith(
+        'chart-warning',
+      );
+    });
   });
 });

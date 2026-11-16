@@ -11,20 +11,25 @@
  * to common-utils later.
  */
 
-import MD5 from 'crypto-js/md5';
+import SHA256 from 'crypto-js/sha256';
 import SqlString from 'sqlstring';
 import {
   ColumnMetaType,
   convertCHDataTypeToJSType,
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { aliasMapToWithClauses } from '@hyperdx/common-utils/dist/core/utils';
+import { quoteResultColumnNameIfNeeded } from '@hyperdx/common-utils/dist/core/metadata';
+import {
+  aliasMapToWithClauses,
+  LEFT_UTF8_HASH_CODE_POINTS,
+  leftUtf8Prefix,
+} from '@hyperdx/common-utils/dist/core/utils';
 import type { BuilderChartConfig } from '@hyperdx/common-utils/dist/types';
 
 const MAX_STRING_LENGTH = 512;
 
 // Type for WITH clause entries, derived from ChartConfig's with property
-export type WithClause = NonNullable<BuilderChartConfig['with']>[number];
+type WithClause = NonNullable<BuilderChartConfig['with']>[number];
 
 // Internal row field names used by the table component for row tracking
 const INTERNAL_ROW_FIELDS = {
@@ -66,7 +71,12 @@ function processRowToWhereClause(
         );
       }
 
-      const strValue = value != null ? String(value) : null;
+      // Handle nullish values for all types uniformly
+      if (value == null) {
+        return SqlString.format(`isNull(?)`, [SqlString.raw(valueExpr)]);
+      }
+
+      const strValue = String(value);
 
       switch (jsType) {
         case JSDataType.Date:
@@ -88,15 +98,15 @@ function processRowToWhereClause(
           ]);
         case JSDataType.JSON:
           // Handle case for whole json object, ex: json
-          return SqlString.format(`lower(hex(MD5(toString(?))))=?`, [
+          return SqlString.format(`lower(hex(SHA256(toString(?))))=?`, [
             SqlString.raw(valueExpr),
-            MD5(strValue ?? '').toString(),
+            SHA256(strValue).toString(),
           ]);
         case JSDataType.Dynamic:
           // Handle case for json element, ex: json.c
           // Currently we can't distinguish null or 'null'
           if (value == null || strValue === 'null') {
-            return SqlString.format(`isNull(??)`, [valueExpr]);
+            return SqlString.format(`isNull(?)`, [SqlString.raw(valueExpr)]);
           }
           if ((strValue?.length ?? 0) > 1000 || column.length > 1000) {
             console.warn('Search value/object key too large.');
@@ -107,16 +117,17 @@ function processRowToWhereClause(
           );
 
         default:
-          // Handle nullish values
-          if (value == null) {
-            return SqlString.format(`isNull(?)`, [SqlString.raw(valueExpr)]);
-          }
           // Handle the case when string is too long
-          if ((strValue?.length ?? 0) > MAX_STRING_LENGTH) {
-            return SqlString.format(`lower(hex(MD5(leftUTF8(?, 1000))))=?`, [
-              SqlString.raw(valueExpr),
-              MD5((strValue ?? '').substring(0, 1000)).toString(),
-            ]);
+          if (strValue.length > MAX_STRING_LENGTH) {
+            return SqlString.format(
+              `lower(hex(SHA256(leftUTF8(?, ${LEFT_UTF8_HASH_CODE_POINTS}))))=?`,
+              [
+                SqlString.raw(valueExpr),
+                SHA256(
+                  leftUtf8Prefix(strValue, LEFT_UTF8_HASH_CODE_POINTS),
+                ).toString(),
+              ],
+            );
           }
           return SqlString.format(`?=?`, [
             SqlString.raw(valueExpr), // don't escape expressions
@@ -140,9 +151,11 @@ export function buildColumnMap(
   return new Map(
     meta?.map(c => {
       // if aliasMap is provided, use the alias as the valueExpr
-      // but if the alias is not found, use the column name as the valueExpr
+      // but if the alias is not found, fall back to the column name.
+      // Alias entries are already SQL expressions; a result column name
+      // needs quoting when it isn't one (e.g. `x-host-header`).
       const valueExpr =
-        aliasMap != null ? (aliasMap[c.name] ?? c.name) : c.name;
+        aliasMap?.[c.name] ?? quoteResultColumnNameIfNeeded(c.name);
 
       return [
         c.name,
@@ -168,11 +181,16 @@ function buildAliasWith(
 /**
  * Generate a RowWhereResult from a row, column map, and alias map.
  * Non-React equivalent of the useRowWhere hook's returned callback.
+ *
+ * When primaryKeyColumns is provided, only those columns are used in the
+ * WHERE clause. This avoids filtering on large columns like Body that
+ * trigger expensive index loading in ClickHouse.
  */
 export function getRowWhere(
   row: Record<string, unknown>,
   columnMap: Map<string, ColumnWithMeta>,
   aliasMap: Record<string, string | undefined> | undefined,
+  primaryKeyColumns?: Set<string>,
 ): RowWhereResult {
   // Filter out synthetic columns that aren't in the database schema
   const {
@@ -180,8 +198,15 @@ export function getRowWhere(
     [INTERNAL_ROW_FIELDS.ALIAS_WITH]: _aliasWith,
     ...dbRow
   } = row;
+
+  const filteredRow = primaryKeyColumns
+    ? Object.fromEntries(
+        Object.entries(dbRow).filter(([col]) => primaryKeyColumns.has(col)),
+      )
+    : dbRow;
+
   return {
-    where: processRowToWhereClause(dbRow, columnMap),
+    where: processRowToWhereClause(filteredRow, columnMap),
     aliasWith: buildAliasWith(aliasMap),
   };
 }

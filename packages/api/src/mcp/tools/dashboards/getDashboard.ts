@@ -1,26 +1,29 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 
 import * as config from '@/config';
 import { getDashboards } from '@/controllers/dashboard';
+import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
+import type { ToolRegistrar } from '@/mcp/tools/types';
+import { mcpUserError, validateObjectId } from '@/mcp/utils/errors';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
 import Dashboard from '@/models/dashboard';
 import { convertToExternalDashboard } from '@/routers/external-api/v2/utils/dashboards';
 
-import { withToolTracing } from '../../utils/tracing';
-import type { McpContext } from '../types';
+import { withResolvedFilterVariableNames } from './variables';
 
-export function registerGetDashboard(
-  server: McpServer,
-  context: McpContext,
-): void {
+export function registerGetDashboard({
+  context,
+  registerTool,
+}: ToolRegistrar): void {
   const { teamId } = context;
   const frontendUrl = config.FRONTEND_URL;
 
-  server.registerTool(
-    'hyperdx_get_dashboard',
+  registerTool(
+    'clickstack_get_dashboard',
     {
       title: 'Get Dashboard(s)',
+      annotations: READ_ONLY_TOOL,
       description:
         'Without an ID: list all dashboards (returns IDs, names, tags). ' +
         'With an ID: get full dashboard detail including all tiles and configuration.',
@@ -33,7 +36,7 @@ export function registerGetDashboard(
           ),
       }),
     },
-    withToolTracing('hyperdx_get_dashboard', context, async ({ id }) => {
+    async ({ id }) => {
       if (!id) {
         const dashboards = await getDashboards(
           new mongoose.Types.ObjectId(teamId),
@@ -51,27 +54,26 @@ export function registerGetDashboard(
         };
       }
 
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return {
-          isError: true,
-          content: [{ type: 'text' as const, text: 'Invalid dashboard ID' }],
-        };
-      }
+      const idError = validateObjectId(id, 'dashboard ID');
+      if (idError) return idError;
 
       const dashboard = await Dashboard.findOne({ _id: id, team: teamId });
       if (!dashboard) {
-        return {
-          isError: true,
-          content: [{ type: 'text' as const, text: 'Dashboard not found' }],
-        };
+        return mcpUserError('Dashboard not found');
       }
+      const externalDashboard = convertToExternalDashboard(dashboard, {
+        hidePromql: !isPromqlEnabled(context),
+      });
       return {
         content: [
           {
             type: 'text' as const,
             text: JSON.stringify(
               {
-                ...convertToExternalDashboard(dashboard),
+                ...externalDashboard,
+                filters: withResolvedFilterVariableNames(
+                  externalDashboard.filters ?? [],
+                ),
                 ...(frontendUrl
                   ? { url: `${frontendUrl}/dashboards/${dashboard._id}` }
                   : {}),
@@ -82,6 +84,6 @@ export function registerGetDashboard(
           },
         ],
       };
-    }),
+    },
   );
 }

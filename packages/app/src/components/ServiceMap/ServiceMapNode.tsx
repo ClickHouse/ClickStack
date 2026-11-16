@@ -1,19 +1,36 @@
+import { use } from 'react';
 import { TTraceSource } from '@hyperdx/common-utils/dist/types';
 import { Text } from '@mantine/core';
 import { Handle, Node, NodeProps, NodeToolbar, Position } from '@xyflow/react';
 
 import { ServiceAggregation } from '@/hooks/useServiceMap';
 
+import { formatServiceMapDimensions } from './dimensions';
+import { ServiceMapMetricContext } from './ServiceMapMetricContext';
 import ServiceMapTooltip from './ServiceMapTooltip';
-import { getNodeColors } from './utils';
+import {
+  deriveDisplayMetrics,
+  getNodeColors,
+  getNodeSize,
+  getServiceMetricValue,
+} from './utils';
 
 import styles from './ServiceMap.module.scss';
 
 export type ServiceMapNodeData = ServiceAggregation & {
   dateRange: [Date, Date];
   source: TTraceSource;
-  maxErrorPercentage: number;
+  // Largest total throughput (incoming + outgoing) across all nodes, used to
+  // scale node size.
+  maxThroughput: number;
   isSingleTrace?: boolean;
+  // The extra group-by SQL expressions behind `dimensions`.
+  groupBy: string[];
+  // Name of the service the map is currently focused on (if any), so a node can
+  // tell whether it is the focused one and show the matching CTA.
+  focusedService?: string;
+  // When provided, the node's tooltip offers a "Focus" action for this service.
+  onFocusService?: (serviceName: string) => void;
 };
 
 export default function ServiceMapNode(
@@ -22,21 +39,56 @@ export default function ServiceMapNode(
   const { data } = props;
   const {
     serviceName,
+    dimensions,
+    groupBy,
     incomingRequests: {
       totalRequests: totalIncomingRequestCount,
       errorPercentage,
+      p50,
+      p95,
+      p99,
+      hasLatency,
+    },
+    outgoingRequests,
+    source,
+    dateRange,
+    maxThroughput,
+    isSingleTrace,
+    focusedService,
+    onFocusService,
+  } = data;
+
+  const { metric, metricMax } = use(ServiceMapMetricContext);
+
+  const { backgroundColor, borderColor, borderStyle, borderWidth } =
+    getNodeColors(
+      getServiceMetricValue(data, metric),
+      metricMax[metric],
+      props.selected,
+      metric,
+      totalIncomingRequestCount > 0,
+    );
+
+  // Fallback matches the schema default (3 = ms); in practice the field is
+  // always present on a parsed source.
+  const { latencyMs, requestsPerSecond } = deriveDisplayMetrics(
+    {
+      totalRequests: totalIncomingRequestCount,
+      p50,
+      p95,
+      p99,
+      hasLatency,
     },
     source,
     dateRange,
-    maxErrorPercentage,
     isSingleTrace,
-  } = data;
-
-  const { backgroundColor, borderColor } = getNodeColors(
-    errorPercentage,
-    maxErrorPercentage,
-    props.selected,
   );
+
+  const size = getNodeSize(
+    totalIncomingRequestCount + outgoingRequests,
+    maxThroughput,
+  );
+  const dimensionsLabel = formatServiceMapDimensions(dimensions);
 
   return (
     <>
@@ -44,10 +96,20 @@ export default function ServiceMapNode(
         <ServiceMapTooltip
           errorPercentage={errorPercentage}
           totalRequests={totalIncomingRequestCount}
+          latencyMs={latencyMs}
+          requestsPerSecond={requestsPerSecond}
           source={source}
           dateRange={dateRange}
           serviceName={serviceName}
+          dimensions={dimensions}
+          groupBy={groupBy}
           isSingleTrace={isSingleTrace}
+          isFocused={focusedService === serviceName}
+          onFocus={
+            onFocusService && !isSingleTrace
+              ? () => onFocusService(serviceName)
+              : undefined
+          }
         />
       </NodeToolbar>
       <div className={`${styles.serviceNode}`}>
@@ -64,6 +126,10 @@ export default function ServiceMapNode(
             style={{
               backgroundColor,
               borderColor,
+              borderStyle,
+              borderWidth,
+              width: size,
+              height: size,
             }}
           />
           <div className="position-relative" style={{ marginLeft: -3 }}>
@@ -75,6 +141,15 @@ export default function ServiceMapNode(
           </div>
         </div>
         <Text size="xxs">{serviceName}</Text>
+        {dimensionsLabel ? (
+          <Text
+            size="xxs"
+            c="var(--color-text-muted)"
+            data-testid="service-map-node-dimensions"
+          >
+            {dimensionsLabel}
+          </Text>
+        ) : null}
       </div>
     </>
   );

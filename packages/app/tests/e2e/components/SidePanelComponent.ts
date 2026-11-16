@@ -4,6 +4,8 @@
  */
 import { Locator, Page } from '@playwright/test';
 
+import { WhereInputComponent } from './WhereInputComponent';
+
 export class SidePanelComponent {
   readonly page: Page;
   private readonly panelContainer: Locator;
@@ -36,6 +38,22 @@ export class SidePanelComponent {
   }
 
   /**
+   * The row-level error state shown when the full row data query fails.
+   */
+  get errorState() {
+    return this.panelContainer.getByTestId('row-error-state');
+  }
+
+  /**
+   * The "Known Columns List" hint rendered inside the error state when the
+   * failure looks like a `SELECT *` against a Distributed/Merge table whose
+   * target tables have mismatched columns.
+   */
+  get knownColumnsListHint() {
+    return this.panelContainer.getByTestId('known-columns-list-hint');
+  }
+
+  /**
    * Get a specific tab by name
    * Usage in spec: await expect(sidePanel.getTab('overview')).toBeVisible()
    */
@@ -60,6 +78,276 @@ export class SidePanelComponent {
     for (const tabName of tabNames) {
       await this.clickTab(tabName);
     }
+  }
+
+  /**
+   * In the parsed JSON view, expand a field whose value is a JSON string, then
+   * click the "Add to Filters" line action on a nested key. Each row in the JSON
+   * viewer carries `data-testid="json-viewer-line"`, and the action is a
+   * `<button title="Add to Filters">` rendered only while the row is hovered.
+   */
+  async addParsedJsonFieldToFilter(parentField: string, nestedKey: string) {
+    await this.clickTab('parsed');
+
+    const lines = this.panelContainer.getByTestId('json-viewer-line');
+    // The leaf line is the one containing an element whose text is exactly the
+    // nested key. Exact match avoids the collapsed parent's raw-value preview,
+    // which contains the key inline as part of a longer string.
+    const leafLine = lines.filter({
+      has: this.page.getByText(nestedKey, { exact: true }),
+    });
+
+    // The nested key only renders as its own line once the parent field (whose
+    // value is a JSON string) is expanded. Expand it if the leaf is not showing.
+    if (
+      !(await leafLine
+        .first()
+        .isVisible()
+        .catch(() => false))
+    ) {
+      await lines
+        .filter({ has: this.page.getByText(parentField, { exact: true }) })
+        .first()
+        .click();
+    }
+
+    await leafLine.first().waitFor({ state: 'visible', timeout: 10_000 });
+    // Hover the line to mount its action menu, then click the titled button
+    // scoped to that line so the parent's menu is never the target.
+    await leafLine.first().hover();
+    await leafLine
+      .first()
+      .getByTitle(/add to filters/i)
+      .click({ timeout: 10_000 });
+  }
+
+  /** Click the "Add to Filters" line action on a top-level field of the parsed row. */
+  async addParsedFieldToFilter(field: string) {
+    await this.clickTab('parsed');
+    const line = this.panelContainer
+      .getByTestId('json-viewer-line')
+      .filter({ has: this.page.getByText(field, { exact: true }) })
+      .first();
+    await line.hover();
+    await line.getByTitle(/add to filters/i).click();
+  }
+
+  /**
+   * The cross-source "View Trace" action rendered in a log panel's metadata row
+   * when the log has trace context (TraceId + a configured trace source).
+   */
+  get viewTraceButton() {
+    return this.page.getByTestId('side-panel-view-trace');
+  }
+
+  /**
+   * The breadcrumb trail container (rendered by SidePanelBreadcrumbs). Its
+   * individual crumbs are `side-panel-breadcrumb-<i>` (0-indexed, root first).
+   */
+  get breadcrumbs() {
+    return this.page.getByTestId('side-panel-breadcrumbs');
+  }
+
+  /**
+   * Get a breadcrumb crumb by its 0-based index (root = 0). Both clickable
+   * (ancestor) and current (leaf) crumbs carry the same test id shape.
+   */
+  getBreadcrumb(index: number) {
+    return this.page.getByTestId(`side-panel-breadcrumb-${index}`);
+  }
+
+  /**
+   * Click the breadcrumb Back control (pops one navigation level).
+   */
+  async back() {
+    await this.breadcrumbs
+      .getByLabel('Back')
+      .click({ timeout: this.defaultTimeout });
+  }
+
+  /**
+   * Click "View Trace" to push the correlated trace onto the source stack.
+   */
+  async clickViewTrace() {
+    // The button stays disabled until the correlated trace source + span row id
+    // resolve, so allow a longer window than the default tab-click timeout.
+    await this.viewTraceButton.waitFor({ state: 'visible', timeout: 10_000 });
+    await this.viewTraceButton.click({ timeout: 10_000 });
+  }
+
+  /**
+   * The Surrounding Context tab. Its "Custom" mode reveals a WHERE input that
+   * narrows the surrounding rows.
+   */
+  get contextTab() {
+    return this.page.getByTestId('side-panel-tab-context');
+  }
+
+  /**
+   * Pick a mode in the Surrounding Context tab's segmented control (All,
+   * Service, Host, Pod, Node, Custom). Clicks the label because Mantine's
+   * SegmentedControl hides the underlying radio.
+   */
+  async setContextBy(mode: string) {
+    await this.contextTab.getByText(mode, { exact: true }).click();
+  }
+
+  /**
+   * The trace waterfall's spans and logs filters, each a `SearchWhereInput`
+   * with its own language switch. Both are collapsed behind the "Show Filters"
+   * toggle — call `toggleTraceFilters` first.
+   */
+  get traceSpansFilter() {
+    return this.page.getByTestId('trace-spans-filter');
+  }
+
+  get traceLogsFilter() {
+    return this.page.getByTestId('trace-logs-filter');
+  }
+
+  /** The spans filter's WHERE control. Call `toggleTraceFilters` first. */
+  get traceSpansWhereInput() {
+    return new WhereInputComponent(this.page, this.traceSpansFilter);
+  }
+
+  /** Expand or collapse the trace waterfall's filter inputs. */
+  async toggleTraceFilters() {
+    await this.page.getByTestId('trace-filters-toggle').click();
+  }
+
+  /**
+   * A clickable span row in the trace waterfall, matched by its label text.
+   * Clicking it opens the span detail panel (Overview tab).
+   */
+  getWaterfallSpan(name: string) {
+    return this.panelContainer
+      .locator('[role="button"]')
+      .filter({ hasText: name });
+  }
+
+  async clickWaterfallSpan(name: string) {
+    await this.getWaterfallSpan(name).first().click({ timeout: 10_000 });
+  }
+
+  /**
+   * The waterfall label currently marked selected. The highlighted class sits
+   * on the span's own `role="button"` row.
+   */
+  getHighlightedWaterfallSpan(name: string) {
+    return this.panelContainer
+      .locator('[role="button"][class*="traceTimelineLabelHighlighted"]')
+      .filter({ hasText: name });
+  }
+
+  /**
+   * The span detail drawer beside the waterfall. Trace sources don't render an
+   * Overview tab of their own, so `tab-overview` plus the close control only
+   * exist together on this drawer. The tab bar's spacer is also `flex-grow-1`,
+   * so that class alone matches the tab chrome and misses the overview body.
+   * The overview root is `flex-grow-1 overflow-auto`.
+   */
+  get spanDetailsPanel() {
+    const closeSpanDetails = this.page.getByRole('button', {
+      name: 'Close span details',
+    });
+    return this.panelContainer
+      .locator('div')
+      .filter({ has: closeSpanDetails })
+      .filter({ has: this.page.getByTestId('tab-overview') })
+      .filter({ has: this.page.locator('.flex-grow-1.overflow-auto') })
+      .last();
+  }
+
+  /**
+   * Rows in the span detail's "Span Links" section. Each row's open action
+   * (`span-link-open-trace`) shows the linked span's name once the target
+   * span is resolved, or "Open trace" as the unresolved fallback.
+   */
+  get spanLinkRows() {
+    return this.panelContainer.getByTestId('span-link-row');
+  }
+
+  get spanLinkOpenActions() {
+    return this.panelContainer.getByTestId('span-link-open-trace');
+  }
+
+  /**
+   * Rows in the span detail's "Linked from" section (spans whose links
+   * reference the selected span), and the per-row action that opens the
+   * referencing span's trace.
+   */
+  get linkedFromRows() {
+    return this.panelContainer.getByTestId('linked-from-row');
+  }
+
+  get linkedFromOpenActions() {
+    return this.panelContainer.getByTestId('linked-from-open-span');
+  }
+
+  /**
+   * Key labels of the JSON viewer's depth-0 rows. Nested rows are excluded so
+   * the list is a flat sequence that reverses cleanly when the order flips —
+   * nested children stay grouped under their parent, so a full-tree list does
+   * not.
+   */
+  get jsonViewerTopLevelKeys() {
+    return this.panelContainer.locator(
+      '[data-testid="json-viewer-line"][data-depth="0"] [class*="keyContainer"] > [class*="key"]',
+    );
+  }
+
+  async getJsonViewerTopLevelKeys(): Promise<string[]> {
+    await this.jsonViewerTopLevelKeys
+      .first()
+      .waitFor({ state: 'visible', timeout: 10_000 });
+    const keys = await this.jsonViewerTopLevelKeys.allInnerTexts();
+    return keys.map(key => key.trim()).filter(Boolean);
+  }
+
+  /**
+   * Sort in the browser, where the viewer's own `localeCompare` runs — Node's
+   * ICU orders mixed-case keys differently, so sorting test-side would compare
+   * against a different collation than the one under test.
+   */
+  async sortKeysLikeViewer(keys: string[]): Promise<string[]> {
+    return this.page.evaluate(
+      (ks: string[]) =>
+        [...ks].sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true }),
+        ),
+      keys,
+    );
+  }
+
+  /** Pick a key-order option from the JSON viewer's view options menu. */
+  async selectJsonKeyOrder(order: 'asc' | 'desc' | 'original') {
+    await this.panelContainer
+      .getByTestId('json-viewer-options-menu')
+      .click({ timeout: this.defaultTimeout });
+    await this.panelContainer
+      .getByTestId(`json-viewer-key-order-${order}`)
+      .click({ timeout: this.defaultTimeout });
+  }
+
+  /**
+   * The "Column Values" (parsed) tab's content panel, which renders the full
+   * fetched row via the JSON viewer.
+   */
+  get columnValuesContent() {
+    return this.panelContainer.getByTestId('side-panel-tab-parsed');
+  }
+
+  /** Open the "Column Values" (parsed) tab. */
+  async openColumnValues() {
+    await this.clickTab('parsed');
+  }
+
+  /**
+   * A line in the "Column Values" tab matching `text` (substring). Used to
+   * assert a fetched row's value is shown.
+   */
+  columnValue(text: string) {
+    return this.columnValuesContent.getByText(text, { exact: false });
   }
 
   /**

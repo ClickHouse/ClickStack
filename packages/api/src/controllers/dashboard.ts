@@ -1,7 +1,10 @@
+import { savedChartConfigSupportsAlerts } from '@hyperdx/common-utils/dist/core/utils';
 import {
   DashboardWithoutIdSchema,
+  resolveChartPaletteToken,
   SavedChartConfig,
   Tile,
+  walkRawDashboardTileColors,
 } from '@hyperdx/common-utils/dist/types';
 import { map, partition, uniq } from 'lodash';
 import { z } from 'zod';
@@ -12,17 +15,65 @@ import {
   getDashboardAlertsByTile,
   getTeamDashboardAlertsByDashboardAndTile,
 } from '@/controllers/alerts';
+import { recordOnboardingTaskCompletion } from '@/controllers/user';
 import type { ObjectId } from '@/models';
 import type { AlertDocument, IAlert } from '@/models/alert';
-import Dashboard from '@/models/dashboard';
+import Dashboard, { IDashboard } from '@/models/dashboard';
+import { resolveAlertDisplayFields } from '@/utils/alerts';
+
+// Drop alerts on tiles the alert checker cannot evaluate (e.g. PromQL), so
+// they are never stored and any existing ones are deleted on save.
+function getSupportedTileAlert(tile: Tile) {
+  return savedChartConfigSupportsAlerts(tile.config)
+    ? tile.config.alert
+    : undefined;
+}
 
 function pickAlertsByTile(tiles: Tile[]) {
   return tiles.reduce((acc, tile) => {
-    if (tile.config.alert) {
-      acc[tile.id] = tile.config.alert;
+    const alert = getSupportedTileAlert(tile);
+    if (alert) {
+      acc[tile.id] = alert;
     }
     return acc;
   }, {});
+}
+
+// Completes only when a dashboard has a tile (an empty shell isn't charting).
+// Shared by every dashboard write path (controllers, external REST v2, MCP).
+export function recordDashboardOnboardingIfHasTiles(
+  userId: string | ObjectId | undefined | null,
+  tiles: { length: number } | null | undefined,
+) {
+  if ((tiles?.length ?? 0) > 0) {
+    recordOnboardingTaskCompletion(userId, 'dashboard');
+  }
+}
+
+/**
+ * Rewrite any legacy `chart-1`..`chart-10` tile colors from #2265 in
+ * an already-serialized dashboard JSON to their hue-named equivalents
+ * before it leaves the server. Keeps the wire format on a single
+ * canonical vocabulary so non-React HTTP clients (CI scripts, stale
+ * bundle tabs during a rolling deploy, the upcoming external API
+ * surface) never have to know about the legacy values, and so a
+ * GET → unmodified PATCH round-trip on a Mongo-seeded legacy doc can
+ * never resurrect the legacy tokens through the strict server-side
+ * `ChartPaletteTokenSchema`. The React-side
+ * `normalizeDashboardTileColors` becomes redundant for the wire path
+ * after this lands but stays in place as defense in depth for
+ * `IS_LOCAL_MODE` and in-memory tile literals.
+ *
+ * Unresolvable strings (stale hexes, hand-edited values, forward-rolled
+ * future tokens) pass through untouched so the user's data is not
+ * silently dropped; the strict schema surfaces a clear error on next
+ * save.
+ */
+function healLegacyDashboardTileColors<T>(dashboard: T): T {
+  return walkRawDashboardTileColors(dashboard, current => {
+    const resolved = resolveChartPaletteToken(current);
+    return resolved ?? current;
+  }) as T;
 }
 
 type TileForAlertSync = Pick<Tile, 'id'> & {
@@ -41,18 +92,19 @@ function extractTileAlertData(tiles: TileForAlertSync[]): {
 }
 
 async function syncDashboardAlerts(
-  dashboardId: string,
+  dashboard: Pick<IDashboard, '_id' | 'name' | 'tags' | 'tiles'>,
   teamId: ObjectId,
   oldTiles: TileForAlertSync[],
   newTiles: Tile[],
   userId?: ObjectId,
 ): Promise<void> {
+  const dashboardId = dashboard._id.toString();
   const { tileIds: oldTileIds, tileIdsWithAlerts: oldTileIdsWithAlerts } =
     extractTileAlertData(oldTiles);
 
   const newTilesForAlertSync: TileForAlertSync[] = newTiles.map(t => ({
     id: t.id,
-    config: { alert: t.config.alert },
+    config: { alert: getSupportedTileAlert(t) },
   }));
   const { tileIds: newTileIds, tileIdsWithAlerts: newTileIdsWithAlerts } =
     extractTileAlertData(newTilesForAlertSync);
@@ -61,7 +113,7 @@ async function syncDashboardAlerts(
   const alertsByTile = pickAlertsByTile(newTiles);
   if (Object.keys(alertsByTile).length > 0) {
     await createOrUpdateDashboardAlerts(
-      dashboardId,
+      dashboard,
       teamId,
       alertsByTile,
       userId,
@@ -88,6 +140,23 @@ async function syncDashboardAlerts(
   }
 }
 
+/**
+ * Attach the resolved display name/tags so the chart editor prefills real
+ * values for alerts written before the fields existed.
+ */
+function withResolvedDisplayFields(
+  alert: AlertDocument | undefined,
+  dashboard: Pick<IDashboard, 'name' | 'tags' | 'tiles'>,
+) {
+  if (alert == null) {
+    return undefined;
+  }
+  return {
+    ...alert.toJSON(),
+    ...resolveAlertDisplayFields(alert, { dashboard }),
+  };
+}
+
 export async function getDashboards(teamId: ObjectId) {
   const [_dashboards, alerts] = await Promise.all([
     Dashboard.find({ team: teamId })
@@ -104,10 +173,14 @@ export async function getDashboards(teamId: ObjectId) {
         ...t,
         config: {
           ...t.config,
-          alert: alerts[`${d._id.toString()}:${t.id}`]?.[0],
+          alert: withResolvedDisplayFields(
+            alerts[`${d._id.toString()}:${t.id}`]?.[0],
+            d,
+          ),
         },
       })),
-    }));
+    }))
+    .map(healLegacyDashboardTileColors);
 
   return dashboards;
 }
@@ -120,13 +193,20 @@ export async function getDashboard(dashboardId: string, teamId: ObjectId) {
     getDashboardAlertsByTile(teamId, dashboardId),
   ]);
 
-  return {
-    ..._dashboard?.toJSON(),
-    tiles: _dashboard?.tiles.map(t => ({
+  if (_dashboard == null) {
+    return null;
+  }
+
+  return healLegacyDashboardTileColors({
+    ..._dashboard.toJSON(),
+    tiles: _dashboard.tiles.map(t => ({
       ...t,
-      config: { ...t.config, alert: alerts[t.id]?.[0] },
+      config: {
+        ...t.config,
+        alert: withResolvedDisplayFields(alerts[t.id]?.[0], _dashboard),
+      },
     })),
-  };
+  });
 }
 
 export async function createDashboard(
@@ -142,11 +222,13 @@ export async function createDashboard(
   }).save();
 
   await createOrUpdateDashboardAlerts(
-    newDashboard._id,
+    newDashboard,
     teamId,
     pickAlertsByTile(dashboard.tiles),
     userId,
   );
+
+  recordDashboardOnboardingIfHasTiles(userId, newDashboard.tiles);
 
   return newDashboard;
 }
@@ -167,6 +249,19 @@ export async function updateDashboard(
   updates: Partial<z.infer<typeof DashboardWithoutIdSchema>>,
   userId?: ObjectId,
 ) {
+  // Defense-in-depth: callers pass spread objects into the update doc below.
+  // A smuggled `team`/`createdBy` here would move the document between
+  // tenants / forge ownership (the model marks them immutable, but the
+  // write below reaches Mongo directly).
+  const {
+    team: _ignoredTeam,
+    createdBy: _ignoredCreatedBy,
+    ...safeUpdates
+  } = updates as Record<string, unknown>;
+  if (_ignoredTeam !== undefined || _ignoredCreatedBy !== undefined) {
+    throw new Error('updateDashboard: team/createdBy are not updatable');
+  }
+
   const oldDashboard = await getDashboard(dashboardId, teamId);
 
   if (oldDashboard == null) {
@@ -179,7 +274,7 @@ export async function updateDashboard(
       team: teamId,
     },
     {
-      ...updates,
+      ...safeUpdates,
       tags: updates.tags && uniq(updates.tags),
       updatedBy: userId,
     },
@@ -191,13 +286,15 @@ export async function updateDashboard(
 
   if (updates.tiles) {
     await syncDashboardAlerts(
-      dashboardId,
+      updatedDashboard,
       teamId,
       oldDashboard?.tiles || [],
       updates.tiles,
       userId,
     );
   }
+
+  recordDashboardOnboardingIfHasTiles(userId, updatedDashboard.tiles);
 
   return updatedDashboard;
 }

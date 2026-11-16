@@ -9,7 +9,7 @@ export class SavedSearchModalComponent {
   readonly page: Page;
   private readonly modal: Locator;
   private readonly nameInput: Locator;
-  private readonly savedSearchNameTitle: Locator;
+  private readonly savedSearchNameInput: Locator;
   private readonly submitButton: Locator;
   private readonly addTagButton: Locator;
 
@@ -17,9 +17,7 @@ export class SavedSearchModalComponent {
     this.page = page;
     this.modal = page.locator('[data-testid="save-search-modal"]');
     this.nameInput = page.locator('[data-testid="save-search-name-input"]');
-    this.savedSearchNameTitle = page.locator(
-      '[data-testid="saved-search-name"]',
-    );
+    this.savedSearchNameInput = page.getByTestId('saved-search-name');
     this.submitButton = page.locator(
       '[data-testid="save-search-submit-button"]',
     );
@@ -100,11 +98,12 @@ export class SavedSearchModalComponent {
     // Wait for navigation to complete
     await urlPromise;
 
-    // Wait for modal to fully close
     await expect(this.container).toBeHidden();
 
-    await expect(this.savedSearchNameTitle).toBeVisible({ timeout: 5000 });
-    await expect(this.savedSearchNameTitle).toHaveText(name, { timeout: 5000 });
+    await expect(this.savedSearchNameInput).toBeVisible({ timeout: 5000 });
+    await expect(this.savedSearchNameInput).toHaveValue(name, {
+      timeout: 5000,
+    });
   }
 
   /**

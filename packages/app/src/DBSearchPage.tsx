@@ -3,6 +3,7 @@ import {
   FormEventHandler,
   Fragment,
   memo,
+  ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -25,7 +26,10 @@ import {
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
+import {
+  ClickHouseQueryError,
+  ColumnMeta,
+} from '@hyperdx/common-utils/dist/clickhouse';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { buildSearchChartConfig } from '@hyperdx/common-utils/dist/core/searchChartConfig';
 import {
@@ -38,6 +42,7 @@ import {
   ChartConfigWithDateRange,
   DisplayType,
   Filter,
+  isPersistableUserId,
   isTraceSource,
   SourceKind,
   TSource,
@@ -69,25 +74,40 @@ import { notifications } from '@mantine/notifications';
 import {
   IconArrowBarToRight,
   IconBolt,
+  IconCode,
   IconPlayerPlay,
   IconPlus,
   IconStack2,
   IconTags,
   IconX,
 } from '@tabler/icons-react';
-import { useIsFetching } from '@tanstack/react-query';
+import { keepPreviousData, useIsFetching } from '@tanstack/react-query';
 import { SortingState } from '@tanstack/react-table';
 import CodeMirror from '@uiw/react-codemirror';
 
+import api, { useCompleteOnboardingTask } from '@/api';
+import { usePageTitle } from '@/brand';
 import { ActiveFilterPills } from '@/components/ActiveFilterPills';
+import { AlertStatusIcon } from '@/components/AlertStatusIcon';
+import { ResponsiveSidePanel } from '@/components/CompactViewport/ResponsiveSidePanel';
+import { useCompactViewport } from '@/components/CompactViewport/useCompactViewport';
 import { ContactSupportText } from '@/components/ContactSupportText';
 import { DBSearchPageFilters } from '@/components/DBSearchPageFilters';
-import { DBTimeChart } from '@/components/DBTimeChart';
+import { cleanClickHouseExpression } from '@/components/DBSearchPageFilters/utils';
+import { DBTimeChart, type SeriesGroupFilter } from '@/components/DBTimeChart';
 import EmptyState from '@/components/EmptyState';
 import { ErrorBoundary } from '@/components/Error/ErrorBoundary';
 import { FavoriteButton } from '@/components/FavoriteButton';
+import ResourceTerraformPopover from '@/components/Iac/ResourceTerraformPopover';
+import { InlineNameInput } from '@/components/InlineNameInput/InlineNameInput';
 import { InputControlled } from '@/components/InputControlled';
 import OnboardingModal from '@/components/OnboardingModal';
+import {
+  isCustomSearchGroupBy,
+  resolveSearchGroupBy,
+  retainGroupByByColumns,
+} from '@/components/SearchGroupBy/searchGroupBy';
+import { SearchGroupBySelect } from '@/components/SearchGroupBy/SearchGroupBySelect';
 import SearchWhereInput, {
   getStoredLanguage,
 } from '@/components/SearchInput/SearchWhereInput';
@@ -101,7 +121,10 @@ import { TimePicker } from '@/components/TimePicker';
 import { IS_LOCAL_MODE } from '@/config';
 import { useAliasMapFromChartConfig } from '@/hooks/useChartConfig';
 import { useExplainQuery } from '@/hooks/useExplainQuery';
+import { useResolvedSourceParam } from '@/hooks/useResolvedSourceParam';
 import { withAppNav } from '@/layout';
+import { isNonTrivialSearch } from '@/OnboardingChecklist/onboardingTasks';
+import { QueryAttributionProvider } from '@/queryAttribution';
 import {
   useCreateSavedSearch,
   useDeleteSavedSearch,
@@ -110,26 +133,42 @@ import {
 } from '@/savedSearch';
 import { useSearchPageFilterState } from '@/searchFilters';
 import { getEventBody, useSource, useSources } from '@/source';
-import { useAppTheme, useBrandDisplayName } from '@/theme/ThemeProvider';
 import {
   parseRelativeTimeQuery,
-  parseTimeQuery,
+  useDefaultTimeRange,
   useNewTimeQuery,
 } from '@/timeQuery';
-import { QUERY_LOCAL_STORAGE, useLocalStorage, usePrevious } from '@/utils';
+import { TimeZoneOverrideProvider } from '@/timeZoneOverride';
+import {
+  formatDurationMs,
+  orderByAfterRemovingSelectItem,
+  QUERY_LOCAL_STORAGE,
+  selectItemExpression,
+  useLocalStorage,
+  usePrevious,
+  withMapKeyAlias,
+} from '@/utils';
+import { recordAction } from '@/utils/browserTelemetry';
 
-import { SQLPreview } from './components/ChartSQLPreview';
+import ChartSQLPreview, { SQLPreview } from './components/ChartSQLPreview';
 import DBSqlRowTableWithSideBar from './components/DBSqlRowTableWithSidebar';
 import PatternTable from './components/PatternTable';
 import { DBSearchHeatmapChart } from './components/Search/DBSearchHeatmapChart';
 import DirectTraceSidePanel from './components/Search/DirectTraceSidePanel';
-import SourceSchemaPreview from './components/SourceSchemaPreview';
+import SourceSchemaPreview, {
+  isSourceSchemaPreviewEnabled,
+} from './components/SourceSchemaPreview';
 import {
   getRelativeTimeOptionLabel,
   LIVE_TAIL_DURATION_MS,
 } from './components/TimePicker/utils';
-import { useTableMetadata } from './hooks/useMetadata';
+import {
+  useColumns,
+  useResolvedDateTimeColumns,
+  useTableMetadata,
+} from './hooks/useMetadata';
 import { useSqlSuggestions } from './hooks/useSqlSuggestions';
+import { useStableCallback } from './hooks/useStableCallback';
 import {
   buildDirectTraceWhereClause,
   getDefaultDirectTraceDateRange,
@@ -141,11 +180,10 @@ import {
 } from './utils/queryParsers';
 import { LOCAL_STORE_CONNECTIONS_KEY } from './connection';
 import { DBSearchPageAlertModal } from './DBSearchPageAlertModal';
-import { EditablePageName } from './EditablePageName';
 import { SearchConfig } from './types';
 import { FormatTime } from './useFormatTime';
 
-import searchPageStyles from '../styles/SearchPage.module.scss';
+import searchPageStyles from '@styles/SearchPage.module.scss';
 
 const LIVE_TAIL_REFRESH_FREQUENCY_OPTIONS = [
   { value: '1000', label: '1s' },
@@ -183,24 +221,33 @@ type SearchConfigFromSchema = z.infer<typeof SearchConfigSchema>;
 
 const QUERY_KEY_PREFIX = 'search';
 
+// Clicks inside the results panel keep the row side panel open (so users can
+// scroll the table or select a different row); clicks anywhere else on the page
+// dismiss it.
+const SEARCH_RESULTS_PANEL_KEEP_OPEN_SELECTOR =
+  '[data-testid="search-results-panel"]';
+
 // Helper function to get the default source id
 export function getDefaultSourceId(
-  sources: { id: string; disabled?: boolean }[] | undefined,
+  sources: Pick<TSource, 'id' | 'kind' | 'disabled'>[] | undefined,
   lastSelectedSourceId: string | undefined,
 ): string {
   if (!sources || sources.length === 0) return '';
 
-  // Filter out disabled sources
-  const enabledSources = sources.filter(s => !s.disabled);
-  if (enabledSources.length === 0) return '';
+  // Restrict to sources that this page can actually display.
+  const searchableSources = sources.filter(
+    s => ALLOWED_SOURCE_KINDS.includes(s.kind) && !s.disabled,
+  );
+  if (searchableSources.length === 0) return '';
 
   if (
     lastSelectedSourceId &&
-    enabledSources.some(s => s.id === lastSelectedSourceId)
+    searchableSources.some(s => s.id === lastSelectedSourceId)
   ) {
     return lastSelectedSourceId;
   }
-  return enabledSources[0].id;
+
+  return searchableSources[0].id;
 }
 
 function SourceEditModal({
@@ -245,13 +292,10 @@ function ResumeLiveTailButton({
 }: {
   handleResumeLiveTail: () => void;
 }) {
-  const { themeName } = useAppTheme();
-  const variant = themeName === 'clickstack' ? 'secondary' : 'primary';
-
   return (
     <Button
       size="compact-xs"
-      variant={variant}
+      variant="secondary"
       onClick={handleResumeLiveTail}
       leftSection={<IconBolt size={14} />}
     >
@@ -272,6 +316,7 @@ function SearchSubmitButton({
       type="submit"
       leftSection={<IconPlayerPlay size={16} />}
       style={{ flexShrink: 0 }}
+      size="xs"
     >
       Run
     </Button>
@@ -296,52 +341,120 @@ function ExpandFiltersButton({ onExpand }: { onExpand: () => void }) {
 function SearchResultsCountGroup({
   isFilterSidebarCollapsed,
   onExpandFilters,
-  histogramTimeChartConfig,
+  totalCountConfig,
   enableParallelQueries,
+  children,
 }: {
   isFilterSidebarCollapsed: boolean;
   onExpandFilters: () => void;
-  histogramTimeChartConfig: BuilderChartConfigWithDateRange;
+  totalCountConfig: BuilderChartConfigWithDateRange;
   enableParallelQueries?: boolean;
+  children?: ReactNode;
 }) {
   return (
-    <Group gap={4} align="center">
-      {isFilterSidebarCollapsed && (
-        <ExpandFiltersButton onExpand={onExpandFilters} />
-      )}
-      <SearchTotalCountChart
-        config={histogramTimeChartConfig}
-        queryKeyPrefix={QUERY_KEY_PREFIX}
-        enableParallelQueries={enableParallelQueries}
-      />
+    <Group gap="sm" align="center">
+      <Group gap={4} align="center">
+        {isFilterSidebarCollapsed && (
+          <ExpandFiltersButton onExpand={onExpandFilters} />
+        )}
+        <SearchTotalCountChart
+          config={totalCountConfig}
+          queryKeyPrefix={QUERY_KEY_PREFIX}
+          enableParallelQueries={enableParallelQueries}
+        />
+      </Group>
+      {children}
     </Group>
   );
 }
 
-function SearchNumRows({
+export function SearchNumRows({
   config,
+  sqlConfig,
   enabled,
+  searchElapsedMs,
+  isSearching,
+  isLiveTail = false,
 }: {
   config: ChartConfigWithDateRange;
+  sqlConfig?: ChartConfigWithDateRange;
   enabled: boolean;
+  searchElapsedMs: number | null;
+  isSearching: boolean;
+  isLiveTail?: boolean;
 }) {
+  const [statsOpened, { open: openStats, close: closeStats }] =
+    useDisclosure(false);
   const { data, isLoading, error } = useExplainQuery(config, {
     enabled,
+    // Keep the previous row count on screen while a new EXPLAIN runs so the
+    // "Scanned Rows" value doesn't flash a loading state on every live-tail
+    // poll (each poll changes the dateRange, and thus the query key).
+    placeholderData: keepPreviousData,
   });
 
   if (!enabled) {
     return null;
   }
 
-  const numRows = data?.[0]?.rows;
+  const explainRow = data?.[0];
+  const numRows = explainRow?.rows;
+  const hasData = !isLoading && !error && numRows != null;
+
+  // During live tail we keep showing the last measured elapsed time and never
+  // flash the "..." loading state, so the value doesn't flicker between polls.
+  const showElapsedLoading = isSearching && !isLiveTail;
+  const showElapsed = showElapsedLoading || searchElapsedMs != null;
+
   return (
-    <Text size="xs">
-      {isLoading
-        ? 'Scanned Rows ...'
-        : error || !numRows
-          ? ''
-          : `Scanned Rows: ${Number.parseInt(numRows)?.toLocaleString()}`}
-    </Text>
+    <>
+      <Modal
+        opened={statsOpened}
+        onClose={closeStats}
+        title={sqlConfig != null ? 'Generated SQL (Timeline)' : 'Generated SQL'}
+        size="xl"
+      >
+        <ChartSQLPreview config={sqlConfig ?? config} enableCopy />
+      </Modal>
+      <Group gap={4} align="center">
+        <Text size="xs">
+          {isLoading
+            ? 'Scanned Rows ...'
+            : error || numRows == null
+              ? ''
+              : `Scanned Rows: ${Number(numRows).toLocaleString()}`}
+        </Text>
+        {showElapsed && (
+          <>
+            {(hasData || isLoading) && (
+              <Text size="xs" c="dimmed">
+                |
+              </Text>
+            )}
+            <Text size="xs">
+              {showElapsedLoading
+                ? 'Elapsed Time: ...'
+                : `Elapsed Time: ${formatDurationMs(searchElapsedMs!)}`}
+            </Text>
+          </>
+        )}
+        {/* The generated-SQL preview is derived purely from config, not the
+            explain query, so it renders unconditionally. Gating it on explain
+            loading/data would make it flicker on every live-tail poll, since
+            each poll changes the dateRange (and thus the explain queryKey). */}
+        <Tooltip label="Show Generated SQL" position="top">
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            color="gray"
+            onClick={openStats}
+            aria-label="Show Generated SQL"
+          >
+            <IconCode size={16} />
+          </ActionIcon>
+        </Tooltip>
+      </Group>
+    </>
   );
 }
 
@@ -349,12 +462,14 @@ function SaveSearchModalComponent({
   searchedConfig,
   opened,
   onClose,
+  onCreate,
   isUpdate,
   savedSearchId,
 }: {
   searchedConfig: SearchConfig;
   opened: boolean;
   onClose: () => void;
+  onCreate: (savedSearchId: string) => Promise<void>;
   isUpdate: boolean;
   savedSearchId: string | undefined | null;
 }) {
@@ -460,7 +575,7 @@ function SaveSearchModalComponent({
             tags: tags,
           });
 
-          router.push(`/search/${savedSearch.id}${window.location.search}`);
+          await onCreate(savedSearch.id);
           onClose();
         } catch (error) {
           console.error('Error creating saved search:', error);
@@ -601,9 +716,6 @@ function SaveSearchModalComponent({
   );
 }
 const SaveSearchModal = memo(SaveSearchModalComponent);
-
-// TODO: This is a hack to set the default time range
-const defaultTimeRange = parseTimeQuery('Past 15m', false) as [Date, Date];
 
 function useLiveUpdate({
   isLive,
@@ -782,6 +894,17 @@ export function useDefaultOrderBy(sourceID: string | undefined | null) {
   }, [source, tableMetadata]);
 }
 
+function formatDroppedFiltersMessage(count: number): string {
+  const noun = count === 1 ? 'filter' : 'filters';
+  const verb = count === 1 ? 'was' : 'were';
+  return `${count} ${noun} didn't apply to this source and ${verb} removed.`;
+}
+
+function formatDroppedGroupByMessage(dropped: string[]): string {
+  const verb = dropped.length === 1 ? 'was' : 'were';
+  return `Group by ${dropped.join(', ')} didn't apply to this source and ${verb} removed.`;
+}
+
 // This is outside as it needs to be a stable reference
 const queryStateMap = {
   source: parseAsString,
@@ -792,14 +915,163 @@ const queryStateMap = {
   orderBy: parseAsStringEncoded,
 };
 
-export function DBSearchPage() {
-  const brandName = useBrandDisplayName();
-  // Next router is laggy behind window.location, which causes race
-  // conditions with useQueryStates, so we'll parse it directly
-  const paths = window.location.pathname.split('/');
-  const savedSearchId = paths.length === 3 ? paths[2] : null;
+/**
+ * Route for a newly created saved search. The saved-search config params are
+ * dropped so the page hydrates from the stored configuration; only the time
+ * range is carried over, since it is not part of a saved search.
+ *
+ * Returned without `router.basePath` — `router.push` prepends it.
+ */
+export function buildSavedSearchNavigationUrl(
+  savedSearchId: string,
+  currentSearch: string,
+) {
+  const currentParams = new URLSearchParams(currentSearch);
+  const timeRangeParams = new URLSearchParams();
+  const from = currentParams.get('from');
+  const to = currentParams.get('to');
 
-  const [searchedConfig, setSearchedConfig] = useQueryStates(queryStateMap);
+  if (from != null && to != null) {
+    timeRangeParams.set('from', from);
+    timeRangeParams.set('to', to);
+
+    // An explicit absolute range must stay in range mode on the saved search;
+    // otherwise the default live-tail mode can take over.
+    if (currentParams.get('isLive') === 'false') {
+      timeRangeParams.set('isLive', 'false');
+    }
+  }
+
+  const timeRangeSearch = timeRangeParams.toString();
+  return `/search/${savedSearchId}${
+    timeRangeSearch ? `?${timeRangeSearch}` : ''
+  }`;
+}
+
+export function useSearchTelemetry({
+  isAnyQueryFetching,
+  isLive,
+  sourceId,
+}: {
+  isAnyQueryFetching: boolean;
+  /** When true the hook suppresses recording and emission so live-tail
+   * background refetches do not flood the metric. */
+  isLive: boolean;
+  sourceId: string | null;
+}) {
+  const searchStartTimeRef = useRef<number | null>(null);
+  const wasFetchingRef = useRef(false);
+  // Whether the in-flight cycle began as a live-tail refresh, captured on the
+  // rising edge so a mid-cycle isLive flip can't change how it's treated.
+  const cycleIsLiveRef = useRef(false);
+
+  // Snapshot latency_ms and source_id together so a later sourceId change does
+  // not cause the emission effect to re-fire with stale latency data. `emit`
+  // records whether this cycle should be reported to telemetry (user-initiated
+  // searches only); latency is still surfaced for display in every case.
+  const [completedSearch, setCompletedSearch] = useState<{
+    latency_ms: number;
+    source_id: string;
+    emit: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (isAnyQueryFetching) {
+      // Start the timer once per fetch cycle (for live tail too — we display
+      // its elapsed time, we just don't emit telemetry for it).
+      if (!wasFetchingRef.current) {
+        searchStartTimeRef.current = performance.now();
+        cycleIsLiveRef.current = isLive;
+        // Only blank the displayed timer for user-initiated searches. During
+        // live tail we keep the previous value so it doesn't flicker between
+        // background refreshes.
+        if (!isLive) {
+          setCompletedSearch(null);
+        }
+      }
+      wasFetchingRef.current = true;
+    } else {
+      if (searchStartTimeRef.current != null) {
+        setCompletedSearch({
+          latency_ms: Math.round(
+            performance.now() - searchStartTimeRef.current,
+          ),
+          source_id: sourceId ?? '',
+          emit: !cycleIsLiveRef.current,
+        });
+        searchStartTimeRef.current = null;
+      }
+      wasFetchingRef.current = false;
+    }
+  }, [isAnyQueryFetching, isLive, sourceId]);
+
+  // completedSearch is the only dep here — sourceId was snapshotted at
+  // completion time so changing source after a finished search does not
+  // re-emit the previous run's latency against the new source. Live-tail
+  // cycles are recorded for display but flagged emit=false so they never flood
+  // telemetry.
+  useEffect(() => {
+    if (completedSearch == null || !completedSearch.emit) return;
+    recordAction('search executed', {
+      latency_ms: completedSearch.latency_ms,
+      source_id: completedSearch.source_id,
+    });
+  }, [completedSearch]);
+
+  return { searchElapsedMs: completedSearch?.latency_ms ?? null };
+}
+
+/**
+ * The saved search being shown, or null for an ad-hoc one.
+ *
+ * Read from the URL directly because the Next router lags window.location,
+ * which races with useQueryStates.
+ */
+function getSavedSearchIdFromPath(): string | null {
+  const paths = window.location.pathname.split('/');
+  return paths.length === 3 ? paths[2] : null;
+}
+
+/**
+ * Tags the page's ClickHouse queries with the saved search they belong to.
+ * A wrapper so the page component's own JSX stays where it is.
+ */
+export function DBSearchPage() {
+  return (
+    <QueryAttributionProvider
+      attribution={{
+        surface: 'search',
+        search: getSavedSearchIdFromPath() ?? undefined,
+      }}
+    >
+      <TimeZoneOverrideProvider>
+        <DBSearchPageContent />
+      </TimeZoneOverrideProvider>
+    </QueryAttributionProvider>
+  );
+}
+
+function DBSearchPageContent() {
+  // Read again here, not passed down: this component re-renders from its own
+  // query-state hooks without the wrapper, and must see the current path.
+  const savedSearchId = getSavedSearchIdFromPath();
+  const defaultTimeRange = useDefaultTimeRange('Past 15m');
+
+  const [rawSearchedConfig, setSearchedConfig] = useQueryStates(queryStateMap);
+
+  // `?source=` accepts a source name as well as a source ID. Resolve it to an ID
+  // here. The param is not changed until the user changes the source in the UI.
+  const { source: searchedSource } = useResolvedSourceParam(
+    rawSearchedConfig.source,
+    {
+      kinds: [SourceKind.Log, SourceKind.Trace],
+    },
+  );
+
+  const searchedConfig = useMemo(
+    () => ({ ...rawSearchedConfig, source: searchedSource?.id }),
+    [rawSearchedConfig, searchedSource?.id],
+  );
   const [directTraceId, setDirectTraceId] = useQueryState(
     'traceId',
     parseAsStringEncoded,
@@ -811,16 +1083,15 @@ export function DBSearchPage() {
       enabled: savedSearchId != null,
     },
   );
+  const title = usePageTitle(
+    savedSearch ? `${savedSearch.name} Search` : 'Search',
+  );
 
   const { data: sources } = useSources();
   const [lastSelectedSourceId, setLastSelectedSourceId] = useLocalStorage(
     'hdx-last-selected-source-id',
     '',
   );
-  const { data: searchedSource } = useSource({
-    id: searchedConfig.source,
-    kinds: [SourceKind.Log, SourceKind.Trace],
-  });
   const directTraceSource =
     directTraceId != null && searchedSource?.kind === SourceKind.Trace
       ? searchedSource
@@ -839,6 +1110,23 @@ export function DBSearchPage() {
     ]).withDefault('results'),
   );
 
+  // URL-only, not saved with the search: null uses the source default.
+  const [groupByParam, setGroupByParam] = useQueryState(
+    'groupBy',
+    parseAsStringEncoded,
+  );
+
+  const [patternColumn, setPatternColumn] = useQueryState(
+    'patternColumn',
+    parseAsString,
+  );
+  const [draftPatternColumn, setDraftPatternColumn] = useState(
+    patternColumn ?? '',
+  );
+  useEffect(() => {
+    setDraftPatternColumn(patternColumn ?? '');
+  }, [patternColumn]);
+
   const [isLive, setIsLive] = useQueryState(
     'isLive',
     parseAsBoolean.withDefault(true),
@@ -852,6 +1140,31 @@ export function DBSearchPage() {
 
   const [isFilterSidebarCollapsed, setIsFilterSidebarCollapsed] =
     useLocalStorage<boolean>('isFilterSidebarCollapsed', false);
+  // Compact open state stays out of `isFilterSidebarCollapsed`. Writing that
+  // key from a phone would collapse the sidebar the next time the same
+  // browser opens the page on a desktop.
+  const [isCompactFiltersOpen, setIsCompactFiltersOpen] = useState(false);
+  // SELECT grows with its text. On a phone that pushes the logs off the
+  // screen, so the column editors stay closed until the user asks.
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const isCompact = useCompactViewport();
+  const filtersCollapsed = isCompact
+    ? !isCompactFiltersOpen
+    : isFilterSidebarCollapsed;
+  const collapseFilters = useCallback(() => {
+    if (isCompact) {
+      setIsCompactFiltersOpen(false);
+      return;
+    }
+    setIsFilterSidebarCollapsed(true);
+  }, [isCompact, setIsFilterSidebarCollapsed]);
+  const expandFilters = useCallback(() => {
+    if (isCompact) {
+      setIsCompactFiltersOpen(true);
+      return;
+    }
+    setIsFilterSidebarCollapsed(false);
+  }, [isCompact, setIsFilterSidebarCollapsed]);
 
   const [denoiseResults, _setDenoiseResults] = useQueryState(
     'denoise',
@@ -871,16 +1184,20 @@ export function DBSearchPage() {
     [sources, lastSelectedSourceId],
   );
 
-  const { control, setValue, reset, handleSubmit, formState } =
+  const { control, setValue, getValues, reset, handleSubmit, formState } =
     useForm<SearchConfigFromSchema>({
       values: {
         select: searchedConfig.select || '',
         where: searchedConfig.where || '',
         whereLanguage:
           searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
+        // When source is provided in the URL or in the saved search, don't
+        // fallback to the default source.
         source:
           searchedConfig.source ||
-          (savedSearchId || directTraceId ? '' : defaultSourceId),
+          (savedSearchId || directTraceId || rawSearchedConfig.source
+            ? ''
+            : defaultSourceId),
         filters: searchedConfig.filters ?? [],
         orderBy: searchedConfig.orderBy ?? '',
       },
@@ -959,8 +1276,14 @@ export function DBSearchPage() {
   // been wiped (ex. clicking on the same saved search again)
   useEffect(() => {
     const { source, where, select, whereLanguage, filters } = searchedConfig;
+    // Source is "empty" when it's not present in the URL, not when it cannot be resolved
+    // to an existing source.
     const isSearchConfigEmpty =
-      !source && !where && !select && !whereLanguage && !filters?.length;
+      !rawSearchedConfig.source &&
+      !where &&
+      !select &&
+      !whereLanguage &&
+      !filters?.length;
 
     // Landed on saved search (if we just landed on a searchId route)
     if (
@@ -998,6 +1321,7 @@ export function DBSearchPage() {
   }, [
     savedSearch,
     searchedConfig,
+    rawSearchedConfig.source,
     setSearchedConfig,
     savedSearchId,
     defaultSourceId,
@@ -1008,6 +1332,14 @@ export function DBSearchPage() {
   const [_queryErrors, setQueryErrors] = useState<{
     [key: string]: Error | ClickHouseQueryError;
   }>({});
+
+  const completeOnboardingTask = useCompleteOnboardingTask();
+  const { data: me } = api.useMe();
+  // A non-persistable user counts as "already explored" so the POST never fires
+  // (see isPersistableUserId).
+  const hasExploredData =
+    !isPersistableUserId(me?.id) ||
+    (me?.onboardingData?.completedTasks.includes('advancedQuery') ?? false);
 
   useEffect(() => {
     if (!isBrowser || !IS_LOCAL_MODE) return;
@@ -1023,31 +1355,56 @@ export function DBSearchPage() {
     };
   }, []);
 
-  const onSubmit = useCallback(() => {
-    onSearch(displayedTimeInputValue);
-    handleSubmit(
-      ({ select, where, whereLanguage, source, filters, orderBy }) => {
-        setSearchedConfig({
-          select,
-          where,
-          whereLanguage,
-          source,
-          filters,
-          orderBy,
-        });
-      },
-    )();
-    // clear query errors
-    setQueryErrors({});
-  }, [
-    handleSubmit,
-    setSearchedConfig,
-    displayedTimeInputValue,
-    onSearch,
-    setQueryErrors,
-  ]);
+  // recordExploration is false for the programmatic catch-up submit (loading a
+  // source / saved search), true for a genuine user search — so only the latter
+  // completes "Explore your data". An explicit arg, not a shared ref, so
+  // concurrent submits can't consume each other's suppression.
+  const onSubmit = useCallback(
+    ({ recordExploration = true }: { recordExploration?: boolean } = {}) => {
+      onSearch(displayedTimeInputValue);
+      handleSubmit(
+        ({ select, where, whereLanguage, source, filters, orderBy }) => {
+          setSearchedConfig({
+            select,
+            where,
+            whereLanguage,
+            source,
+            filters,
+            orderBy,
+          });
+          if (
+            recordExploration &&
+            !IS_LOCAL_MODE &&
+            !hasExploredData &&
+            isNonTrivialSearch(where, filters)
+          ) {
+            completeOnboardingTask.mutate('advancedQuery');
+          }
+        },
+      )();
+      setPatternColumn(draftPatternColumn || null);
+      setQueryErrors({});
+    },
+    [
+      handleSubmit,
+      setSearchedConfig,
+      displayedTimeInputValue,
+      onSearch,
+      setQueryErrors,
+      draftPatternColumn,
+      setPatternColumn,
+      completeOnboardingTask,
+      hasExploredData,
+    ],
+  );
 
+  // One debouncer so a catch-up and filter-apply in the same window collapse
+  // into one run; useDebouncedCallback keeps the last call's args.
   const debouncedSubmit = useDebouncedCallback(onSubmit, 1000);
+  const debouncedCatchUpSubmit = useCallback(
+    () => debouncedSubmit({ recordExploration: false }),
+    [debouncedSubmit],
+  );
   const handleSetFilters = useCallback(
     (filters: Filter[]) => {
       setValue('filters', filters);
@@ -1056,11 +1413,23 @@ export function DBSearchPage() {
     [debouncedSubmit, setValue],
   );
 
-  const filters = useWatch({ name: 'filters', control });
-  const searchFilters = useSearchPageFilterState({
-    searchQuery: filters ?? undefined,
-    onFilterChange: handleSetFilters,
-  });
+  // Top-level column names for the active source, used to quote
+  // filter keys that contain special characters.
+  const { data: inputSourceColumns } = useColumns(
+    {
+      databaseName: inputSourceObj?.from?.databaseName ?? '',
+      tableName: inputSourceObj?.from?.tableName ?? '',
+      connectionId: inputSourceObj?.connection ?? '',
+    },
+    { enabled: !!inputSourceObj },
+  );
+  const knownColumns = useMemo(
+    () =>
+      inputSourceColumns
+        ? new Set(inputSourceColumns.map(c => c.name))
+        : new Set<string>(),
+    [inputSourceColumns],
+  );
 
   const watchedSource = useWatch({
     control,
@@ -1069,11 +1438,59 @@ export function DBSearchPage() {
     defaultValue: searchedConfig.source ?? undefined,
   });
   const prevSourceRef = useRef(watchedSource);
+  // Set when the user switches sources via the dropdown. The follow-up
+  // effect waits for the new source's columns to load and then drops any
+  // sidebar filters that don't apply to the new schema.
+  const pendingFilterReconcileRef = useRef<string | null>(null);
+  // Same, for the histogram group by. Also set when a saved search switches the
+  // source, since the group by isn't part of the saved search.
+  const pendingGroupByReconcileRef = useRef<string | null>(null);
+
+  const watchedSourceObj = useMemo(
+    () => inputSourceObjs?.find(s => s.id === watchedSource),
+    [inputSourceObjs, watchedSource],
+  );
+  const { data: watchedSourceColumns } = useColumns(
+    {
+      databaseName: watchedSourceObj?.from?.databaseName ?? '',
+      tableName: watchedSourceObj?.from?.tableName ?? '',
+      connectionId: watchedSourceObj?.connection ?? '',
+    },
+    { enabled: !!watchedSourceObj },
+  );
+
+  const { dateTimeColumns, onResolvedColumnsChange } =
+    useResolvedDateTimeColumns(inputSourceColumns);
+
+  const filters = useWatch({ name: 'filters', control });
+  const searchFilters = useSearchPageFilterState({
+    searchQuery: filters ?? undefined,
+    onFilterChange: handleSetFilters,
+    dateTimeColumns,
+    knownColumns,
+  });
 
   useEffect(() => {
     // If the user changes the source dropdown, reset the select and orderby fields
     // to match the new source selected
     if (watchedSource !== prevSourceRef.current) {
+      // Whether the form is only catching up to the source the search config
+      // already points at — a source name resolving to its ID, a saved search's
+      // own source arriving, or history navigation — rather than the user
+      // picking a different source. Either way the URL's other params were
+      // chosen deliberately and must not be rewritten.
+      const isCatchingUpToConfig =
+        !!watchedSource && watchedSource === searchedSource?.id;
+
+      if (isCatchingUpToConfig && savedSearchId == null) {
+        prevSourceRef.current = watchedSource;
+        if (rawSearchedConfig.source !== watchedSource) {
+          // Partial update — the other search params are left as they are.
+          setSearchedConfig({ source: watchedSource });
+        }
+        return;
+      }
+
       prevSourceRef.current = watchedSource;
       const newInputSourceObj = inputSourceObjs?.find(
         s => s.id === watchedSource,
@@ -1082,18 +1499,31 @@ export function DBSearchPage() {
         // Save the selected source ID to localStorage
         setLastSelectedSourceId(newInputSourceObj.id);
 
-        // If the user isn't in a saved search (or the source is different from the saved search source), reset fields
-        if (savedSearchId == null || savedSearch?.source !== watchedSource) {
-          setValue('select', '');
-          setValue('orderBy', '');
-          // Clear all search filters only when switching to a different source
-          searchFilters.clearAllFilters();
-          // If the user is in a saved search, prefer the saved search's select/orderBy if available
-        } else {
-          setValue('select', savedSearch?.select ?? '');
-          setValue('orderBy', savedSearch?.orderBy ?? '');
-          // Don't clear filters - we're loading from saved search
+        // Only a real user-initiated source change may reset the query fields. On a saved
+        // search route the form also catches up to the source the URL points at
+        // (the saved-search effect writes it), and resetting there would discard
+        // select/orderBy the link carried — e.g. an unsaved tweak that was
+        // bookmarked or refreshed. The submit below still runs, since that is how
+        // a freshly loaded page pushes its defaults into the search config.
+        if (!isCatchingUpToConfig) {
+          pendingGroupByReconcileRef.current = watchedSource ?? null;
+          // If the user isn't in a saved search (or the source is different from the saved search source), reset fields
+          if (savedSearchId == null || savedSearch?.source !== watchedSource) {
+            setValue('select', '');
+            setValue('orderBy', '');
+            // Defer filter clearing: wait until the new source's columns load,
+            // then keep filters whose root column exists on the new schema.
+            pendingFilterReconcileRef.current = watchedSource ?? null;
+            // If the user is in a saved search, prefer the saved search's select/orderBy if available
+          } else {
+            setValue('select', savedSearch?.select ?? '');
+            setValue('orderBy', savedSearch?.orderBy ?? '');
+            // Don't clear filters - we're loading from saved search
+          }
         }
+        // Programmatic catch-up (loading a source / saved search), so use the
+        // variant that does NOT credit "Explore your data".
+        debouncedCatchUpSubmit();
       }
     }
   }, [
@@ -1102,9 +1532,51 @@ export function DBSearchPage() {
     savedSearch,
     savedSearchId,
     inputSourceObjs,
-    searchFilters,
     setLastSelectedSourceId,
+    debouncedCatchUpSubmit,
+    searchedSource?.id,
+    rawSearchedConfig.source,
+    setSearchedConfig,
   ]);
+
+  const retainCompatibleFiltersAndGroupBy = useStableCallback(
+    (columns: ColumnMeta[]) => {
+      const allowed = new Set(columns.map(c => c.name));
+
+      if (pendingFilterReconcileRef.current === watchedSource) {
+        pendingFilterReconcileRef.current = null;
+        const dropped = searchFilters.retainFiltersByColumns(allowed);
+        if (dropped.length > 0) {
+          notifications.show({
+            color: 'yellow',
+            message: formatDroppedFiltersMessage(dropped.length),
+          });
+        }
+      }
+
+      if (pendingGroupByReconcileRef.current === watchedSource) {
+        pendingGroupByReconcileRef.current = null;
+        const { kept, dropped } = retainGroupByByColumns(groupByParam, allowed);
+        if (dropped.length > 0) {
+          setGroupByParam(kept);
+          notifications.show({
+            color: 'yellow',
+            message: formatDroppedGroupByMessage(dropped),
+          });
+        }
+      }
+    },
+  );
+
+  useEffect(() => {
+    if (
+      watchedSourceColumns &&
+      (pendingFilterReconcileRef.current === watchedSource ||
+        pendingGroupByReconcileRef.current === watchedSource)
+    ) {
+      retainCompatibleFiltersAndGroupBy(watchedSourceColumns);
+    }
+  }, [watchedSource, watchedSourceColumns, retainCompatibleFiltersAndGroupBy]);
 
   const onTableScroll = useCallback(
     (scrollTop: number) => {
@@ -1238,6 +1710,12 @@ export function DBSearchPage() {
       queryKey: [QUERY_KEY_PREFIX],
     }) > 0;
 
+  const { searchElapsedMs } = useSearchTelemetry({
+    isAnyQueryFetching,
+    isLive: isLive ?? false,
+    sourceId: chartConfig?.source ?? null,
+  });
+
   const isTabVisible = useDocumentVisibility();
 
   // State for collapsing all expanded rows when resuming live tail
@@ -1268,12 +1746,32 @@ export function DBSearchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [updateRelativeTimeInputValue, searchedConfig.source, isReady]);
 
+  // Row selection is scoped to one result set, so anything that re-queries
+  // or changes the result set should reset the selection.
+  const selectionResetKey = useMemo(
+    () =>
+      JSON.stringify([
+        searchedConfig,
+        searchedTimeRange[0].getTime(),
+        searchedTimeRange[1].getTime(),
+        denoiseResults,
+      ]),
+    [searchedConfig, searchedTimeRange, denoiseResults],
+  );
+
   useLiveUpdate({
     isLive,
     interval,
     refreshFrequency,
     onTimeRangeSelect,
-    pause: isAnyQueryFetching || !queryReady || !isTabVisible,
+    // The save modal captures the search as it stands, so refreshing the time
+    // range underneath it is both surprising and a source of query-string
+    // writes that would race the navigation to the new saved search.
+    pause:
+      isAnyQueryFetching ||
+      !queryReady ||
+      !isTabVisible ||
+      saveSearchModalState != null,
   });
 
   // This ensures we only render this conditionally on the client
@@ -1282,6 +1780,18 @@ export function DBSearchPage() {
   useEffect(() => {
     setShouldShowLiveModeHint(isLive === false);
   }, [isLive]);
+
+  // Selected rows belong to one result set, so a live refresh would churn the
+  // table under them. Same treatment as expanding a row: leave live tail, which
+  // surfaces the Resume Live Tail button so the exit is visible and undoable.
+  const onSelectedRowsChange = useCallback(
+    (hasSelectedRows: boolean) => {
+      if (hasSelectedRows && isLive) {
+        setIsLive(false);
+      }
+    },
+    [isLive, setIsLive],
+  );
 
   // Callback to handle when rows are expanded - kick user out of live tail
   const onExpandedRowsChange = useCallback(
@@ -1313,6 +1823,14 @@ export function DBSearchPage() {
     };
   }, [chartConfig, searchedTimeRange]);
 
+  // Stable key for persisting column widths in localStorage. Scoped per saved
+  // search when one is loaded, else per source for ad-hoc searches.
+  const columnSizeTableId = savedSearchId
+    ? `db-search-saved-${savedSearchId}`
+    : searchedConfig.source
+      ? `db-search-source-${searchedConfig.source}`
+      : undefined;
+
   const displayedColumns = useMemo(() => {
     // `select` is typed as `string | DerivedColumn[]` upstream, but in the
     // search page we always supply a string. Guard for type safety.
@@ -1325,13 +1843,38 @@ export function DBSearchPage() {
 
   const toggleColumn = useCallback(
     (column: string) => {
-      const newSelectArray = displayedColumns.includes(column)
-        ? displayedColumns.filter(s => s !== column)
-        : [...displayedColumns, column];
+      // A column added from the UI can carry an alias, so match the expression too
+      const selected = displayedColumns.find(
+        s => s === column || selectItemExpression(s) === column,
+      );
+      const newSelectArray = selected
+        ? displayedColumns.filter(s => s !== selected)
+        : [
+            ...displayedColumns,
+            withMapKeyAlias(column, displayedColumns, knownColumns),
+          ];
       setValue('select', newSelectArray.join(', '));
+      if (selected) {
+        const orderBy = getValues('orderBy') ?? '';
+        const nextOrderBy = orderByAfterRemovingSelectItem(
+          selected,
+          orderBy,
+          defaultSearchConfig.orderBy ?? '',
+        );
+        if (nextOrderBy !== orderBy) {
+          setValue('orderBy', nextOrderBy);
+        }
+      }
       onSubmit();
     },
-    [displayedColumns, setValue, onSubmit],
+    [
+      displayedColumns,
+      knownColumns,
+      setValue,
+      getValues,
+      defaultSearchConfig.orderBy,
+      onSubmit,
+    ],
   );
 
   const generateSearchUrl = useCallback(
@@ -1457,16 +2000,6 @@ export function DBSearchPage() {
       return undefined;
     }
 
-    const variableConfig: any = {};
-    switch (searchedSource?.kind) {
-      case SourceKind.Log:
-        variableConfig.groupBy = searchedSource?.severityTextExpression;
-        break;
-      case SourceKind.Trace:
-        variableConfig.groupBy = searchedSource?.statusCodeExpression;
-        break;
-    }
-
     return {
       ...chartConfig,
       select: [
@@ -1482,20 +2015,53 @@ export function DBSearchPage() {
       displayType: DisplayType.StackedBar,
       with: aliasWith,
       // Preserve the original table select string for "View Events" links
-      eventTableSelect: searchedConfig.select,
-      // In live mode, when the end date is aligned to the granularity, the end date does
-      // not change on every query, resulting in cached data being re-used.
-      alignDateRangeToGranularity: !isLive,
-      ...variableConfig,
-    };
+      eventTableSelect: searchedConfig.select ?? undefined,
+      // Never align to granularity boundaries on the search page: the histogram
+      // and total count must reflect the user's exact selected range so they
+      // match the rows shown in the results table. Aligning to bucket
+      // boundaries (e.g. expanding a 2s selection to a 15s bucket) inflates
+      // the count beyond what the table shows. In live mode this also avoids
+      // stale cached data from an unchanging aligned end date.
+      alignDateRangeToGranularity: false,
+      // Make sure the end date is inclusive so that the histogram and table counts match
+      dateRangeEndInclusive: true,
+      groupBy: resolveSearchGroupBy(groupByParam, searchedSource),
+    } satisfies BuilderChartConfigWithDateRange;
   }, [
     chartConfig,
     searchedSource,
     aliasWith,
     searchedTimeRange,
     searchedConfig.select,
-    isLive,
+    groupByParam,
   ]);
+
+  // The default severity/status grouping reads without a legend.
+  const isCustomGroupBy = isCustomSearchGroupBy(groupByParam, searchedSource);
+
+  // A high-cardinality custom group by can exceed the count query's row limit
+  // and truncate the summed total, so totals use the default grouping. Without
+  // a custom group by, this is the histogram config itself so the two share one
+  // query.
+  const totalCountConfig = useMemo(
+    () =>
+      isCustomGroupBy && histogramTimeChartConfig != null
+        ? {
+            ...histogramTimeChartConfig,
+            groupBy: resolveSearchGroupBy(null, searchedSource),
+          }
+        : histogramTimeChartConfig,
+    [isCustomGroupBy, histogramTimeChartConfig, searchedSource],
+  );
+
+  const histogramGroupBySelect = (
+    <SearchGroupBySelect
+      source={searchedSource}
+      value={groupByParam}
+      onApply={setGroupByParam}
+      dateRange={searchedTimeRange}
+    />
+  );
 
   const onFormSubmit = useCallback<FormEventHandler<HTMLFormElement>>(
     e => {
@@ -1533,6 +2099,24 @@ export function DBSearchPage() {
       setIsLive(false);
     },
     [onTimeRangeSelect, setIsLive],
+  );
+
+  // Focus a chart series into the actual search. Applying each group-by value
+  // as an "only" filter re-queries both the chart and the results table so
+  // they stay in sync (the chart-only visual focus wouldn't touch the table).
+  const handleFocusSeries = useCallback(
+    (groupFilters: SeriesGroupFilter[]) => {
+      // Apply all group filters in one update so a multi-group series focus
+      // re-queries once, not once per column. setOnlyFilters keys on the clean
+      // (unquoted) column expression; the chart hands us the raw groupBy one.
+      searchFilters.setOnlyFilters(
+        groupFilters.map(({ column, value }) => ({
+          property: cleanClickHouseExpression(column),
+          value,
+        })),
+      );
+    },
+    [searchFilters],
   );
 
   const filtersChartConfig = useMemo<BuilderChartConfigWithDateRange>(() => {
@@ -1592,10 +2176,8 @@ export function DBSearchPage() {
     [inputSourceObj],
   );
 
-  const sourceSchemaPreview = useMemo(
-    () => <SourceSchemaPreview source={inputSourceObj} variant="text" />,
-    [inputSourceObj],
-  );
+  const [isSourceSchemaPreviewOpen, setIsSourceSchemaPreviewOpen] =
+    useState(false);
 
   const onTimePickerSearch = useCallback(
     (range: string) => {
@@ -1666,17 +2248,57 @@ export function DBSearchPage() {
     [setSaveSearchModalState],
   );
 
+  const onSavedSearchCreated = useCallback(
+    async (newSavedSearchId: string) => {
+      // nuqs batches query-string writes and flushes them onto whatever path
+      // the router reports at flush time, which during a client-side
+      // transition is still the old one. Draining the queue first keeps a
+      // pending write (live tail refreshes the time range on a timer) from
+      // landing after the push and sending us back to /search.
+      await setSearchedConfig({});
+      router.push(
+        buildSavedSearchNavigationUrl(newSavedSearchId, window.location.search),
+      );
+    },
+    [setSearchedConfig],
+  );
+
   const onModelFormExpandClose = useCallback(() => {
     setModelFormExpanded(false);
   }, [setModelFormExpanded]);
 
-  const onEditSources = useCallback(() => {
+  // `Edit source` (singular): operate on the currently selected source.
+  // Local mode opens the inline edit modal seeded with `inputSource`;
+  // non-local uses a hard navigation so the page's `useQueryStates`
+  // (source/where/select/whereLanguage/filters/orderBy) can't merge
+  // stale /search state into the destination URL, and so
+  // `router.basePath` is correctly prepended for the /clickstack build.
+  const onEditCurrentSource = useCallback(() => {
     if (IS_LOCAL_MODE) {
-      setModelFormExpanded(v => !v);
-    } else {
-      router.push('/team');
+      setModelFormExpanded(true);
+      return;
     }
-  }, [setModelFormExpanded]);
+    if (inputSource) {
+      window.location.assign(`${router.basePath}/team#source-${inputSource}`);
+    } else {
+      window.location.assign(`${router.basePath}/team`);
+    }
+  }, [inputSource, setModelFormExpanded]);
+
+  // `Manage sources`: open the all-sources list view. Only wired in
+  // non-local mode; local has no list-view surface so the menu item
+  // hides itself when this prop is undefined. We use `window.location`
+  // for a hard navigation instead of `router.push` so the page's
+  // `useQueryStates` (source/where/select/whereLanguage/filters/orderBy)
+  // can't restore its state into the new URL during the client-side
+  // transition, and so `router.basePath` is correctly prepended for
+  // the /clickstack build.
+  const onManageSources = useMemo(() => {
+    if (IS_LOCAL_MODE) return undefined;
+    return () => {
+      window.location.assign(`${router.basePath}/team`);
+    };
+  }, []);
 
   const setNewSourceModalClosed = useCallback(
     () => setNewSourceModalOpened(false),
@@ -1691,6 +2313,52 @@ export function DBSearchPage() {
     [setValue, setNewSourceModalClosed],
   );
 
+  const columnFields = (allowMultiline: boolean, stacked: boolean) => {
+    const select = (
+      <SQLInlineEditorControlled
+        tableConnection={inputSourceTableConnection}
+        control={control}
+        name="select"
+        defaultValue={defaultSearchConfig.select}
+        placeholder={defaultSearchConfig.select || 'SELECT Columns'}
+        onSubmit={onSubmit}
+        label="SELECT"
+        size="xs"
+        allowMultiline={allowMultiline}
+        dateRange={searchedTimeRange}
+        sourceId={inputSource}
+      />
+    );
+    const orderBy = (
+      <SQLInlineEditorControlled
+        tableConnection={inputSourceTableConnection}
+        control={control}
+        name="orderBy"
+        defaultValue={defaultSearchConfig.orderBy}
+        onSubmit={onSubmit}
+        label="ORDER BY"
+        size="xs"
+        allowMultiline={allowMultiline}
+        dateRange={searchedTimeRange}
+        sourceId={inputSource}
+      />
+    );
+    if (stacked) {
+      return (
+        <>
+          {select}
+          {orderBy}
+        </>
+      );
+    }
+    return (
+      <>
+        <Box style={{ flex: '1 1 0%', minWidth: 100 }}>{select}</Box>
+        <Box style={{ maxWidth: 400, width: '20%' }}>{orderBy}</Box>
+      </>
+    );
+  };
+
   return (
     <Flex
       direction="column"
@@ -1699,9 +2367,7 @@ export function DBSearchPage() {
       data-testid="search-page"
     >
       <Head>
-        <title>
-          {savedSearch ? `${savedSearch.name} Search` : 'Search'} - {brandName}
-        </title>
+        <title>{title}</title>
       </Head>
       {!IS_LOCAL_MODE && isAlertModalOpen && (
         <DBSearchPageAlertModal
@@ -1713,7 +2379,7 @@ export function DBSearchPage() {
       )}
       <OnboardingModal />
       {savedSearch && (
-        <Stack mt="lg" mx="xs">
+        <Stack mt="xs" mx="xs" gap="xs">
           <Group justify="space-between">
             <Breadcrumbs fz="sm">
               <Anchor component={Link} href="/search/list" fz="sm" c="dimmed">
@@ -1723,7 +2389,7 @@ export function DBSearchPage() {
                 {savedSearch.name}
               </Text>
             </Breadcrumbs>
-            <Text size="xs" c="dimmed" lh={1}>
+            <Text size="xs" c="dimmed">
               {savedSearch.createdBy && (
                 <span>
                   Created by{' '}
@@ -1750,18 +2416,33 @@ export function DBSearchPage() {
             </Text>
           </Group>
           <Group justify="space-between" align="flex-end">
-            <div data-testid="saved-search-name">
-              <EditablePageName
-                key={savedSearch.id}
-                name={savedSearch?.name ?? 'Untitled Search'}
-                onSave={editedName => {
-                  updateSavedSearch.mutate({
+            <InlineNameInput
+              key={savedSearch.id}
+              value={savedSearch.name ?? ''}
+              placeholder="Untitled search"
+              aria-label="Saved search name"
+              size="md"
+              headingLevel={3}
+              data-testid="saved-search-name"
+              onCommit={editedName =>
+                updateSavedSearch
+                  .mutateAsync({
                     id: savedSearch.id,
                     name: editedName,
-                  });
-                }}
-              />
-            </div>
+                  })
+                  .catch(error => {
+                    notifications.show({
+                      color: 'red',
+                      title: 'Unable to save search',
+                      message:
+                        error instanceof Error
+                          ? error.message.slice(0, 100)
+                          : 'An error occurred while renaming your saved search.',
+                    });
+                    throw error;
+                  })
+              }
+            />
 
             <Group gap="xs">
               <FavoriteButton
@@ -1783,6 +2464,14 @@ export function DBSearchPage() {
                   {savedSearch.tags?.length || 0}
                 </Button>
               </Tags>
+
+              <ResourceTerraformPopover
+                resource={{
+                  type: 'saved_search',
+                  id: savedSearch.id,
+                  name: savedSearch.name,
+                }}
+              />
 
               <SearchPageActionBar
                 onClickDeleteSavedSearch={() => {
@@ -1806,43 +2495,37 @@ export function DBSearchPage() {
         className={searchPageStyles.searchForm}
       >
         {/* <DevTool control={control} /> */}
-        <Flex gap="sm" px="sm" pt="sm" wrap="nowrap">
+        <Flex
+          gap={isCompact ? 'xs' : 'sm'}
+          px="sm"
+          pt={isCompact ? 4 : 'sm'}
+          wrap={isCompact ? 'wrap' : 'nowrap'}
+        >
           <SourceSelectControlled
             key={`${savedSearchId}`}
             size="xs"
             control={control}
             name="source"
             onCreate={openNewSourceModal}
-            onEdit={onEditSources}
+            onEdit={onEditCurrentSource}
+            onManageSources={onManageSources}
+            onSchemaPreview={() => setIsSourceSchemaPreviewOpen(true)}
+            isSchemaPreviewEnabled={isSourceSchemaPreviewEnabled(
+              inputSourceObj,
+            )}
             allowedSourceKinds={ALLOWED_SOURCE_KINDS}
             data-testid="source-selector"
-            sourceSchemaPreview={sourceSchemaPreview}
-            style={{ minWidth: 150 }}
+            style={
+              isCompact ? { flex: '1 1 140px', minWidth: 0 } : { minWidth: 150 }
+            }
           />
-          <Box style={{ flex: '1 1 0%', minWidth: 100 }}>
-            <SQLInlineEditorControlled
-              tableConnection={inputSourceTableConnection}
-              control={control}
-              name="select"
-              defaultValue={defaultSearchConfig.select}
-              placeholder={defaultSearchConfig.select || 'SELECT Columns'}
-              onSubmit={onSubmit}
-              label="SELECT"
-              size="xs"
-              allowMultiline
-            />
-          </Box>
-          <Box style={{ maxWidth: 400, width: '20%' }}>
-            <SQLInlineEditorControlled
-              tableConnection={inputSourceTableConnection}
-              control={control}
-              name="orderBy"
-              defaultValue={defaultSearchConfig.orderBy}
-              onSubmit={onSubmit}
-              label="ORDER BY"
-              size="xs"
-            />
-          </Box>
+          <SourceSchemaPreview
+            source={inputSourceObj}
+            controlled
+            open={isSourceSchemaPreviewOpen}
+            onClose={() => setIsSourceSchemaPreviewOpen(false)}
+          />
+          {!isCompact && columnFields(true, false)}
           <>
             {!savedSearchId ? (
               <Button
@@ -1875,11 +2558,30 @@ export function DBSearchPage() {
                 onClick={openAlertModal}
                 style={{ flexShrink: 0 }}
               >
-                Alerts
+                <Group gap={4}>
+                  Alerts
+                  <AlertStatusIcon alerts={savedSearch?.alerts} />
+                </Group>
+              </Button>
+            )}
+            {isCompact && (
+              <Button
+                variant="subtle"
+                size="xs"
+                style={{ flexShrink: 0 }}
+                aria-expanded={columnsOpen}
+                onClick={() => setColumnsOpen(open => !open)}
+              >
+                {columnsOpen ? 'Hide columns' : 'Columns'}
               </Button>
             )}
           </>
         </Flex>
+        {isCompact && columnsOpen && (
+          <Flex direction="column" gap={4} px="sm" pt={4}>
+            {columnFields(false, true)}
+          </Flex>
+        )}
         <SourceEditModal
           opened={modelFormExpanded}
           onClose={onModelFormExpandClose}
@@ -1890,7 +2592,12 @@ export function DBSearchPage() {
           onClose={setNewSourceModalClosed}
           onCreate={onNewSourceCreate}
         />
-        <Flex gap="sm" mt="sm" px="sm" wrap="wrap">
+        <Flex
+          gap={isCompact ? 'xs' : 'sm'}
+          mt={isCompact ? 4 : 'sm'}
+          px="sm"
+          wrap="wrap"
+        >
           <SearchWhereInput
             tableConnection={inputSourceTableConnection}
             control={control}
@@ -1901,11 +2608,14 @@ export function DBSearchPage() {
             enableHotkey
             data-testid="search-input"
             minWidth="min(600px, 100%)"
+            dateRange={searchedTimeRange}
+            sourceId={inputSource}
+            size="xs"
           />
           <Flex
             gap="sm"
             style={{ flex: '0 1 500px', minWidth: 0 }}
-            align="center"
+            align="flex-start"
           >
             <TimePicker
               data-testid="time-picker"
@@ -1920,12 +2630,13 @@ export function DBSearchPage() {
                 isLive && interval !== LIVE_TAIL_DURATION_MS
               }
               width="100%"
+              size="xs"
             />
             {isLive && (
               <Tooltip label="Live tail refresh interval">
                 <Box style={{ width: 80, minWidth: 80, flexShrink: 0 }}>
                   <Select
-                    size="sm"
+                    size="xs"
                     w="100%"
                     data={LIVE_TAIL_REFRESH_FREQUENCY_OPTIONS}
                     value={String(refreshFrequency)}
@@ -1944,12 +2655,18 @@ export function DBSearchPage() {
             <SearchSubmitButton isFormStateDirty={formState.isDirty} />
           </Flex>
         </Flex>
-        <ActiveFilterPills searchFilters={searchFilters} mt={6} />
+        <ActiveFilterPills
+          searchFilters={searchFilters}
+          chartConfig={filtersChartConfig}
+          dateTimeColumns={dateTimeColumns}
+          mt={6}
+        />
       </form>
       {searchedConfig != null && searchedSource != null && (
         <SaveSearchModal
           opened={saveSearchModalState != null}
           onClose={clearSaveSearchModalState}
+          onCreate={onSavedSearchCreated}
           searchedConfig={searchedConfig}
           isUpdate={saveSearchModalState === 'update'}
           savedSearchId={savedSearchId}
@@ -1963,10 +2680,11 @@ export function DBSearchPage() {
         focusDate={directTraceFocusDate}
         onClose={closeDirectTraceSidePanel}
         onSourceChange={onDirectTraceSourceChange}
+        keepOpenSelector={SEARCH_RESULTS_PANEL_KEEP_OPEN_SELECTOR}
       />
       <Flex
         direction="column"
-        style={{ overflow: 'hidden', height: '100%' }}
+        style={{ overflow: 'hidden', flex: 1, minHeight: 0 }}
         className="bg-body"
       >
         {!queryReady ? (
@@ -1978,14 +2696,12 @@ export function DBSearchPage() {
           />
         ) : (
           <>
-            <div
+            <ResponsiveSidePanel
               className={searchPageStyles.searchPageContainer}
-              style={{
-                minHeight: 0,
-                height: '100%',
-              }}
-            >
-              {!isFilterSidebarCollapsed && (
+              opened={!filtersCollapsed}
+              onClose={collapseFilters}
+              title="Filters"
+              panel={
                 <ErrorBoundary message="Unable to render search filters">
                   <DBSearchPageFilters
                     denoiseResults={denoiseResults}
@@ -2002,13 +2718,16 @@ export function DBSearchPage() {
                     }
                     onColumnToggle={toggleColumn}
                     displayedColumns={displayedColumns}
-                    onCollapse={() => setIsFilterSidebarCollapsed(true)}
+                    onCollapse={isCompact ? undefined : collapseFilters}
+                    fill={isCompact}
                     {...searchFilters}
                   />
                 </ErrorBoundary>
-              )}
+              }
+            >
               {analysisMode === 'pattern' &&
-                histogramTimeChartConfig != null && (
+                histogramTimeChartConfig != null &&
+                totalCountConfig != null && (
                   <Flex direction="column" w="100%" gap="0px" mih="0" miw={0}>
                     <Box className={searchPageStyles.searchStatsContainer}>
                       <Group
@@ -2017,29 +2736,37 @@ export function DBSearchPage() {
                         style={{ width: '100%' }}
                       >
                         <SearchResultsCountGroup
-                          isFilterSidebarCollapsed={isFilterSidebarCollapsed}
-                          onExpandFilters={() =>
-                            setIsFilterSidebarCollapsed(false)
-                          }
-                          histogramTimeChartConfig={histogramTimeChartConfig}
-                        />
+                          isFilterSidebarCollapsed={filtersCollapsed}
+                          onExpandFilters={expandFilters}
+                          totalCountConfig={totalCountConfig}
+                        >
+                          {histogramGroupBySelect}
+                        </SearchResultsCountGroup>
                         <SearchNumRows
                           config={{
                             ...chartConfig,
                             dateRange: searchedTimeRange,
                           }}
+                          sqlConfig={histogramTimeChartConfig ?? undefined}
                           enabled={isReady}
+                          searchElapsedMs={searchElapsedMs}
+                          isSearching={isAnyQueryFetching}
+                          isLiveTail={isLive ?? false}
                         />
                       </Group>
                     </Box>
                     {!hasQueryError && (
                       <Box
-                        className={searchPageStyles.timeChartContainer}
+                        className={
+                          isCompact
+                            ? `${searchPageStyles.timeChartContainer} ${searchPageStyles.timeChartContainerCompact}`
+                            : searchPageStyles.timeChartContainer
+                        }
                         mih="0"
                       >
                         <DBTimeChart
                           sourceId={searchedConfig.source ?? undefined}
-                          showLegend={false}
+                          showLegend={isCustomGroupBy}
                           config={histogramTimeChartConfig}
                           enabled={isReady}
                           showDisplaySwitcher={false}
@@ -2047,6 +2774,7 @@ export function DBSearchPage() {
                           showDateRangeIndicator={false}
                           queryKeyPrefix={QUERY_KEY_PREFIX}
                           onTimeRangeSelect={handleTimeRangeSelect}
+                          onFocusSeries={handleFocusSeries}
                         />
                       </Box>
                     )}
@@ -2056,13 +2784,23 @@ export function DBSearchPage() {
                         config={{
                           ...chartConfig,
                           dateRange: searchedTimeRange,
+                          // Carry the source's select-alias definitions so the
+                          // rebuilt pattern query can filter on aliased columns
+                          // (e.g. `ServiceName as service`) without hitting
+                          // "Unknown identifier". Mirrors the results,
+                          // histogram, and heatmap configs.
+                          with: aliasWith,
                         }}
                         bodyValueExpression={
                           searchedSource
                             ? (getEventBody(searchedSource) ?? '')
                             : (chartConfig.implicitColumnExpression ?? '')
                         }
-                        totalCountConfig={histogramTimeChartConfig}
+                        patternColumn={patternColumn}
+                        draftPatternColumn={draftPatternColumn}
+                        onDraftPatternColumnChange={setDraftPatternColumn}
+                        onSubmit={onSubmit}
+                        totalCountConfig={totalCountConfig}
                         totalCountQueryKeyPrefix={QUERY_KEY_PREFIX}
                       />
                     </Box>
@@ -2071,73 +2809,95 @@ export function DBSearchPage() {
               {analysisMode === 'delta' &&
                 searchedSource != null &&
                 isTraceSource(searchedSource) && (
-                  <DBSearchHeatmapChart
-                    chartConfig={{
-                      ...chartConfig,
-                      dateRange: searchedTimeRange,
-                      with: aliasWith,
-                    }}
-                    isReady={isReady}
-                    source={searchedSource}
-                    onAddFilter={searchFilters.setFilterValue}
-                  />
+                  <Flex direction="column" mih="0" miw={0} flex="1">
+                    {filtersCollapsed && (
+                      <Box className={searchPageStyles.searchStatsContainer}>
+                        <ExpandFiltersButton onExpand={expandFilters} />
+                      </Box>
+                    )}
+                    <Box flex="1" mih="0">
+                      <DBSearchHeatmapChart
+                        chartConfig={{
+                          ...chartConfig,
+                          dateRange: searchedTimeRange,
+                          with: aliasWith,
+                        }}
+                        isReady={isReady}
+                        source={searchedSource}
+                        onAddFilter={searchFilters.setFilterValue}
+                      />
+                    </Box>
+                  </Flex>
                 )}
               {analysisMode === 'results' && (
                 <Flex direction="column" mih="0" miw={0}>
-                  {chartConfig && histogramTimeChartConfig && (
-                    <>
-                      <Box className={searchPageStyles.searchStatsContainer}>
-                        <Group
-                          justify="space-between"
-                          align="center"
-                          style={{ width: '100%' }}
-                        >
-                          <SearchResultsCountGroup
-                            isFilterSidebarCollapsed={isFilterSidebarCollapsed}
-                            onExpandFilters={() =>
-                              setIsFilterSidebarCollapsed(false)
-                            }
-                            histogramTimeChartConfig={histogramTimeChartConfig}
-                            enableParallelQueries
-                          />
-                          <Group gap="sm" align="center">
-                            {shouldShowLiveModeHint &&
-                              denoiseResults != true && (
-                                <ResumeLiveTailButton
-                                  handleResumeLiveTail={handleResumeLiveTail}
-                                />
-                              )}
-                            <SearchNumRows
-                              config={{
-                                ...chartConfig,
-                                dateRange: searchedTimeRange,
-                              }}
-                              enabled={isReady}
-                            />
+                  {chartConfig &&
+                    histogramTimeChartConfig &&
+                    totalCountConfig && (
+                      <>
+                        <Box className={searchPageStyles.searchStatsContainer}>
+                          <Group
+                            justify="space-between"
+                            align="center"
+                            style={{ width: '100%' }}
+                          >
+                            <SearchResultsCountGroup
+                              isFilterSidebarCollapsed={filtersCollapsed}
+                              onExpandFilters={expandFilters}
+                              totalCountConfig={totalCountConfig}
+                              enableParallelQueries
+                            >
+                              {histogramGroupBySelect}
+                            </SearchResultsCountGroup>
+                            <Group gap="sm" align="center">
+                              {shouldShowLiveModeHint &&
+                                denoiseResults != true && (
+                                  <ResumeLiveTailButton
+                                    handleResumeLiveTail={handleResumeLiveTail}
+                                  />
+                                )}
+                              <SearchNumRows
+                                config={{
+                                  ...chartConfig,
+                                  dateRange: searchedTimeRange,
+                                }}
+                                sqlConfig={
+                                  histogramTimeChartConfig ?? undefined
+                                }
+                                enabled={isReady}
+                                searchElapsedMs={searchElapsedMs}
+                                isSearching={isAnyQueryFetching}
+                                isLiveTail={isLive ?? false}
+                              />
+                            </Group>
                           </Group>
-                        </Group>
-                      </Box>
-                      {!hasQueryError && (
-                        <Box
-                          className={searchPageStyles.timeChartContainer}
-                          mih="0"
-                        >
-                          <DBTimeChart
-                            sourceId={searchedConfig.source ?? undefined}
-                            showLegend={false}
-                            config={histogramTimeChartConfig}
-                            enabled={isReady}
-                            showDisplaySwitcher={false}
-                            showMVOptimizationIndicator={false}
-                            showDateRangeIndicator={false}
-                            queryKeyPrefix={QUERY_KEY_PREFIX}
-                            onTimeRangeSelect={handleTimeRangeSelect}
-                            enableParallelQueries
-                          />
                         </Box>
-                      )}
-                    </>
-                  )}
+                        {!hasQueryError && (
+                          <Box
+                            className={
+                              isCompact
+                                ? `${searchPageStyles.timeChartContainer} ${searchPageStyles.timeChartContainerCompact}`
+                                : searchPageStyles.timeChartContainer
+                            }
+                            mih="0"
+                          >
+                            <DBTimeChart
+                              sourceId={searchedConfig.source ?? undefined}
+                              showLegend={isCustomGroupBy}
+                              config={histogramTimeChartConfig}
+                              enabled={isReady}
+                              showDisplaySwitcher={false}
+                              showMVOptimizationIndicator={false}
+                              showDateRangeIndicator={false}
+                              queryKeyPrefix={QUERY_KEY_PREFIX}
+                              onTimeRangeSelect={handleTimeRangeSelect}
+                              onFocusSeries={handleFocusSeries}
+                              enableParallelQueries
+                            />
+                          </Box>
+                        )}
+                      </>
+                    )}
                   {hasQueryError && queryError ? (
                     <>
                       <div className="h-100 w-100 px-4 mt-4 align-items-center justify-content-center text-muted overflow-auto">
@@ -2259,7 +3019,12 @@ export function DBSearchPage() {
                       </div>
                     </>
                   ) : (
-                    <Box flex="1" mih="0" px="sm">
+                    <Box
+                      flex="1"
+                      mih="0"
+                      px="sm"
+                      data-testid="search-results-panel"
+                    >
                       {chartConfig &&
                         searchedConfig.source &&
                         dbSqlRowTableConfig && (
@@ -2267,6 +3032,10 @@ export function DBSearchPage() {
                             context={rowTableContext}
                             config={dbSqlRowTableConfig}
                             sourceId={searchedConfig.source}
+                            tableId={columnSizeTableId}
+                            keepOpenSelector={
+                              SEARCH_RESULTS_PANEL_KEEP_OPEN_SELECTOR
+                            }
                             onSidebarOpen={onSidebarOpen}
                             onExpandedRowsChange={onExpandedRowsChange}
                             enabled={isReady}
@@ -2279,13 +3048,17 @@ export function DBSearchPage() {
                             onSortingChange={onSortingChange}
                             initialSortBy={initialSortBy}
                             enableSmallFirstWindow
+                            enableRowSelection
+                            selectionResetKey={selectionResetKey}
+                            onSelectedRowsChange={onSelectedRowsChange}
+                            onResolvedColumnsChange={onResolvedColumnsChange}
                           />
                         )}
                     </Box>
                   )}
                 </Flex>
               )}
-            </div>
+            </ResponsiveSidePanel>
           </>
         )}
       </Flex>
@@ -2295,7 +3068,7 @@ export function DBSearchPage() {
 
 const DBSearchPageDynamic = dynamic(async () => DBSearchPage, { ssr: false });
 
-// @ts-ignore
+// @ts-expect-error next/dynamic component type does not include the getLayout static
 DBSearchPageDynamic.getLayout = withAppNav;
 
 export default DBSearchPageDynamic;

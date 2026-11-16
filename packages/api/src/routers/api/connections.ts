@@ -1,21 +1,26 @@
 import { ConnectionSchema } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
+import z from 'zod';
 import { validateRequest } from 'zod-express-middleware';
 
 import {
   createConnection,
   deleteConnection,
   getConnectionById,
-  getConnections,
+  getConnectionsByTeam,
   updateConnection,
 } from '@/controllers/connection';
+import { connectionServesPrometheusHttpApi } from '@/controllers/promql';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
+import { objectIdSchema } from '@/utils/zod';
 
 const router = express.Router();
 
 router.get('/', async (req, res, next) => {
   try {
-    const connections = await getConnections();
+    const { teamId } = getNonNullUserWithTeam(req);
+
+    const connections = await getConnectionsByTeam(teamId.toString());
 
     res.json(connections.map(c => c.toJSON({ virtuals: true })));
   } catch (e) {
@@ -32,8 +37,18 @@ router.post(
     try {
       const { teamId } = getNonNullUserWithTeam(req);
 
+      // `platformProvisioned` records how a connection came to exist and
+      // decides whether IaC export treats it as safe to `terraform import`, so
+      // it is server-owned. `validateRequest` only validates — it does not
+      // replace `req.body` — so a client-supplied value would otherwise reach
+      // the model. Re-parsing rather than omitting the one key by name: zod
+      // strips every unknown key, so this holds for the next server-owned
+      // field too, and lodash's `omit` types its key as `keyof any` rather
+      // than `keyof T`, so a typo in the name would compile silently.
+      const body = ConnectionSchema.omit({ id: true }).parse(req.body);
+
       const connection = await createConnection(teamId.toString(), {
-        ...req.body,
+        ...body,
         password: req.body.password ?? '',
         team: teamId,
         hyperdxSettingPrefix: req.body.hyperdxSettingPrefix ?? undefined,
@@ -65,12 +80,14 @@ router.put(
         return;
       }
 
-      // Build the base connection update
       const shouldUnsetPrefix =
         req.body.hyperdxSettingPrefix === null ||
         req.body.hyperdxSettingPrefix === '';
 
-      const { hyperdxSettingPrefix, ...restBody } = req.body;
+      // `platformProvisioned` is server-owned — see the POST handler above.
+      const { hyperdxSettingPrefix, ...restBody } = ConnectionSchema.parse(
+        req.body,
+      );
 
       const newConnection = {
         ...restBody,
@@ -80,7 +97,6 @@ router.put(
           : {
               password: connection.password,
             }),
-        // Only include hyperdxSettingPrefix if it's a valid string
         ...(!shouldUnsetPrefix && hyperdxSettingPrefix
           ? { hyperdxSettingPrefix }
           : {}),
@@ -99,6 +115,35 @@ router.put(
       }
 
       res.status(200).send();
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// Whether the connection answers PromQL over ClickHouse's Prometheus HTTP API.
+// Onboarding uses it to pin a new PromQL source to that API.
+router.get(
+  '/:id/prometheus-http-api',
+  validateRequest({ params: z.object({ id: objectIdSchema }) }),
+  async (req, res, next) => {
+    try {
+      const { teamId } = getNonNullUserWithTeam(req);
+
+      const connection = await getConnectionById(
+        teamId.toString(),
+        req.params.id,
+        true,
+      );
+
+      if (!connection) {
+        res.status(404).send();
+        return;
+      }
+
+      res.json({
+        supported: await connectionServesPrometheusHttpApi(connection),
+      });
     } catch (e) {
       next(e);
     }

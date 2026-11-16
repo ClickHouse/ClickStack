@@ -3,19 +3,49 @@ import _ from 'lodash';
 import { z } from 'zod';
 
 import {
+  countAlerts,
   createAlert,
   deleteAlert,
-  getAlertById,
-  getAlerts,
+  getAlertsWithDisplayRefs,
+  getAlertWithDisplayRefs,
   updateAlert,
   validateAlertInput,
 } from '@/controllers/alerts';
+import { alertsFilterShape, buildAlertsFilter } from '@/controllers/alertsPage';
+import { AlertSource } from '@/models/alert';
+import {
+  convertExternalAlertChartConfigToInternal,
+  translateAlertDocumentToExternalAlertWithChartConfig,
+} from '@/routers/external-api/v2/utils/alertChartConfig';
 import {
   processRequestWithEnhancedErrors as processRequest,
   validateRequestWithEnhancedErrors as validateRequest,
 } from '@/utils/enhancedErrors';
 import { translateAlertDocumentToExternalAlert } from '@/utils/externalApi';
-import { alertSchema, objectIdSchema } from '@/utils/zod';
+import { paginationMeta, paginationQuerySchema } from '@/utils/pagination';
+import {
+  alertSchema,
+  ExternalAlertInput,
+  InternalAlertInput,
+  objectIdSchema,
+} from '@/utils/zod';
+
+/**
+ * Maps a parsed external alert request body onto the internal alert input
+ * shape: inline alerts arrive with a chartConfig in the external tile-config
+ * dialect and are converted to the internal AlertChartConfig the controllers
+ * and check-alerts task operate on.
+ */
+function toInternalAlertInput(body: ExternalAlertInput): InternalAlertInput {
+  if (body.source === AlertSource.INLINE) {
+    const { chartConfig, ...rest } = body;
+    return {
+      ...rest,
+      chartConfig: convertExternalAlertChartConfigToInternal(chartConfig),
+    };
+  }
+  return body;
+}
 
 /**
  * @openapi
@@ -38,11 +68,71 @@ import { alertSchema, objectIdSchema } from '@/utils/zod';
  *       description: Threshold comparison direction.
  *     AlertSource:
  *       type: string
- *       enum: [saved_search, tile]
- *       description: Alert source type.
+ *       enum: [saved_search, tile, inline]
+ *       description: >
+ *         Alert source type. "saved_search" alerts monitor a saved search,
+ *         "tile" alerts monitor a dashboard tile, and "inline" alerts carry
+ *         their own chart configuration (see AlertChartConfig) without
+ *         requiring a saved search or dashboard.
+ *     AlertChartConfigOverlay:
+ *       type: object
+ *       description: >
+ *         Fields an alert's chart config carries on top of the dashboard tile
+ *         config dialect. Unlike a tile (whose name lives on the tile, not
+ *         its config), an inline alert's config is standalone.
+ *       properties:
+ *         name:
+ *           type: string
+ *           description: >
+ *             Display name for the alert query. Used in notification titles
+ *             and as an alert-name fallback when the alert itself has no
+ *             name.
+ *           example: "Error Rate Query"
+ *         where:
+ *           type: string
+ *           maxLength: 10000
+ *           description: >
+ *             Chart-level filter applied on top of every select item's own
+ *             "where" (combined via AND). Builder variants only; rejected on
+ *             Raw SQL variants (filter inside the sqlTemplate instead).
+ *           example: "ServiceName:api"
+ *         whereLanguage:
+ *           $ref: '#/components/schemas/QueryLanguage'
+ *           description: Language of the chart-level "where" filter.
+ *     AlertLineChartConfig:
+ *       allOf:
+ *         - $ref: '#/components/schemas/LineChartConfig'
+ *         - $ref: '#/components/schemas/AlertChartConfigOverlay'
+ *     AlertBarChartConfig:
+ *       allOf:
+ *         - $ref: '#/components/schemas/BarChartConfig'
+ *         - $ref: '#/components/schemas/AlertChartConfigOverlay'
+ *     AlertStackedLineChartConfig:
+ *       allOf:
+ *         - $ref: '#/components/schemas/StackedLineChartConfig'
+ *         - $ref: '#/components/schemas/AlertChartConfigOverlay'
+ *     AlertNumberChartConfig:
+ *       allOf:
+ *         - $ref: '#/components/schemas/NumberChartConfig'
+ *         - $ref: '#/components/schemas/AlertChartConfigOverlay'
+ *     AlertChartConfig:
+ *       description: >
+ *         The chart configuration an inline alert evaluates, in the same
+ *         dialect as dashboard tile configs plus the alert-only fields in
+ *         AlertChartConfigOverlay. Only the display types the alert evaluator
+ *         supports are accepted: line, stacked_bar, stacked_line, and number,
+ *         in both builder and Raw SQL (configType "sql") variants. Raw SQL
+ *         templates must reference the evaluation window via the time-filter
+ *         and interval macros (e.g. $__timeFilter and $__timeInterval), and the
+ *         referenced source/connection must belong to the team.
+ *       oneOf:
+ *         - $ref: '#/components/schemas/AlertLineChartConfig'
+ *         - $ref: '#/components/schemas/AlertBarChartConfig'
+ *         - $ref: '#/components/schemas/AlertStackedLineChartConfig'
+ *         - $ref: '#/components/schemas/AlertNumberChartConfig'
  *     AlertState:
  *       type: string
- *       enum: [ALERT, OK, INSUFFICIENT_DATA, DISABLED]
+ *       enum: [ALERT, OK, INSUFFICIENT_DATA, DISABLED, PENDING]
  *       description: Current alert state.
  *     AlertChannelType:
  *       type: string
@@ -50,7 +140,7 @@ import { alertSchema, objectIdSchema } from '@/utils/zod';
  *       description: Channel type.
  *     AlertErrorType:
  *       type: string
- *       enum: [QUERY_ERROR, WEBHOOK_ERROR, INVALID_ALERT, UNKNOWN]
+ *       enum: [QUERY_ERROR, QUERY_TIMEOUT, WEBHOOK_ERROR, INVALID_ALERT, UNKNOWN]
  *       description: Category of error recorded during alert execution.
  *     AlertExecutionError:
  *       type: object
@@ -110,6 +200,15 @@ import { alertSchema, objectIdSchema } from '@/utils/zod';
  *         - $ref: '#/components/schemas/AlertChannelWebhook'
  *       discriminator:
  *         propertyName: type
+ *     AlertChannels:
+ *       type: array
+ *       description: >
+ *         Notification channels to trigger when the alert fires or resolves.
+ *         Between 1 and 10 channels; duplicates are rejected.
+ *       minItems: 1
+ *       maxItems: 10
+ *       items:
+ *         $ref: '#/components/schemas/AlertChannel'
  *     Alert:
  *       type: object
  *       properties:
@@ -133,6 +232,12 @@ import { alertSchema, objectIdSchema } from '@/utils/zod';
  *           description: Group-by key for saved search alerts.
  *           nullable: true
  *           example: "ServiceName"
+ *         chartConfig:
+ *           $ref: '#/components/schemas/AlertChartConfig'
+ *           description: >
+ *             Chart configuration for inline alerts. Required when source is
+ *             "inline" and rejected otherwise. Returned on single-alert
+ *             responses (GET by ID, POST, PUT); the list endpoint omits it.
  *         threshold:
  *           type: number
  *           description: Threshold value for triggering the alert. For between and not_between threshold types, this is the lower bound.
@@ -168,23 +273,81 @@ import { alertSchema, objectIdSchema } from '@/utils/zod';
  *           example: "above"
  *         channel:
  *           $ref: '#/components/schemas/AlertChannel'
- *           description: Alert notification channel configuration.
+ *           description: First notification channel, mirrored from "channels" for pre-multi-channel clients.
+ *         channels:
+ *           $ref: '#/components/schemas/AlertChannels'
+ *           description: All notification channels to trigger when the alert fires or resolves.
  *         name:
  *           type: string
- *           description: Human-friendly alert name.
+ *           description: >-
+ *             Alert name template (Handlebars), rendered as the notification
+ *             title. When omitted, a default title is generated from the
+ *             display name, value and threshold.
  *           nullable: true
- *           example: "Test Alert"
+ *           example: "Errors for {{group}} hit {{value}}"
+ *         displayName:
+ *           type: string
+ *           description: >-
+ *             Display name shown in the alerts list and in notification titles.
+ *             Defaults to the name of the referenced saved search, dashboard
+ *             tile, or inline chart when omitted or null.
+ *           nullable: true
+ *           minLength: 1
+ *           maxLength: 512
+ *           example: "Checkout error spike"
+ *         tags:
+ *           type: array
+ *           items:
+ *             type: string
+ *             maxLength: 32
+ *           maxItems: 50
+ *           description: >-
+ *             Tags for the alert. Defaults to the tags of the referenced saved
+ *             search or dashboard when omitted or null; inline alerts have no
+ *             parent to inherit from and default to an empty list.
+ *           nullable: true
+ *           example: ["checkout", "p1"]
  *         message:
  *           type: string
  *           description: Alert message template.
  *           nullable: true
  *           example: "Test Alert Message"
+ *         note:
+ *           type: string
+ *           description: Freeform note for the alert. Supports markdown formatting.
+ *           nullable: true
+ *           minLength: 1
+ *           maxLength: 4096
+ *           example: "Threshold raised from 50 to 100 on 2026-01-15. See [runbook](https://wiki.example.com/runbook)."
+ *         numConsecutiveWindows:
+ *           type: integer
+ *           minimum: 1
+ *           nullable: true
+ *           description: Fire the alert only after its condition has been met for this many consecutive evaluation windows. While the condition is met but fewer than this many consecutive windows have violated, the alert is in the PENDING state.
+ *           example: 3
  *
  *     AlertResponse:
  *       allOf:
  *         - $ref: '#/components/schemas/Alert'
  *         - type: object
+ *           required:
+ *             - displayName
+ *             - tags
  *           properties:
+ *             displayName:
+ *               type: string
+ *               description: >-
+ *                 The display name for the alert in the UI. Derived from the saved search name,
+ *                 dashboard tile name, or inline chartConfig name when not explicitly set.
+ *               example: "Checkout error spike"
+ *             tags:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               description: >-
+ *                 The tags for the alert. Derived from the tags of the referenced saved search or dashboard when not explicitly set;
+ *                 inline alerts default to an empty list.
+ *               example: ["checkout", "p1"]
  *             id:
  *               type: string
  *               description: Unique alert identifier.
@@ -224,21 +387,33 @@ import { alertSchema, objectIdSchema } from '@/utils/zod';
  *       allOf:
  *         - $ref: '#/components/schemas/Alert'
  *         - type: object
+ *           description: >
+ *             At least one of "channel" or "channels" must be provided. Sending both is
+ *             allowed only when "channel" matches the first entry of "channels", so a
+ *             response body can be echoed back unchanged. Responses always include both,
+ *             with "channel" mirroring the first entry of "channels".
  *           required:
  *             - threshold
  *             - interval
  *             - thresholdType
- *             - channel
  *
  *     UpdateAlertRequest:
  *       allOf:
  *         - $ref: '#/components/schemas/Alert'
  *         - type: object
+ *           description: >
+ *             At least one of "channel" or "channels" must be provided. Sending both is
+ *             allowed only when "channel" matches the first entry of "channels", so a
+ *             response body can be echoed back unchanged. Responses always include both,
+ *             with "channel" mirroring the first entry of "channels".
+ *             Updates replace the alert's configuration rather than merging it: sending
+ *             only the legacy "channel" field for an alert that has several channels
+ *             reduces it to that one channel. Fetch the alert and resend the complete
+ *             "channels" array to preserve them.
  *           required:
  *             - threshold
  *             - interval
  *             - thresholdType
- *             - channel
  *
  *     AlertResponseEnvelope:
  *       type: object
@@ -249,12 +424,18 @@ import { alertSchema, objectIdSchema } from '@/utils/zod';
  *
  *     AlertsListResponse:
  *       type: object
+ *       required:
+ *         - data
+ *         - meta
  *       properties:
  *         data:
  *           type: array
  *           description: List of alert objects.
  *           items:
  *             $ref: '#/components/schemas/AlertResponse'
+ *         meta:
+ *           $ref: '#/components/schemas/PaginationMeta'
+ *           description: Pagination metadata for this result page.
  *
  *     EmptyResponse:
  *       type: object
@@ -303,10 +484,19 @@ const router = express.Router();
  *                     teamId: "65f5e4a3b9e77c001a345678"
  *                     tileId: "65f5e4a3b9e77c001a901234"
  *                     dashboardId: "65f5e4a3b9e77c001a567890"
+ *                     displayName: "Checkout error spike"
+ *                     tags: ["checkout", "p1"]
+ *                     numConsecutiveWindows: 3
  *                     createdAt: "2023-03-15T10:20:30.000Z"
  *                     updatedAt: "2023-03-15T14:25:10.000Z"
  *       '401':
  *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
  *         content:
  *           application/json:
  *             schema:
@@ -329,17 +519,17 @@ router.get(
     try {
       const teamId = req.user?.team;
       if (teamId == null) {
-        return res.sendStatus(403);
+        return res.status(403).json({ message: 'Forbidden' });
       }
 
-      const alert = await getAlertById(req.params.id, teamId);
+      const alert = await getAlertWithDisplayRefs(req.params.id, teamId);
 
       if (alert == null) {
-        return res.sendStatus(404);
+        return res.status(404).json({ message: 'Alert not found' });
       }
 
       return res.json({
-        data: translateAlertDocumentToExternalAlert(alert),
+        data: translateAlertDocumentToExternalAlertWithChartConfig(alert),
       });
     } catch (e) {
       next(e);
@@ -352,9 +542,77 @@ router.get(
  * /api/v2/alerts:
  *   get:
  *     summary: List Alerts
- *     description: Retrieves a list of all alerts for the authenticated team
+ *     description: >-
+ *       Retrieves alerts for the authenticated team (paginated). Results are
+ *       capped at `limit` (default and maximum 1000). When more records exist
+ *       than are returned, `meta.total` exceeds `data.length`; clients with
+ *       large collections must page with `limit`/`offset` to retrieve them all.
+ *       Optional filters narrow the result set, and `meta.total` counts only
+ *       the matching alerts.
  *     operationId: listAlerts
  *     tags: [Alerts]
+ *     parameters:
+ *       - name: limit
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 1000
+ *           default: 1000
+ *         description: Maximum number of alerts to return.
+ *       - name: offset
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           default: 0
+ *         description: Number of alerts to skip before returning results.
+ *       - name: tag
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: array
+ *           items:
+ *             type: string
+ *             maxLength: 32
+ *           maxItems: 50
+ *         description: >-
+ *           Only return alerts that have any of the given tags. Repeat the
+ *           parameter to pass several tags. Matches the tags stored on the
+ *           alert, not tags inherited from the linked dashboard or saved
+ *           search.
+ *       - name: search
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: string
+ *           maxLength: 512
+ *         description: >-
+ *           Only return alerts whose display name contains this text
+ *           (case-insensitive). Matches the display name stored on the alert,
+ *           not a name derived from the linked dashboard or saved search.
+ *       - name: source
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/AlertSource'
+ *         description: >-
+ *           Only return alerts of any of the given sources. Repeat the
+ *           parameter to pass several sources.
+ *       - name: state
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/AlertState'
+ *         description: >-
+ *           Only return alerts in any of the given states. Repeat the
+ *           parameter to pass several states.
  *     responses:
  *       '200':
  *         description: Successfully retrieved alerts
@@ -379,8 +637,20 @@ router.get(
  *                       teamId: "65f5e4a3b9e77c001a345678"
  *                       tileId: "65f5e4a3b9e77c001a901234"
  *                       dashboardId: "65f5e4a3b9e77c001a567890"
+ *                       displayName: "Checkout error spike"
+ *                       tags: ["checkout", "p1"]
  *                       createdAt: "2023-01-01T00:00:00.000Z"
  *                       updatedAt: "2023-01-01T00:00:00.000Z"
+ *                   meta:
+ *                     total: 1
+ *                     limit: 1000
+ *                     offset: 0
+ *       '400':
+ *         description: Invalid query parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  *       '401':
  *         description: Unauthorized
  *         content:
@@ -389,23 +659,46 @@ router.get(
  *               $ref: '#/components/schemas/Error'
  *             example:
  *               message: "Unauthorized access. API key is missing or invalid."
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
-router.get('/', async (req, res, next) => {
-  try {
-    const teamId = req.user?.team;
-    if (teamId == null) {
-      return res.sendStatus(403);
+const listAlertsQuerySchema = paginationQuerySchema.extend(alertsFilterShape);
+
+router.get(
+  '/',
+  processRequest({ query: listAlertsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const { limit, offset, ...filterParams } = listAlertsQuerySchema.parse(
+        req.query ?? {},
+      );
+      const filter = buildAlertsFilter(teamId, filterParams);
+      const [alerts, total] = await Promise.all([
+        getAlertsWithDisplayRefs(teamId, { limit, offset }, filter),
+        countAlerts(teamId, filter),
+      ]);
+
+      // Surface the full count at the HTTP layer too, so a client that reads
+      // headers but not the `meta` body can still detect truncation.
+      res.set('X-Total-Count', String(total));
+      return res.json({
+        data: alerts.map(alert => translateAlertDocumentToExternalAlert(alert)),
+        meta: paginationMeta({ limit, offset }, total, 'alerts'),
+      });
+    } catch (e) {
+      next(e);
     }
-
-    const alerts = await getAlerts(teamId);
-
-    return res.json({
-      data: alerts.map(alert => translateAlertDocumentToExternalAlert(alert)),
-    });
-  } catch (e) {
-    next(e);
-  }
-});
+  },
+);
 
 /**
  * @openapi
@@ -436,6 +729,41 @@ router.get('/', async (req, res, next) => {
  *                   webhookId: "65f5e4a3b9e77c001a789012"
  *                 name: "Error Spike Alert"
  *                 message: "Error rate has exceeded 100 in the last hour"
+ *                 displayName: "Checkout error spike"
+ *                 tags: ["checkout", "p1"]
+ *                 numConsecutiveWindows: 3
+ *             multiChannelAlert:
+ *               summary: Create an alert that notifies several webhooks
+ *               value:
+ *                 savedSearchId: "65f5e4a3b9e77c001a345678"
+ *                 threshold: 10
+ *                 interval: "5m"
+ *                 source: "saved_search"
+ *                 thresholdType: "above"
+ *                 channels:
+ *                   - type: "webhook"
+ *                     webhookId: "65f5e4a3b9e77c001a789012"
+ *                   - type: "webhook"
+ *                     webhookId: "65f5e4a3b9e77c001a789013"
+ *                 name: "Error Spike Alert"
+ *             inlineAlert:
+ *               summary: Create an inline alert that carries its own chart config
+ *               value:
+ *                 source: "inline"
+ *                 chartConfig:
+ *                   displayType: "line"
+ *                   sourceId: "65f5e4a3b9e77c001a123456"
+ *                   select:
+ *                     - aggFn: "count"
+ *                       where: "level:error"
+ *                       whereLanguage: "lucene"
+ *                 threshold: 100
+ *                 interval: "5m"
+ *                 thresholdType: "above"
+ *                 channel:
+ *                   type: "webhook"
+ *                   webhookId: "65f5e4a3b9e77c001a789012"
+ *                 name: "Error log spike"
  *     responses:
  *       '200':
  *         description: Successfully created alert
@@ -445,6 +773,12 @@ router.get('/', async (req, res, next) => {
  *               $ref: '#/components/schemas/AlertResponseEnvelope'
  *       '401':
  *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
  *         content:
  *           application/json:
  *             schema:
@@ -465,16 +799,18 @@ router.post(
     const teamId = req.user?.team;
     const userId = req.user?._id;
     if (teamId == null || userId == null) {
-      return res.sendStatus(403);
+      return res.status(403).json({ message: 'Forbidden' });
     }
     try {
-      const alertInput = req.body;
-      await validateAlertInput(teamId, alertInput);
+      const alertInput = toInternalAlertInput(req.body);
+      const refs = await validateAlertInput(teamId, alertInput);
 
-      const createdAlert = await createAlert(teamId, alertInput, userId);
+      const createdAlert = await createAlert(teamId, alertInput, userId, refs);
 
       return res.json({
-        data: translateAlertDocumentToExternalAlert(createdAlert),
+        data: translateAlertDocumentToExternalAlertWithChartConfig(
+          createdAlert,
+        ),
       });
     } catch (e) {
       next(e);
@@ -519,6 +855,8 @@ router.post(
  *                   webhookId: "65f5e4a3b9e77c001a789012"
  *                 name: "Updated Alert Name"
  *                 message: "Updated threshold and interval"
+ *                 displayName: "Checkout error spike"
+ *                 tags: ["checkout", "p1"]
  *     responses:
  *       '200':
  *         description: Successfully updated alert
@@ -528,6 +866,12 @@ router.post(
  *               $ref: '#/components/schemas/AlertResponseEnvelope'
  *       '401':
  *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
  *         content:
  *           application/json:
  *             schema:
@@ -558,21 +902,27 @@ router.put(
       const teamId = req.user?.team;
 
       if (teamId == null) {
-        return res.sendStatus(403);
+        return res.status(403).json({ message: 'Forbidden' });
       }
       const { id } = req.params;
 
-      const alertInput = req.body;
-      await validateAlertInput(teamId, alertInput);
+      const alertInput = toInternalAlertInput(req.body);
+      const refs = await validateAlertInput(teamId, alertInput);
 
-      const alert = await updateAlert(id, teamId, alertInput);
+      const alert = await updateAlert(
+        id,
+        teamId,
+        alertInput,
+        refs,
+        req.user?._id,
+      );
 
       if (alert == null) {
-        return res.sendStatus(404);
+        return res.status(404).json({ message: 'Alert not found' });
       }
 
       res.json({
-        data: translateAlertDocumentToExternalAlert(alert),
+        data: translateAlertDocumentToExternalAlertWithChartConfig(alert),
       });
     } catch (e) {
       next(e);
@@ -610,6 +960,12 @@ router.put(
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  *       '404':
  *         description: Alert not found
  *         content:
@@ -629,11 +985,14 @@ router.delete(
       const teamId = req.user?.team;
       const { id: alertId } = req.params;
       if (teamId == null) {
-        return res.sendStatus(403);
+        return res.status(403).json({ message: 'Forbidden' });
       }
 
-      await deleteAlert(alertId, teamId);
-      res.sendStatus(200);
+      const { deletedCount } = await deleteAlert(alertId, teamId);
+      if (deletedCount === 0) {
+        return res.status(404).json({ message: 'Alert not found' });
+      }
+      res.json({});
     } catch (e) {
       next(e);
     }

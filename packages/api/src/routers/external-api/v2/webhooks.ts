@@ -1,9 +1,78 @@
 import express from 'express';
+import { z } from 'zod';
 
+import {
+  createWebhook,
+  deleteWebhook,
+  updateWebhook,
+} from '@/controllers/webhook';
 import { WebhookDocument } from '@/models/webhook';
 import Webhook from '@/models/webhook';
+import { processRequestWithEnhancedErrors as validateRequest } from '@/utils/enhancedErrors';
+import { isDuplicateKeyError } from '@/utils/errors';
+import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
-import { ExternalWebhook, externalWebhookSchema } from '@/utils/zod';
+import {
+  getPagination,
+  paginationMeta,
+  paginationQuerySchema,
+} from '@/utils/pagination';
+import {
+  getWebhookConfigErrors,
+  isWebhookValidationError,
+} from '@/utils/validators';
+import {
+  ExternalWebhook,
+  externalWebhookCreateSchema,
+  externalWebhookSchema,
+  objectIdSchema,
+} from '@/utils/zod';
+
+const DUPLICATE_WEBHOOK_MESSAGE =
+  'A webhook with this service and name already exists';
+
+const handleWebhookValidationError = (
+  err: unknown,
+  res: express.Response,
+): boolean => {
+  if (!isWebhookValidationError(err)) return false;
+  res.status(400).json({ message: err.message });
+  return true;
+};
+
+// Countable log event (see agent_docs/observability.md): a webhook that was
+// written but can't be serialized back to the client. `service` is a
+// low-cardinality enum (slack/incidentio/generic).
+const webhookSerializationErrorCounter = getCounter(
+  'hyperdx.api.webhook.serialization_errors',
+  {
+    description:
+      'Count of webhooks persisted but not serializable for the external API v2 create/update response.',
+  },
+);
+
+// Shared handling for the (verified-unreachable-today) case where the write
+// committed but formatExternalWebhook returned undefined — i.e. a WebhookService
+// value that externalWebhookSchema does not cover. This is not a rejected
+// request: log it distinctly from a validation error, emit the metric, and
+// return the persisted id so the client knows the resource exists and can
+// reconcile rather than assuming the create/update failed.
+function respondPersistedButUnserializable(
+  res: express.Response,
+  webhook: WebhookDocument,
+) {
+  logger.error({
+    message:
+      'Webhook persisted but could not be serialized for the external API response',
+    webhookId: webhook._id.toString(),
+    service: webhook.service,
+  });
+  webhookSerializationErrorCounter.add(1, { service: String(webhook.service) });
+  return res.status(500).json({
+    message: 'Webhook was saved but could not be serialized for the response',
+    id: webhook._id.toString(),
+  });
+}
 
 function formatExternalWebhook(
   webhook: WebhookDocument,
@@ -17,9 +86,15 @@ function formatExternalWebhook(
     return parseResult.data;
   }
 
-  // If parsing fails, log the error and return undefined
+  // If parsing fails, log only non-sensitive identifiers and the error. The
+  // raw webhook document carries write-only headers/queryParams (auth tokens),
+  // so it must never be written to logs.
   logger.error(
-    { webhook, error: parseResult.error },
+    {
+      webhookId: String(webhook._id),
+      service: webhook.service,
+      error: parseResult.error,
+    },
     'Failed to parse webhook using externalWebhookSchema:',
   );
 
@@ -59,7 +134,11 @@ function formatExternalWebhook(
  *         description:
  *           type: string
  *           description: Webhook description, shown in the UI
- *           example: Sends critical alerts to the #incidents channel
+ *           example: "Sends critical alerts to the #incidents channel"
+ *         titleEmoji:
+ *           type: boolean
+ *           description: Set to false to omit the state emoji prefix from notification titles sent through this webhook. Unset or true keeps the default prefix.
+ *           example: false
  *         updatedAt:
  *           type: string
  *           format: date-time
@@ -100,6 +179,10 @@ function formatExternalWebhook(
  *           type: string
  *           description: Webhook description, shown in the UI
  *           example: Routes alerts to incident.io for on-call escalation
+ *         titleEmoji:
+ *           type: boolean
+ *           description: Set to false to omit the state emoji prefix from notification titles sent through this webhook. Unset or true keeps the default prefix.
+ *           example: false
  *         updatedAt:
  *           type: string
  *           format: date-time
@@ -140,6 +223,10 @@ function formatExternalWebhook(
  *           type: string
  *           description: Webhook description, shown in the UI
  *           example: Forwards alert payloads to an external monitoring service
+ *         titleEmoji:
+ *           type: boolean
+ *           description: Set to false to omit the state emoji prefix from notification titles sent through this webhook. Unset or true keeps the default prefix.
+ *           example: false
  *         body:
  *           type: string
  *           description: Optional request body template
@@ -165,16 +252,39 @@ function formatExternalWebhook(
  *           slack: '#/components/schemas/SlackWebhook'
  *           incidentio: '#/components/schemas/IncidentIOWebhook'
  *           generic: '#/components/schemas/GenericWebhook'
+ *     PaginationMeta:
+ *       type: object
+ *       required:
+ *         - total
+ *         - limit
+ *         - offset
+ *       properties:
+ *         total:
+ *           type: integer
+ *           description: Total number of items matching the query, ignoring pagination.
+ *           example: 142
+ *         limit:
+ *           type: integer
+ *           description: Maximum number of items returned in this page.
+ *           example: 50
+ *         offset:
+ *           type: integer
+ *           description: Number of items skipped before this page.
+ *           example: 100
  *     WebhooksListResponse:
  *       type: object
  *       required:
  *         - data
+ *         - meta
  *       properties:
  *         data:
  *           type: array
  *           description: List of webhook objects.
  *           items:
  *             $ref: '#/components/schemas/Webhook'
+ *         meta:
+ *           $ref: '#/components/schemas/PaginationMeta'
+ *           description: Pagination metadata for this result page.
  */
 
 const router = express.Router();
@@ -184,9 +294,31 @@ const router = express.Router();
  * /api/v2/webhooks:
  *   get:
  *     summary: List Webhooks
- *     description: Retrieves a list of all webhooks for the authenticated team
+ *     description: >-
+ *       Retrieves webhooks for the authenticated team (paginated). Results are
+ *       capped at `limit` (default and maximum 1000). When more records exist
+ *       than are returned, `meta.total` exceeds `data.length`; clients with
+ *       large collections must page with `limit`/`offset` to retrieve them all.
  *     operationId: listWebhooks
  *     tags: [Webhooks]
+ *     parameters:
+ *       - name: limit
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 1000
+ *           default: 1000
+ *         description: Maximum number of webhooks to return.
+ *       - name: offset
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           default: 0
+ *         description: Number of webhooks to skip before returning results.
  *     responses:
  *       '200':
  *         description: Successfully retrieved webhooks
@@ -209,23 +341,538 @@ const router = express.Router();
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-router.get('/', async (req, res, next) => {
+router.get(
+  '/',
+  validateRequest({ query: paginationQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const { limit, offset } = getPagination(req.query);
+      const filter = { team: teamId.toString() };
+      // Sort by _id so skip/offset paging is stable across requests.
+      const [webhooks, total] = await Promise.all([
+        Webhook.find(filter).sort({ _id: 1 }).skip(offset).limit(limit),
+        Webhook.countDocuments(filter),
+      ]);
+
+      // Surface the full count at the HTTP layer too, so a client that reads
+      // headers but not the `meta` body can still detect truncation.
+      res.set('X-Total-Count', String(total));
+      return res.json({
+        data: webhooks.map(formatExternalWebhook).filter(s => s !== undefined),
+        meta: paginationMeta({ limit, offset }, total, 'webhooks'),
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * components:
+ *   schemas:
+ *     WebhookInput:
+ *       type: object
+ *       required:
+ *         - name
+ *         - service
+ *         - url
+ *       description: |
+ *         Webhook create/update body. `body`, `headers`, and `queryParams`
+ *         only take effect for services that issue a templated HTTP request
+ *         (`generic`, `incidentio`). The `slack` service posts a fixed payload
+ *         to its incoming-webhook URL and ignores them, so supplying any of
+ *         these fields on a `slack` webhook is rejected. `headers` and
+ *         `queryParams` are write-only — they are accepted here but never
+ *         returned by any read endpoint, so secrets such as auth tokens do
+ *         not leak. On
+ *         update (PUT), omitted readable fields (`description`, `titleEmoji`, `body`) are
+ *         cleared, while omitted `headers`/`queryParams` are preserved —
+ *         send an explicit `{}` to clear them. Exception: if the destination
+ *         (`url` or `service`) changes, omitted `headers`/`queryParams` are
+ *         cleared rather than preserved, so stored secrets are never forwarded
+ *         to a new destination; re-supply them for the new destination.
+ *       properties:
+ *         name:
+ *           type: string
+ *           maxLength: 1024
+ *           description: Webhook name. Must be unique per service within the team.
+ *           example: Production Alerts
+ *         service:
+ *           type: string
+ *           enum: [slack, incidentio, generic]
+ *           description: Webhook service type.
+ *           example: slack
+ *         url:
+ *           type: string
+ *           format: uri
+ *           maxLength: 2048
+ *           description: Webhook destination URL.
+ *           example: https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
+ *         description:
+ *           type: string
+ *           maxLength: 2048
+ *           description: Webhook description, shown in the UI.
+ *           example: "Sends critical alerts to the #incidents channel"
+ *         titleEmoji:
+ *           type: boolean
+ *           description: Set to false to omit the state emoji prefix from notification titles sent through this webhook. Unset or true keeps the default prefix.
+ *           example: false
+ *         body:
+ *           type: string
+ *           maxLength: 16384
+ *           description: Optional Handlebars request body template. Only for generic/incidentio; rejected for slack. Rejected with a 400 if it does not compile or calls a helper other than `eq` and the Handlebars built-ins.
+ *           example: '{"alert": "{{title}}", "severity": "{{level}}"}'
+ *         headers:
+ *           type: object
+ *           maxProperties: 100
+ *           description: Write-only. Custom HTTP headers sent with the webhook request. Never returned on read. Only for generic/incidentio; rejected for slack. Each value is capped at 4096 characters.
+ *           additionalProperties:
+ *             type: string
+ *             maxLength: 4096
+ *           example:
+ *             Authorization: Bearer secret-token
+ *         queryParams:
+ *           type: object
+ *           maxProperties: 100
+ *           description: Write-only. Query parameters appended to the webhook URL. Never returned on read. Only for generic/incidentio; rejected for slack. Each value is capped at 4096 characters.
+ *           additionalProperties:
+ *             type: string
+ *             maxLength: 4096
+ *     WebhookResponseEnvelope:
+ *       type: object
+ *       properties:
+ *         data:
+ *           $ref: '#/components/schemas/Webhook'
+ *           description: The webhook object.
+ */
+
+/**
+ * @openapi
+ * /api/v2/webhooks/validate:
+ *   post:
+ *     summary: Validate Webhook
+ *     description: |
+ *       Validates a webhook body against the same schema, URL rules, and body
+ *       template check used by POST /api/v2/webhooks. The webhook is **never
+ *       persisted**. Use this endpoint at plan time (e.g. from a Terraform
+ *       provider) to check that a webhook configuration is valid before
+ *       applying it. Name uniqueness is not checked.
+ *     operationId: validateWebhook
+ *     tags: [Webhooks]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WebhookInput'
+ *     responses:
+ *       '200':
+ *         description: |
+ *           Validation result. HTTP 200 is always returned for valid **and**
+ *           invalid bodies — a non-200 response means the request itself
+ *           failed (auth, server error, etc.).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [valid, errors, normalized]
+ *               properties:
+ *                 valid:
+ *                   type: boolean
+ *                   description: True when the body passes all validation rules.
+ *                 errors:
+ *                   type: array
+ *                   description: Validation errors. Empty when valid is true.
+ *                   items:
+ *                     type: object
+ *                     required: [path, message]
+ *                     properties:
+ *                       path:
+ *                         type: string
+ *                         description: Dot-separated field path, or empty string for top-level errors.
+ *                       message:
+ *                         type: string
+ *                         description: Human-readable error description.
+ *                 normalized:
+ *                   type: object
+ *                   nullable: true
+ *                   description: |
+ *                     The parsed webhook body, without the write-only
+ *                     `headers` and `queryParams`. Populated when valid is
+ *                     true, null when valid is false.
+ *             examples:
+ *               valid:
+ *                 summary: Valid webhook body
+ *                 value:
+ *                   valid: true
+ *                   errors: []
+ *                   normalized:
+ *                     name: "Alerts"
+ *                     service: "generic"
+ *                     url: "https://example.com/webhooks/alerts"
+ *                     body: '{"alert": "{{title}}"}'
+ *               invalid:
+ *                 summary: Body template that does not compile
+ *                 value:
+ *                   valid: false
+ *                   errors:
+ *                     - path: "body"
+ *                       message: "Invalid webhook body template (line 1, column 12): Parse error on line 1: ..."
+ *                   normalized: null
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Unauthorized access. API key is missing or invalid."
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post('/validate', async (req, res, next) => {
   try {
     const teamId = req.user?.team;
     if (teamId == null) {
-      return res.sendStatus(403);
+      return res.status(403).json({ message: 'Forbidden' });
     }
 
-    const webhooks: WebhookDocument[] = await Webhook.find({
-      team: teamId.toString(),
-    });
+    const parsed = externalWebhookCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.json({
+        valid: false,
+        errors: parsed.error.issues.map(i => ({
+          path: i.path.join('.'),
+          message: i.message,
+        })),
+        normalized: null,
+      });
+    }
+
+    const errors = getWebhookConfigErrors(parsed.data);
+    // Never echo write-only secrets, matching every other webhook read path.
+    const {
+      headers: _headers,
+      queryParams: _queryParams,
+      ...readable
+    } = parsed.data;
 
     return res.json({
-      data: webhooks.map(formatExternalWebhook).filter(s => s !== undefined),
+      valid: errors.length === 0,
+      errors,
+      normalized: errors.length === 0 ? readable : null,
     });
   } catch (e) {
     next(e);
   }
 });
+
+/**
+ * @openapi
+ * /api/v2/webhooks:
+ *   post:
+ *     summary: Create Webhook
+ *     description: Creates a new webhook for the authenticated team.
+ *     operationId: createWebhook
+ *     tags: [Webhooks]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WebhookInput'
+ *     responses:
+ *       '200':
+ *         description: Successfully created webhook
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/WebhookResponseEnvelope'
+ *       '400':
+ *         description: Bad request or duplicate webhook
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post(
+  '/',
+  validateRequest({ body: externalWebhookCreateSchema }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const {
+        name,
+        service,
+        url,
+        description,
+        titleEmoji,
+        queryParams,
+        headers,
+        body,
+      } = req.body;
+
+      const webhook = await createWebhook(teamId, {
+        name,
+        service,
+        url,
+        description,
+        titleEmoji,
+        queryParams,
+        headers,
+        body,
+      });
+
+      const data = formatExternalWebhook(webhook);
+      if (data === undefined) {
+        return respondPersistedButUnserializable(res, webhook);
+      }
+
+      res.json({ data });
+    } catch (e) {
+      if (handleWebhookValidationError(e, res)) return;
+      if (isDuplicateKeyError(e)) {
+        return res.status(400).json({ message: DUPLICATE_WEBHOOK_MESSAGE });
+      }
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v2/webhooks/{id}:
+ *   put:
+ *     summary: Update Webhook
+ *     description: |
+ *       Replaces an existing webhook. Readable optional fields
+ *       (`description`, `titleEmoji`, `body`) are a full replace: omitting them clears
+ *       them. The write-only fields `headers` and `queryParams` are never
+ *       returned on read, so omitting them preserves the stored values;
+ *       send an explicit empty object (`{}`) to clear them. Exception: if the
+ *       destination (`url` or `service`) changes, omitted `headers`/
+ *       `queryParams` are cleared rather than preserved so stored secrets are
+ *       never forwarded to a new destination.
+ *     operationId: updateWebhook
+ *     tags: [Webhooks]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Webhook ID
+ *         example: "507f1f77bcf86cd799439011"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/WebhookInput'
+ *     responses:
+ *       '200':
+ *         description: Successfully updated webhook
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/WebhookResponseEnvelope'
+ *       '400':
+ *         description: Bad request or duplicate webhook
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '404':
+ *         description: Webhook not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '409':
+ *         description: Webhook was modified concurrently; retry with current state
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.put(
+  '/:id',
+  validateRequest({
+    params: z.object({ id: objectIdSchema }),
+    body: externalWebhookCreateSchema,
+  }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const {
+        name,
+        service,
+        url,
+        description,
+        titleEmoji,
+        queryParams,
+        headers,
+        body,
+      } = req.body;
+
+      const result = await updateWebhook(teamId, req.params.id, {
+        name,
+        service,
+        url,
+        description,
+        titleEmoji,
+        queryParams,
+        headers,
+        body,
+      });
+
+      if (result.status === 'not_found') {
+        return res.status(404).json({ message: 'Webhook not found' });
+      }
+      if (result.status === 'conflict') {
+        return res.status(409).json({
+          message:
+            'Webhook was modified concurrently; please retry with the current state',
+        });
+      }
+
+      const data = formatExternalWebhook(result.webhook);
+      if (data === undefined) {
+        return respondPersistedButUnserializable(res, result.webhook);
+      }
+
+      res.json({ data });
+    } catch (e) {
+      if (handleWebhookValidationError(e, res)) return;
+      if (isDuplicateKeyError(e)) {
+        return res.status(400).json({ message: DUPLICATE_WEBHOOK_MESSAGE });
+      }
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v2/webhooks/{id}:
+ *   delete:
+ *     summary: Delete Webhook
+ *     description: >-
+ *       Deletes a webhook. Blocked with a 409 while any alert still references
+ *       it — reassign or remove those alerts first — so deletion never leaves an
+ *       alert pointing at a missing webhook (which would silently drop
+ *       notifications). Mirrors the internal webhook delete guard.
+ *     operationId: deleteWebhook
+ *     tags: [Webhooks]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Webhook ID
+ *         example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       '200':
+ *         description: Successfully deleted webhook
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/EmptyResponse'
+ *             example: {}
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '404':
+ *         description: Webhook not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '409':
+ *         description: Webhook is still referenced by one or more alerts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.delete(
+  '/:id',
+  validateRequest({ params: z.object({ id: objectIdSchema }) }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const result = await deleteWebhook(teamId, req.params.id);
+
+      if (result.status === 'referenced') {
+        return res.status(409).json({
+          message: `Cannot delete webhook: ${result.alertCount} alert(s) still reference it. Reassign or remove those alerts first.`,
+        });
+      }
+      if (result.status === 'not_found') {
+        return res.status(404).json({ message: 'Webhook not found' });
+      }
+
+      res.json({});
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 export default router;

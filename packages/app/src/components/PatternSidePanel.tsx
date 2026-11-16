@@ -1,24 +1,26 @@
 import * as React from 'react';
 import { JSDataType } from '@hyperdx/common-utils/dist/clickhouse';
-import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import { TSource } from '@hyperdx/common-utils/dist/types';
 import { Button, Card, Drawer, Stack, Text } from '@mantine/core';
 
+import { IsolatedChartSyncProvider } from '@/chartSync';
 // Easter egg: April Fools 2026 — see aiSummarize/ for details.
 import AISummarizePatternButton from '@/components/AISummarizePatternButton';
 import DBRowSidePanel from '@/components/DBRowSidePanel';
 import { RawLogTable } from '@/components/DBRowTable';
 import { DrawerBody, DrawerHeader } from '@/components/DrawerUtils';
-import { Pattern } from '@/hooks/usePatterns';
 import {
+  LEVEL_COLUMN_ALIAS,
+  Pattern,
   PATTERN_COLUMN_ALIAS,
-  SEVERITY_TEXT_COLUMN_ALIAS,
+  SERVICE_NAME_COLUMN_ALIAS,
   TIMESTAMP_COLUMN_ALIAS,
 } from '@/hooks/usePatterns';
 import useRowWhere, { RowWhereResult } from '@/hooks/useRowWhere';
 import { getFirstTimestampValueExpression } from '@/source';
 import { useZIndex, ZIndexContext } from '@/zIndex';
 
-import styles from '../../styles/LogSidePanel.module.scss';
+import styles from '@styles/LogSidePanel.module.scss';
 
 export default function PatternSidePanel({
   isOpen,
@@ -39,38 +41,35 @@ export default function PatternSidePanel({
   const [selectedRowWhere, setSelectedRowWhere] =
     React.useState<RowWhereResult | null>(null);
 
-  const serviceNameExpression =
-    ((source?.kind === SourceKind.Log || source?.kind === SourceKind.Trace) &&
-      source.serviceNameExpression) ||
-    'Service';
+  const columnTypeMap = React.useMemo(
+    () =>
+      new Map<string, { _type: JSDataType | null }>([
+        [TIMESTAMP_COLUMN_ALIAS, { _type: JSDataType.Date }],
+        [PATTERN_COLUMN_ALIAS, { _type: JSDataType.String }],
+        [LEVEL_COLUMN_ALIAS, { _type: JSDataType.String }],
+        [SERVICE_NAME_COLUMN_ALIAS, { _type: JSDataType.String }],
+      ]),
+    [],
+  );
 
-  const columnTypeMap = React.useMemo(() => {
-    const map = new Map<string, { _type: JSDataType | null }>([
-      [TIMESTAMP_COLUMN_ALIAS, { _type: JSDataType.Date }],
-      [PATTERN_COLUMN_ALIAS, { _type: JSDataType.String }],
-      [SEVERITY_TEXT_COLUMN_ALIAS, { _type: JSDataType.String }],
-      [serviceNameExpression, { _type: JSDataType.String }],
-    ]);
-    return map;
-  }, [serviceNameExpression]);
-
-  const columnNameMap = React.useMemo(() => {
-    return {
+  const columnNameMap = React.useMemo(
+    () => ({
       [TIMESTAMP_COLUMN_ALIAS]: 'Timestamp',
-      [serviceNameExpression]: 'Service',
-      [SEVERITY_TEXT_COLUMN_ALIAS]: 'level',
+      [SERVICE_NAME_COLUMN_ALIAS]: 'Service',
+      [LEVEL_COLUMN_ALIAS]: 'Level',
       [PATTERN_COLUMN_ALIAS]: 'Body',
-    };
-  }, [serviceNameExpression]);
+    }),
+    [],
+  );
 
   const displayedColumns = React.useMemo(() => {
     return [
       TIMESTAMP_COLUMN_ALIAS,
-      serviceNameExpression,
-      SEVERITY_TEXT_COLUMN_ALIAS,
+      SERVICE_NAME_COLUMN_ALIAS,
+      LEVEL_COLUMN_ALIAS,
       PATTERN_COLUMN_ALIAS,
     ];
-  }, [serviceNameExpression]);
+  }, []);
 
   const getRowWhere = useRowWhere({
     meta: [
@@ -126,62 +125,59 @@ export default function PatternSidePanel({
         },
       }}
     >
-      <ZIndexContext.Provider value={drawerZIndex}>
-        <div className={styles.panel}>
-          <DrawerHeader
-            header="Pattern"
-            onClose={selectedRowWhere ? handleCloseRowSidePanel : onClose}
-          />
-          <DrawerBody>
-            <Stack>
-              <Card p="md">
-                <Text size="sm">{pattern.pattern}</Text>
-                <AISummarizePatternButton
-                  pattern={pattern}
-                  serviceNameExpression={serviceNameExpression}
-                />
-              </Card>
-              <Card p="md">
-                <Card.Section p="md" py="xs">
-                  ~{pattern.count?.toLocaleString()} Sample Events
-                </Card.Section>
-                <RawLogTable
-                  rows={displayedSamples}
-                  generateRowId={row => ({ where: row.id, aliasWith: [] })}
-                  displayedColumns={displayedColumns}
-                  columnTypeMap={columnTypeMap}
-                  columnNameMap={columnNameMap}
-                  onRowDetailsClick={handleRowClick}
-                  wrapLines={false}
-                  showExpandButton={false}
-                  isLive={false}
-                />
-                {!showAll && pattern.samples.length > INITIAL_LIMIT && (
-                  <Button
-                    variant="subtle"
-                    fullWidth
-                    size="xs"
-                    mt="xs"
-                    onClick={() => setShowAll(true)}
-                  >
-                    Show all {pattern.samples.length.toLocaleString()} samples
-                  </Button>
-                )}
-              </Card>
-            </Stack>
-          </DrawerBody>
-          {selectedRowWhere && (
-            <DBRowSidePanel
-              source={source}
-              rowId={selectedRowWhere.where}
-              aliasWith={selectedRowWhere.aliasWith}
-              onClose={handleCloseRowSidePanel}
-              isNestedPanel={true}
-              breadcrumbPath={[{ label: 'Pattern Overview' }]}
+      <ZIndexContext value={drawerZIndex}>
+        <IsolatedChartSyncProvider>
+          <div className={styles.panel} data-testid="pattern-side-panel">
+            <DrawerHeader
+              header="Pattern"
+              onClose={selectedRowWhere ? handleCloseRowSidePanel : onClose}
             />
-          )}
-        </div>
-      </ZIndexContext.Provider>
+            <DrawerBody>
+              <Stack>
+                <Card p="md">
+                  <Text size="sm">{pattern.pattern}</Text>
+                  <AISummarizePatternButton pattern={pattern} />
+                </Card>
+                <Card p="md">
+                  <Card.Section p="md" py="xs">
+                    ~{pattern.count?.toLocaleString()} Sample Events
+                  </Card.Section>
+                  <RawLogTable
+                    rows={displayedSamples}
+                    generateRowId={row => ({ where: row.id, aliasWith: [] })}
+                    displayedColumns={displayedColumns}
+                    columnTypeMap={columnTypeMap}
+                    columnNameMap={columnNameMap}
+                    onRowDetailsClick={handleRowClick}
+                    wrapLines={false}
+                    showExpandButton={false}
+                    isLive={false}
+                  />
+                  {!showAll && pattern.samples.length > INITIAL_LIMIT && (
+                    <Button
+                      variant="subtle"
+                      fullWidth
+                      size="xs"
+                      mt="xs"
+                      onClick={() => setShowAll(true)}
+                    >
+                      Show all {pattern.samples.length.toLocaleString()} samples
+                    </Button>
+                  )}
+                </Card>
+              </Stack>
+            </DrawerBody>
+            {selectedRowWhere && (
+              <DBRowSidePanel
+                source={source}
+                rowId={selectedRowWhere.where}
+                aliasWith={selectedRowWhere.aliasWith}
+                onClose={handleCloseRowSidePanel}
+              />
+            )}
+          </div>
+        </IsolatedChartSyncProvider>
+      </ZIndexContext>
     </Drawer>
   );
 }

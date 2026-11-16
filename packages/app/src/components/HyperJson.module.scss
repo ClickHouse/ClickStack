@@ -4,13 +4,15 @@
   width: 100%;
   flex-direction: column;
   padding: var(--mantine-spacing-xs);
-  font-size: 12px;
+  font-size: var(--hdx-content-font-size);
   font-family: var(--font-ibm-plex-mono);
 }
 
 .withTabulate {
-  .key {
-    min-width: 150px;
+  .keyContainer {
+    // `min()` keeps the floor inside the 50% cap so the key
+    // column also can't overflow into the value column in narrow panels.
+    min-width: min(150px, 50%);
   }
 }
 
@@ -29,7 +31,7 @@
 .line {
   display: flex;
   gap: 10px;
-  padding: 2px 8px;
+  padding: 2px 8px 2px 20px;
   align-items: flex-start;
   border-radius: 3px;
   position: relative;
@@ -54,11 +56,10 @@
     cursor: pointer;
 
     .key {
-      margin-left: -10px;
+      margin-left: -16px;
     }
 
     .valueContainer {
-      margin-left: 10px;
       word-break: break-all;
     }
 
@@ -158,6 +159,11 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+
+  // Cap the key column so long keys (e.g. `longtask.attribution.entry_type`)
+  // can't stretch the row and squeeze the value column to nothing
+  max-width: 50%;
+  min-width: 0;
 }
 
 .key {
@@ -167,6 +173,9 @@
   cursor: pointer;
   display: flex;
   gap: 6px;
+
+  // Wrap unbroken keys (dots don't break) within the keyContainer cap
+  overflow-wrap: anywhere;
 
   // @extend .hoverable;
   // @extend .clickable;
@@ -183,6 +192,7 @@
   align-items: flex-start;
   gap: 3px;
   max-width: 100%;
+  min-width: 0;
 }
 
 .value {
@@ -199,7 +209,10 @@
 .string {
   color: var(--color-json-string);
   white-space: pre;
-  overflow-wrap: break-word;
+
+  // `anywhere` (vs `break-word`) so when wrapping is enabled long
+  // unbroken tokens like URLs/paths break instead of overflowing
+  overflow-wrap: anywhere;
 
   &::before,
   &::after {
@@ -218,12 +231,12 @@
 
 .object {
   color: var(--color-json-object);
-  font-size: 11px;
+  font-size: var(--hdx-content-font-size-compact);
 }
 
 .array {
   color: var(--color-json-array);
-  font-size: 11px;
+  font-size: var(--hdx-content-font-size-compact);
 }
 
 .expandMoreProps {

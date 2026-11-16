@@ -2,15 +2,25 @@
  * SearchPage - Page object for the /search page
  * Encapsulates all interactions with the search interface
  */
-import { Locator, Page } from '@playwright/test';
+import { expect, Locator, Page } from '@playwright/test';
 
 import { FilterComponent } from '../components/FilterComponent';
+import { HeatmapComponent } from '../components/HeatmapComponent';
 import { InfrastructurePanelComponent } from '../components/InfrastructurePanelComponent';
+import { PatternSidePanelComponent } from '../components/PatternSidePanelComponent';
 import { SavedSearchModalComponent } from '../components/SavedSearchModalComponent';
 import { SearchPageAlertModalComponent } from '../components/SearchPageAlertModalComponent';
 import { SidePanelComponent } from '../components/SidePanelComponent';
 import { TableComponent } from '../components/TableComponent';
 import { TimePickerComponent } from '../components/TimePickerComponent';
+import { WhereInputComponent } from '../components/WhereInputComponent';
+import { DEFAULT_TRACES_SOURCE_NAME } from '../utils/constants';
+import {
+  borderedBox,
+  dismissSqlAutocomplete,
+  replaceEditorText,
+} from '../utils/locators';
+import type { MultilineField } from '../utils/multiline-input';
 
 type SaveSearchModalProps = {
   update: boolean;
@@ -20,10 +30,13 @@ export class SearchPage {
   readonly table: TableComponent;
   readonly timePicker: TimePickerComponent;
   readonly sidePanel: SidePanelComponent;
+  readonly patternSidePanel: PatternSidePanelComponent;
   readonly infrastructure: InfrastructurePanelComponent;
   readonly filters: FilterComponent;
+  readonly heatmap: HeatmapComponent;
+  readonly whereInput: WhereInputComponent;
   readonly savedSearchModal: SavedSearchModalComponent;
-  readonly savedSearchNameTitle: Locator;
+  readonly savedSearchNameInput: Locator;
   readonly alertModal: SearchPageAlertModalComponent;
   readonly defaultTimeout: number = 3000;
   private readonly alertsButtonLocator: Locator;
@@ -33,10 +46,7 @@ export class SearchPage {
   private readonly searchInput: Locator;
   private readonly searchButton: Locator;
   private readonly saveSearchButton: Locator;
-  private readonly languageSelect: Locator;
   private readonly updateSearchButton: Locator;
-  private readonly luceneTab: Locator;
-  private readonly sqlTab: Locator;
   private readonly sourceSelector: Locator;
 
   constructor(page: Page, defaultTimeout: number = 3000) {
@@ -49,36 +59,43 @@ export class SearchPage {
     );
     this.timePicker = new TimePickerComponent(page);
     this.sidePanel = new SidePanelComponent(page, 'row-side-panel');
+    this.patternSidePanel = new PatternSidePanelComponent(page);
     this.infrastructure = new InfrastructurePanelComponent(page);
     this.filters = new FilterComponent(page);
+    this.heatmap = new HeatmapComponent(page);
     this.savedSearchModal = new SavedSearchModalComponent(page);
     this.alertModal = new SearchPageAlertModalComponent(page);
     this.alertsButtonLocator = page.getByTestId('alerts-button');
-    this.savedSearchNameTitle = page.locator(
-      '[data-testid="saved-search-name"]',
-    );
+    this.savedSearchNameInput = page.getByTestId('saved-search-name');
 
     // Define page-specific locators
     this.searchForm = page.getByTestId('search-form');
+    this.whereInput = new WhereInputComponent(page, this.searchForm);
     this.searchInput = page.getByTestId('search-input');
     this.searchButton = page.getByTestId('search-submit-button');
     this.saveSearchButton = page.getByTestId('save-search-button');
     this.updateSearchButton = page.getByTestId('update-search-button');
-    const whereLanguageSwitch = page.getByTestId('where-language-switch');
-    this.languageSelect = whereLanguageSwitch.getByRole('combobox', {
-      name: 'Query language',
-    });
-    this.sqlTab = page.getByRole('option', { name: 'SQL', exact: true });
-    this.luceneTab = page.getByRole('option', { name: 'Lucene', exact: true });
     this.sourceSelector = page.getByTestId('source-selector');
   }
 
-  get createNewSourceItem() {
-    return this.page.getByRole('option', { name: 'Create New Source' });
+  get sourceActionsMenu() {
+    return this.page.getByTestId('source-actions-menu');
   }
 
-  get editSourcesItem() {
-    return this.page.getByRole('option', { name: 'Edit Sources' });
+  get createNewSourceItem() {
+    return this.page.getByRole('menuitem', { name: 'Create new source' });
+  }
+
+  get editSourceItem() {
+    return this.page.getByRole('menuitem', { name: 'Edit source' });
+  }
+
+  get manageSourcesItem() {
+    return this.page.getByRole('menuitem', { name: 'Manage sources' });
+  }
+
+  get viewSchemaItem() {
+    return this.page.getByRole('menuitem', { name: 'View schema' });
   }
 
   /**
@@ -91,15 +108,120 @@ export class SearchPage {
   }
 
   async selectSource(sourceName: string) {
+    // Clicking the option that is already selected deselects it. Leave an
+    // existing match alone.
+    if ((await this.sourceSelector.inputValue()) === sourceName) {
+      return;
+    }
     await this.sourceSelector.click();
     await this.page
       .getByRole('option', { name: sourceName, exact: true })
       .click();
   }
 
+  /** The "Event Patterns" analysis-mode tab in the filters sidebar. */
+  get eventPatternsTab() {
+    return this.page.getByRole('tab', { name: 'Event Patterns' });
+  }
+
+  /** The "Event Deltas" analysis-mode tab, shown only for trace sources. */
+  get eventDeltasTab() {
+    return this.page.getByRole('tab', { name: 'Event Deltas' });
+  }
+
+  async switchToEventDeltas() {
+    await this.eventDeltasTab.click();
+    await expect(this.page).toHaveURL(/[?&]mode=delta/);
+  }
+
+  get chartErrorState() {
+    return this.page.getByTestId('chart-error-state');
+  }
+
+  /** DBDeltaChart legend entries shown only while a selection is compared. */
+  get deltaSelectionLegend() {
+    return this.page.getByText('Selection', { exact: true });
+  }
+
+  get deltaBackgroundLegend() {
+    return this.page.getByText('Background', { exact: true });
+  }
+
+  /** DBDeltaChart hint shown while there is no selection to compare. */
+  get deltaNoSelectionHint() {
+    return this.page.getByText(
+      'Select an area on the chart above to enable comparisons',
+    );
+  }
+
+  get heatmapSettingsDrawer() {
+    return this.page.getByRole('dialog', { name: 'Display Settings' });
+  }
+
+  async openHeatmapSettings() {
+    await this.page.getByTestId('heatmap-settings-button').click();
+    await expect(this.heatmapSettingsDrawer).toBeVisible();
+  }
+
+  async setHeatmapScale(scale: 'Log' | 'Linear') {
+    await this.heatmapSettingsDrawer.getByText(scale, { exact: true }).click();
+  }
+
+  async applyHeatmapSettings() {
+    await this.heatmapSettingsDrawer
+      .getByRole('button', { name: 'Apply' })
+      .click();
+    await expect(this.heatmapSettingsDrawer).toBeHidden();
+  }
+
+  /**
+   * The pattern list table (the "Event Patterns" grid). It renders before the
+   * flyout in the DOM (the flyout is a portaled drawer), so `.first()` resolves
+   * the pattern list even after the flyout's sample table mounts.
+   */
+  get patternListTable() {
+    return this.page.getByTestId('search-results-table').first();
+  }
+
+  get patternListRows() {
+    return this.patternListTable.locator('[data-testid^="table-row-"]');
+  }
+
+  /**
+   * Switch to Event Patterns mode and wait for the (client-side, Drain-based)
+   * pattern list to finish clustering and render at least one pattern row.
+   */
+  async switchToEventPatterns(timeout = 60_000) {
+    await this.eventPatternsTab.click();
+    await this.patternListRows.first().waitFor({ state: 'visible', timeout });
+  }
+
+  /**
+   * The Level-column cell of a pattern-list row. The list renders its columns
+   * as sibling divs inside the row's content button (see PatternTable's
+   * displayedColumns: Trend, Count, Level, Pattern).
+   */
+  patternListLevelCell(rowIndex = 0) {
+    const PATTERN_LIST_LEVEL_COLUMN_INDEX = 2;
+    return this.patternListRows
+      .nth(rowIndex)
+      .locator('td > button > div')
+      .nth(PATTERN_LIST_LEVEL_COLUMN_INDEX);
+  }
+
+  /** Open the first pattern's sample flyout and wait for it to render. */
+  async openFirstPattern(timeout = 30_000) {
+    await this.patternListRows.first().click();
+    await this.patternSidePanel.container.waitFor({
+      state: 'visible',
+      timeout,
+    });
+    await this.patternSidePanel.firstRow.waitFor({ state: 'visible', timeout });
+  }
+
   async openEditSourceModal() {
-    await this.sourceSelector.click();
-    await this.editSourcesItem.click();
+    await this.sourceActionsMenu.click();
+    await this.editSourceItem.click();
   }
 
   async sourceModalShowOptionalFields() {
@@ -109,6 +231,10 @@ export class SearchPage {
     if (await optionalFieldsButton.isVisible()) {
       await optionalFieldsButton.click();
     }
+  }
+
+  async saveSourceForm() {
+    await this.page.getByRole('button', { name: 'Save Source' }).click();
   }
 
   /**
@@ -124,6 +250,95 @@ export class SearchPage {
   }
 
   /**
+   * Open a log row that carries trace context (a non-empty TraceId) so the side
+   * panel renders the cross-source "View Trace" action.
+   */
+  async openTraceLinkedLogRow(traceId: string = 'trace-0') {
+    await this.timePicker.selectRelativeTime('Last 1 days');
+    await this.performSearch(`TraceId:"${traceId}"`);
+    await expect(this.table.firstRow).toBeVisible();
+    await this.table.clickFirstRow();
+    await expect(this.sidePanel.tabs).toBeVisible();
+  }
+
+  /** The selection menu button in the table header, once rows are selected. */
+  get selectionCount() {
+    return this.page.getByTestId('row-selection-count');
+  }
+
+  /** Only rendered while live tail is stopped. */
+  get resumeLiveTailButton() {
+    return this.page.getByRole('button', { name: 'Resume Live Tail' });
+  }
+
+  async resumeLiveTail() {
+    await this.resumeLiveTailButton.click();
+  }
+
+  /** Opens the selection menu and picks one of its actions. */
+  private async clickSelectionMenuItem(testId: string) {
+    await this.selectionCount.click();
+    await this.page.getByTestId(testId).click();
+  }
+
+  async copySelectedRows(format: 'csv' | 'json' = 'csv') {
+    await this.clickSelectionMenuItem(`row-selection-copy-${format}`);
+  }
+
+  /** The toast confirming a clipboard copy of the selected rows. */
+  getCopiedSelectionToast() {
+    return this.page.getByText(/copied \d+ rows? as (CSV|JSON)/i);
+  }
+
+  async clearRowSelection() {
+    await this.clickSelectionMenuItem('row-selection-clear');
+  }
+
+  /**
+   * Download the selected rows and return the CSV text. The export triggers a
+   * client-side anchor download, so capture the Playwright download event and
+   * read its stream.
+   */
+  async downloadSelectedRowsCsv(): Promise<{
+    filename: string;
+    content: string;
+  }> {
+    const downloadPromise = this.page.waitForEvent('download');
+    await this.clickSelectionMenuItem('row-selection-download-csv');
+    const download = await downloadPromise;
+    const stream = await download.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return {
+      filename: download.suggestedFilename(),
+      content: Buffer.concat(chunks).toString('utf-8'),
+    };
+  }
+
+  /**
+   * Open the waterfall's spans filter — a `SearchWhereInput` with
+   * `allowMultiline={false}` in both SQL and Lucene.
+   */
+  async openTraceSpansFilter(): Promise<WhereInputComponent> {
+    await this.selectSource(DEFAULT_TRACES_SOURCE_NAME);
+    await this.timePicker.selectRelativeTime('Last 1 days');
+    await this.submitEmptySearch();
+    await expect(this.table.firstRow).toBeVisible();
+    await this.table.clickFirstRow();
+    await expect(this.sidePanel.container).toBeVisible();
+    await expect(this.sidePanel.getTab('trace')).toBeVisible({
+      timeout: 15_000,
+    });
+    await this.sidePanel.clickTab('trace');
+    await this.sidePanel.toggleTraceFilters();
+    const whereInput = this.sidePanel.traceSpansWhereInput;
+    await expect(whereInput.languageSwitch).toBeVisible();
+    return whereInput;
+  }
+
+  /**
    * Clear the search input
    */
   async clearSearch() {
@@ -134,16 +349,14 @@ export class SearchPage {
    * Switch to SQL mode
    */
   async switchToSQLMode() {
-    await this.languageSelect.click();
-    await this.sqlTab.click();
+    await this.whereInput.selectLanguage('SQL');
   }
 
   /**
    * Switch to Lucene mode
    */
   async switchToLuceneMode() {
-    await this.languageSelect.click();
-    await this.luceneTab.click();
+    await this.whereInput.selectLanguage('Lucene');
   }
 
   /**
@@ -178,6 +391,23 @@ export class SearchPage {
 
     // Wait for new results to populate
     await this.table.waitForRowsToPopulate();
+  }
+
+  /**
+   * Mark the live document so a later `hasSurvivedReload` can tell a
+   * client-side route change from a full page load, which replaces the
+   * document and with it the marker.
+   */
+  async markDocument() {
+    await this.page.evaluate(() => {
+      document.documentElement.dataset.e2eDocumentMarker = 'true';
+    });
+  }
+
+  async hasSurvivedReload() {
+    return this.page.evaluate(
+      () => document.documentElement.dataset.e2eDocumentMarker === 'true',
+    );
   }
 
   /**
@@ -222,10 +452,70 @@ export class SearchPage {
   }
 
   /**
+   * Locator for the results table's error state (rendered by ChartErrorState
+   * when the underlying ClickHouse query fails). Assert `toHaveCount(0)` to
+   * confirm the results loaded without error.
+   */
+  getTableError() {
+    return this.page.getByText(/Error loading/i);
+  }
+
+  /** Move focus into the WHERE input, whichever language it is rendering. */
+  async focusWhereInput() {
+    await this.whereInput.focus();
+  }
+
+  /**
+   * Border colors of the two halves of the WHERE control. They sit flush
+   * against each other, so a focus state on only one reads as half-focused.
+   */
+  async getWhereBorderColors(): Promise<{
+    languageSwitch: string;
+    input: string;
+  }> {
+    return this.whereInput.borderColors();
+  }
+
+  /**
    * Get SELECT editor (CodeMirror)
    */
   getSELECTEditor() {
     return this.page.locator('.cm-content').first();
+  }
+
+  async getSelectBorderColor(): Promise<string> {
+    return this.selectClauseField().visibleBox.evaluate(
+      el => getComputedStyle(el).borderTopColor,
+    );
+  }
+
+  async getOrderByBorderColor(): Promise<string> {
+    return this.orderByClauseField().visibleBox.evaluate(
+      el => getComputedStyle(el).borderTopColor,
+    );
+  }
+
+  /** The SELECT / ORDER BY clause editors as growth-assertable fields. */
+  selectClauseField(): MultilineField {
+    return this.clauseField(this.getSELECTEditor());
+  }
+
+  orderByClauseField(): MultilineField {
+    return this.clauseField(this.getOrderByEditor());
+  }
+
+  /** Empty a clause editor so it starts from one short line. */
+  async clearClause(field: MultilineField) {
+    await field.focusTarget.press('ControlOrMeta+A');
+    await field.focusTarget.press('Backspace');
+  }
+
+  private clauseField(content: Locator): MultilineField {
+    return {
+      focusTarget: content,
+      growthBox: content,
+      visibleBox: borderedBox(content),
+    };
   }
 
   /**
@@ -241,7 +531,13 @@ export class SearchPage {
   async setCustomSELECT(selectStatement: string) {
     const selectEditor = this.getSELECTEditor();
     await selectEditor.click({ clickCount: 3 }); // Select all
-    await this.page.keyboard.type(selectStatement);
+    // Insert atomically rather than per-keystroke: under load CodeMirror can
+    // drop individual keys from keyboard.type (e.g. "Timestamp" -> "Timstamp"),
+    // which then gets faithfully saved and fails later assertions.
+    await this.page.keyboard.insertText(selectStatement);
+    // Dismiss the autocomplete popup so it can't linger and overlay the next
+    // control (e.g. the Save Search button).
+    await dismissSqlAutocomplete(this.page);
   }
 
   /**
@@ -253,6 +549,81 @@ export class SearchPage {
     await this.page.keyboard.type(orderByStatement);
     // CLoses Autocomplete Modal if open
     await this.page.keyboard.press('Escape');
+  }
+
+  get groupByButton() {
+    return this.page.getByTestId('search-group-by-button');
+  }
+
+  get groupByDropdown() {
+    return this.page.getByTestId('search-group-by-dropdown');
+  }
+
+  async openGroupBy() {
+    await this.groupByButton.click();
+    await expect(this.groupByDropdown).toBeVisible();
+  }
+
+  /** Replace the histogram group by with `fields`, picked from the key list. */
+  async setGroupByFields(fields: string[]) {
+    await this.openGroupBy();
+    await this.groupByDropdown.getByRole('button', { name: 'Clear' }).click();
+    for (const field of fields) {
+      await this.groupByDropdown
+        .getByTestId('search-group-by-search')
+        .fill(field);
+      await this.groupByDropdown
+        .getByRole('checkbox', { name: field, exact: true })
+        .check();
+    }
+    await this.applyGroupBy();
+  }
+
+  async openGroupBySqlTab() {
+    await this.groupByDropdown.getByText('SQL', { exact: true }).click();
+  }
+
+  /** Replace the histogram group by with a SQL expression list. */
+  async setGroupBySql(sql: string) {
+    await this.openGroupBy();
+    await this.openGroupBySqlTab();
+    await replaceEditorText(
+      this.page,
+      this.groupByDropdown.locator('.cm-content'),
+      sql,
+    );
+    await dismissSqlAutocomplete(this.page);
+    await this.applyGroupBy();
+  }
+
+  private async applyGroupBy() {
+    await this.groupByDropdown.getByRole('button', { name: 'Apply' }).click();
+    await expect(this.groupByDropdown).toBeHidden();
+  }
+
+  getDroppedGroupByToast(fields: string) {
+    return this.page.getByText(
+      `Group by ${fields} didn't apply to this source`,
+      { exact: false },
+    );
+  }
+
+  getHistogramLegend() {
+    return this.getHistogram().locator('.recharts-legend-wrapper');
+  }
+
+  /** Pin the histogram tooltip and focus its first series. */
+  async focusFirstHistogramSeries() {
+    const focusButton = this.page
+      .locator('[data-testid^="chart-focus-series-"]')
+      .first();
+    // Recharts only pins on a click that lands on a bucket, so the click
+    // itself is part of what gets retried.
+    await expect(async () => {
+      await this.getHistogram().click();
+      await expect(focusButton).toBeVisible({ timeout: 2000 });
+    }).toPass({ timeout: 30000 });
+    await focusButton.click();
   }
 
   /**
@@ -295,6 +666,18 @@ export class SearchPage {
     await this.page.mouse.up();
   }
 
+  /**
+   * Returns a locator for the yellow Mantine notification shown when one or
+   * more sidebar filters are dropped because they don't exist on the newly
+   * selected source's schema.
+   *
+   * The message format from DBSearchPage.tsx:
+   *   "N filter(s) didn't apply to this source and was/were removed."
+   */
+  getDroppedFiltersToast() {
+    return this.page.getByText(/filter.* didn't apply to this source/i);
+  }
+
   // Getters for assertions in spec files
 
   get form() {
@@ -310,11 +693,11 @@ export class SearchPage {
   }
 
   get luceneModeTab() {
-    return this.luceneTab;
+    return this.page.getByRole('option', { name: 'Lucene', exact: true });
   }
 
   get sqlModeTab() {
-    return this.sqlTab;
+    return this.page.getByRole('option', { name: 'SQL', exact: true });
   }
 
   get sourceDropdown() {
@@ -331,5 +714,14 @@ export class SearchPage {
 
   get otherSources() {
     return this.page.getByRole('option', { selected: false });
+  }
+
+  get totalCountText() {
+    return this.page.getByTestId('search-total-count');
+  }
+
+  async waitForTotalCountLoaded(timeout = 15_000) {
+    await expect(this.totalCountText).toBeVisible({ timeout });
+    await expect(this.totalCountText).not.toContainText('···', { timeout });
   }
 }

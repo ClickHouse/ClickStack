@@ -1,6 +1,8 @@
 import React from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 
+import { useMaterializedAliasColumnsOption } from '@/hooks/useMaterializedAliasColumnsOption';
+
 import { buildJSONExtractQuery, DBRowJsonViewer } from './DBRowJsonViewer';
 import { RowSidePanelContext } from './DBRowSidePanel';
 
@@ -10,6 +12,13 @@ jest.mock('next/router', () => ({
   default: {
     push: jest.fn(),
   },
+}));
+
+const mockFormatTime = jest.fn();
+
+jest.mock('@/useFormatTime', () => ({
+  useFormatTime: () => mockFormatTime,
+  FormatTime: jest.fn(() => null),
 }));
 
 describe('DBRowJsonViewer', () => {
@@ -50,14 +59,38 @@ describe('DBRowJsonViewer', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockFormatTime.mockImplementation((time, { format } = {}) => {
+      const date = time instanceof Date ? time : new Date(time);
+      if (format === 'withMs') {
+        return `formatted:${date.toISOString()}`;
+      }
+      return String(time);
+    });
   });
 
   // Helper to render component
   const renderComponent = (data: any) => {
     return renderWithMantine(
-      <RowSidePanelContext.Provider value={defaultContext}>
+      <RowSidePanelContext value={defaultContext}>
         <DBRowJsonViewer data={data} />
-      </RowSidePanelContext.Provider>,
+      </RowSidePanelContext>,
+    );
+  };
+
+  // Line action buttons are now icon-only; locate them by their `title`
+  // tooltip. Maps the friendly action name to a unique title substring.
+  const ACTION_TITLE: Record<string, string> = {
+    Search: 'search for this value only',
+    'Add to Filters': 'add to filters',
+    Column: 'column to results table',
+    'Copy Object': 'copy object',
+    'Copy Value': 'copy value',
+  };
+
+  const findActionButton = (line: HTMLElement, buttonText: string) => {
+    const needle = (ACTION_TITLE[buttonText] ?? buttonText).toLowerCase();
+    return within(line).getByTitle((content: string) =>
+      (content ?? '').toLowerCase().includes(needle),
     );
   };
 
@@ -65,7 +98,7 @@ describe('DBRowJsonViewer', () => {
   const clickLineButton = (fieldText: string, buttonText: string) => {
     const line = screen.getByText(fieldText).closest('.line')! as HTMLElement;
     fireEvent.mouseEnter(line);
-    const button = within(line).getByText(buttonText);
+    const button = findActionButton(line, buttonText);
     fireEvent.click(button);
   };
 
@@ -84,7 +117,7 @@ describe('DBRowJsonViewer', () => {
       .getByText(childField)
       .closest('.line')! as HTMLElement;
     fireEvent.mouseEnter(childLine);
-    const button = within(childLine).getByText(buttonText);
+    const button = findActionButton(childLine, buttonText);
     fireEvent.click(button);
   };
 
@@ -133,6 +166,21 @@ describe('DBRowJsonViewer', () => {
     );
   });
 
+  // HDX-4427: "Add to Filters" on a value inside parsed JSON from a String
+  // column must hand searchFilters the JSONExtract* expression, which is what
+  // gets serialized into the WHERE clause. Body here is a String column holding
+  // a JSON string with a dotted key, mirroring the play-clickstack repro.
+  it('adds a JSONExtractString filter for a value inside a parsed-JSON string column', () => {
+    renderComponent({ Body: JSON.stringify({ 'app.user.currency': 'USD' }) });
+
+    expandAndClickButton('Body', 'app.user.currency', 'Add to Filters');
+
+    expect(mockOnPropertyAddClick).toHaveBeenCalledWith(
+      "JSONExtractString(Body, 'app.user.currency')",
+      'USD',
+    );
+  });
+
   it('toggles columns with correct path formatting', () => {
     renderComponent(logData);
     clickLineButton('field1', 'Column');
@@ -140,7 +188,74 @@ describe('DBRowJsonViewer', () => {
     expect(mockToggleColumn).toHaveBeenCalledWith("LogAttributes['field1']");
   });
 
+  it('turns the materialized and alias columns option on and off from the menu', async () => {
+    const OptionValue = () => (
+      <span data-testid="materialized-alias-option">
+        {String(useMaterializedAliasColumnsOption()[0])}
+      </span>
+    );
+    const { container } = renderWithMantine(
+      <RowSidePanelContext value={defaultContext}>
+        <DBRowJsonViewer data={logData} showMaterializedAliasColumnsOption />
+        <OptionValue />
+      </RowSidePanelContext>,
+    );
+    const option = screen.getByTestId('materialized-alias-option');
+    const toggle = async () => {
+      fireEvent.click(container.querySelector('[aria-haspopup="menu"]')!);
+      fireEvent.click(
+        await screen.findByTestId('json-viewer-materialized-alias-toggle'),
+      );
+    };
+
+    expect(option).toHaveTextContent('false');
+    await toggle();
+    expect(option).toHaveTextContent('true');
+    expect(
+      localStorage.getItem('hdx-row-show-materialized-alias-columns'),
+    ).toBe('true');
+    await toggle();
+    expect(option).toHaveTextContent('false');
+  });
+
+  it('hides the materialized and alias columns option unless asked to show it', async () => {
+    const { container } = renderComponent(logData);
+    fireEvent.click(container.querySelector('[aria-haspopup="menu"]')!);
+
+    expect(await screen.findByText('Hide blank values')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('json-viewer-materialized-alias-toggle'),
+    ).not.toBeInTheDocument();
+  });
+
   describe('timestamp fields', () => {
+    it('displays Timestamp using the same formatter as the results table', () => {
+      renderComponent({
+        Timestamp: '2026-06-15T02:23:15.895Z',
+      });
+
+      expect(
+        screen.queryByText('2026-06-15T02:23:15.895Z'),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText('formatted:2026-06-15T02:23:15.895Z'),
+      ).toBeInTheDocument();
+      expect(mockFormatTime).toHaveBeenCalledWith(
+        expect.any(Date),
+        expect.objectContaining({ format: 'withMs' }),
+      );
+    });
+
+    it('does not reformat nested Timestamp attributes', () => {
+      renderComponent({
+        LogAttributes: {
+          Timestamp: '2026-06-15T02:23:15.895Z',
+        },
+      });
+
+      expect(screen.getByText('2026-06-15T02:23:15.895Z')).toBeInTheDocument();
+    });
+
     it.each([['Timestamp'], ['TimestampTime']])(
       'formats %s field correctly',
       field => {
@@ -276,6 +391,58 @@ describe('DBRowJsonViewer', () => {
           ['LogAttributes'],
         ),
       ).toBe("JSONExtractString(LogAttributes.`config`, 'host')");
+    });
+
+    // HDX-4369. HyperJson promotes a Map sub-value that is itself a
+    // JSON-parseable string to `isInParsedJson=true` with
+    // parsedJsonRootPath=[MapCol, key] (see HyperJson.tsx:227-234). When that
+    // key is numeric, the inner `mergePath` used to emit `MapCol[N+1]` array
+    // syntax, which ClickHouse rejects with "Illegal types of arguments:
+    // Map(String, String), UInt8 for function arrayElement". Threading
+    // `mapColumns` keeps the Map[\'1\'] subscript.
+    it("emits Map['1'] for Map column with numeric sub-key holding parsed JSON", () => {
+      expect(
+        buildJSONExtractQuery(
+          ['LogAttributes', '1', 'foo'],
+          ['LogAttributes', '1'],
+          [], // jsonColumns
+          'JSONExtractString',
+          ['LogAttributes'], // mapColumns
+        ),
+      ).toBe("JSONExtractString(LogAttributes['1'], 'foo')");
+    });
+
+    it("emits Map['42'] for deeply nested Map column with numeric sub-key holding parsed JSON", () => {
+      expect(
+        buildJSONExtractQuery(
+          ['LogAttributes', '42', 'bar', 'baz'],
+          ['LogAttributes', '42'],
+          [],
+          'JSONExtractString',
+          ['LogAttributes'],
+        ),
+      ).toBe("JSONExtractString(LogAttributes['42'], 'bar', 'baz')");
+    });
+
+    it('keeps non-numeric Map sub-key unchanged when mapColumns is threaded', () => {
+      expect(
+        buildJSONExtractQuery(
+          ['LogAttributes', 'config', 'host'],
+          ['LogAttributes', 'config'],
+          [],
+          'JSONExtractString',
+          ['LogAttributes'],
+        ),
+      ).toBe("JSONExtractString(LogAttributes['config'], 'host')");
+    });
+
+    it('falls back to array index when mapColumns is empty (unchanged behavior)', () => {
+      // Without mapColumns, a numeric segment still gets the array-index
+      // treatment. This pins the pre-HDX-4369 default for the non-Map case
+      // (e.g. an Array(JSON) column whose element holds a parsed JSON value).
+      expect(
+        buildJSONExtractQuery(['SomeArray', '0', 'id'], ['SomeArray', '0']),
+      ).toBe("JSONExtractString(SomeArray[1], 'id')");
     });
   });
 });

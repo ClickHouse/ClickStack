@@ -30,35 +30,22 @@ DOCKER_COMPOSE_FILE="$REPO_ROOT/packages/app/tests/e2e/docker-compose.yml"
 # ---------------------------------------------------------------------------
 # Multi-agent / worktree isolation
 # ---------------------------------------------------------------------------
-# Compute a deterministic port offset (0-99) from the working directory name
-# so that multiple worktrees can run E2E tests in parallel without port
-# conflicts. Override HDX_E2E_SLOT manually if you need a specific slot.
-#
-# Port allocation — E2E gets its own range (20320-21399) so it can run
-# simultaneously with CI integration tests (14320-40098) and the dev
-# stack (30100-31199). All ports are below the OS ephemeral range
-# (32768 Linux, 49152 macOS).
-#
-# Port mapping (base + slot):
-#   OpAMP            : 20320 + slot  (20320-20419)
-#   ClickHouse HTTP  : 20500 + slot  (20500-20599)
-#   ClickHouse Native: 20600 + slot  (20600-20699)
-#   API server       : 21000 + slot  (21000-21099)
-#   MongoDB          : 21100 + slot  (21100-21199)
-#   App (local)      : 21200 + slot  (21200-21299)
-#   App (fullstack)  : 21300 + slot  (21300-21399)
+# E2E gets its own slot and port range so worktrees can run E2E tests in
+# parallel with each other, the dev stack, and integration tests. See
+# scripts/slots.sh for the ports. Override with HDX_E2E_SLOT.
 # ---------------------------------------------------------------------------
-export HDX_E2E_SLOT="${HDX_E2E_SLOT:-$(printf '%s' "$(basename "$REPO_ROOT")" | cksum | awk '{print $1 % 100}')}"
+# shellcheck source=./slots.sh
+. "$SCRIPT_DIR/slots.sh"
+hdx_e2e_ports "$REPO_ROOT"
 
-export HDX_E2E_OPAMP_PORT="${HDX_E2E_OPAMP_PORT:-$((20320 + HDX_E2E_SLOT))}"
-export HDX_E2E_CH_PORT="${HDX_E2E_CH_PORT:-$((20500 + HDX_E2E_SLOT))}"
-export HDX_E2E_CH_NATIVE_PORT="${HDX_E2E_CH_NATIVE_PORT:-$((20600 + HDX_E2E_SLOT))}"
-export HDX_E2E_API_PORT="${HDX_E2E_API_PORT:-$((21000 + HDX_E2E_SLOT))}"
-export HDX_E2E_MONGO_PORT="${HDX_E2E_MONGO_PORT:-$((21100 + HDX_E2E_SLOT))}"
-export HDX_E2E_APP_LOCAL_PORT="${HDX_E2E_APP_LOCAL_PORT:-$((21200 + HDX_E2E_SLOT))}"
-export HDX_E2E_APP_PORT="${HDX_E2E_APP_PORT:-$((21300 + HDX_E2E_SLOT))}"
-
-export E2E_PROJECT="e2e-${HDX_E2E_SLOT}"
+# Prevent Playwright's html reporter from spawning a blocking server on port
+# 9323 ("Serving HTML report... Press Ctrl+C to quit.") after a failed/flaky
+# run. Without this, the test process never exits in interactive terminals,
+# which breaks non-interactive (agent) invocations of `make dev-e2e`.
+# The Makefile's `REPORT=1` flag still works because it invokes
+# `npx playwright show-report` separately after the test process exits.
+# CI is already unaffected (Playwright skips auto-open when process.env.CI is set).
+export PLAYWRIGHT_HTML_OPEN=never
 
 # --- Log capture for dev-portal visibility ---
 HDX_E2E_SLOTS_DIR="${HOME}/.config/hyperdx/dev-slots"

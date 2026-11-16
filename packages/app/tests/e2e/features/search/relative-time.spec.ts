@@ -42,9 +42,9 @@ test.describe('Relative Time Picker', { tag: '@relative-time' }, () => {
     });
 
     test('should show Live Tail option in relative time mode', async () => {
-      const liveTailButton = searchPage.page
-        .locator('text=Live Tail')
-        .locator('..');
+      const liveTailButton = searchPage.timePicker.popover.getByRole('button', {
+        name: 'Live Tail',
+      });
       await expect(liveTailButton).toBeVisible();
     });
   });
@@ -62,6 +62,12 @@ test.describe('Relative Time Picker', { tag: '@relative-time' }, () => {
 
       for (const interval of intervals) {
         await test.step(`Select ${interval.label}`, async () => {
+          // Make sure the popover is open at the start of every iteration
+          // rather than relying on the previous iteration leaving it open.
+          // selectTimeInterval() closes the popover, so each iteration must
+          // re-open it independently. open() is idempotent.
+          await searchPage.timePicker.open();
+
           // Ensure relative time mode is enabled
           await searchPage.timePicker.enableRelativeTime();
 
@@ -83,8 +89,6 @@ test.describe('Relative Time Picker', { tag: '@relative-time' }, () => {
 
           // Verify the time picker input displays the selected interval
           await expect(searchPage.timePicker.input).toHaveValue(interval.label);
-
-          await searchPage.timePicker.open();
         });
       }
     });

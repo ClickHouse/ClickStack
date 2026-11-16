@@ -14,9 +14,20 @@ WHERE TimestampTime >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})
 GROUP BY ts, SeverityText
 ORDER BY ts ASC;`;
 
+const SINGLE_SERIES_GROUPED_PLACEHOLDER_SQL = `SELECT
+  ServiceName,
+  count()
+FROM
+  $__sourceTable
+WHERE TimestampTime >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})
+  AND TimestampTime < fromUnixTimestamp64Milli({endDateMilliseconds:Int64})
+  AND $__filters
+GROUP BY ServiceName;`;
+
 export const SQL_PLACEHOLDERS: Record<DisplayType, string> = {
   [DisplayType.Line]: TIMESERIES_PLACEHOLDER_SQL,
   [DisplayType.StackedBar]: TIMESERIES_PLACEHOLDER_SQL,
+  [DisplayType.StackedLine]: TIMESERIES_PLACEHOLDER_SQL,
   [DisplayType.Table]: `SELECT
   count()
 FROM
@@ -27,15 +38,8 @@ WHERE TimestampTime >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})
 LIMIT
   200
   `,
-  [DisplayType.Pie]: `SELECT
-  ServiceName,
-  count()
-FROM
-  $__sourceTable
-WHERE TimestampTime >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})
-  AND TimestampTime < fromUnixTimestamp64Milli({endDateMilliseconds:Int64})
-  AND $__filters
-GROUP BY ServiceName;`,
+  [DisplayType.Pie]: SINGLE_SERIES_GROUPED_PLACEHOLDER_SQL,
+  [DisplayType.Bar]: SINGLE_SERIES_GROUPED_PLACEHOLDER_SQL,
   [DisplayType.Number]: `SELECT
   count()
 FROM
@@ -47,6 +51,7 @@ WHERE TimestampTime >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})
   [DisplayType.Heatmap]: '',
   [DisplayType.Markdown]: '',
   [DisplayType.Timeline]: '',
+  [DisplayType.EventPatterns]: '',
 };
 
 const TIMESERIES_INSTRUCTIONS = (
@@ -95,6 +100,7 @@ export const DISPLAY_TYPE_INSTRUCTIONS: Partial<
 > = {
   [DisplayType.Line]: TIMESERIES_INSTRUCTIONS,
   [DisplayType.StackedBar]: TIMESERIES_INSTRUCTIONS,
+  [DisplayType.StackedLine]: TIMESERIES_INSTRUCTIONS,
   [DisplayType.Pie]: (
     <>
       <Text size="xs" fw="bold">
@@ -118,6 +124,34 @@ export const DISPLAY_TYPE_INSTRUCTIONS: Partial<
             {' '}
             (optional) — Each unique value of each string, map, and array type
             columns will be used as a slice label.
+          </Text>
+        </List.Item>
+      </List>
+    </>
+  ),
+  [DisplayType.Bar]: (
+    <>
+      <Text size="xs" fw="bold">
+        Result columns are plotted as follows:
+      </Text>
+      <List size="xs" withPadding spacing={3} mb="xs">
+        <List.Item>
+          <Text span size="xs" fw={600}>
+            Bar Value
+          </Text>
+          <Text span size="xs">
+            {' '}
+            — The first numeric column determines each bar&apos;s height.
+          </Text>
+        </List.Item>
+        <List.Item>
+          <Text span size="xs" fw={600}>
+            Bar Label
+          </Text>
+          <Text span size="xs">
+            {' '}
+            (optional) — Each unique value of each string, map, and array type
+            columns will be used as a bar label.
           </Text>
         </List.Item>
       </List>

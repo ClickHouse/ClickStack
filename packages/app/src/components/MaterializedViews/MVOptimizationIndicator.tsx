@@ -1,10 +1,11 @@
 import { useState } from 'react';
+import { Badge } from '@clickhouse/click-ui';
 import {
   BuilderChartConfigWithOptDateRange,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { ActionIcon, Badge, Tooltip } from '@mantine/core';
+import { ActionIcon, Tooltip } from '@mantine/core';
 import { IconBolt, IconBoltOff } from '@tabler/icons-react';
 
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
@@ -22,14 +23,24 @@ function MVOptimizationIcon({
   onClick: () => void;
 }) {
   return isInWarningState ? (
-    <Tooltip label="Not Accelerated">
-      <ActionIcon onClick={onClick}>
+    <Tooltip label="Not accelerated">
+      <ActionIcon
+        onClick={onClick}
+        aria-label="Not accelerated"
+        data-testid="mv-optimization-indicator"
+        data-mv-accelerated="false"
+      >
         <IconBoltOff size={16} color={WARNING_COLOR} />
       </ActionIcon>
     </Tooltip>
   ) : (
     <Tooltip label="Accelerated">
-      <ActionIcon onClick={onClick}>
+      <ActionIcon
+        onClick={onClick}
+        aria-label="Accelerated"
+        data-testid="mv-optimization-indicator"
+        data-mv-accelerated="true"
+      >
         <IconBolt size={18} color={SUCCESS_COLOR} />
       </ActionIcon>
     </Tooltip>
@@ -45,12 +56,13 @@ function MVOptimizationBadge({
 }) {
   return (
     <Badge
-      color={isInWarningState ? WARNING_COLOR : SUCCESS_COLOR}
+      text={isInWarningState ? 'Not accelerated' : 'Accelerated'}
+      state={isInWarningState ? 'warning' : 'success'}
       onClick={onClick}
       className="cursor-pointer"
-    >
-      {isInWarningState ? 'Not Accelerated' : 'Accelerated'}
-    </Badge>
+      data-testid="mv-optimization-indicator"
+      data-mv-accelerated={isInWarningState ? 'false' : 'true'}
+    />
   );
 }
 

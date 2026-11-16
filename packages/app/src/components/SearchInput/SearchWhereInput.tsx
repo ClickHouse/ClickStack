@@ -1,11 +1,15 @@
 import { FieldPath, useController, UseControllerProps } from 'react-hook-form';
 import { TableConnectionChoice } from '@hyperdx/common-utils/dist/core/metadata';
-import { Box, Flex, Kbd } from '@mantine/core';
+import { ActionIcon, Box, Flex, Tooltip } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
+import { IconHelp } from '@tabler/icons-react';
 
+import { EDITOR_INPUT_HEIGHTS } from '@/components/editorInputHeights';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 
 import InputLanguageSwitch from './InputLanguageSwitch';
 import SearchInputV2 from './SearchInputV2';
+import SyntaxReferenceModal from './SyntaxReferenceModal';
 
 import styles from './SearchWhereInput.module.scss';
 
@@ -56,14 +60,6 @@ export type SearchWhereInputProps = {
    */
   size?: 'xs' | 'sm';
   /**
-   * Show label on SQL input (default true). Use label to customize text (e.g. "GLOBAL WHERE").
-   */
-  showLabel?: boolean;
-  /**
-   * Label text when showLabel is true (default "WHERE")
-   */
-  label?: string;
-  /**
    * Enable multiline for SQL input
    */
   allowMultiline?: boolean;
@@ -104,10 +100,21 @@ export type SearchWhereInputProps = {
    */
   additionalSuggestions?: string[];
   /**
+   * Date range for filter or autocomplete queries
+   */
+  dateRange?: [Date, Date];
+  /**
    * Form field name for the language value ('sql' | 'lucene').
    * If not provided, defaults to `${name}Language` (e.g. name="where" → "whereLanguage").
    */
   languageName?: string;
+  /**
+   * Source id used in various queries
+   */
+  sourceId?: string;
+  parentRef?: HTMLElement | null;
+  /** Whether the dashboard variables in scope apply to this expression. */
+  enableVariables?: boolean;
 } & TableConnectionChoice &
   UseControllerProps<any>;
 
@@ -140,8 +147,6 @@ export default function SearchWhereInput({
   onLanguageChange,
   enableHotkey,
   size = 'sm',
-  showLabel = true,
-  label: labelText = 'WHERE',
   allowMultiline = true,
   sqlQueryHistoryType,
   luceneQueryHistoryType,
@@ -152,8 +157,15 @@ export default function SearchWhereInput({
   minWidth,
   'data-testid': dataTestId,
   additionalSuggestions,
+  dateRange,
   languageName = `${name}Language`,
+  sourceId,
+  parentRef,
+  enableVariables = false,
 }: SearchWhereInputProps) {
+  const [syntaxRefOpened, { open: openSyntaxRef, close: closeSyntaxRef }] =
+    useDisclosure(false);
+
   const { field: languageField } = useController({
     control,
     name: languageName as FieldPath<any>,
@@ -169,67 +181,87 @@ export default function SearchWhereInput({
   };
 
   const tc = tableConnection ? { tableConnection } : { tableConnections };
-  const sizeClass = size === 'xs' ? styles.sizeXs : styles.sizeSm;
+  const baseHeight =
+    size === 'xs' ? EDITOR_INPUT_HEIGHTS.xs : EDITOR_INPUT_HEIGHTS.sm;
 
   return (
-    <Box
-      className={styles.root}
-      style={{
-        width,
-        maxWidth,
-        minWidth,
-      }}
-    >
-      <Flex
-        align="center"
-        className={`${styles.languageSwitch} ${sizeClass}`}
-        data-testid="where-language-switch"
-        onMouseDown={e => e.preventDefault()}
+    <>
+      <SyntaxReferenceModal
+        opened={syntaxRefOpened}
+        onClose={closeSyntaxRef}
+        language={language}
+      />
+      <Box
+        className={styles.root}
+        style={{
+          width,
+          maxWidth,
+          minWidth,
+          ['--editor-base-height' as string]: `${baseHeight}px`,
+        }}
       >
-        <InputLanguageSwitch
-          language={language}
-          onLanguageChange={handleLanguageChange}
-        />
-      </Flex>
-      <Box className={`${styles.inputWrapper} ${sizeClass}`}>
-        {isSql ? (
-          <SQLInlineEditorControlled
-            {...tc}
-            control={control}
-            name={name}
-            placeholder={sqlPlaceholder}
-            onSubmit={onSubmit}
-            label={showLabel ? labelText : undefined}
-            queryHistoryType={sqlQueryHistoryType}
-            enableHotkey={enableHotkey}
-            allowMultiline={allowMultiline}
-            size={size}
-            additionalSuggestions={additionalSuggestions}
-          />
-        ) : (
-          <SearchInputV2
-            {...tc}
-            control={control}
-            name={name}
-            onSubmit={onSubmit}
-            placeholder={lucenePlaceholder}
-            queryHistoryType={luceneQueryHistoryType}
-            enableHotkey={enableHotkey}
-            size={size}
-            data-testid={dataTestId}
-            additionalSuggestions={additionalSuggestions}
-          />
-        )}
-        {enableHotkey && (
-          <Box
-            className={styles.shortcutHint}
-            title="Press / or s to focus search"
-            aria-hidden
-          >
-            <Kbd size="xs">/</Kbd>
-          </Box>
-        )}
+        <Flex
+          align="flex-start"
+          className={styles.languageSwitch}
+          data-testid="where-language-switch"
+          onMouseDown={e => e.preventDefault()}
+        >
+          <Flex align="center" className={styles.languageSwitchRow}>
+            <InputLanguageSwitch
+              language={language}
+              onLanguageChange={handleLanguageChange}
+            />
+            <Tooltip label="Syntax reference" withArrow position="top">
+              <ActionIcon
+                variant="subtle"
+                size="xs"
+                aria-label="Open syntax reference"
+                onClick={openSyntaxRef}
+                style={{ marginRight: 4 }}
+              >
+                <IconHelp size={14} />
+              </ActionIcon>
+            </Tooltip>
+          </Flex>
+        </Flex>
+        <Box className={styles.inputWrapper}>
+          {isSql ? (
+            <SQLInlineEditorControlled
+              {...tc}
+              control={control}
+              name={name}
+              placeholder={sqlPlaceholder}
+              onSubmit={onSubmit}
+              queryHistoryType={sqlQueryHistoryType}
+              enableHotkey={enableHotkey}
+              allowMultiline={allowMultiline}
+              size={size}
+              additionalSuggestions={additionalSuggestions}
+              dateRange={dateRange}
+              sourceId={sourceId}
+              parentRef={parentRef}
+              enableVariables={enableVariables}
+            />
+          ) : (
+            <SearchInputV2
+              {...tc}
+              control={control}
+              name={name}
+              onSubmit={onSubmit}
+              placeholder={lucenePlaceholder}
+              queryHistoryType={luceneQueryHistoryType}
+              enableHotkey={enableHotkey}
+              allowMultiline={allowMultiline}
+              size={size}
+              data-testid={dataTestId}
+              additionalSuggestions={additionalSuggestions}
+              dateRange={dateRange}
+              sourceId={sourceId}
+              enableVariables={enableVariables}
+            />
+          )}
+        </Box>
       </Box>
-    </Box>
+    </>
   );
 }

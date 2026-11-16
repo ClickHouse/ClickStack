@@ -1,12 +1,12 @@
 import React from 'react';
+import { screen } from '@testing-library/react';
 
+import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
+import DBListBarChart from '@/components/DBListBarChart';
+import MVOptimizationIndicator from '@/components/MaterializedViews/MVOptimizationIndicator';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useSource } from '@/source';
-
-import DateRangeIndicator from '../charts/DateRangeIndicator';
-import DBListBarChart from '../DBListBarChart';
-import MVOptimizationIndicator from '../MaterializedViews/MVOptimizationIndicator';
 
 // Mock dependencies
 jest.mock('@/hooks/useChartConfig', () => ({
@@ -23,7 +23,9 @@ jest.mock('@/hooks/useMVOptimizationExplanation', () => ({
 
 jest.mock('@/source', () => ({
   useSource: jest.fn().mockReturnValue({ data: null }),
-  useResolvedNumberFormat: jest.fn().mockReturnValue(undefined),
+  useChartNumberFormats: jest
+    .fn()
+    .mockReturnValue({ formatByColumn: new Map(), chartFormat: undefined }),
 }));
 
 jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
@@ -167,5 +169,73 @@ describe('DBListBarChart', () => {
 
     // Verify DateRangeIndicator was not called
     expect(jest.mocked(DateRangeIndicator)).not.toHaveBeenCalled();
+  });
+
+  describe('refresh', () => {
+    const renderChart = () =>
+      renderWithMantine(
+        <DBListBarChart
+          config={baseTestConfig}
+          valueColumn="value"
+          groupColumn="group"
+        />,
+      );
+
+    it('pulses the previous bars while a refresh loads', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [{ group: 'checkout', value: 100 }] },
+        isLoading: false,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderChart();
+
+      expect(
+        screen.getByText('checkout').closest('.effect-pulse'),
+      ).toBeInTheDocument();
+    });
+
+    it('does not pulse once fresh bars load', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [{ group: 'checkout', value: 100 }] },
+        isLoading: false,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderChart();
+
+      expect(screen.getByText('checkout').closest('.effect-pulse')).toBeNull();
+    });
+
+    it('shows loading instead of the stale empty result during a refetch', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [] },
+        isLoading: false,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderChart();
+
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
+    });
+
+    it('does not pulse a fresh empty result', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [] },
+        isLoading: false,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderChart();
+
+      expect(
+        screen.getByText('No data found within time range.'),
+      ).not.toHaveClass('effect-pulse');
+    });
   });
 });

@@ -1,24 +1,52 @@
 import { useCallback, useEffect, useMemo } from 'react';
-import { useForm, useWatch } from 'react-hook-form';
+import { Controller, useForm, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
+import {
+  UnknownTemplateHelperError,
+  validateTemplate,
+} from '@hyperdx/common-utils/dist/core/handlebarsEnv';
+import { isTimeSeriesDisplayType } from '@hyperdx/common-utils/dist/core/utils';
 import {
   ChartConfigWithDateRange,
   DisplayType,
+  getDefaultLineInterpolation,
+  LineInterpolation,
+  LineInterpolationSchema,
+  MAX_LEGEND_TEMPLATE_LENGTH,
   NumberFormat,
+  PromqlHeatmapMode,
 } from '@hyperdx/common-utils/dist/types';
 import {
+  Alert,
   Box,
   Button,
   Checkbox,
-  Divider,
   Drawer,
   Group,
+  Input,
+  NumberInput,
+  SegmentedControl,
   Stack,
+  Text,
+  Tooltip,
 } from '@mantine/core';
+import { IconHelpCircle } from '@tabler/icons-react';
 
 import { shouldFillNullsWithZero } from '@/ChartUtils';
+import { MAX_RENDERED_TIME_CHART_SERIES } from '@/defaults';
 import { FormatTime } from '@/useFormatTime';
 
-import { CheckBoxControlled } from './InputControlled';
+import { HeatmapScaleControl } from './DBHeatmapChart/HeatmapScaleControl';
+import { BackgroundChartInput } from './BackgroundChartInput';
+import {
+  attachLocalIds,
+  ColorRulesEditor,
+  ColorRuleWithId,
+  stripLocalIds,
+} from './ColorRulesEditor';
+import { ColorSwatchInput } from './ColorSwatchInput';
+import type { HeatmapScaleType } from './DBHeatmapChart';
+import { CheckBoxControlled, TextInputControlled } from './InputControlled';
 import { DEFAULT_NUMBER_FORMAT, NumberFormatForm } from './NumberFormat';
 
 export type ChartConfigDisplaySettings = Pick<
@@ -27,8 +55,35 @@ export type ChartConfigDisplaySettings = Pick<
   | 'alignDateRangeToGranularity'
   | 'fillNulls'
   | 'compareToPreviousPeriod'
+  | 'fitYAxisToData'
+  | 'lineInterpolation'
+  | 'color'
+  | 'colorRules'
+  | 'backgroundChart'
 > & {
   groupByColumnsOnLeft?: boolean;
+  alternateRowBackground?: boolean;
+  // Per-tile series cap. On builder group-by/pie/bar charts it's a fetch cap
+  // (the __hdx_series_limit CTE / a SQL LIMIT); on raw SQL time charts it's a
+  // client-side render cap only. Three-state: null/undefined = default cap,
+  // 0 = unlimited, positive N = top N. See SharedChartSettingsSchema.seriesLimit
+  // for the authoritative semantics. The editor clears to `null` (not
+  // `undefined`) so the cleared state survives JSON round-tripping via the URL.
+  seriesLimit?: number | null;
+  // PromQL-only: Handlebars template over each series' Prometheus label set
+  // that renders the legend/tooltip name.
+  legendTemplate?: string;
+  // Distribution heatmaps only; stored on a builder heatmap's select[0] and
+  // on a PromQL heatmap's `heatmap.scaleType`.
+  heatmapScaleType?: HeatmapScaleType;
+};
+
+/**
+ * Internal form shape: `colorRules` is stored with `localId`s for dnd-kit
+ * stability; they are stripped before the settings are passed to `onChange`.
+ */
+type DrawerFormValues = Omit<ChartConfigDisplaySettings, 'colorRules'> & {
+  colorRules?: ColorRuleWithId[];
 };
 
 interface ChartDisplaySettingsDrawerProps {
@@ -39,16 +94,33 @@ interface ChartDisplaySettingsDrawerProps {
   defaultNumberFormat?: NumberFormat;
   displayType: DisplayType;
   /** 'sql' for raw SQL chart configs; anything else is treated as a builder config. */
-  configType?: 'sql' | 'builder';
+  configType?: 'sql' | 'builder' | 'promql';
+  /** Whether a PromQL tile's queried expression runs over a range. */
+  promqlUsesRange?: boolean;
+  /** A heatmap's mode; only distribution heatmaps have a numeric y axis to scale. */
+  heatmapMode?: PromqlHeatmapMode;
+  /** The heatmap scale used when the tile has none set. */
+  defaultHeatmapScaleType?: HeatmapScaleType;
   previousDateRange?: [Date, Date];
-  onChange: (settings: ChartConfigDisplaySettings) => void;
+  onChange: (settings: ChartConfigDisplaySettings, isDirty: boolean) => void;
   onClose: () => void;
+  isPerSeriesNumberFormatAllowed?: boolean;
 }
+
+const LINE_INTERPOLATION_OPTIONS: {
+  label: string;
+  value: LineInterpolation;
+}[] = [
+  { label: 'Smooth', value: 'smooth' },
+  { label: 'Linear', value: 'linear' },
+  { label: 'Step', value: 'step' },
+];
 
 function applyDefaultSettings(
   settings: ChartConfigDisplaySettings,
-  fallbackNumberFormat?: NumberFormat,
-): ChartConfigDisplaySettings {
+  fallbackNumberFormat: NumberFormat | undefined,
+  defaultHeatmapScaleType: HeatmapScaleType,
+): DrawerFormValues {
   return {
     numberFormat:
       settings.numberFormat ?? fallbackNumberFormat ?? DEFAULT_NUMBER_FORMAT,
@@ -58,7 +130,22 @@ function applyDefaultSettings(
         : settings.alignDateRangeToGranularity,
     fillNulls: settings.fillNulls ?? 0,
     compareToPreviousPeriod: settings.compareToPreviousPeriod ?? false,
+    fitYAxisToData: settings.fitYAxisToData ?? false,
+    // No default: an unset value keeps following the display type's default
+    // if the tile later switches between line and stacked line.
+    lineInterpolation: settings.lineInterpolation,
     groupByColumnsOnLeft: settings.groupByColumnsOnLeft ?? false,
+    alternateRowBackground: settings.alternateRowBackground ?? false,
+    // Coerce to null so `reset` clears the input; undefined leaves the
+    // previously registered field value in place.
+    seriesLimit: settings.seriesLimit ?? null,
+    legendTemplate: settings.legendTemplate ?? '',
+    color: settings.color,
+    colorRules: settings.colorRules
+      ? attachLocalIds(settings.colorRules)
+      : undefined,
+    backgroundChart: settings.backgroundChart,
+    heatmapScaleType: settings.heatmapScaleType ?? defaultHeatmapScaleType,
   };
 }
 
@@ -67,20 +154,34 @@ export default function ChartDisplaySettingsDrawer({
   opened,
   displayType,
   configType,
+  promqlUsesRange = false,
+  heatmapMode,
+  defaultHeatmapScaleType = 'log',
   defaultNumberFormat,
   onChange,
   onClose,
   previousDateRange,
+  isPerSeriesNumberFormatAllowed = false,
 }: ChartDisplaySettingsDrawerProps) {
   const appliedDefaults = useMemo(
-    () => applyDefaultSettings(settings, defaultNumberFormat),
-    [settings, defaultNumberFormat],
+    () =>
+      applyDefaultSettings(
+        settings,
+        defaultNumberFormat,
+        defaultHeatmapScaleType,
+      ),
+    [settings, defaultNumberFormat, defaultHeatmapScaleType],
   );
 
-  const { control, handleSubmit, reset, setValue } =
-    useForm<ChartConfigDisplaySettings>({
-      defaultValues: appliedDefaults,
-    });
+  const {
+    control,
+    handleSubmit,
+    reset,
+    setValue,
+    formState: { dirtyFields },
+  } = useForm<DrawerFormValues>({
+    defaultValues: appliedDefaults,
+  });
 
   useEffect(() => {
     reset(appliedDefaults);
@@ -95,21 +196,106 @@ export default function ChartDisplaySettingsDrawer({
   }, [onClose, reset, appliedDefaults]);
 
   const applyChanges = useCallback(() => {
-    handleSubmit(onChange)();
-    onClose();
-  }, [onChange, handleSubmit, onClose]);
+    handleSubmit(formValues => {
+      // Strip client-side localIds before passing rules to the config.
+      const { colorRules, ...rest } = formValues;
+      // Persist numberFormat only when the user actually chose one: either the
+      // tile already had an explicit override (settings.numberFormat) or the
+      // user changed the format control in this session (dirtyFields). Otherwise
+      // emit undefined so the datasource-derived format keeps driving render
+      // instead of freezing the drawer's inferred fallback into the config.
+      const numberFormatExplicit =
+        settings.numberFormat != null || dirtyFields.numberFormat != null;
+      const hasDirtyFields = Object.keys(dirtyFields).length > 0;
+      onChange(
+        {
+          ...rest,
+          numberFormat: numberFormatExplicit
+            ? formValues.numberFormat
+            : undefined,
+          colorRules: colorRules ? stripLocalIds(colorRules) : undefined,
+        },
+        hasDirtyFields,
+      );
+      // Close only on successful validation
+      onClose();
+    })();
+  }, [onChange, handleSubmit, onClose, settings.numberFormat, dirtyFields]);
 
   const resetToDefaults = useCallback(() => {
-    reset(applyDefaultSettings({}, defaultNumberFormat));
-  }, [reset, defaultNumberFormat]);
+    reset(
+      applyDefaultSettings(
+        {} as ChartConfigDisplaySettings,
+        defaultNumberFormat,
+        defaultHeatmapScaleType,
+      ),
+    );
+  }, [reset, defaultNumberFormat, defaultHeatmapScaleType]);
 
-  const isTimeChart =
-    displayType === DisplayType.Line || displayType === DisplayType.StackedBar;
+  const isTimeChart = isTimeSeriesDisplayType(displayType);
 
-  // Group By column ordering only applies to builder table charts; raw SQL
-  // configs let the user author whatever column order they want directly.
+  const showLineInterpolation =
+    displayType === DisplayType.Line || displayType === DisplayType.StackedLine;
+  const defaultLineInterpolation = getDefaultLineInterpolation(displayType);
+
+  // Series Limit applies to every time chart. On builder group-by charts a
+  // positive value drives the __hdx_series_limit SQL CTE (trimming what's
+  // fetched); on raw SQL and PromQL it drives the client-side render cap in
+  // `formatResponseForTimeChart` (neither can take the CTE, and a Prometheus
+  // `limit` would keep an arbitrary label-sorted subset, not the top N).
+  const showSeriesLimit = isTimeChart;
+  const isClientSideSeriesLimit =
+    showSeriesLimit && (configType === 'sql' || configType === 'promql');
+
+  const isDistributionHeatmap =
+    displayType === DisplayType.Heatmap && heatmapMode === 'distribution';
+
+  // Every PromQL display that surfaces a series name. A number tile shows one
+  // value, a table gives each label its own column, a distribution heatmap
+  // merges every series into one, and a histogram heatmap labels rows by
+  // bucket, so none has a legend.
+  const showLegendTemplate =
+    configType === 'promql' &&
+    displayType !== DisplayType.Number &&
+    displayType !== DisplayType.Table &&
+    !(displayType === DisplayType.Heatmap && heatmapMode !== 'series');
+
+  // On pie/bar builder charts, seriesLimit becomes a plain SQL LIMIT on the
+  // number of slices/bars; on PromQL it trims the reduced series client-side
+  // in `useCategoricalChart`. Raw SQL configs author their own LIMIT directly.
+  const isCategoricalChart =
+    displayType === DisplayType.Pie || displayType === DisplayType.Bar;
+  const showCategoricalLimit = isCategoricalChart && configType !== 'sql';
+
+  // Table display options. Alternate Row Background is purely presentational
+  // (it stripes rendered rows), so it applies to any table tile. Group By
+  // column ordering needs the builder `select` structure to know which columns
+  // are group-by keys, so it stays builder-only.
+  const showTableOptions = displayType === DisplayType.Table;
   const showGroupByColumnsOnLeft =
-    displayType === DisplayType.Table && configType !== 'sql';
+    showTableOptions && configType !== 'sql' && configType !== 'promql';
+
+  // Tile-level color is only meaningful for number tiles today.
+  // Per-series colors on line / bar / pie ship in a follow-up PR via
+  // `select[i].color`.
+  const showTileColor = displayType === DisplayType.Number;
+
+  // The sparkline needs buckets. A builder tile derives them from a
+  // time-bucketed version of its query; a PromQL tile reuses the buckets its
+  // range query fetches, so an instant one has none. Raw SQL returns a
+  // single value with no time dimension at all. Where it cannot apply the
+  // control is shown disabled with a hint rather than hidden, so the option
+  // stays discoverable.
+  const showBackgroundChart = displayType === DisplayType.Number;
+  const isBackgroundChartDisabled =
+    configType === 'sql' || (configType === 'promql' && !promqlUsesRange);
+  const backgroundChartDisabledHint =
+    configType === 'promql'
+      ? 'Available on PromQL range queries.'
+      : 'Available on query-builder number tiles.';
+
+  // Log scale only means something on a numeric (distribution mode) y axis
+  const showHeatmapScale = isDistributionHeatmap;
 
   return (
     <Drawer
@@ -153,29 +339,243 @@ export default function ChartDisplaySettingsDrawer({
                 )
               }
             />
-            <Divider />
-          </>
-        )}
-
-        {showGroupByColumnsOnLeft && (
-          <>
             <CheckBoxControlled
               control={control}
-              name="groupByColumnsOnLeft"
+              name="fitYAxisToData"
               size="xs"
-              label="Display Group By Columns on Left"
+              label="Fit Y-Axis to Data"
+              description="Start the y-axis at the minimum of the displayed data instead of zero. Only applicable to line charts."
             />
-            <Divider />
+            {showLineInterpolation && (
+              <Input.Wrapper
+                size="xs"
+                label={
+                  <Group gap={4} align="center">
+                    Line interpolation
+                    <Tooltip label="Determines the shape of the line between data points in the same series">
+                      <IconHelpCircle size={14} className="cursor-pointer" />
+                    </Tooltip>
+                  </Group>
+                }
+              >
+                <Controller
+                  control={control}
+                  name="lineInterpolation"
+                  render={({ field: { onChange, value } }) => (
+                    <SegmentedControl
+                      size="xs"
+                      fullWidth
+                      value={value ?? defaultLineInterpolation}
+                      onChange={v => {
+                        const parsed = LineInterpolationSchema.safeParse(v);
+                        if (parsed.success) onChange(parsed.data);
+                      }}
+                      data={LINE_INTERPOLATION_OPTIONS}
+                      data-testid="line-interpolation-control"
+                    />
+                  )}
+                />
+              </Input.Wrapper>
+            )}
+            {showSeriesLimit && (
+              <Box>
+                <Controller
+                  control={control}
+                  name="seriesLimit"
+                  render={({ field: { onChange, value } }) => (
+                    <NumberInput
+                      size="xs"
+                      label="Series Limit"
+                      description={
+                        isClientSideSeriesLimit
+                          ? `Maximum number of series rendered, keeping those with the largest values. Leave empty for the default (${MAX_RENDERED_TIME_CHART_SERIES}); set 0 for unlimited.`
+                          : `Maximum number of series fetched for a group-by chart, keeping those with the largest values. Leave empty for the default (${MAX_RENDERED_TIME_CHART_SERIES}); set 0 for unlimited.`
+                      }
+                      placeholder={`Default (${MAX_RENDERED_TIME_CHART_SERIES})`}
+                      min={0}
+                      allowDecimal={false}
+                      value={value ?? ''}
+                      onChange={v =>
+                        onChange(v === '' || v == null ? null : Number(v))
+                      }
+                    />
+                  )}
+                />
+              </Box>
+            )}
+            <Separator size="xs" />
           </>
         )}
 
-        <NumberFormatForm control={control} setValue={setValue} />
-        <Divider />
+        {showHeatmapScale && (
+          <>
+            <Controller
+              control={control}
+              name="heatmapScaleType"
+              render={({ field: { onChange, value } }) => (
+                <HeatmapScaleControl
+                  value={value ?? defaultHeatmapScaleType}
+                  onChange={onChange}
+                />
+              )}
+            />
+            <Separator size="xs" />
+          </>
+        )}
+
+        {showLegendTemplate && (
+          <>
+            <Box>
+              <TextInputControlled
+                control={control}
+                name="legendTemplate"
+                size="xs"
+                label="Legend template"
+                description="Handlebars template rendered with each series' Prometheus labels. Leave empty for the default legend. Additional labels will be added if the template does not produce unique labels for each series."
+                placeholder="e.g. {{namespace}} - {{pod}}"
+                data-testid="legend-template-input"
+                rules={{
+                  validate: value => {
+                    if (typeof value !== 'string' || !value) return true;
+                    const trimmed = value.trim();
+                    if (trimmed.length > MAX_LEGEND_TEMPLATE_LENGTH) {
+                      return `Template is too long (${trimmed.length} characters, max ${MAX_LEGEND_TEMPLATE_LENGTH})`;
+                    }
+                    try {
+                      validateTemplate(trimmed);
+                      return true;
+                    } catch (err) {
+                      return err instanceof UnknownTemplateHelperError
+                        ? err.message
+                        : 'Invalid Handlebars template';
+                    }
+                  },
+                }}
+              />
+            </Box>
+            <Separator size="xs" />
+          </>
+        )}
+
+        {showCategoricalLimit && (
+          <>
+            <Box>
+              <Controller
+                control={control}
+                name="seriesLimit"
+                render={({ field: { onChange, value } }) => (
+                  <NumberInput
+                    size="xs"
+                    label="Series Limit"
+                    description="Maximum number of values displayed, keeping those with the largest values. Leave empty to fetch all."
+                    placeholder="Disabled (e.g. 10)"
+                    min={1}
+                    allowDecimal={false}
+                    value={value ?? ''}
+                    onChange={v =>
+                      onChange(v === '' || v == null ? null : Number(v))
+                    }
+                  />
+                )}
+              />
+            </Box>
+            <Separator size="xs" />
+          </>
+        )}
+
+        {showTableOptions && (
+          <>
+            {showGroupByColumnsOnLeft && (
+              <CheckBoxControlled
+                control={control}
+                name="groupByColumnsOnLeft"
+                size="xs"
+                label="Display Group By Columns on Left"
+              />
+            )}
+            <CheckBoxControlled
+              control={control}
+              name="alternateRowBackground"
+              size="xs"
+              label="Alternate Row Background"
+            />
+            <Separator size="xs" />
+          </>
+        )}
+
+        {showTileColor && (
+          <>
+            <Box>
+              <Text size="xs" c="dimmed" mb={4}>
+                Color
+              </Text>
+              <Controller
+                control={control}
+                name="color"
+                render={({ field: { onChange, value } }) => (
+                  <ColorSwatchInput
+                    value={value}
+                    onChange={onChange}
+                    ariaLabel="Number tile color"
+                  />
+                )}
+              />
+            </Box>
+            <Box>
+              <Controller
+                control={control}
+                name="colorRules"
+                render={({ field: { onChange, value } }) => (
+                  <ColorRulesEditor value={value ?? []} onChange={onChange} />
+                )}
+              />
+            </Box>
+            <Separator size="xs" />
+          </>
+        )}
+
+        {showBackgroundChart && (
+          <>
+            <Controller
+              control={control}
+              name="backgroundChart"
+              render={({ field: { onChange, value } }) => (
+                <BackgroundChartInput
+                  value={value}
+                  onChange={onChange}
+                  disabled={isBackgroundChartDisabled}
+                  disabledHint={backgroundChartDisabledHint}
+                />
+              )}
+            />
+            <Separator size="xs" />
+          </>
+        )}
+
+        <NumberFormatForm
+          control={control}
+          setValue={setValue}
+          disclaimer={
+            isPerSeriesNumberFormatAllowed ? (
+              <Alert variant="outline" color="yellow" p="xs">
+                <Text size="xs" m={0}>
+                  Format may be overridden on individual series.
+                </Text>
+              </Alert>
+            ) : undefined
+          }
+        />
+        <Separator size="xs" />
         <Group gap="xs" mt="xs" justify="space-between">
           <Button type="submit" variant="secondary" onClick={resetToDefaults}>
             Reset to Defaults
           </Button>
-          <Button type="submit" variant="primary" onClick={applyChanges}>
+          <Button
+            type="submit"
+            variant="primary"
+            onClick={applyChanges}
+            data-testid="display-settings-apply-button"
+          >
             Apply
           </Button>
         </Group>

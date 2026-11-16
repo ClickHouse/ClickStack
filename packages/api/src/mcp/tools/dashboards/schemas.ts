@@ -1,16 +1,249 @@
+// prose-lint: allow-file
+// MCP tool descriptions intentionally use the established en-dash
+// separator (e.g. "Source ID – call clickstack_list_sources") for LLM
+// readability. Reformatting all separators is out of scope here.
 import {
   AggregateFunctionSchema,
-  SearchConditionLanguageSchema,
+  BackgroundChartSchema,
+  ChartPaletteTokenSchema,
+  DASHBOARD_CONTAINER_ID_MAX,
+  DASHBOARD_MAX_CONTAINERS,
+  DASHBOARD_VARIABLE_NAME_MAX_LENGTH,
+  DASHBOARD_VARIABLE_NAME_PATTERN_ANCHORED,
+  DashboardContainerSchema,
+  DashboardFilterType,
+  HeatmapScaleTypeSchema,
+  LineInterpolationSchema,
+  MAX_LEGEND_TEMPLATE_LENGTH,
+  MAX_PROMQL_EXPRESSIONS,
+  MetricsDataType,
+  NumberTileColorConditionSchema,
+  PromqlHeatmapModeSchema,
+  PromqlLabelDashboardFilterSchema,
+  PromqlQueryTypeSchema,
+  PromqlReducerSchema,
+  SearchConditionTrimmedLanguageSchema,
+  SQLIntervalSchema,
+  StaticListDashboardFilterSchema,
 } from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
 
-import { externalQuantileLevelSchema } from '@/utils/zod';
+import {
+  getMetricSelectIssues,
+  mcpQuantileLevelSchema,
+} from '@/mcp/tools/query/schemas';
+import { QUERYABLE_METRIC_KINDS } from '@/mcp/tools/sources/metricKinds';
+import {
+  externalSqlSavedFilterValueSchema,
+  externalVariableSavedFilterValueSchema,
+  objectIdSchema,
+  tagsSchema,
+} from '@/utils/zod';
+
+/**
+ * Metric type values exposed on dashboard tile select items. Restricted to
+ * the kinds the query renderer can translate today; summary is intentionally
+ * excluded. Imports the shared
+ * `QUERYABLE_METRIC_KINDS` source-of-truth tuple from `../sources/metricKinds`.
+ */
+const mcpTileMetricTypeSchema = z.enum(QUERYABLE_METRIC_KINDS);
 
 // ─── Shared tile schemas for MCP dashboard tools ─────────────────────────────
+
+const seriesLevelNumberFormatDescription =
+  'Per-series display formatting, applied to this series only (overrides any tile-level numberFormat). ' +
+  'Controls how the series number value(s) are formatted for display. ' +
+  'Most useful: { output: "duration", factor: 0.000000001 } to auto-format nanosecond durations, ' +
+  'or { output: "number", mantissa: 2, thousandSeparated: true } for clean counts.';
+
+const tileLevelNumberFormatDescription =
+  'Controls how the number value(s) are formatted for display. Applies to series or numbers without a series-level numberFormat. ' +
+  'Most useful: { output: "duration", factor: 0.000000001 } to auto-format nanosecond durations, ' +
+  'or { output: "number", mantissa: 2, thousandSeparated: true } for clean counts.';
+
+// Aggregation builder tiles (table, line, stacked_bar, number, pie, bar) do NOT
+// support a tile-level `where`: the chart editor only surfaces a per-select-item
+// filter, so a tile-level filter would be applied to the query yet stay
+// invisible and uneditable in the UI. Rather than silently dropping the field,
+// these fields are declared solely to REJECT it with an actionable message that
+// points at the per-select-item `where`. Keeping them as plain object fields (a
+// refinement, not a wrapping `.superRefine`) preserves each config schema's
+// `.shape` so the patch tile union can still read `.shape.config`.
+const rejectTileWhereMessage =
+  'This tile type has no tile-level `where`. Put the filter on each select ' +
+  'item\'s `where` instead (that is the tile\'s visible "Where" box); use a ' +
+  'dashboard-level filter to scope the whole dashboard.';
+
+const rejectedTileWhereFields = {
+  where: z
+    .never({ invalid_type_error: rejectTileWhereMessage })
+    .optional()
+    .describe(
+      "Not supported on this tile type; any value is rejected. Put the filter on each select item's `where` instead.",
+    ),
+  whereLanguage: z
+    .never({ invalid_type_error: rejectTileWhereMessage })
+    .optional()
+    .describe(
+      'Not supported on this tile type; any value is rejected. Set `whereLanguage` on each select item instead.',
+    ),
+};
+
+// A variable reference expands in either language; only the two variable
+// MACROS are SQL-only. Every input that can carry one repeats the note rather
+// than relying on the agent having fetched the query_guide prompt.
+const variableMacroDescription =
+  'DASHBOARD VARIABLES: a reference to a variable-enabled dashboard filter ' +
+  'expands here in either language ($variableName renders as quoted SQL ' +
+  'values, or as a Lucene value list in a Lucene input). With whereLanguage ' +
+  '"sql" this also accepts $__filter(<expression>, $<variableName>) and ' +
+  '$__conditionalAll(<condition>, $<variableName>), which are preferred ' +
+  'because they expand to 1=1 while nothing is selected, where a bare SQL ' +
+  'reference renders as NULL. The two macros have no meaning in a Lucene ' +
+  'input and are matched as literal text; write ServiceName:$variableName ' +
+  'there. A Lucene reference needs no macro: with nothing selected it renders ' +
+  'as ("") and the translator drops it to a match-all.';
+
+// Same note for the always-SQL expressions (HAVING), which have no
+// whereLanguage to set.
+const sqlOnlyVariableMacroDescription =
+  'DASHBOARD VARIABLES: accepts $__filter(<expression>, $<variableName>) and ' +
+  '$__conditionalAll(<condition>, $<variableName>), which expand to 1=1 while ' +
+  'the variable has no selection, as well as a bare $variableName reference ' +
+  '(which renders as NULL when nothing is selected).';
+
+const timeChartSeriesLimitDescription =
+  'Maximum number of series to fetch (the "Series Limit" display setting). ' +
+  'Keeps the top-N groups by aggregated value over the queried range and ' +
+  'drops the rest. Requires `groupBy`; ignored on a chart without one. ' +
+  'Omit to apply the default render cap; 0 means unlimited.';
+
+const timeChartFillNullsDescription =
+  'Fill time buckets that have no data with zero (the "Fill Missing ' +
+  'Intervals with Zero" display setting). false leaves gaps instead.';
+
+const timeChartAlignDateRangeDescription =
+  'The "Show Complete Intervals" display setting. When omitted or true, the ' +
+  'dashboard widens the queried range to whole granularity buckets so the ' +
+  'first and last buckets are complete; false queries the exact selected range.';
+
+const whereLanguageDescription = (owner: 'tile' | 'item') =>
+  `Query language of this ${owner}'s \`where\`. Use sql for the $__filter / ` +
+  '$__conditionalAll variable macros.';
+
+const tileWhereLanguageDescription = whereLanguageDescription('tile');
+
+const asRatioDescription =
+  'Return select[0] divided by select[1] as a single ratio series instead of ' +
+  'the two operands. Requires exactly two select items; cannot be combined ' +
+  'with formulas.';
+
+const seriesLimitSchema = z.number().int().nonnegative().optional();
+
+const numberTileColorDescription =
+  'Static palette color for the displayed number. Applied unless a ' +
+  'colorRules entry matches the value.';
+
+const numberTileColorRulesDescription =
+  'Conditional colors for the number, evaluated in array order with the ' +
+  'last matching rule winning; falls back to color (then the default text ' +
+  'color) when none match. Rules compare the raw query value, before ' +
+  'numberFormat is applied (a 0.5 shown as 50% matches value 0.5). Example: ' +
+  '[{ operator: "gte", value: 500, color: "chart-error", label: "Critical" }].';
+
+const rawSqlNumberTileColorDescription =
+  `${numberTileColorDescription} Valid only when displayType is ` +
+  '"number", ignored otherwise.';
+
+const rawSqlNumberTileColorRulesDescription =
+  `${numberTileColorRulesDescription} Valid only when displayType is ` +
+  '"number", ignored otherwise.';
+
+const numberTileBackgroundChartDescription =
+  'Background trend sparkline drawn behind the number, derived ' +
+  'from a time-bucketed version of the same query (useful for SLO / ' +
+  'error-budget tiles where the trend over the window matters). ' +
+  'Builder number tiles only; raw SQL number tiles have no time ' +
+  'dimension to bucket. Example: { type: "area", color: "chart-blue" }.';
+
+const mcpNumberFormatSchema = z.object({
+  output: z
+    .enum([
+      'currency',
+      'percent',
+      'byte',
+      'time',
+      'duration',
+      'number',
+      'data_rate',
+      'throughput',
+    ])
+    .describe(
+      'How to render the value. "duration" auto-formats elapsed times as e.g. "1.2s" (use factor for input unit). ' +
+        '"time" formats clock-style durations. "byte" formats as KB/MB/GB. ' +
+        '"data_rate" formats as bytes/sec. "throughput" formats as count/sec. ' +
+        '"currency" prepends a symbol. "percent" multiplies the value by 100 and appends % (0.5 becomes 50%).',
+    ),
+  mantissa: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Number of decimal places, 0 to 10. Not used for "time" or "duration" output.',
+    ),
+  thousandSeparated: z
+    .boolean()
+    .optional()
+    .describe('Insert thousands separators, e.g. 1,234,567.'),
+  average: z
+    .boolean()
+    .optional()
+    .describe('Abbreviate large numbers, e.g. 1.2m.'),
+  decimalBytes: z
+    .boolean()
+    .optional()
+    .describe(
+      'Use decimal base for bytes (1KB = 1000). Only for "byte" output.',
+    ),
+  factor: z
+    .number()
+    .optional()
+    .describe(
+      'Input unit factor for "time" or "duration" output. ' +
+        '1 = seconds, 0.001 = milliseconds, 0.000001 = microseconds, 0.000000001 = nanoseconds.',
+    ),
+  currencySymbol: z
+    .string()
+    .optional()
+    .describe('Currency symbol (e.g. "$"). Only for "currency" output.'),
+  unit: z
+    .string()
+    .optional()
+    .describe('Suffix appended to the value (e.g. " req/s")'),
+});
+
+/**
+ * The delta flag a select item resolves to, given that the tool accepts both
+ * spellings (`isDelta` and the REST dialect's `periodAggFn: 'delta'`). An
+ * explicit `isDelta` wins; `periodAggFn` only fills in when it is absent.
+ * Shared by the refinement and the transform so a body carrying both cannot
+ * validate as one value and persist as the other.
+ */
+const resolveIsDelta = (data: {
+  isDelta?: unknown;
+  periodAggFn?: unknown;
+}): boolean | undefined =>
+  typeof data.isDelta === 'boolean'
+    ? data.isDelta
+    : data.periodAggFn === 'delta' || undefined;
+
 const mcpTileSelectItemSchema = z
   .object({
     aggFn: AggregateFunctionSchema.describe(
-      'Aggregation function. "count" requires no valueExpression; all others do.',
+      'Aggregation function. "count" requires no valueExpression; all others do. ' +
+        'METRIC SOURCES: "increase" computes the per-bucket counter increase for Sum metrics ' +
+        '(reset-aware). For Gauges use last_value/avg/min/max. For Histograms and ' +
+        'Exponential Histograms use "quantile" with level or "count".',
     ),
     valueExpression: z
       .string()
@@ -19,302 +252,1771 @@ const mcpTileSelectItemSchema = z
         'Column or expression to aggregate. Required for all aggFn except "count". ' +
           'Use PascalCase for top-level columns (e.g. "Duration", "StatusCode"). ' +
           "For span attributes use: SpanAttributes['key'] (e.g. SpanAttributes['http.method']). " +
-          "For resource attributes use: ResourceAttributes['key'] (e.g. ResourceAttributes['service.name']).",
+          "For resource attributes use: ResourceAttributes['key'] (e.g. ResourceAttributes['service.name']).\n\n" +
+          'METRIC SOURCES: optional — defaults to "Value" (the metric value column) when ' +
+          'metricType/metricName are set.',
       ),
     where: z
       .string()
       .optional()
       .default('')
-      .describe('Filter in Lucene syntax. Example: "level:error"'),
-    whereLanguage: SearchConditionLanguageSchema.optional().default('lucene'),
-    alias: z.string().optional().describe('Display label for this series'),
-    level: externalQuantileLevelSchema
+      .describe(
+        'Row filter for THIS series (compiles to `countIf(...)`). This is how ' +
+          "you filter a builder tile: the chart editor renders it as the tile's " +
+          'visible "Where" box, so the user can see and edit it. To scope the ' +
+          'whole tile to a subset of rows, put the same `where` on every select ' +
+          'item; use different filters per item for cohort comparisons (errors ' +
+          'vs total). There is no tile-level `where` for these tile types. ' +
+          'Lucene syntax by default. Example: "level:error"\n\n' +
+          variableMacroDescription,
+      ),
+    whereLanguage: SearchConditionTrimmedLanguageSchema.optional()
+      .default('lucene')
+      .describe(whereLanguageDescription('item')),
+    alias: z
+      .string()
       .optional()
-      .describe('Percentile level for aggFn="quantile"'),
+      .describe(
+        'Display label for this series — used in chart legends, table column headers, CSV exports, and onClick templates. ' +
+          'Always set a short, human-readable alias (e.g. "Requests", "P95 Latency", "Error Rate"). ' +
+          'Without an alias the UI shows the raw ClickHouse expression (e.g. count(), quantile(0.95)(Duration)) which is hard to read. ' +
+          'Heatmap select items are the only exception (no alias needed).',
+      ),
+    level: mcpQuantileLevelSchema
+      .optional()
+      .describe(
+        'Percentile level for aggFn="quantile". REQUIRED for histogram and exponential histogram metrics with aggFn:"quantile".',
+      ),
+    numberFormat: mcpNumberFormatSchema
+      .optional()
+      .describe(seriesLevelNumberFormatDescription),
+    metricType: mcpTileMetricTypeSchema
+      .optional()
+      .describe(
+        'METRIC SOURCES ONLY. OTel metric kind: gauge, sum, histogram, or exponential histogram. ' +
+          'Required (with metricName) when the tile sourceId is a metric source. ' +
+          'summary is not supported by the renderer — chart summary metrics with a raw ' +
+          'SQL tile (configType:"sql") against the table in the source\'s metricTables.summary.',
+      ),
+    metricName: z
+      .string()
+      .optional()
+      .describe(
+        'METRIC SOURCES ONLY. OTel metric name (e.g. "system.cpu.utilization"). ' +
+          'Required when metricType is set.',
+      ),
+    isDelta: z
+      .boolean()
+      .optional()
+      .describe(
+        'METRIC SOURCES ONLY (gauge metrics). When true, computes the Prometheus-style ' +
+          'delta over each bucket instead of the raw gauge value.',
+      ),
+    // The REST v2 dialect's spelling of the same flag. Accepted so a select
+    // item read back from the external API (or clickstack_get_alert /
+    // clickstack_get_dashboard, which emit the REST dialect) can be resent
+    // verbatim without silently clearing the delta flag; normalized onto
+    // `isDelta` in the transform below.
+    periodAggFn: z
+      .enum(['delta'])
+      .optional()
+      .describe(
+        'Alias for isDelta accepted for round-tripping configs read from ' +
+          'get tools: "delta" is equivalent to isDelta: true.',
+      ),
   })
   .superRefine((data, ctx) => {
-    if (data.level && data.aggFn !== 'quantile') {
+    const narrow = {
+      aggFn: typeof data.aggFn === 'string' ? data.aggFn : undefined,
+      metricType:
+        typeof data.metricType === 'string' ? data.metricType : undefined,
+      metricName:
+        typeof data.metricName === 'string' ? data.metricName : undefined,
+      // Must use the same precedence as the transform below, or a body
+      // spelling both flags (`isDelta: false` + `periodAggFn: 'delta'`) is
+      // validated as non-delta — passing the gauge-only rule — and then
+      // persisted as a delta.
+      isDelta: resolveIsDelta(data),
+      level: typeof data.level === 'number' ? data.level : undefined,
+      valueExpression:
+        typeof data.valueExpression === 'string'
+          ? data.valueExpression
+          : undefined,
+    };
+    for (const issue of getMetricSelectIssues(narrow)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Level can only be used with quantile aggregation function',
+        path: issue.path,
+        message: issue.message,
       });
     }
-    if (data.valueExpression && data.aggFn === 'count') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          'Value expression cannot be used with count aggregation function',
-      });
-    } else if (!data.valueExpression && data.aggFn !== 'count') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          'Value expression is required for non-count aggregation functions',
-      });
-    }
+  })
+  .transform(data => {
+    // Emit BOTH spellings, agreeing, so neither downstream consumer can lose
+    // the flag: MCP tiles are re-parsed through the external REST schema
+    // (createDashboardBodySchema / externalAlertChartConfigSchema), which
+    // knows only `periodAggFn` and strips `isDelta`, while direct MCP
+    // consumers read `isDelta`. Writing the resolved value to both also
+    // clears a stale `periodAggFn: 'delta'` when `isDelta: false` wins,
+    // which would otherwise persist a delta the refinement never checked.
+    const { isDelta: _isDelta, periodAggFn: _periodAggFn, ...rest } = data;
+    const withDelta = resolveIsDelta(data)
+      ? { ...rest, isDelta: true as const, periodAggFn: 'delta' as const }
+      : rest;
+    return withDelta.metricType &&
+      withDelta.aggFn !== 'count' &&
+      !withDelta.valueExpression
+      ? { ...withDelta, valueExpression: 'Value' }
+      : withDelta;
   });
 
+// ─── Chart formulas ──────────────────────────────────────────────────────────
+
+const mcpFormulaSchema = z.object({
+  expression: z
+    .string()
+    .max(1024)
+    .describe(
+      'Arithmetic expression over the tile\'s select items by position: "A" is ' +
+        'select[0], "B" is select[1], etc. Supports + - * /, parentheses, and ' +
+        'numeric constants — e.g. "A / (A + B) * 100" for a success rate. ' +
+        'Division by zero or a missing operand renders as a gap (NULL), not an error.',
+    ),
+  alias: z
+    .string()
+    .optional()
+    .describe(
+      'Display label for the formula series (chart legend / column header). ' +
+        'Falls back to the raw expression text when unset. Always set a short, ' +
+        'human-readable alias (e.g. "Error rate %").',
+    ),
+  numberFormat: mcpNumberFormatSchema
+    .optional()
+    .describe(seriesLevelNumberFormatDescription),
+});
+
+const tileFormulasDescription =
+  'METRIC, LOG, AND TRACE SOURCES. Derived series computed from the select ' +
+  'items via letter-ref arithmetic ("A" = select[0], "B" = select[1], ...). ' +
+  'Example: [{ expression: "A / B * 100", alias: "Error rate %" }] with ' +
+  'select = [errors count, total count]. Each formula adds one series ' +
+  'computed in ClickHouse. Cannot be combined with asRatio (express the ' +
+  'ratio as a formula instead). Rejected on other source kinds (e.g. session).';
+
+const mcpTileFormulasSchema = z
+  .array(mcpFormulaSchema)
+  .max(10)
+  .optional()
+  .describe(tileFormulasDescription);
+
+const mcpShowOperandSeriesSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    'Only meaningful with `formulas`: when false, only the formula series ' +
+      'are returned and the raw operand series (the select items) are hidden. ' +
+      'When omitted, operands are shown alongside the formula.',
+  );
+
+// ─── OnClick (link-out) schemas for table tiles ──────────────────────────────
+const mcpOnClickFilterTemplateSchema = z
+  .object({
+    kind: z
+      .literal('expressionTemplate')
+      .describe(
+        'Filter kind: an expression matched against a value rendered from the clicked row.',
+      ),
+    expression: z
+      .string()
+      .min(1)
+      .max(10000)
+      .describe(
+        'Column or SQL expression the rendered template is matched against. ' +
+          'Example: "ServiceName" or "SpanAttributes[\'http.route\']". Filters that ' +
+          'share an expression are merged into a single IN clause on the destination.',
+      ),
+    template: z
+      .string()
+      .min(1)
+      .max(10000)
+      .describe(
+        "Handlebars-style template rendered with the clicked row's columns. " +
+          'Example: "{{ServiceName}}" pulls the row\'s ServiceName column value. ' +
+          'Columns can be referenced by series alias.',
+      ),
+  })
+  .describe(
+    'One templated equality filter applied on the destination page. ' +
+      'Use filters to pre-populate the destination search/dashboard with a row-driven ' +
+      'IN clause (e.g. "ServiceName IN (\'api\')") rather than dropping the user into ' +
+      'an unscoped view.',
+  );
+
+const mcpOnClickTargetSchema = z
+  .discriminatedUnion('mode', [
+    z
+      .object({
+        mode: z
+          .literal('id')
+          .describe('Resolve the destination from a fixed ID.'),
+        id: z
+          .string()
+          .min(1)
+          .describe(
+            'Concrete source ID (for type=search) or dashboard ID (for type=dashboard). ' +
+              'Get source IDs from clickstack_list_sources; get dashboard IDs from ' +
+              'clickstack_get_dashboard (no id arg returns the list) or clickstack_search_dashboards. ' +
+              'For type=search the source kind must be "log" or "trace"; the /search ' +
+              'page does not render metric/session sources.',
+          ),
+      })
+      .describe('Link to a specific source or dashboard by its concrete ID.'),
+    z
+      .object({
+        mode: z
+          .literal('template')
+          .describe(
+            'Resolve the destination by name, rendered from the clicked row.',
+          ),
+        template: z
+          .string()
+          .min(1)
+          .max(10000)
+          .describe(
+            'Handlebars-style template rendered against the clicked row, then ' +
+              'resolved by NAME on the destination team. ' +
+              'Example: "ServiceOverview-{{ServiceName}}" assumes a row column ServiceName whose value ' +
+              'is the name of a source/dashboard. Prefer mode="id" when the target is ' +
+              'known up-front; it survives renames.',
+          ),
+      })
+      .describe(
+        'Link to a source/dashboard whose name comes from a column on the clicked row.',
+      ),
+  ])
+  .describe(
+    'Destination resolver. mode="id" pins a specific source/dashboard; ' +
+      'mode="template" picks one at click time from a row column. ' +
+      "Linking by ID is preferred, but using a template is valid when the destination dashboard depends on the clicked row's content",
+  );
+
+const mcpOnClickSearchSchema = z
+  .object({
+    type: z
+      .literal('search')
+      .describe('Link to the /search page for a log or trace source.'),
+    target: mcpOnClickTargetSchema,
+    whereTemplate: z
+      .string()
+      .max(10000)
+      .optional()
+      .describe(
+        'Handlebars-style WHERE template rendered against the clicked row ' +
+          "and placed in the destination's `where` query param. " +
+          'Example: "ServiceName = \'{{service.name}}\'" pulls service.name from the row. ' +
+          'Use Lucene or SQL syntax matching `whereLanguage`. Prefer `filters` (below) ' +
+          'for simple equality; filters merge nicely on the destination.',
+      ),
+    whereLanguage: SearchConditionTrimmedLanguageSchema.describe(
+      'Query language of `whereTemplate` and `filters`. Set it explicitly so the ' +
+        'destination knows how to parse the rendered values.',
+    ),
+    filters: z
+      .array(mcpOnClickFilterTemplateSchema)
+      .max(50)
+      .optional()
+      .describe(
+        'Templated equality filters. Each filter becomes an ' +
+          "`expression IN ('rendered-value')` clause on the destination; filters that " +
+          'share an expression are merged into one IN clause.',
+      ),
+  })
+  .describe(
+    'Row-click handler that opens the /search page. Use this to drill from an ' +
+      'aggregated table row down to the underlying log/trace events for that row.',
+  );
+
+const mcpOnClickDashboardSchema = z
+  .object({
+    type: z
+      .literal('dashboard')
+      .describe('Link to another ClickStack dashboard.'),
+    target: mcpOnClickTargetSchema,
+    whereTemplate: z
+      .string()
+      .max(10000)
+      .optional()
+      .describe(
+        'Handlebars-style WHERE template rendered against the clicked row and applied to the destination ' +
+          "dashboard's global filter. Useful when the target dashboard exposes a single " +
+          'global scope rather than per-tile filters.',
+      ),
+    whereLanguage: SearchConditionTrimmedLanguageSchema.describe(
+      'Query language of `whereTemplate` and `filters`. Set it explicitly so the ' +
+        'destination knows how to parse the rendered values.',
+    ),
+    filters: z
+      .array(mcpOnClickFilterTemplateSchema)
+      .max(50)
+      .optional()
+      .describe(
+        'Templated equality filters. The destination dashboard ' +
+          'auto-populates its filter list with these (matched by expression), so prefer ' +
+          'this over whereTemplate when the target dashboard already declares the same ' +
+          'filter expressions. ' +
+          'If the destination dashboard does not declare a top-level filter whose ' +
+          '`expression` matches, that value is dropped at click time and the ' +
+          'destination opens unfiltered for that expression.',
+      ),
+  })
+  .describe(
+    'Row-click handler that opens another dashboard. Use this to drill from a ' +
+      'high-level overview table down to a per-service or per-endpoint dashboard.',
+  );
+
+const mcpOnClickExternalSchema = z
+  .object({
+    type: z
+      .literal('external')
+      .describe('Link to an arbitrary external URL (e.g. Grafana, Langfuse).'),
+    urlTemplate: z
+      .string()
+      .min(1)
+      .max(10000)
+      .describe(
+        'Handlebars-style template rendered against the clicked row, e.g. ' +
+          '"https://example.com/d/abc?var-service={{ServiceName}}". ' +
+          'The rendered value MUST be an absolute http(s) URL; relative URLs and ' +
+          'non-http(s) schemes (javascript:, data:, etc.) are rejected at click time. ' +
+          'This variant references no HyperDX source or dashboard.',
+      ),
+  })
+  .describe(
+    'Row-click handler that opens an external URL in a new tab. Use this to ' +
+      'link out to a third-party tool (Grafana, Langfuse, runbooks, etc.).',
+  );
+
+const mcpOnClickSchema = z
+  .discriminatedUnion('type', [
+    mcpOnClickSearchSchema,
+    mcpOnClickDashboardSchema,
+    mcpOnClickExternalSchema,
+  ])
+  .describe(
+    'Row-click navigation for tiles that render as tables (Table tiles always; ' +
+      'SQL tiles only when displayType is "table"). ' +
+      'type="search" links to the /search page for a log/trace source; ' +
+      'type="dashboard" links to another dashboard; ' +
+      'type="external" links to an arbitrary external http(s) URL. ' +
+      'All support Handlebars `{{column}}` templating against the clicked row ' +
+      'for the target/url, whereTemplate, and filter values.\n\n' +
+      'Examples:\n' +
+      '1. Drill into search for the clicked service: \n' +
+      '   { "type": "search", "target": { "mode": "id", "id": "<trace-source-id>" }, ' +
+      '"whereLanguage": "sql", ' +
+      '"filters": [{ "kind": "expressionTemplate", "expression": "ServiceName", ' +
+      '"template": "{{ServiceName}}" }] }\n' +
+      '2. Drill into a per-service dashboard: \n' +
+      '   { "type": "dashboard", "target": { "mode": "id", "id": "<dashboard-id>" }, ' +
+      '"whereLanguage": "sql", ' +
+      '"filters": [{ "kind": "expressionTemplate", "expression": "ServiceName", ' +
+      '"template": "{{ServiceName}}" }] }\n' +
+      '3. Resolve the destination from the row (rare; prefer mode="id"): \n' +
+      '   { "type": "dashboard", "target": { "mode": "template", "template": ' +
+      '"{{TargetDashboardName}}" }, "whereLanguage": "lucene" }\n' +
+      '4. Link out to an external tool: \n' +
+      '   { "type": "external", "urlTemplate": ' +
+      '"https://grafana.example.com/d/abc?var-service={{ServiceName}}" }',
+  );
+
+const mcpTimeChartDisplayFields = {
+  fillNulls: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(timeChartFillNullsDescription),
+  alignDateRangeToGranularity: z
+    .boolean()
+    .optional()
+    .describe(timeChartAlignDateRangeDescription),
+  asRatio: z.boolean().optional().describe(asRatioDescription),
+  numberFormat: mcpNumberFormatSchema
+    .optional()
+    .describe(tileLevelNumberFormatDescription),
+};
+
+const mcpRowListSourceFields = {
+  sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+  where: z
+    .string()
+    .optional()
+    .default('')
+    .describe(
+      'Row filter, in the language set by whereLanguage (Lucene by default). Example: "level:error"\n\n' +
+        variableMacroDescription,
+    ),
+  whereLanguage: SearchConditionTrimmedLanguageSchema.optional()
+    .default('lucene')
+    .describe(tileWhereLanguageDescription),
+};
+
 const mcpTileLayoutSchema = z.object({
-  name: z.string().describe('Tile title shown on the dashboard'),
+  name: z.string().min(1).describe('Tile title shown on the dashboard'),
   x: z
     .number()
     .min(0)
     .max(23)
     .optional()
     .default(0)
-    .describe('Horizontal grid position (0–23). Default 0'),
+    .describe("Grid column of the tile's left edge, counted from the left."),
   y: z
     .number()
     .min(0)
     .optional()
     .default(0)
-    .describe('Vertical grid position. Default 0'),
+    .describe("Grid row of the tile's top edge, counted from the top."),
   w: z
     .number()
     .min(1)
     .max(24)
     .optional()
     .default(12)
-    .describe('Width in grid columns (1–24). Default 12'),
+    .describe(
+      'Width in grid columns; a full row is 24. ' +
+        'Match the width to the displayType: number 6-8 (three or four KPIs per row), ' +
+        'line / stacked_bar / pie 8-12, heatmap 12, table / search 12-24 (often the full row). ' +
+        'A markdown note is usually full-width (24).',
+    ),
   h: z
     .number()
     .min(1)
     .optional()
     .default(4)
-    .describe('Height in grid rows. Default 4'),
+    .describe(
+      'Height in grid rows. ' +
+        'Match the height to the displayType so content is not clipped: number 3-4, ' +
+        'line / stacked_bar / pie 4-6, heatmap 5-6, table / search 6-10 (taller when more rows are expected), ' +
+        'markdown 2-3 for a short note (h: 1 clips the text).',
+    ),
   id: z
     .string()
     .max(36)
     .optional()
-    .describe('Tile ID (auto-generated if omitted)'),
+    .describe(
+      'Tile ID, generated when omitted. When updating a dashboard, keep each ' +
+        "existing tile's ID from clickstack_get_dashboard: a tile whose ID " +
+        'disappears is treated as removed and its alerts are deleted.',
+    ),
+  containerId: z
+    .string()
+    .min(1)
+    .max(DASHBOARD_CONTAINER_ID_MAX)
+    .optional()
+    .describe(
+      'Container this tile belongs to. Must reference the id of a container in the ' +
+        'dashboard-level containers array. Omit to render the tile in the ungrouped area.',
+    ),
+  tabId: z
+    .string()
+    .min(1)
+    .max(DASHBOARD_CONTAINER_ID_MAX)
+    .optional()
+    .describe(
+      'Tab within the container this tile belongs to. Requires containerId to be set ' +
+        "and must match a tab id on that container. Omit to render in the container's shell " +
+        '(useful when the container has zero or one tabs, or when a tile should appear above ' +
+        'the tab bar).',
+    ),
 });
 
-const mcpLineTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    displayType: z.literal('line').describe('Line chart over time'),
-    sourceId: z.string().describe('Source ID – call hyperdx_list_sources'),
-    select: z
-      .array(mcpTileSelectItemSchema)
-      .min(1)
-      .max(20)
-      .describe('Metrics to plot (one series per item)'),
-    groupBy: z
-      .string()
-      .optional()
-      .describe(
-        'Column to split/group by. ' +
-          'Top-level columns use PascalCase (e.g. "SpanName", "StatusCode"). ' +
-          "Span attributes: SpanAttributes['key'] (e.g. SpanAttributes['http.method']). " +
-          "Resource attributes: ResourceAttributes['key'] (e.g. ResourceAttributes['service.name']).",
+export const mcpLineTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z.literal('line').describe('Line chart over time'),
+      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      select: z
+        .array(mcpTileSelectItemSchema)
+        .min(1)
+        .max(20)
+        .describe('Metrics to plot (one series per item)'),
+      groupBy: z
+        .string()
+        .optional()
+        .describe(
+          'Column to split/group by. ' +
+            'Top-level columns use PascalCase (e.g. "SpanName", "StatusCode"). ' +
+            "Span attributes: SpanAttributes['key'] (e.g. SpanAttributes['http.method']). " +
+            "Resource attributes: ResourceAttributes['key'] (e.g. ResourceAttributes['service.name']).",
+        ),
+      ...mcpTimeChartDisplayFields,
+      compareToPreviousPeriod: z
+        .boolean()
+        .optional()
+        .describe('Overlay the previous period as a dashed comparison series.'),
+      fitYAxisToData: z
+        .boolean()
+        .optional()
+        .describe(
+          'Scale the y-axis to the data range instead of starting at zero.',
+        ),
+      seriesLimit: seriesLimitSchema.describe(timeChartSeriesLimitDescription),
+      formulas: mcpTileFormulasSchema,
+      showOperandSeries: mcpShowOperandSeriesSchema,
+      lineInterpolation: LineInterpolationSchema.optional().describe(
+        'How points are connected: "smooth" (default), "linear", or "step".',
       ),
-    fillNulls: z.boolean().optional().default(true),
-    alignDateRangeToGranularity: z.boolean().optional(),
-    asRatio: z
-      .boolean()
-      .optional()
-      .describe(
-        'Plot as ratio of two metrics (requires exactly 2 select items)',
-      ),
-  }),
+    })
+    .describe('Line chart query and display settings.'),
 });
 
-const mcpBarTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    displayType: z
-      .literal('stacked_bar')
-      .describe('Stacked bar chart over time'),
-    sourceId: z.string().describe('Source ID – call hyperdx_list_sources'),
-    select: z.array(mcpTileSelectItemSchema).min(1).max(20),
-    groupBy: z.string().optional(),
-    fillNulls: z.boolean().optional().default(true),
-    alignDateRangeToGranularity: z.boolean().optional(),
-    asRatio: z.boolean().optional(),
-  }),
+const mcpStackedTimeChartConfigFields = {
+  sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+  select: z
+    .array(mcpTileSelectItemSchema)
+    .min(1)
+    .max(20)
+    .describe('Metrics to plot (one series per item; series are stacked).'),
+  groupBy: z
+    .string()
+    .optional()
+    .describe(
+      'Column to split/group by; each group value becomes a stacked series. ' +
+        'Top-level columns use PascalCase (e.g. "SpanName"). ' +
+        "For attributes: SpanAttributes['key'] or ResourceAttributes['key'].",
+    ),
+  ...mcpTimeChartDisplayFields,
+  seriesLimit: seriesLimitSchema.describe(timeChartSeriesLimitDescription),
+  formulas: mcpTileFormulasSchema,
+  showOperandSeries: mcpShowOperandSeriesSchema,
+};
+
+export const mcpBarTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z
+        .literal('stacked_bar')
+        .describe('Stacked bar chart over time'),
+      ...mcpStackedTimeChartConfigFields,
+    })
+    .describe('Stacked bar chart query and display settings.'),
+});
+
+export const mcpStackedLineTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z
+        .literal('stacked_line')
+        .describe('Stacked line (area) chart over time'),
+      ...mcpStackedTimeChartConfigFields,
+      lineInterpolation: LineInterpolationSchema.optional().describe(
+        'How points are connected: "linear" (default), "smooth", or "step".',
+      ),
+    })
+    .describe('Stacked line chart query and display settings.'),
 });
 
 const mcpTableTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    displayType: z.literal('table').describe('Tabular aggregated data'),
-    sourceId: z.string().describe('Source ID – call hyperdx_list_sources'),
-    select: z.array(mcpTileSelectItemSchema).min(1).max(20),
-    groupBy: z
-      .string()
-      .optional()
-      .describe(
-        'Group rows by this column. Use PascalCase for top-level columns (e.g. "SpanName"). ' +
-          "For attributes: SpanAttributes['key'] or ResourceAttributes['key'].",
-      ),
-    orderBy: z.string().optional().describe('Sort results by this column'),
-    asRatio: z.boolean().optional(),
-  }),
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z.literal('table').describe('Tabular aggregated data'),
+      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      select: z
+        .array(mcpTileSelectItemSchema)
+        .min(1)
+        .max(20)
+        .describe('Aggregations to compute (one column per item).'),
+      groupBy: z
+        .string()
+        .optional()
+        .describe(
+          'Group rows by this column. Use PascalCase for top-level columns (e.g. "SpanName"). ' +
+            "For attributes: SpanAttributes['key'] or ResourceAttributes['key'].",
+        ),
+      having: z
+        .string()
+        .max(10000)
+        .optional()
+        .describe(
+          'Post-aggregation SQL HAVING expression. Example: "Count > 100" to drop ' +
+            'groups with few rows, or "StatusMessage != \'\'" to drop empty-message rows ' +
+            'from a groupBy: "StatusMessage" table.\n\n' +
+            sqlOnlyVariableMacroDescription,
+        ),
+      orderBy: z
+        .string()
+        .optional()
+        .describe(
+          'Sort results by this column. ' +
+            'When ordering by an alias that contains spaces or special characters, ' +
+            `wrap the alias in quotes: e.g. '"P95 Latency" DESC'.`,
+        ),
+      asRatio: z.boolean().optional().describe(asRatioDescription),
+      groupByColumnsOnLeft: z
+        .boolean()
+        .optional()
+        .describe(
+          'Render Group By columns on the left side of the table, before the series columns. ' +
+            'When omitted or false, they render on the right.',
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+      onClick: mcpOnClickSchema.optional(),
+      formulas: mcpTileFormulasSchema,
+      showOperandSeries: mcpShowOperandSeriesSchema,
+    })
+    .describe('Table query and display settings.'),
 });
 
-const mcpNumberFormatSchema = z
-  .object({
-    output: z
-      .enum(['currency', 'percent', 'byte', 'time', 'number'])
-      .describe(
-        'Format category. "time" auto-formats durations (use factor for input unit). ' +
-          '"byte" formats as KB/MB/GB. "currency" prepends a symbol. "percent" appends %.',
+export const mcpNumberTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z
+        .literal('number')
+        .describe('Single aggregate scalar value'),
+      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      select: z
+        .array(mcpTileSelectItemSchema)
+        .min(1)
+        .max(20)
+        .describe(
+          'Exactly one metric to display — unless `formulas` is set, in which ' +
+            'case the select items are the formula operands and the (single) ' +
+            'formula value is displayed instead.',
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+      formulas: z
+        .array(mcpFormulaSchema)
+        .max(1)
+        .optional()
+        .describe(
+          `${tileFormulasDescription} Number tiles support a single formula ` +
+            'and always display the formula value (operand series are hidden).',
+        ),
+      color: ChartPaletteTokenSchema.optional().describe(
+        numberTileColorDescription,
       ),
-    mantissa: z
-      .number()
-      .int()
-      .optional()
-      .describe('Decimal places (0–10). Not used for "time" output.'),
-    thousandSeparated: z
-      .boolean()
-      .optional()
-      .describe('Separate thousands (e.g. 1,234,567)'),
-    average: z
-      .boolean()
-      .optional()
-      .describe('Abbreviate large numbers (e.g. 1.2m)'),
-    decimalBytes: z
-      .boolean()
-      .optional()
-      .describe(
-        'Use decimal base for bytes (1KB = 1000). Only for "byte" output.',
+      colorRules: z
+        .array(NumberTileColorConditionSchema)
+        .max(10)
+        .optional()
+        .describe(numberTileColorRulesDescription),
+      backgroundChart: BackgroundChartSchema.optional().describe(
+        numberTileBackgroundChartDescription,
       ),
-    factor: z
-      .number()
-      .optional()
-      .describe(
-        'Input unit factor for "time" output. ' +
-          '1 = seconds, 0.001 = milliseconds, 0.000001 = microseconds, 0.000000001 = nanoseconds.',
-      ),
-    currencySymbol: z
-      .string()
-      .optional()
-      .describe('Currency symbol (e.g. "$"). Only for "currency" output.'),
-    unit: z
-      .string()
-      .optional()
-      .describe('Suffix appended to the value (e.g. " req/s")'),
-  })
-  .describe(
-    'Controls how the number value is formatted for display. ' +
-      'Most useful: { output: "time", factor: 0.000000001 } to auto-format nanosecond durations, ' +
-      'or { output: "number", mantissa: 2, thousandSeparated: true } for clean counts.',
-  );
-
-const mcpNumberTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    displayType: z.literal('number').describe('Single aggregate scalar value'),
-    sourceId: z.string().describe('Source ID – call hyperdx_list_sources'),
-    select: z
-      .array(mcpTileSelectItemSchema)
-      .length(1)
-      .describe('Exactly one metric to display'),
-    numberFormat: mcpNumberFormatSchema
-      .optional()
-      .describe(
-        'Display formatting for the number value. Example: { output: "time", factor: 0.000000001 } ' +
-          'to auto-format nanosecond durations as human-readable time.',
-      ),
-  }),
+    })
+    .describe('Number tile query and display settings.'),
 });
 
 const mcpPieTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    displayType: z.literal('pie').describe('Pie chart'),
-    sourceId: z.string().describe('Source ID – call hyperdx_list_sources'),
-    select: z.array(mcpTileSelectItemSchema).length(1),
-    groupBy: z
-      .string()
-      .optional()
-      .describe(
-        'Column that defines pie slices. Use PascalCase for top-level columns. ' +
-          "For attributes: SpanAttributes['key'] or ResourceAttributes['key'].",
-      ),
-  }),
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z.literal('pie').describe('Pie chart'),
+      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      select: z
+        .array(mcpTileSelectItemSchema)
+        .length(1)
+        .describe('The aggregation that sizes each slice.'),
+      groupBy: z
+        .string()
+        .optional()
+        .describe(
+          'Column that defines pie slices. Use PascalCase for top-level columns. ' +
+            "For attributes: SpanAttributes['key'] or ResourceAttributes['key'].",
+        ),
+      orderBy: z
+        .string()
+        .optional()
+        .describe(
+          'Optional custom SQL ORDER BY expression. Overrides the default ' +
+            'value-descending ordering and, combined with `limit`, controls which ' +
+            'slices are kept. When ordering by an alias that contains spaces or ' +
+            `special characters, wrap the alias in quotes: e.g. '"P95 Latency" DESC'.`,
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+      limit: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          'Maximum number of slices (SQL LIMIT). Without a custom `orderBy`, keeps ' +
+            'the top-N groups by the aggregated value, descending; with an `orderBy` ' +
+            'keeps the first N in that order. Omit or set 0 to fetch all groups.',
+        ),
+    })
+    .describe('Pie chart query and display settings.'),
+});
+
+// Categorical bar charts ('bar') behave exactly like pie charts: one
+// aggregated select item, optional groupBy, no time bucketing. Distinct
+// from 'stacked_bar', which is a time series.
+const mcpCategoricalBarTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z
+        .literal('bar')
+        .describe('Bar chart — one bar per group value (not a time series)'),
+      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      select: z
+        .array(mcpTileSelectItemSchema)
+        .length(1)
+        .describe('The aggregation that sets each bar height.'),
+      groupBy: z
+        .string()
+        .optional()
+        .describe(
+          'Column(s) that define the bars. Use PascalCase for top-level columns. ' +
+            "For attributes: SpanAttributes['key'] or ResourceAttributes['key'].",
+        ),
+      orderBy: z
+        .string()
+        .optional()
+        .describe(
+          'Optional custom SQL ORDER BY expression. Overrides the default ' +
+            'value-descending ordering and, combined with `limit`, controls which ' +
+            'bars are kept. When ordering by an alias that contains spaces or ' +
+            `special characters, wrap the alias in quotes: e.g. '"P95 Latency" DESC'.`,
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+      limit: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          'Maximum number of bars (SQL LIMIT). Without a custom `orderBy`, keeps ' +
+            'the top-N groups by the aggregated value, descending; with an `orderBy` ' +
+            'keeps the first N in that order. Omit or set 0 to fetch all groups.',
+        ),
+    })
+    .describe('Bar chart query and display settings.'),
+});
+
+// Heatmap tiles use a dedicated select-item shape: heatmap aggregation is
+// fixed internally, the chart-level discriminator is
+// `displayType: 'heatmap'`, and `HeatmapSeriesEditor` does not render an
+// alias input. valueExpression is required and non-empty. Mirrors
+// externalDashboardHeatmapSelectItemSchema in
+// `packages/api/src/utils/zod.ts` so the MCP and REST surfaces stay in
+// lockstep.
+const mcpHeatmapSelectItemSchema = z.object({
+  valueExpression: z
+    .string()
+    .min(1)
+    .describe(
+      'Numeric column or expression to bucket. ' +
+        'Use "Duration" for trace latency heatmaps, or any other numeric column.',
+    ),
+  countExpression: z
+    .string()
+    .optional()
+    .describe(
+      'Custom count expression (e.g. "count()"). The renderer applies a default when omitted.',
+    ),
+  heatmapScaleType: z
+    .enum(['log', 'linear'])
+    .optional()
+    .describe('Scale of the y axis (the bucketed value).'),
+});
+
+// Distribution heatmap tiles are builder-only and restricted to Trace sources
+// (see HEATMAP_DISTRIBUTION_SOURCE_KINDS in `packages/common-utils/src/guards.ts`).
+// The save path runs `getHeatmapTilesWithIncompatibleSources` after schema
+// validation to enforce that, mirroring the REST handler.
+const mcpHeatmapTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      displayType: z
+        .literal('heatmap')
+        .describe(
+          'Heatmap chart. Without `heatmapMode` it is a distribution heatmap, ' +
+            'which buckets a numeric value on the y-axis and requires a Trace source',
+        ),
+      heatmapMode: z
+        .literal('distribution')
+        .optional()
+        .describe(
+          'Distribution mode; may be omitted. For a series heatmap use heatmapMode "series" instead.',
+        ),
+      sourceId: z
+        .string()
+        .describe(
+          'Source ID. Must be a Trace source today; use clickstack_list_sources and ' +
+            'pick one whose kind is "trace".',
+        ),
+      select: z
+        .array(mcpHeatmapSelectItemSchema)
+        .length(1)
+        .describe('The value to bucket.'),
+      where: z
+        .string()
+        .optional()
+        .default('')
+        .describe(
+          'Row-level filter applied before bucketing. Example: "level:error"\n\n' +
+            variableMacroDescription,
+        ),
+      whereLanguage: SearchConditionTrimmedLanguageSchema.optional()
+        .default('lucene')
+        .describe(tileWhereLanguageDescription),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(
+          'Display formatting for bucket values. Example: { output: "duration", factor: 0.000000001 } ' +
+            'to format nanosecond durations as human-readable time.',
+        ),
+    })
+    .describe('Distribution heatmap query and display settings.'),
+});
+
+const mcpHeatmapSeriesTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      ...rejectedTileWhereFields,
+      displayType: z
+        .literal('heatmap')
+        .describe(
+          'Series heatmap: one row per groupBy value, each cell colored by the ' +
+            'aggregated value over time',
+        ),
+      heatmapMode: z
+        .literal('series')
+        .describe(
+          'Selects the series heatmap: one row per groupBy value over time.',
+        ),
+      sourceId: z
+        .string()
+        .describe(
+          'Source ID of a Trace, Log, or Metric source - call clickstack_list_sources',
+        ),
+      select: z
+        .array(mcpTileSelectItemSchema)
+        .length(1)
+        .describe(
+          'Defines the aggregate value displayed for each heatmap series.',
+        ),
+      groupBy: z
+        .string()
+        .optional()
+        .describe(
+          'SQL GROUP BY expression defining the series shown in the heatmap.',
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+    })
+    .describe('Series heatmap query and display settings.'),
 });
 
 const mcpSearchTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    displayType: z.literal('search').describe('Log/event search results list'),
-    sourceId: z.string().describe('Source ID – call hyperdx_list_sources'),
-    where: z
-      .string()
-      .optional()
-      .default('')
-      .describe('Filter in Lucene syntax. Example: "level:error"'),
-    whereLanguage: SearchConditionLanguageSchema.optional().default('lucene'),
-    select: z
-      .string()
-      .optional()
-      .default('')
-      .describe(
-        'Columns to display (empty = defaults). Example: "body,service.name,duration"',
-      ),
-  }),
+  config: z
+    .object({
+      displayType: z
+        .literal('search')
+        .describe('Log/event search results list'),
+      ...mcpRowListSourceFields,
+      select: z
+        .string()
+        .optional()
+        .default('')
+        .describe(
+          'Columns to display (empty = defaults). Example: "body,service.name,duration"',
+        ),
+    })
+    .describe('Search results list query settings.'),
+});
+
+const mcpEventPatternsTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      displayType: z
+        .literal('event_patterns')
+        .describe('Event pattern mining tile'),
+      ...mcpRowListSourceFields,
+      select: z
+        .string()
+        .optional()
+        .default('')
+        .describe(
+          'Pattern expression — column or expression to mine patterns from. ' +
+            'Leave empty to use the source default (Body for logs, SpanName for traces). ' +
+            'Example: "Body", "SpanName", "SpanAttributes[\'http.url\']"',
+        ),
+    })
+    .describe('Event pattern mining query settings.'),
 });
 
 const mcpMarkdownTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    displayType: z.literal('markdown').describe('Free-form Markdown text tile'),
-    markdown: z.string().optional().default(''),
-  }),
+  config: z
+    .object({
+      displayType: z
+        .literal('markdown')
+        .describe('Free-form Markdown text tile'),
+      markdown: z
+        .string()
+        .optional()
+        .default('')
+        .describe('Markdown text rendered in the tile.'),
+    })
+    .describe('Markdown tile content.'),
 });
 
-const mcpSqlTileSchema = mcpTileLayoutSchema.extend({
-  config: z.object({
-    configType: z
-      .literal('sql')
-      .describe(
-        'Must be "sql" for raw SQL tiles. ' +
-          'ADVANCED: Only use raw SQL tiles when the builder tile types cannot express the query you need.',
+export const mcpSqlTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      configType: z
+        .literal('sql')
+        .describe(
+          'Marks this as a raw SQL tile. ' +
+            'ADVANCED: Only use raw SQL tiles when the builder tile types cannot express the query you need.',
+        ),
+      displayType: z
+        .enum([
+          'line',
+          'stacked_bar',
+          'stacked_line',
+          'table',
+          'number',
+          'pie',
+          'bar',
+        ])
+        .describe('How to render the SQL results'),
+      connectionId: z
+        .string()
+        .describe(
+          'Connection ID (not sourceId) – call clickstack_list_sources to find available connections',
+        ),
+      sourceId: z
+        .string()
+        .optional()
+        .describe(
+          'Source ID for the table this query reads from (call clickstack_list_sources). ' +
+            'ALWAYS set this for raw SQL tiles UNLESS the query reads from multiple tables ' +
+            '(e.g. JOINs or sub-queries spanning several sources), in which case omit it. ' +
+            'sourceId is REQUIRED by two macros: $__filters and $__sourceTable. ' +
+            'The sourceId must belong to the same connection as connectionId.',
+        ),
+      sqlTemplate: z.string().describe(`
+Raw ClickHouse SQL query. SQL guidelines:
+
+1. ALWAYS include a LIMIT clause to avoid excessive data.
+2. ALWAYS include a date/time filter in the WHERE clause using either macros or raw parameters to ensure the chart responds to user selected time range.
+    - $__timeFilter(col) expands to col >= toDateTime(fromUnixTimestamp64Milli({startDateMilliseconds:Int64})) AND col <= toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}))
+    - $__timeFilter_ms(col) is the same but should be used when col has millisecond precision (DateTime64 type)
+    - $__dateFilter(col) is the same but should be used when col has Day granularity (Date type)
+    - $__dateTimeFilter(dateCol, dateTimeCol) should be used when there are both Date and DateTime columns that should be filtered on.
+    - NEVER hardcode a fixed time range unless the user specifically asks for it.
+    - $__fromTime and $__toTime can be expanded to {startDateMilliseconds:Int64} and {endDateMilliseconds:Int64}, but prefer the full filter macros for readability.
+3. ALWAYS include a granularity macro or parameter for time series (line or bar charts) to ensure the chart's granularity responds to user selected time bucket size.
+    - $__timeInterval(col) expands to toStartOfInterval(TimestampTime, INTERVAL {intervalSeconds:Int64} second)
+    - $__interval_s expands to {intervalSeconds:Int64}
+    - These macros are only available for time-series charts; do not use them for other display types.
+4. STRONGLY RECOMMENDED: use the $__filters and $__sourceTable macros to ensure the tile reacts to dashboard-level filters and source selectors.
+    - $__filters and $__sourceTable both require sourceId to be set on this tile.
+
+Example:
+
+SELECT
+  $__timeInterval(TimestampTime) AS ts,
+  count()
+FROM $__sourceTable
+WHERE $__timeFilter(TimestampTime)
+  AND $__filters
+GROUP BY ServiceName, ts
+`),
+      fillNulls: z
+        .boolean()
+        .optional()
+        .describe(
+          `${timeChartFillNullsDescription} Time-series display types only.`,
+        ),
+      alignDateRangeToGranularity: z
+        .boolean()
+        .optional()
+        .describe(
+          `${timeChartAlignDateRangeDescription} Time-series display types only.`,
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+      compareToPreviousPeriod: z
+        .boolean()
+        .optional()
+        .describe(
+          'Overlay the previous period as a dashed comparison series. ' +
+            'Valid only when displayType is "line", ignored otherwise.',
+        ),
+      fitYAxisToData: z
+        .boolean()
+        .optional()
+        .describe(
+          'Scale the y-axis to the data range instead of starting at zero. ' +
+            'Valid only when displayType is "line", ignored otherwise.',
+        ),
+      color: ChartPaletteTokenSchema.optional().describe(
+        rawSqlNumberTileColorDescription,
       ),
-    displayType: z
-      .enum(['line', 'stacked_bar', 'table', 'number', 'pie'])
-      .describe('How to render the SQL results'),
-    connectionId: z
-      .string()
-      .describe(
-        'Connection ID (not sourceId) – call hyperdx_list_sources to find available connections',
+      colorRules: z
+        .array(NumberTileColorConditionSchema)
+        .max(10)
+        .optional()
+        .describe(rawSqlNumberTileColorRulesDescription),
+      onClick: mcpOnClickSchema.optional(),
+      lineInterpolation: LineInterpolationSchema.optional().describe(
+        'How points are connected: "smooth", "linear", or "step". Defaults to ' +
+          '"smooth" for "line" and "linear" for "stacked_line". ' +
+          'Valid only when displayType is "line" or "stacked_line", ignored otherwise.',
       ),
-    sqlTemplate: z
-      .string()
-      .describe(
-        'Raw ClickHouse SQL query. Always include a LIMIT clause to avoid excessive data.\n' +
-          'Use query parameters: {startDateMilliseconds:Int64}, {endDateMilliseconds:Int64}, ' +
-          '{intervalSeconds:Int64}, {intervalMilliseconds:Int64}.\n' +
-          'Or use macros: $__timeFilter(col), $__timeFilter_ms(col), $__dateFilter(col), ' +
-          '$__fromTime, $__toTime, $__fromTime_ms, $__toTime_ms, ' +
-          '$__timeInterval(col), $__timeInterval_ms(col), $__interval_s, $__filters.\n' +
-          'Example: "SELECT $__timeInterval(TimestampTime) AS ts, ServiceName, count() ' +
-          'FROM otel_logs WHERE $__timeFilter(TimestampTime) AND $__filters ' +
-          'GROUP BY ServiceName, ts ORDER BY ts"',
+    })
+    .describe('Raw SQL tile query and display settings.'),
+});
+
+const PROMQL_TIME_CHARTS = '"line", "stacked_bar" or "stacked_line"';
+
+const promqlOnlyFor = (displayTypes: string) =>
+  `Valid only when displayType is ${displayTypes}, ignored otherwise.`;
+
+const mcpPromqlExpressionSchema = z.object({
+  expression: z
+    .string()
+    .max(10000)
+    .describe(
+      'PromQL expression. Supports dashboard variables in label matchers ' +
+        '(e.g. {job=~"$job"}) and the $__interval, $__rate_interval and ' +
+        '$__range macros. Example: ' +
+        'sum by (job) (rate(http_requests_total[$__rate_interval]))',
+    ),
+  alias: z
+    .string()
+    .max(10000)
+    .optional()
+    .describe('Legend label for this series.'),
+  queryType: PromqlQueryTypeSchema.optional().describe(
+    '"instant" evaluates the expression once at the end of the time range; ' +
+      `"range" (the default) evaluates it over the range. ${promqlOnlyFor('"table", "number", "pie" or "bar"')}`,
+  ),
+  reducer: PromqlReducerSchema.optional().describe(
+    'How a range query reduces each series to a single value. ' +
+      promqlOnlyFor('"number", "pie" or "bar"'),
+  ),
+});
+
+// One flat config for every display type, like the save_source schema: the
+// external API tile schema applies the per-display-type rules on save.
+const mcpPromqlTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      configType: z
+        .literal('promql')
+        .describe('Marks this as a PromQL tile. Requires a promql source.'),
+      displayType: z.enum([
+        'line',
+        'stacked_bar',
+        'stacked_line',
+        'table',
+        'number',
+        'pie',
+        'bar',
+        'heatmap',
+      ]),
+      sourceId: z
+        .string()
+        .describe(
+          'ID of a source whose kind is "promql" – call clickstack_list_sources',
+        ),
+      expressions: z
+        .array(mcpPromqlExpressionSchema)
+        .min(1)
+        .max(MAX_PROMQL_EXPRESSIONS)
+        .describe(
+          'PromQL queries. Line and stacked charts plot every expression; ' +
+            'other display types query only the first.',
+        ),
+      granularity: z
+        .union([SQLIntervalSchema, z.literal('auto')])
+        .optional()
+        .describe(
+          'Step of range queries and the value of $__interval, as "<n> <unit>" ' +
+            'with unit second, minute, hour or day (e.g. "1 minute"), or "auto". ' +
+            'Omit for auto.',
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+      legendTemplate: z
+        .string()
+        .max(MAX_LEGEND_TEMPLATE_LENGTH)
+        .optional()
+        .describe(
+          'Series name built from label values, e.g. "{{job}} {{instance}}". ' +
+            'Ignored when displayType is "table" or "number".',
+        ),
+      fillNulls: z
+        .boolean()
+        .optional()
+        .describe(
+          `${timeChartFillNullsDescription} ${promqlOnlyFor(PROMQL_TIME_CHARTS)}`,
+        ),
+      alignDateRangeToGranularity: z
+        .boolean()
+        .optional()
+        .describe(
+          `${timeChartAlignDateRangeDescription} ${promqlOnlyFor(PROMQL_TIME_CHARTS)}`,
+        ),
+      seriesLimit: seriesLimitSchema.describe(
+        'Maximum number of series to show. Omit for the default cap; 0 means ' +
+          `unlimited. ${promqlOnlyFor(PROMQL_TIME_CHARTS)}`,
       ),
-    fillNulls: z.boolean().optional(),
-    alignDateRangeToGranularity: z.boolean().optional(),
-  }),
+      compareToPreviousPeriod: z
+        .boolean()
+        .optional()
+        .describe(
+          'Overlay the previous period as a dashed comparison series. ' +
+            promqlOnlyFor('"line"'),
+        ),
+      lineInterpolation: LineInterpolationSchema.optional().describe(
+        'How points are connected: "smooth", "linear", or "step". ' +
+          promqlOnlyFor('"line" or "stacked_line"'),
+      ),
+      color: ChartPaletteTokenSchema.optional().describe(
+        `${numberTileColorDescription} ${promqlOnlyFor('"number"')}`,
+      ),
+      colorRules: z
+        .array(NumberTileColorConditionSchema)
+        .max(10)
+        .optional()
+        .describe(
+          `${numberTileColorRulesDescription} ${promqlOnlyFor('"number"')}`,
+        ),
+      backgroundChart: BackgroundChartSchema.optional().describe(
+        'Background trend sparkline drawn behind the number. ' +
+          promqlOnlyFor('"number"'),
+      ),
+      limit: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          'Maximum number of slices or bars, one per series. Omit for the ' +
+            `default cap; 0 means unlimited. ${promqlOnlyFor('"pie" or "bar"')}`,
+        ),
+      heatmapMode: PromqlHeatmapModeSchema.optional().describe(
+        '"distribution" (the default) buckets sample values, "series" shows ' +
+          'one row per series, "histogram" plots Prometheus histogram ' +
+          `buckets (_bucket series by le). ${promqlOnlyFor('"heatmap"')}`,
+      ),
+      heatmapScaleType: HeatmapScaleTypeSchema.optional().describe(
+        `Scale of the y axis. ${promqlOnlyFor('"heatmap"')}`,
+      ),
+    })
+    .describe(
+      'PromQL tile query and display settings. PromQL tiles cannot have alerts.',
+    ),
 });
 
 const mcpTileSchema = z.union([
   mcpLineTileSchema,
   mcpBarTileSchema,
+  mcpStackedLineTileSchema,
   mcpTableTileSchema,
   mcpNumberTileSchema,
   mcpPieTileSchema,
+  mcpCategoricalBarTileSchema,
+  mcpHeatmapSeriesTileSchema,
+  mcpHeatmapTileSchema,
   mcpSearchTileSchema,
+  mcpEventPatternsTileSchema,
   mcpMarkdownTileSchema,
   mcpSqlTileSchema,
 ]);
 
-export const mcpTilesParam = z
+// Layout schema without defaults for the patch tool: layout fields stay
+// truly `undefined` when omitted so the merge logic can fall back to the
+// existing tile's values instead of Zod filling in 0/12/4.
+const mcpPatchTileLayoutSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Tile title. Omit to keep the existing title.'),
+  x: z
+    .number()
+    .min(0)
+    .max(23)
+    .optional()
+    .describe(
+      "Grid column of the tile's left edge. Omit to keep the existing position.",
+    ),
+  y: z
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      "Grid row of the tile's top edge. Omit to keep the existing position.",
+    ),
+  w: z
+    .number()
+    .min(1)
+    .max(24)
+    .optional()
+    .describe(
+      'Width in grid columns; a full row is 24. Omit to keep the existing width.',
+    ),
+  h: z
+    .number()
+    .min(1)
+    .optional()
+    .describe('Height in grid rows. Omit to keep the existing height.'),
+  containerId: z
+    .string()
+    .min(1)
+    .max(DASHBOARD_CONTAINER_ID_MAX)
+    .optional()
+    .describe(
+      "Container to place the tile in; must be the id of one of the dashboard's " +
+        'containers. Omit to keep the tile in its current container.',
+    ),
+  tabId: z
+    .string()
+    .min(1)
+    .max(DASHBOARD_CONTAINER_ID_MAX)
+    .optional()
+    .describe(
+      "Tab to place the tile in; must be a tab id on the tile's container. " +
+        'Omit to keep the current tab.',
+    ),
+});
+
+// Build the patch tile union by extending the default-free layout with
+// each tile type's config shape. We only need the `config` field from
+// each tile schema; the layout wrapper is replaced.
+const mcpPatchTileSchema = z.union([
+  mcpPatchTileLayoutSchema.extend({ config: mcpLineTileSchema.shape.config }),
+  mcpPatchTileLayoutSchema.extend({ config: mcpBarTileSchema.shape.config }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpStackedLineTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({ config: mcpTableTileSchema.shape.config }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpNumberTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({ config: mcpPieTileSchema.shape.config }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpCategoricalBarTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpHeatmapSeriesTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpHeatmapTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpSearchTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpEventPatternsTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({
+    config: mcpMarkdownTileSchema.shape.config,
+  }),
+  mcpPatchTileLayoutSchema.extend({ config: mcpSqlTileSchema.shape.config }),
+]);
+
+const mcpPromqlPatchTileSchema = mcpPatchTileLayoutSchema.extend({
+  config: mcpPromqlTileSchema.shape.config,
+});
+
+const mcpTilesParam = z
   .array(mcpTileSchema)
   .describe(
     'Array of dashboard tiles. Each tile needs a name, optional layout (x/y/w/h), and a config block. ' +
-      'The config block varies by displayType – use hyperdx_list_sources for sourceId and connectionId values.\n\n' +
+      'The config block varies by displayType – use clickstack_list_sources for sourceId and connectionId values.\n\n' +
       'Example tiles:\n' +
       '1. Line chart: { "name": "Error Rate", "config": { "displayType": "line", "sourceId": "<from list_sources>", ' +
-      '"groupBy": "ResourceAttributes[\'service.name\']", "select": [{ "aggFn": "count", "where": "StatusCode:STATUS_CODE_ERROR" }] } }\n' +
+      '"groupBy": "ResourceAttributes[\'service.name\']", "select": [{ "aggFn": "count", "where": "StatusCode:STATUS_CODE_ERROR", "alias": "Errors" }] } }\n' +
       '2. Table: { "name": "Top Endpoints", "config": { "displayType": "table", "sourceId": "<from list_sources>", ' +
-      '"groupBy": "SpanAttributes[\'http.route\']", "select": [{ "aggFn": "count" }, { "aggFn": "avg", "valueExpression": "Duration" }] } }\n' +
+      '"groupBy": "SpanAttributes[\'http.route\']", "select": [{ "aggFn": "count", "alias": "Requests" }, ' +
+      '{ "aggFn": "avg", "valueExpression": "Duration", "alias": "Avg Duration", "numberFormat": { "output": "duration", "factor": 0.000000001 } }] } }\n' +
+      '   (per-series numberFormat lets one column render as a duration while a sibling count column stays a plain number)\n' +
       '3. Number: { "name": "Total Requests", "config": { "displayType": "number", "sourceId": "<from list_sources>", ' +
-      '"select": [{ "aggFn": "count" }], "numberFormat": { "output": "number", "average": true } } }\n' +
+      '"select": [{ "aggFn": "count", "alias": "Requests" }], "numberFormat": { "output": "number", "average": true } } }\n' +
       '4. Number (duration): { "name": "P95 Latency", "config": { "displayType": "number", "sourceId": "<from list_sources>", ' +
-      '"select": [{ "aggFn": "quantile", "level": 0.95, "valueExpression": "Duration" }], ' +
-      '"numberFormat": { "output": "time", "factor": 0.000000001 } } }',
+      '"select": [{ "aggFn": "quantile", "level": 0.95, "valueExpression": "Duration", "alias": "P95 Latency" }], ' +
+      '"numberFormat": { "output": "duration", "factor": 0.000000001 } } }\n' +
+      '5. Heatmap: { "name": "Latency Heatmap", "config": { "displayType": "heatmap", "sourceId": "<from list_sources, must be a Trace source>", ' +
+      '"select": [{ "valueExpression": "Duration" }], ' +
+      '"numberFormat": { "output": "duration", "factor": 0.000000001 } } }',
+  );
+
+const PROMQL_TILE_EXAMPLE =
+  '\n6. PromQL line chart (promql sources only): { "name": "Request Rate", "config": { "configType": "promql", ' +
+  '"displayType": "line", "sourceId": "<promql source id>", ' +
+  '"expressions": [{ "expression": "sum by (job) (rate(http_requests_total{job=~\\"$job\\"}[$__rate_interval]))" }], ' +
+  '"legendTemplate": "{{job}}" } }';
+
+/** PromQL tiles are offered only while PromQL is enabled. */
+export function buildMcpTilesParam(promqlEnabled: boolean) {
+  if (!promqlEnabled) return mcpTilesParam;
+  return z
+    .array(z.union([...mcpTileSchema.options, mcpPromqlTileSchema]))
+    .describe(`${mcpTilesParam.description}${PROMQL_TILE_EXAMPLE}`);
+}
+
+const VARIABLE_NAME_DESCRIPTION =
+  "Token that tiles reference this filter's selected value by, eg. $variableName. " +
+  'A default is derived from the display name when omitted. ' +
+  "Must be unique across the dashboard's variable-enabled filters.";
+
+const variableNameSchema = z
+  .string()
+  .max(DASHBOARD_VARIABLE_NAME_MAX_LENGTH)
+  .regex(DASHBOARD_VARIABLE_NAME_PATTERN_ANCHORED)
+  .optional();
+const mcpDashboardFilterBaseShape = {
+  id: z
+    .string()
+    .optional()
+    .describe(
+      'Filter identity. ' +
+        'On UPDATE of an existing dashboard, every filter in the array MUST carry ' +
+        'an id: pass the exact id returned by clickstack_get_dashboard for any filter ' +
+        'you are keeping (so saved values bound to it stay attached), and generate ' +
+        'a fresh random hex/ObjectId string for any filter you are adding in this ' +
+        'update. Omitting `id` on an existing filter would orphan its saved values; ' +
+        'reusing an existing id for a new filter would silently overwrite the old ' +
+        'one. On CREATE (no top-level `id` on the dashboard call), filter `id` may ' +
+        'be omitted and one will be generated server-side.',
+    ),
+  name: z
+    .string()
+    .min(1)
+    .describe(
+      'Human-readable filter label shown in the dashboard filter bar dropdown.',
+    ),
+  variableName: variableNameSchema.describe(VARIABLE_NAME_DESCRIPTION),
+  minSelections: z
+    .number()
+    .int()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe(
+      'Set to 1 to make this filter REQUIRED. Until the user picks at least one ' +
+        'value for it, the tiles that read this filter refuse to load and show a ' +
+        '"missing required filters" message instead. By default, tiles that ' +
+        'reference this filter by its variable or receive a broadcasted value ' +
+        'from this filter will be blocked. isGlobalRequirement widens the block ' +
+        'to all tiles. Omit the field (or pass 0) for the normal optional ' +
+        'behavior, which is usually what you want.',
+    ),
+  isGlobalRequirement: z
+    .boolean()
+    .optional()
+    .describe(
+      'Widens a REQUIRED filter (minSelections: 1) to block EVERY tile on the dashboard, ' +
+        'not just the ones that read it. Ignored unless minSelections is 1.',
+    ),
+  maxSelections: z
+    .number()
+    .int()
+    .min(1)
+    .max(1)
+    .optional()
+    .describe(
+      'Set to 1 to make this filter SINGLE-SELECT: the user can pick at most one ' +
+        'value. In PromQL, a single-select variable expands to its raw value by ' +
+        'default (for exact matchers such as {job="$job"}), while a multi-select ' +
+        'one expands to an escaped regex (for {job=~"$job"}). Omit for the normal ' +
+        'multi-select behavior.',
+    ),
+};
+
+const mcpQueryExpressionFilterSchema = z
+  .object({
+    ...mcpDashboardFilterBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.QUERY_EXPRESSION)
+      .describe(
+        'Filter type discriminator for a filter whose dropdown values are queried from a source column (expression + sourceId).',
+      ),
+    expression: z
+      .string()
+      .min(1)
+      .describe(
+        'Column or SQL expression this filter binds to. Example: "ServiceName" ' +
+          'or "SpanAttributes[\'http.method\']". ' +
+          'IMPORTANT: This is the key that table-tile onClick filters match against ' +
+          'when a row click navigates here. An onClick filter whose `expression` is ' +
+          "not declared in any of this dashboard's filters is silently dropped at click time. " +
+          'Declare an expression here for every column you plan to drive via row-click.',
+      ),
+    sourceId: objectIdSchema.describe(
+      'Source the filter values are pulled from (for the dropdown). ' +
+        'Get IDs from clickstack_list_sources.',
+    ),
+    sourceMetricType: z
+      .nativeEnum(MetricsDataType)
+      .optional()
+      .describe(
+        'Required only when `sourceId` is a Metric source; picks which metric table the ' +
+          'dropdown values come from.',
+      ),
+    where: z
+      .string()
+      .optional()
+      .describe(
+        'Optional WHERE clause scoping the dropdown values (e.g. "level:error" in Lucene). ' +
+          "DEPENDENT FILTERS: this clause may reference ANOTHER filter's variable, which " +
+          "chains one dropdown off another (pick a service, and this filter's dropdown only " +
+          "offers that service's endpoints). The upstream filter must set isVariableEnabled: true; " +
+          'this one does not have to. With whereLanguage "sql", prefer ' +
+          '$__filter(<expression>, $<variableName>) so the dropdown lists every value until the ' +
+          'upstream filter is set; a bare $variableName leaves this dropdown empty until then. ' +
+          'With whereLanguage "lucene" a bare reference is already safe: it renders as ("") ' +
+          'with nothing selected, which matches all. ' +
+          "Reference a SIBLING filter's variable only: naming this filter's own variable " +
+          'collapses its dropdown to the values already picked.',
+      ),
+    whereLanguage: SearchConditionTrimmedLanguageSchema.describe(
+      'Query language of `where`. Set it explicitly.',
+    ),
+    appliesToSourceIds: z
+      .array(objectIdSchema)
+      .optional()
+      .describe(
+        'Source IDs (from clickstack_list_sources) that this filter is applied to. ' +
+          'Omit to apply the filter to ALL tiles regardless of source ' +
+          '— this is the recommended default. ' +
+          'A non-empty array restricts the filter to only tiles whose source ID is in the list; ' +
+          'tiles on other sources are not affected by the dropdown value at all. ' +
+          'Useful on mixed-source dashboards where a column (e.g. SpanName) only exists on ' +
+          'a subset of sources. ' +
+          'Scopes the broadcast condition only, so a non-empty array is rejected when ' +
+          'isBroadcastEnabled is false.',
+      ),
+    isBroadcastEnabled: z
+      .boolean()
+      .optional()
+      .describe(
+        'Whether the selected value is applied as a filter condition on every builder ' +
+          'tile this filter applies to (see appliesToSourceIds), and on every raw SQL ' +
+          'tile using the $__filters macro. Omitting the field means ENABLED. ' +
+          'Set false to build a variable-only filter that tiles opt into by name.',
+      ),
+    isVariableEnabled: z
+      .boolean()
+      .optional()
+      .describe(
+        'Whether the selected value is exposed to tile queries as a dashboard variable ' +
+          'named by variableName. Omitting the field means DISABLED. ' +
+          'Tiles reference it as $variableName, or (preferred) via ' +
+          '$__filter(<expression>, $<variableName>) and ' +
+          '$__conditionalAll(<condition>, $<variableName>) in any SQL condition ' +
+          "(a select item's `where`, a tile-level `where`, `having`, or a raw SQL " +
+          "tile's sqlTemplate). Another filter's `where` can reference it too, which " +
+          "chains that filter's dropdown off this one.",
+      ),
+    variableName: variableNameSchema.describe(
+      `${VARIABLE_NAME_DESCRIPTION} Rejected when isVariableEnabled is not true.`,
+    ),
+  })
+  .describe(
+    'A dashboard filter whose dropdown values are queried from a source. ' +
+      'Each filter binds a label/name to a column expression on a source. ' +
+      'Every filter either broadcasts its selected value to matching tiles as a ' +
+      'condition (isBroadcastEnabled, the default), exposes it to tile queries as a ' +
+      'variable (isVariableEnabled + variableName), or both. Typically pick only ONE.' +
+      "Filters are also the contract for row-click navigation: a table tile's " +
+      'onClick.filters[i].expression must match a filter declared here for the value to land.',
+  );
+
+const mcpStaticListFilterSchema = z
+  .object({
+    ...mcpDashboardFilterBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.STATIC_LIST)
+      .describe(
+        'Filter type discriminator for a filter whose dropdown offers a fixed hand-authored list; no source query.',
+      ),
+    options: StaticListDashboardFilterSchema.shape.options.describe(
+      'The values the dropdown offers, in display order, without duplicates.',
+    ),
+  })
+  .describe(
+    'A variable-only dashboard filter whose dropdown offers a hand-authored options ' +
+      'list. Use it when the values are a fixed business list (environments, tiers, ' +
+      'regions) rather than derivable from the data. The selected value reaches tiles ' +
+      'only as $variableName — typically via $__filter(<expression>, $<variableName>) ' +
+      'with the column passed explicitly, since the filter has no expression of its own.',
+  );
+
+const mcpPromqlLabelFilterSchema = z
+  .object({
+    ...mcpDashboardFilterBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.PROMETHEUS_LABEL)
+      .describe(
+        "Filter type discriminator for a filter whose dropdown lists a Prometheus label's values.",
+      ),
+    sourceId: objectIdSchema.describe(
+      'ID of a source whose kind is "promql". Get IDs from clickstack_list_sources.',
+    ),
+    label: PromqlLabelDashboardFilterSchema.shape.label.describe(
+      'Label whose values fill the dropdown, e.g. "job". ' +
+        'clickstack_describe_source lists the label names of a promql source.',
+    ),
+    match: PromqlLabelDashboardFilterSchema.shape.match.describe(
+      'Optional series selector narrowing which series the values come from, ' +
+        'e.g. up{env="prod"}.',
+    ),
+  })
+  .describe(
+    "A variable-only filter whose dropdown lists a Prometheus label's values. " +
+      'PromQL tiles reference it in a label matcher: {job=~"$job"} for the ' +
+      'default multi-select, or {job="$job"} with maxSelections: 1.',
+  );
+
+const mcpDashboardFilterSchema = z
+  .discriminatedUnion('type', [
+    mcpQueryExpressionFilterSchema,
+    mcpStaticListFilterSchema,
+  ])
+  .describe(
+    'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
+      'Two types: QUERY_EXPRESSION queries its dropdown values from a source column; ' +
+      'STATIC_LIST declares them inline and is always variable-only.',
+  );
+
+const mcpPromqlDashboardFilterSchema = z
+  .discriminatedUnion('type', [
+    mcpQueryExpressionFilterSchema,
+    mcpStaticListFilterSchema,
+    mcpPromqlLabelFilterSchema,
+  ])
+  .describe(
+    'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
+      'QUERY_EXPRESSION queries its dropdown values from a source column; ' +
+      'STATIC_LIST declares them inline and is always variable-only; ' +
+      'PROMETHEUS_LABEL lists the values of a label on a promql source and is ' +
+      'always variable-only.',
+  );
+
+export type McpDashboardFilter = z.infer<typeof mcpPromqlDashboardFilterSchema>;
+
+const mcpFiltersParam = z
+  .array(mcpDashboardFilterSchema)
+  .describe(
+    'Optional dashboard-level filters. These define the dropdowns in the dashboard filter ' +
+      'bar AND the expressions that table-tile row-click navigation can populate. ' +
+      'If another tile\'s onClick targets THIS dashboard with `filters: [{ expression: "X", ... }]`, ' +
+      'this array MUST declare a filter whose `expression` is "X". Otherwise the value is ' +
+      'dropped on arrival and the destination opens unfiltered.\n\n' +
+      'Two filter types: QUERY_EXPRESSION queries its dropdown values from a source column, ' +
+      'while STATIC_LIST declares them inline via `options` and is always variable-only ' +
+      '(it has no expression to broadcast).\n\n' +
+      'A QUERY_EXPRESSION filter runs in one of two modes (or both). BROADCAST (the default) applies the ' +
+      'selected value as a condition on matching tiles with no per-tile wiring. VARIABLE ' +
+      '(isVariableEnabled) exposes the value to tile queries as $variableName, which the tile ' +
+      'must reference explicitly. Prefer broadcast; reach for a variable in advanced cases. ' +
+      'Enabling both on one filter applies the value twice.\n\n' +
+      'By default, a broadcast filter applies to every tile on the dashboard. On mixed-source ' +
+      'dashboards, use variable mode or the optional `appliesToSourceIds` field to restrict a filter to only the ' +
+      'tiles whose source carries the referenced column — leave `appliesToSourceIds` omitted to ' +
+      'keep the broadcast-to-all-tiles default. `appliesToSourceIds` does NOT scope variable ' +
+      'references; any tile may reference any variable.\n\n' +
+      'Example (broadcast to every tile, the common case):\n' +
+      '[\n' +
+      '  { "type": "QUERY_EXPRESSION", "name": "Service", "expression": "ServiceName",\n' +
+      '    "sourceId": "<trace-source-id>", "whereLanguage": "sql" }\n' +
+      ']\n\n' +
+      'Example (scoped on a mixed log/trace/metric dashboard):\n' +
+      '[\n' +
+      '  { "type": "QUERY_EXPRESSION", "name": "Service", "expression": "SpanName",\n' +
+      '    "sourceId": "<trace-source-id>", "whereLanguage": "sql",\n' +
+      '    "appliesToSourceIds": ["<trace-source-id>"] }\n' +
+      ']\n\n' +
+      'Example (variable only, referenced by tiles as $service):\n' +
+      '[\n' +
+      '  { "type": "QUERY_EXPRESSION", "name": "Service", "expression": "ServiceName",\n' +
+      '    "sourceId": "<trace-source-id>", "whereLanguage": "sql",\n' +
+      '    "isBroadcastEnabled": false, "isVariableEnabled": true, "variableName": "service" }\n' +
+      ']\n' +
+      'A tile then uses it as $__filter(ServiceName, $service) in a SQL where clause, which ' +
+      'expands to 1=1 while nothing is selected.\n\n' +
+      'Example (static list: fixed hand-authored values, always a variable, no source query):\n' +
+      '[\n' +
+      '  { "type": "STATIC_LIST", "name": "Environment",\n' +
+      '    "options": ["prod", "staging", "dev"], "variableName": "env" }\n' +
+      ']\n' +
+      "A tile references it as $__filter(ResourceAttributes['deployment.environment'], $env). " +
+      'Always pass the column explicitly: the one-argument $__filter($env) form reuses the ' +
+      "filter's own expression, which a static filter does not have. Prefer STATIC_LIST when " +
+      'the values are a fixed business list or a curated subset rather than derivable from the data.\n\n' +
+      "Example (dependent filter: the Endpoint dropdown only lists the selected service's " +
+      'endpoints):\n' +
+      '[\n' +
+      '  { "type": "QUERY_EXPRESSION", "name": "Service", "expression": "ServiceName",\n' +
+      '    "sourceId": "<trace-source-id>", "whereLanguage": "sql",\n' +
+      '    "isVariableEnabled": true, "variableName": "service" },\n' +
+      '  { "type": "QUERY_EXPRESSION", "name": "Endpoint", "expression": "SpanName",\n' +
+      '    "sourceId": "<trace-source-id>", "whereLanguage": "sql",\n' +
+      '    "where": "$__filter(ServiceName, $service)" }\n' +
+      ']\n' +
+      "A filter's `where` scopes only the values ITS dropdown offers; it is not applied to " +
+      'any tile. That is why Service keeps broadcasting here: its variable is read by the ' +
+      'Endpoint dropdown, not by a tile, so the value is never applied twice.',
+  );
+
+const PROMQL_FILTERS_EXAMPLE =
+  '\n\nA third type, PROMETHEUS_LABEL, lists the values of a label on a promql source ' +
+  'and is always variable-only.\n\n' +
+  'Example (PROMETHEUS_LABEL):\n' +
+  '[\n' +
+  '  { "type": "PROMETHEUS_LABEL", "name": "Job", "sourceId": "<promql-source-id>",\n' +
+  '    "label": "job", "variableName": "job" }\n' +
+  ']\n' +
+  'A PromQL tile references it as rate(http_requests_total{job=~"$job"}[$__rate_interval]).';
+
+/** PROMETHEUS_LABEL filters are offered only while PromQL is enabled. */
+export function buildMcpFiltersParam(promqlEnabled: boolean) {
+  if (!promqlEnabled) return mcpFiltersParam;
+  return z
+    .array(mcpPromqlDashboardFilterSchema)
+    .describe(`${mcpFiltersParam.description}${PROMQL_FILTERS_EXAMPLE}`);
+}
+
+// Validation rules come from the external schemas so MCP and REST stay in
+// lockstep; only the descriptions live here.
+const sqlValueShape = externalSqlSavedFilterValueSchema.shape;
+const mcpSqlSavedFilterValueSchema = externalSqlSavedFilterValueSchema.extend({
+  type: sqlValueShape.type.describe(
+    'Entry kind. Defaults to "sql"; a predicate broadcast to tiles.',
+  ),
+  condition: sqlValueShape.condition.describe(
+    'Raw SQL predicate applied to every tile (SQL, not Lucene). Example: ' +
+      '"ServiceName IN (\'api\')".',
+  ),
+});
+
+const variableValueShape = externalVariableSavedFilterValueSchema.shape;
+const mcpVariableSavedFilterValueSchema =
+  externalVariableSavedFilterValueSchema.extend({
+    type: variableValueShape.type.describe(
+      'Entry kind: a selection for a variable-enabled filter.',
+    ),
+    name: variableValueShape.name.describe(
+      'The variableName of the variable-enabled filter this selection belongs ' +
+        "to. Must match a filter's variableName declared in `filters` (see " +
+        'clickstack_get_dashboard for the resolved names); an unknown name is ' +
+        'ignored when the dashboard loads.',
+    ),
+    values: variableValueShape.values.describe(
+      'Selected values for the variable, e.g. ["api", "web"].',
+    ),
+  });
+
+export const mcpSavedFilterValuesParam = z
+  .array(
+    z.union([mcpSqlSavedFilterValueSchema, mcpVariableSavedFilterValueSchema]),
+  )
+  .describe(
+    'Default filter selections restored every time the dashboard is opened. ' +
+      'Replaces the whole saved set on write; pass [] to clear the defaults. ' +
+      'Omit to leave the saved defaults untouched.',
+  );
+
+export type McpSavedFilterValues = z.infer<typeof mcpSavedFilterValuesParam>;
+
+const mcpPatchDashboardSchema = z.object({
+  dashboardId: objectIdSchema.describe(
+    'ID of the dashboard to patch, from clickstack_get_dashboard (no id lists ' +
+      'dashboards) or clickstack_search_dashboards.',
+  ),
+  name: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('New dashboard name. Omit to keep the current name.'),
+  tags: tagsSchema.describe(
+    'New tag list; replaces all existing tags. Omit to keep the current tags.',
+  ),
+  savedFilterValues: mcpSavedFilterValuesParam.optional(),
+  tileId: z
+    .string()
+    .optional()
+    .describe(
+      'ID of the tile to replace. Must be paired with `tile`. ' +
+        'Obtain tile IDs from clickstack_get_dashboard.',
+    ),
+  tile: mcpPatchTileSchema
+    .optional()
+    .describe(
+      'The full replacement tile definition. Replaces the tile matched by tileId. ' +
+        'Layout fields (x, y, w, h), name, and containerId/tabId default to the ' +
+        "existing tile's values when omitted. `config` is not merged: send the " +
+        'complete config, since omitted config fields are not carried over.',
+    ),
+});
+
+/** PromQL tiles are offered only while PromQL is enabled. */
+export function buildMcpPatchDashboardSchema(promqlEnabled: boolean) {
+  if (!promqlEnabled) return mcpPatchDashboardSchema;
+  return mcpPatchDashboardSchema.extend({
+    tile: z
+      .union([...mcpPatchTileSchema.options, mcpPromqlPatchTileSchema])
+      .optional()
+      .describe(mcpPatchDashboardSchema.shape.tile.description ?? ''),
+  });
+}
+
+export const mcpSearchDashboardsSchema = z.object({
+  query: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'Text matched against dashboard names as a case-insensitive substring.',
+    ),
+  tags: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      'Return only dashboards that carry every one of these tags (exact match).',
+    ),
+});
+
+export const mcpContainersParam = z
+  .array(DashboardContainerSchema)
+  .max(DASHBOARD_MAX_CONTAINERS)
+  .describe(
+    'Optional dashboard organization layer. Each container groups one or more tiles ' +
+      'visually and may carry a tab bar. Tiles join a container by setting tile.containerId; ' +
+      'tiles further select a tab by setting tile.tabId.\n\n' +
+      'Rules:\n' +
+      '- Container ids must be unique on the dashboard.\n' +
+      '- Tab ids must be unique within a container.\n' +
+      '- A tile.containerId must reference a container id in this array.\n' +
+      '- A tile.tabId must reference a tab id on the same container.\n' +
+      '- tile.tabId requires tile.containerId.\n\n' +
+      'Example:\n' +
+      '[\n' +
+      '  { "id": "service-health", "title": "Service Health", "collapsed": false,\n' +
+      '    "tabs": [ { "id": "errors", "title": "Errors" }, { "id": "latency", "title": "Latency" } ] },\n' +
+      '  { "id": "overview", "title": "Overview", "collapsed": true }\n' +
+      ']',
   );

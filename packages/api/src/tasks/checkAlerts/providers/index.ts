@@ -1,23 +1,23 @@
 import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/node';
-import { Tile } from '@hyperdx/common-utils/dist/types';
+import { AlertChartConfig, Tile } from '@hyperdx/common-utils/dist/types';
 import _ from 'lodash';
 
 import { ObjectId } from '@/models';
 import { IAlert, IAlertError } from '@/models/alert';
-import { IAlertHistory } from '@/models/alertHistory';
+import { IAlertHistory, IAlertHistoryAnalytics } from '@/models/alertHistory';
 import { IConnection } from '@/models/connection';
 import { IDashboard } from '@/models/dashboard';
 import { ISavedSearch } from '@/models/savedSearch';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
+import { AggregatedAlertHistory } from '@/tasks/checkAlerts';
 import DefaultAlertProvider from '@/tasks/checkAlerts/providers/default';
 import logger from '@/utils/logger';
-
-import { AggregatedAlertHistory } from '..';
 
 export enum AlertTaskType {
   SAVED_SEARCH,
   TILE,
+  INLINE,
 }
 
 // Discriminated union of possible alert channel types with populated channel data
@@ -26,13 +26,17 @@ export type PopulatedAlertChannel = { type: 'webhook' } & { channel: IWebhook };
 // Details about the alert and the source for the alert. Depending on
 // the taskType either:
 //   1. the savedSearch field is required or
-//   2. the tile and dashboard field are required
+//   2. the tile and dashboard field are required or
+//   3. the chartConfig field is required (persisted on the alert itself)
 //
 // The dependent typing means less null checks when using these values as
 // the are required when the type is set accordingly.
 export type AlertDetails = {
   alert: IAlert;
   previousMap: Map<string, AggregatedAlertHistory>; // Map of alertId||group -> history for group-by alerts
+  // For multi-window alerts (numConsecutiveWindows > 1): the recent per-group
+  // history (alertId||group -> histories, newest-first).
+  recentHistoryMap?: Map<string, AggregatedAlertHistory[]>;
 } & (
   | {
       taskType: AlertTaskType.SAVED_SEARCH;
@@ -44,6 +48,14 @@ export type AlertDetails = {
       source?: ISource;
       tile: Tile;
       dashboard: IDashboard;
+    }
+  | {
+      // Inline alerts: the config lives on the alert document. `source` is
+      // present for builder configs and optional for raw SQL configs (which
+      // carry the connection directly).
+      taskType: AlertTaskType.INLINE;
+      source?: ISource;
+      chartConfig: AlertChartConfig;
     }
 );
 
@@ -73,6 +85,19 @@ export interface AlertProvider {
     endTime: Date;
     granularity: string;
     startTime: Date;
+    tileId?: string;
+  }): string;
+
+  /**
+   * Link for inline alerts (which have no saved search or dashboard to open):
+   * the chart explorer with the alert's persisted config over the alerting
+   * window. Works regardless of whether the alert-details page is enabled.
+   */
+  buildChartExplorerLink(params: {
+    chartConfig: AlertChartConfig;
+    endTime: Date;
+    granularity: string;
+    startTime: Date;
   }): string;
 
   /**
@@ -80,19 +105,42 @@ export interface AlertProvider {
    * Uses Promise.allSettled to handle partial failures gracefully.
    * The alert state is determined from successfully saved histories, or falls back to all histories if all saves fail.
    * Also replaces the alert's `executionErrors` field with the provided errors from the current execution.
+   * When errors are present (e.g. webhook failures), an ERROR-state history
+   * row is additionally upserted for the evaluation window so the failure is
+   * visible in the alert's evaluation history.
+   *
+   * `evaluatedDateRange` is the data range this evaluation queried
+   * (`[rangeStart, currentWindowStart)`, where windows that failed on earlier
+   * ticks appear as backfilled buckets). Stale ERROR rows from failed earlier
+   * ticks whose windows fall inside the range (exclusive of `rangeStart` — an
+   * ERROR row at exactly the previous anchor belongs to an already-evaluated
+   * window and is kept) are deleted, since this evaluation supersedes them.
    */
   updateAlertState(
     alertId: string,
     histories: IAlertHistory[],
     errors: IAlertError[],
+    evaluatedDateRange?: [Date, Date],
   ): Promise<void>;
 
   /**
-   * Replace the alert's `executionErrors` field without changing state or creating history.
-   * Use this when an error prevents the normal state/history update from running
-   * (e.g. a ClickHouse query error).
+   * Replace the alert's `executionErrors` field without changing state or the
+   * alert's normal history. Use this when an error prevents the normal
+   * state/history update from running (e.g. a ClickHouse query error).
+   *
+   * When `evaluationWindowStart` is provided, the errors are also upserted as
+   * an ERROR-state AlertHistory row for that window (one row per window,
+   * regardless of retries). ERROR rows are excluded from scheduling/backfill
+   * computations, so recording them does not mark the window as evaluated.
+   * `analytics` carries whatever diagnostics the failed evaluation measured
+   * (e.g. the query's time-to-failure) onto that ERROR row.
    */
-  recordAlertErrors(alertId: string, errors: IAlertError[]): Promise<void>;
+  recordAlertErrors(
+    alertId: string,
+    errors: IAlertError[],
+    evaluationWindowStart?: Date,
+    analytics?: IAlertHistoryAnalytics,
+  ): Promise<void>;
 
   /** Fetch all webhooks for the given team, returning a map of webhook ID to webhook */
   getWebhooks(teamId: string | ObjectId): Promise<Map<string, IWebhook>>;

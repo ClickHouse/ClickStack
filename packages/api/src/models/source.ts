@@ -3,10 +3,13 @@ import {
   LogSourceSchema,
   MetricsDataType,
   MetricSourceSchema,
+  PROMQL_SOURCE_BACKENDS,
+  PromqlSourceSchema,
   QuerySettings,
   SessionSourceSchema,
   SourceKind,
   TraceSourceSchema,
+  UseTextIndex,
 } from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
 import z from 'zod';
@@ -16,7 +19,10 @@ import { objectIdSchema } from '@/utils/zod';
 // ISource is a discriminated union (inherits from TSource) with team added
 // and connection widened to ObjectId | string for Mongoose.
 // Omit and & distribute over the union, preserving the discriminated structure.
-export const ISourceSchema = z.discriminatedUnion('kind', [
+// Schema exists purely to derive ISource / ISourceInput via `typeof` below; the
+// runtime value is intentionally never parsed, so no-unused-vars is a false positive here.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const ISourceSchema = z.discriminatedUnion('kind', [
   LogSourceSchema.omit({ connection: true }).extend({
     team: objectIdSchema,
     connection: objectIdSchema.or(z.string()),
@@ -30,6 +36,10 @@ export const ISourceSchema = z.discriminatedUnion('kind', [
     connection: objectIdSchema.or(z.string()),
   }),
   MetricSourceSchema.omit({ connection: true }).extend({
+    team: objectIdSchema,
+    connection: objectIdSchema.or(z.string()),
+  }),
+  PromqlSourceSchema.omit({ connection: true }).extend({
     team: objectIdSchema,
     connection: objectIdSchema.or(z.string()),
   }),
@@ -85,6 +95,7 @@ const sourceBaseSchema = new Schema<MongooseSourceBase>(
       ref: 'Connection',
     },
     name: String,
+    section: String,
     disabled: {
       type: Boolean,
       default: false,
@@ -109,6 +120,11 @@ const sourceBaseSchema = new Schema<MongooseSourceBase>(
   },
 );
 
+// Sources are almost always read by team (IaC import manifest, source pickers,
+// MCP listings); without this those reads collection-scan across every team.
+// Declared on the base schema so the discriminators inherit it.
+sourceBaseSchema.index({ team: 1, _id: 1 });
+
 // Model is typed with the base schema type internally. Consumers use ISource
 // (the discriminated union) via the exported type and discriminator models.
 const SourceModel = mongoose.model<MongooseSourceBase>(
@@ -117,6 +133,19 @@ const SourceModel = mongoose.model<MongooseSourceBase>(
 );
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 export const Source = SourceModel as unknown as mongoose.Model<ISource>;
+
+// Declared as a nested Schema with `_id: false`, like metricTables below.
+// Left as an inline object, Mongoose makes this a single-nested subdoc with an
+// auto-generated `_id`; documents stored without one get a fresh ObjectId on
+// every hydration, so every /api/sources response body and ETag differs
+const MetadataMaterializedViewsMongoSchema = new Schema(
+  {
+    keyRollupTable: String,
+    kvRollupTable: String,
+    granularity: String,
+  },
+  { _id: false },
+);
 
 // --------------------------
 // Log discriminator
@@ -127,8 +156,11 @@ export const LogSource = Source.discriminator<ILogSource>(
   new Schema<ILogSource>({
     defaultTableSelectExpression: String,
     serviceNameExpression: String,
+    serviceVersionExpression: String,
     severityTextExpression: String,
+    severityNumberExpression: String,
     bodyExpression: String,
+    eventNameExpression: String,
     eventAttributesExpression: String,
     resourceAttributesExpression: String,
     displayedTimestampValueExpression: String,
@@ -137,6 +169,12 @@ export const LogSource = Source.discriminator<ILogSource>(
     traceIdExpression: String,
     spanIdExpression: String,
     implicitColumnExpression: String,
+    knownColumnsListExpression: String,
+    rowKeyExpression: String,
+    useTextIndexForImplicitColumn: {
+      type: String,
+      enum: Object.values(UseTextIndex),
+    },
     /** @deprecated See LogSourceSchema in @hyperdx/common-utils/types.ts. */
     tableFilterExpression: String,
     highlightedTraceAttributeExpressions: {
@@ -147,6 +185,10 @@ export const LogSource = Source.discriminator<ILogSource>(
     },
     materializedViews: {
       type: mongoose.Schema.Types.Array,
+    },
+    metadataMaterializedViews: {
+      type: MetadataMaterializedViewsMongoSchema,
+      default: undefined,
     },
     orderByExpression: String,
   }),
@@ -174,10 +216,18 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     statusCodeExpression: String,
     statusMessageExpression: String,
     serviceNameExpression: String,
+    serviceVersionExpression: String,
     resourceAttributesExpression: String,
     eventAttributesExpression: String,
     spanEventsValueExpression: String,
+    spanLinksValueExpression: String,
     implicitColumnExpression: String,
+    knownColumnsListExpression: String,
+    rowKeyExpression: String,
+    useTextIndexForImplicitColumn: {
+      type: String,
+      enum: Object.values(UseTextIndex),
+    },
     displayedTimestampValueExpression: String,
     highlightedTraceAttributeExpressions: {
       type: mongoose.Schema.Types.Array,
@@ -187,6 +237,10 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     },
     materializedViews: {
       type: mongoose.Schema.Types.Array,
+    },
+    metadataMaterializedViews: {
+      type: MetadataMaterializedViewsMongoSchema,
+      default: undefined,
     },
     orderByExpression: String,
   }),
@@ -207,22 +261,55 @@ export const SessionSource = Source.discriminator<ISessionSource>(
 // --------------------------
 // Metric discriminator
 // --------------------------
+// metricTables is declared as a nested Schema with `_id: false` so the
+// embedded subdoc does not auto-generate an ObjectId. Without this opt-out
+// Mongoose adds an `_id` field that leaks into MCP responses alongside
+// the queryable kind keys (gauge/sum/histogram/...).
+const MetricTablesSchema = new Schema(
+  {
+    [MetricsDataType.Gauge]: String,
+    [MetricsDataType.Histogram]: String,
+    [MetricsDataType.Sum]: String,
+    [MetricsDataType.Summary]: String,
+    [MetricsDataType.ExponentialHistogram]: String,
+  },
+  { _id: false },
+);
+
+// See MinAutoGranularitySchema in @hyperdx/common-utils, shared by the metric
+// and PromQL sources. The setter mirrors that schema's '' -> undefined
+// preprocess, since validateRequest doesn't write the parsed body back to
+// req.body.
+const minAutoGranularityField = {
+  type: String,
+  set: (v: string | null | undefined) => (v === '' ? undefined : v),
+};
+
 type IMetricSource = Extract<ISource, { kind: SourceKind.Metric }>;
 export const MetricSource = Source.discriminator<IMetricSource>(
   SourceKind.Metric,
   new Schema<Extract<ISource, { kind: SourceKind.Metric }>>({
     metricTables: {
-      type: {
-        [MetricsDataType.Gauge]: String,
-        [MetricsDataType.Histogram]: String,
-        [MetricsDataType.Sum]: String,
-        [MetricsDataType.Summary]: String,
-        [MetricsDataType.ExponentialHistogram]: String,
-      },
+      type: MetricTablesSchema,
       default: undefined,
     },
     resourceAttributesExpression: String,
     serviceNameExpression: String,
     logSourceId: String,
+    // Unified metrics series table. Available only when `isMetricsSeriesTableEnabled` is set on the team document.
+    seriesTable: String,
+    minAutoGranularity: minAutoGranularityField,
+  }),
+);
+
+// --------------------------
+// PromQL discriminator
+// --------------------------
+type IPromqlSource = Extract<ISource, { kind: SourceKind.Promql }>;
+export const PromqlSource = Source.discriminator<IPromqlSource>(
+  SourceKind.Promql,
+  new Schema<Extract<ISource, { kind: SourceKind.Promql }>>({
+    minAutoGranularity: minAutoGranularityField,
+    promqlBackend: { type: String, enum: PROMQL_SOURCE_BACKENDS },
   }),
 );

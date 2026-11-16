@@ -24,9 +24,10 @@
     "eslint-plugin-security": "^3.0.1",
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "husky": "^8.0.3",
-    "knip": "^6.0.1",
+    "jscpd": "5.1.2",
+    "knip": "^6.19.0",
     "lint-staged": "^13.1.2",
-    "nx": "21.3.11",
+    "nx": "23.1.1",
     "prettier": "3.3.3",
     "tslib": "^2.6.0",
     "typescript-eslint": "^8.46.0"
@@ -40,20 +41,24 @@
     "app:storybook": "nx run @hyperdx/app:storybook",
     "build:clickhouse": "nx run @hyperdx/common-utils:build && nx run @hyperdx/app:build:clickhouse",
     "run:clickhouse": "nx run @hyperdx/app:run:clickhouse",
-    "dev": "sh -c '. ./scripts/dev-env.sh && yarn build:common-utils && dotenvx run --convention=nextjs -- docker compose -p \"$HDX_DEV_PROJECT\" -f docker-compose.dev.yml up -d && yarn app:dev; dotenvx run --convention=nextjs -- docker compose -p \"$HDX_DEV_PROJECT\" -f docker-compose.dev.yml down'",
+    "dev": "sh -c '. ./scripts/dev-env.sh && yarn build:common-utils && dotenvx run --convention=nextjs -- docker compose -p \"$HDX_DEV_PROJECT\" -f docker-compose.dev.yml up -d --build && yarn app:dev; dotenvx run --convention=nextjs -- docker compose -p \"$HDX_DEV_PROJECT\" -f docker-compose.dev.yml down'",
     "dev:local": "IS_LOCAL_APP_MODE='DANGEROUSLY_is_local_app_mode💀' yarn dev",
     "cli:dev": "yarn workspace @hyperdx/cli dev",
     "dev:down": "sh -c '. ./scripts/dev-env.sh && docker compose -p \"$HDX_DEV_PROJECT\" -f docker-compose.dev.yml down && sh ./scripts/dev-kill-ports.sh'",
     "dev:compose": "sh -c '. ./scripts/dev-env.sh && docker compose -p \"$HDX_DEV_PROJECT\" -f docker-compose.dev.yml'",
     "knip": "knip",
     "knip:ci": "knip --reporter json",
+    "ratchet": "node scripts/ci/ratchet.mjs",
+    "ratchet:update": "node scripts/ci/ratchet.mjs --update",
+    "dupes": "node scripts/ci/dupes.mjs",
+    "dupes:all": "node scripts/ci/dupes.mjs --all",
     "lint": "npx nx run-many -t ci:lint",
     "lint:fix": "npx nx run-many -t lint:fix",
     "version": "make version",
-    "release": "npx changeset tag && npx changeset publish"
+    "release": "npx changeset publish --no-git-tag && npx changeset tag"
   },
   "lint-staged": {
-    "packages/api/src/routers/external-api/**/*.ts": [
+    "packages/api/src/{routers/external-api/**/*.ts,utils/swagger.ts}": [
       "prettier --write --ignore-unknown",
       "eslint --flag v10_config_lookup_from_file --fix --quiet",
       "sh -c 'cd packages/api && yarn run lint:openapi && git add openapi.json'"
@@ -68,18 +73,22 @@
   },
   "packageManager": "yarn@4.13.0",
   "resolutions": {
-    "@types/react": "19.0.7",
-    "@types/react-dom": "19.0.3",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
     "@types/express": "4.17.21",
     "@types/express-serve-static-core": "4.17.43",
     "express": "^4.20.0",
     "send": "^0.19.0",
     "serve-static": "^1.16.0",
     "cookie": "^0.7.0",
-    "brace-expansion": "^2.0.2",
+    "@stryker-mutator/core/minimatch": "^9.0.5",
     "diff": "^5.2.2",
     "on-headers": "^1.1.0",
-    "fast-xml-parser": "^4.5.4",
-    "systeminformation": "^5.24.0"
+    "fast-xml-parser": "^4.5.6",
+    "systeminformation": "^5.33.19",
+    "@asyncapi/specs": "6.11.1"
+  },
+  "resolutionsNotes": {
+    "@stryker-mutator/core/minimatch": "Dev tooling, not a CVE override. Added when a blanket `brace-expansion` pin forced v2 (CJS) while minimatch v10 needs v5's named exports. That blanket pin is gone — it broke `nx affected` the same way — so brace-expansion now resolves per consumer and Stryker would most likely work on minimatch v10. The pin stays because no CI job runs `yarn dev:mutation`, so nothing would catch it if that guess is wrong. Drop it once someone has run the mutation suite on v10. See CONTRIBUTING.md#mutation-tests."
   }
 }

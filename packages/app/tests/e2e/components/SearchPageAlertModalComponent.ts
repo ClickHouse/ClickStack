@@ -1,5 +1,7 @@
 import { Locator, Page } from '@playwright/test';
 
+import { addTagViaPicker, removeTagViaPicker } from '../utils/tags';
+
 import { WebhookAlertModalComponent } from './WebhookAlertModalComponent';
 
 /**
@@ -12,6 +14,8 @@ export class SearchPageAlertModalComponent {
   private readonly addNewWebhookButtonLocator: Locator;
   private readonly createAlertButtonLocator: Locator;
   private readonly webhookSelector: Locator;
+  private readonly saveAlertButtonLocator: Locator;
+  private readonly deleteAlertButtonLocator: Locator;
   readonly webhookAlertModal: WebhookAlertModalComponent;
 
   constructor(page: Page) {
@@ -21,7 +25,13 @@ export class SearchPageAlertModalComponent {
       'add-new-webhook-button',
     );
     this.createAlertButtonLocator = page.getByRole('button', {
-      name: 'Create Alert',
+      name: 'Create alert',
+    });
+    this.saveAlertButtonLocator = page.getByRole('button', {
+      name: 'Save alert',
+    });
+    this.deleteAlertButtonLocator = page.getByRole('button', {
+      name: 'Delete alert',
     });
     this.webhookSelector = page.getByTestId('select-webhook');
     this.webhookAlertModal = new WebhookAlertModalComponent(page);
@@ -109,10 +119,97 @@ export class SearchPageAlertModalComponent {
   }
 
   /**
+   * Set the alert's display name. Empty clears it, which makes the server
+   * re-derive it from the saved search.
+   */
+  async setDisplayName(name: string) {
+    await this.modal.getByTestId('alert-display-name-input').fill(name);
+  }
+
+  private get tagsButton() {
+    return this.modal.getByTestId('alert-tags-button');
+  }
+
+  async addTag(tag: string) {
+    await addTagViaPicker(this.page, this.tagsButton, tag);
+  }
+
+  async removeTag(tag: string) {
+    await removeTagViaPicker(this.page, this.tagsButton, tag);
+  }
+
+  /**
+   * Set the note field in the alert form.
+   */
+  async setNote(note: string) {
+    const noteInput = this.modal.getByTestId('alert-note-input');
+    await noteInput.fill(note);
+  }
+
+  /**
    * Submit the alert creation form and wait for the modal to close.
    */
   async createAlert() {
     await this.createAlertButtonLocator.click();
+    await this.modal.waitFor({ state: 'hidden' });
+  }
+
+  /**
+   * Select an existing alert's tab by its zero-based index. Existing alerts
+   * render as tabs labeled "Alert 1", "Alert 2", ... in the order returned by
+   * the saved search. The "New alert" tab is separate.
+   */
+  async selectExistingAlertTab(index: number) {
+    await this.modal.getByRole('tab', { name: `Alert ${index + 1}` }).click();
+  }
+
+  /** Locator for the interval NativeSelect (2nd <select> in a threshold alert form). */
+  private get intervalSelect() {
+    return this.modal.locator('select').nth(1);
+  }
+
+  /**
+   * Change the alert check interval. Pass the interval key (e.g. '1m', '5m').
+   */
+  async selectInterval(value: string) {
+    await this.intervalSelect.selectOption(value);
+  }
+
+  /** Read the currently selected interval value (e.g. '1m', '5m'). */
+  async getSelectedInterval() {
+    return this.intervalSelect.inputValue();
+  }
+
+  /**
+   * Submit edits to an existing alert via "Save alert". Waits for the
+   * PUT /api/alerts/:id so the test fails if the request is never sent, then
+   * waits for the modal to close.
+   */
+  async saveAlert() {
+    const updateResponse = this.page.waitForResponse(
+      resp =>
+        /\/api\/alerts\/[^/]+$/.test(resp.url()) &&
+        resp.request().method() === 'PUT',
+      { timeout: 10000 },
+    );
+    await this.saveAlertButtonLocator.click();
+    await updateResponse;
+    await this.modal.waitFor({ state: 'hidden' });
+  }
+
+  /**
+   * Delete the currently open existing alert via "Delete alert". Waits for the
+   * DELETE request and the modal to close.
+   */
+  async deleteAlert() {
+    const deleteResponse = this.page.waitForResponse(
+      resp =>
+        /\/api\/alerts\/[^/]+$/.test(resp.url()) &&
+        resp.request().method() === 'DELETE',
+      { timeout: 10000 },
+    );
+    await this.deleteAlertButtonLocator.click();
+    await deleteResponse;
     await this.modal.waitFor({ state: 'hidden' });
   }
 }

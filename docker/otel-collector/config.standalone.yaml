@@ -6,13 +6,16 @@ receivers:
     protocols:
       grpc:
         include_metadata: true
-        endpoint: "0.0.0.0:4317"
+        endpoint: '0.0.0.0:4317'
       http:
         cors:
-          allowed_origins: ["*"]
-          allowed_headers: ["*"]
+          allowed_origins: ['*']
+          allowed_headers: ['*']
+          # Lets browsers cache preflights for 10 minutes, see
+          # buildOtelCollectorConfig()
+          max_age: 600
         include_metadata: true
-        endpoint: "0.0.0.0:4318"
+        endpoint: '0.0.0.0:4318'
 
 connectors:
   routing/logs:
@@ -31,7 +34,7 @@ exporters:
     username: ${env:CLICKHOUSE_USER}
     ttl: 720h
     logs_table_name: hyperdx_sessions
-    timeout: 5s
+    timeout: ${env:HYPERDX_OTEL_EXPORTER_TIMEOUT:-5s}
     create_schema: ${env:HYPERDX_OTEL_EXPORTER_CREATE_LEGACY_SCHEMA:-false}
     json: ${env:HYPERDX_OTEL_EXPORTER_CLICKHOUSE_JSON_ENABLE:-false}
     retry_on_failure:
@@ -45,7 +48,7 @@ exporters:
     password: ${env:CLICKHOUSE_PASSWORD}
     username: ${env:CLICKHOUSE_USER}
     ttl: 720h
-    timeout: 5s
+    timeout: ${env:HYPERDX_OTEL_EXPORTER_TIMEOUT:-5s}
     create_schema: ${env:HYPERDX_OTEL_EXPORTER_CREATE_LEGACY_SCHEMA:-false}
     json: ${env:HYPERDX_OTEL_EXPORTER_CLICKHOUSE_JSON_ENABLE:-false}
     retry_on_failure:
@@ -55,23 +58,22 @@ exporters:
       max_elapsed_time: 300s
 
 service:
+  # Pipeline `processors:` lists live in the base config.yaml so users can
+  # swap them via CUSTOM_OTELCOL_CONFIG_FILE. See
+  # https://github.com/ClickHouse/ClickStack/pull/2351.
   pipelines:
     traces:
       receivers: [otlp/hyperdx]
-      processors: [memory_limiter, batch]
       exporters: [clickhouse]
     metrics:
       receivers: [otlp/hyperdx]
-      processors: [memory_limiter, batch]
       exporters: [clickhouse]
     logs/in:
       receivers: [otlp/hyperdx]
       exporters: [routing/logs]
     logs/out-default:
       receivers: [routing/logs]
-      processors: [memory_limiter, transform, batch]
       exporters: [clickhouse]
     logs/out-rrweb:
       receivers: [routing/logs]
-      processors: [memory_limiter, batch]
       exporters: [clickhouse/rrweb]

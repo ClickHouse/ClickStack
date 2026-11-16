@@ -3,6 +3,7 @@ import { z } from 'zod';
 export enum TaskName {
   PING_PONG = 'ping-pong',
   CHECK_ALERTS = 'check-alerts',
+  PROVISION_DASHBOARDS = 'provision-dashboards',
 }
 
 /**
@@ -29,13 +30,21 @@ const checkAlertsTaskArgsSchema = z.object({
     .optional(),
 });
 
+const provisionDashboardsTaskArgsSchema = z.object({
+  taskName: z.literal(TaskName.PROVISION_DASHBOARDS),
+});
+
 const taskArgsSchema = z.discriminatedUnion('taskName', [
   pingTaskArgsSchema,
   checkAlertsTaskArgsSchema,
+  provisionDashboardsTaskArgsSchema,
 ]);
 
 export type PingTaskArgs = z.infer<typeof pingTaskArgsSchema>;
 export type CheckAlertsTaskArgs = z.infer<typeof checkAlertsTaskArgsSchema>;
+export type ProvisionDashboardsTaskArgs = z.infer<
+  typeof provisionDashboardsTaskArgsSchema
+>;
 export type TaskArgs = z.infer<typeof taskArgsSchema>;
 
 /**
@@ -81,10 +90,10 @@ export function asTaskArgs(argv: any): TaskArgs {
  * Interface for HyperDX task implementations.
  * All tasks must implement execute and asyncDispose methods.
  */
-export interface HdxTask<T extends TaskArgs> {
+export interface HdxTask {
   /**
-   * Executes the main task logic with validated arguments.
-   * @param args - Validated command line arguments
+   * Executes the main task logic. Validated arguments are injected via the
+   * implementing class's constructor rather than passed to execute().
    */
   execute(): Promise<void>;
 

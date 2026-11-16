@@ -1,5 +1,199 @@
 # @hyperdx/cli
 
+## 0.9.0
+
+### Minor Changes
+
+- 7935c64bc: feat: add `hdx mcp install` to connect AI agents without pasting a key
+
+  `npx @hyperdx/cli mcp install` asks for a personal access key or an
+  organization API key with hidden input, checks it, and adds the ClickStack MCP
+  server to Claude Code, Codex, Cursor, and VS Code. Team Settings now leads with
+  this command, so the key no longer has to go into a copied command or an agent
+  chat. The per-agent snippets remain for setting up one agent by hand.
+
+### Patch Changes
+
+- d7df729e6: chore: GitHub links (changelog, support, package metadata) now point at `ClickHouse/ClickStack`, and `docker-compose.yml` pulls the app image as `clickhouse/clickstack`
+- e2754d203: fix: use SHA256 instead of MD5 for JSON row lookup WHERE clauses so row
+  details and drill-down work on FIPS-enabled ClickHouse deployments
+
+## 0.8.0
+
+### Minor Changes
+
+- 0b1e0784: Add dashboard and saved-search authoring commands to the CLI:
+
+  - `hdx dashboards list` (default subcommand) gains `--query` name filtering and `--format table|json|csv`
+  - `hdx dashboards export --id <id-or-name>` prints a dashboard definition as JSON, round-trip compatible with import
+  - `hdx dashboards create` accepts either a full definition (`--file <json>`) or inline charts (`--name` + repeatable `--chart` / `--chart-file`, with automatic grid layout), plus `--if-not-exists`
+  - `hdx dashboards import --file <json>` recreates an exported dashboard, with `--if-not-exists` and `--name-override`
+  - `hdx saved-searches` command group: `list` and `create` (`--name/--source/--where/--where-language/--select/--order-by/--tags`)
+
+  Definitions are validated locally against the shared schema before being sent, and missing tile ids are generated automatically. Also fixes `getSavedSearches()` to call the correct `/saved-search` API path (the previous `/saved-searches` path always returned 404).
+
+### Patch Changes
+
+- 5253b861: fix: Stop abbreviating values between 500 and 999 as "0.5k"/"0.8k" on chart axes and in large number format
+
+## 0.7.0
+
+### Minor Changes
+
+- 68082b67: feat: add stacked line (stacked area) time-series display type
+
+## 0.6.4
+
+### Patch Changes
+
+- 416c92a0: fix: stop discarding chart axis-tick decimals for large numbers
+
+  Axis ticks at or above 1k were always rounded to a whole number regardless of the configured Number Format, so nearby values (e.g. 950 and 1080) could both render as `1k` — ticks now use as much precision as the axis's width allows, on both the web app and CLI terminal charts. Also fixed: a tightly fit Y-axis could show two ticks with the identical rounded label.
+
+- c42dda80: fix: use compact duration labels on terminal chart axis ticks
+
+  `axisTickFormatter` is a documented port of the web's `formatAxisTick` (fixed in #3148) and is expected to stay behaviorally in sync with it, but it fell through to the wide `formatDurationMs` instead of the compact formatter for duration-formatted charts. `hdx chart` now renders the same short labels (e.g. "13m" instead of "13.33min") as the web app.
+
+## 0.6.3
+
+### Patch Changes
+
+- 53336f78: fix(charts): show decimals on Y-axis ticks under 10 in magnitude
+
+  The Y-axis of a time series chart (and the CLI's termchart equivalent)
+  always rounded tick labels to 0 decimal places, regardless of the chart's
+  Number Format settings. Charts whose values live under 1 (fractional
+  gauges, ratios, sub-1 rates) rendered every axis tick as `0` even though
+  the tooltip and legend showed the correct value.
+
+  A tick under 10 in magnitude (as displayed - a percent tick's magnitude is
+  checked against its ×100 value, not its raw 0-1 ratio) now honors the
+  chart's configured decimals, capped at 2 to keep the label within the
+  axis's fixed width. A tick of 10 or more, and a tick of exactly 0, stay
+  integers exactly as before, whatever the chart's Number Format configures
+
+  - so ordinary counts and the byte/percent tiles in the bundled dashboard
+    templates are unaffected.
+
+## 0.6.2
+
+### Patch Changes
+
+- dc29d57f: Chart formulas are now supported across every API surface that persists or accepts chart configs. The external dashboards API v2 and the MCP `save_dashboard` / `patch_dashboard` tools accept `formulas` (letter-ref arithmetic over the tile's select items, e.g. `A / (A + B) * 100`) and `showOperandSeries` on line, stacked bar, table and number builder tiles, round-trip them through GET/PUT, and validate the expressions on write — unknown series refs, malformed syntax, combining formulas with `asRatio`, multiple formulas on a number tile, and formulas on formula-incapable source kinds (anything other than metric, log, or trace) are all rejected with actionable errors. MCP `query_tile` computes formula columns for both metric and log/trace event tiles, the query-guide prompt documents the feature, and the OpenAPI spec includes the new `Formula` schema. The CLI's dashboard tile pipeline now delegates its number/table config transforms to the shared common-utils implementations, so formula tiles render with operand-hiding behavior identical to the web.
+
+## 0.6.1
+
+### Patch Changes
+
+- 9581e164: Rewrite the README with the full feature set and command reference (TUI, chart,
+  query, sources/connections/dashboards, auth, team, upload-sourcemaps) ahead of
+  launch, so npm and GitHub show everything the CLI can do. Also remove a stale
+  reference to the removed `hdx stream` command from `hdx chart --help`.
+- 018a6486: Clean up ESLint warnings and tighten lint enforcement. Resolved all
+  `no-unused-vars` and `@typescript-eslint/ban-ts-comment` warnings (removing dead
+  code and converting `@ts-ignore` to described `@ts-expect-error`), then promoted
+  those rules to `error` in the api/app/common-utils/cli/hdx-eval configs, disabled
+  the noisy `@typescript-eslint/no-empty-function` rule in app, and lowered each
+  package's `--max-warnings` ceiling so the counts can't regress. Behavior is
+  unchanged.
+
+## 0.6.0
+
+### Minor Changes
+
+- 386c365d: Add terminal charting to the CLI, built on the same renderChartConfig SQL
+  pipeline as the web dashboards:
+
+  - Interactive Dashboards page in the TUI (`d` key) with tile navigation,
+    fullscreen tiles, time-range editing, and refresh
+  - `hdx chart` command for troubleshooting from the terminal (including by
+    AI agents): render saved dashboard tiles (`-d/-t`), ad-hoc builder charts
+    (`-s <source>` with `--agg/--value/--where/--group-by/--series`), or ad-hoc
+    raw SQL (`--sql` with `$__timeFilter`/`$__timeInterval` macros)
+  - Supported chart types: line, stacked bar, number, table, bar, pie, and
+    markdown; flexible time ranges (`--since 1h`, `--from now-24h`, ISO dates);
+    `--json` output for structured consumption; ANSI colors auto-stripped when
+    piping (`--color auto|always|never`)
+
+### Patch Changes
+
+- 1705b37a: fix: Block webhook URLs targeting known-bad IP ranges
+
+## 0.5.2
+
+### Patch Changes
+
+- bb7ae21e8: Upgrade the TypeScript devDependency from 5.9 to 6.0 across all packages.
+
+## 0.5.1
+
+### Patch Changes
+
+- 5c46215f8: Bump `@clickhouse/client*` to `1.23.0-head.fae5998.1` and fix the type
+  incompatibility it introduces.
+
+  In `@clickhouse/client*` 1.23 each platform package (`@clickhouse/client`,
+  `@clickhouse/client-web`) bundles its own copy of the shared types, so their
+  `ClickHouseSettings` types — which reference the nominally-compared `SettingsMap`
+  class — are no longer the same type as `@clickhouse/client-common`'s. The shared
+  `processClickhouseSettings()` helper produces the `client-common` flavor, so
+  assigning it into the per-platform clients' `query()` now requires an explicit
+  bridge. Guard the existing `as ClickHouseSettings` assertions at those
+  boundaries (`node.ts`, `browser.ts`, `cli`) with a scoped
+  `@typescript-eslint/no-unsafe-type-assertion` disable, matching the existing
+  "client library type mismatch" pattern. No runtime behavior changes.
+
+- 45954c318: Import ClickHouse client types from the platform packages
+  (`@clickhouse/client` / `@clickhouse/client-web`) instead of the deprecated
+  `@clickhouse/client-common`. This makes the packages forward-compatible with
+  `@clickhouse/client*` 1.23 (where `client-common` is deprecated and each
+  platform package bundles and re-exports its own copy of the shared types)
+  without bumping the pinned version. No runtime behavior changes.
+- 1a64796c1: Removing relative imports and using path aliases
+
+## 0.5.0
+
+### Minor Changes
+
+- 3123db53: feat: experimental promql support
+
+### Patch Changes
+
+- b20275c9: fix(cli): exit with non-zero code when `upload-sourcemaps` fails
+
+  The `upload-sourcemaps` command now exits with code 1 when uploads fail
+  (missing source maps, pre-signed URL request failure, authentication failure,
+  or any per-file upload failure after retries). Previously these failures were
+  logged to stderr but the process exited cleanly with code 0, causing CI
+  pipelines to treat failed uploads as successes.
+
+- 19cd7c91: fix: only use pk and row uniqueness to look up a row
+- 8810ff0f: feat: Add option for force-enabling/disabling text index support
+
+## 0.4.1
+
+### Patch Changes
+
+- f6a1d021: Add support for event patterns in MCP server, reduce code duplication
+- 253cf5b7: Fix CLI version flag reporting hardcoded 0.1.0 instead of the actual package version
+- 41043645: feat: support multiple teams and kubectx-style team switching in the CLI
+
+  Adds three new commands for users that belong to multiple teams (HyperDX Cloud /
+  EE):
+
+  - `hdx team list` — list every team the authenticated user belongs to, marking
+    the active one
+  - `hdx team current` — print the currently active team
+  - `hdx team use <name-or-id>` — switch the active team (matched by team ID or
+    case-insensitive name)
+
+  The active team is persisted to `~/.config/hyperdx/cli/session.json` so the
+  choice survives across CLI invocations, and the CLI now sends an `x-hdx-team`
+  header on every API and ClickHouse-proxy request so the server scopes data to
+  the chosen team. `hdx auth status` also surfaces the active team.
+
+  On single-team OSS deployments these commands are effectively no-ops.
+
 ## 0.4.0
 
 ### Minor Changes

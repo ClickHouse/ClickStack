@@ -11,6 +11,7 @@ export default [
     ignores: [
       'node_modules/**',
       'dist/**',
+      '**/*.config.cjs',
       '**/*.config.mjs',
       '**/*.config.ts',
     ],
@@ -22,15 +23,28 @@ export default [
       prettier: prettierPlugin,
     },
     rules: {
+      '@typescript-eslint/ban-ts-comment': 'error',
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': [
-        'warn',
+        'error',
         {
           argsIgnorePattern: '^_',
           varsIgnorePattern: '^_',
         },
       ],
       'prettier/prettier': 'error',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\.(/|$)',
+              message:
+                'Use the @/ path alias instead of parent-relative imports (../).',
+            },
+          ],
+        },
+      ],
     },
     languageOptions: {
       parser: tseslint.parser,

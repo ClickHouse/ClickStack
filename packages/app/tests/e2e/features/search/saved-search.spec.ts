@@ -49,6 +49,28 @@ test.describe('Saved Search Functionality', () => {
     await searchPage.goto();
   });
 
+  test(
+    'should open a newly saved search without reloading the page',
+    { tag: ['@search', '@full-stack'] },
+    async () => {
+      /**
+       * Saving used to leave the page through `window.location`, which reloads
+       * the whole app and 404s on the static ClickStack export, where
+       * /search/<id> has no exported document.
+       */
+      await searchPage.performSearch('ServiceName:frontend');
+      await searchPage.markDocument();
+
+      await searchPage.openSaveSearchModal();
+      await searchPage.savedSearchModal.saveSearchAndWaitForNavigation(
+        `Client Side Nav ${Date.now()}`,
+      );
+
+      expect(await searchPage.hasSurvivedReload()).toBe(true);
+      await searchPage.table.waitForRowsToPopulate(true);
+    },
+  );
+
   // TODO: Expand this test to include:
   // - Add tags
   // - Verify search appears in sidebar
@@ -245,6 +267,20 @@ test.describe('Saved Search Functionality', () => {
           'Info Logs Navigation Test',
         );
 
+        const savedSearchParams = new URL(page.url()).searchParams;
+        // This scenario starts at /search with the app's default relative
+        // range, not explicit URL bounds. Saving must not manufacture fixed
+        // bounds. Saved-search hydration may serialize its restored
+        // configuration into the URL, so verify the hydrated inputs below
+        // rather than treating URL parameters as the source of truth.
+        expect(savedSearchParams.has('from')).toBe(false);
+        expect(savedSearchParams.has('to')).toBe(false);
+
+        await expect(searchPage.input).toHaveValue('SeverityText:info');
+        await expect(searchPage.getOrderByEditor()).toContainText(
+          customOrderBy,
+        );
+
         // Capture the saved search URL (without query params)
         savedSearchUrl = page.url().split('?')[0];
       });
@@ -263,8 +299,8 @@ test.describe('Saved Search Functionality', () => {
 
         // Wait for the search page to load
         await expect(page.getByTestId('search-page')).toBeVisible();
-        await expect(searchPage.savedSearchNameTitle).toBeVisible();
-        await expect(searchPage.savedSearchNameTitle).toHaveText(
+        await expect(searchPage.savedSearchNameInput).toBeVisible();
+        await expect(searchPage.savedSearchNameInput).toHaveValue(
           'Info Logs Navigation Test',
         );
       });
@@ -339,6 +375,65 @@ test.describe('Saved Search Functionality', () => {
   );
 
   test(
+    'should preserve SELECT and ORDER BY carried in a saved search link loaded cold',
+    {},
+    async ({ page }) => {
+      /**
+       * The other SELECT tests reload `page.url().split('?')[0]`, dropping the
+       * query string — so none of them cover a link whose URL config differs
+       * from what the saved search stores, which is what you have after tweaking
+       * SELECT without saving. A bookmark, a shared link, or a plain browser
+       * refresh keeps that query string, and it has to survive a *cold* load,
+       * where the source list isn't cached and the form's source therefore
+       * arrives a render later than the rest of the config.
+       */
+      const savedSelect = 'Timestamp, Body';
+      const tweakedSelect = 'Timestamp, Body, lower(Body) as body_lower';
+      let linkWithTweak: string;
+
+      await test.step('Create a saved search with a plain SELECT', async () => {
+        await searchPage.setCustomSELECT(savedSelect);
+        await searchPage.submitEmptySearch();
+        await searchPage.openSaveSearchModal();
+        await searchPage.savedSearchModal.saveSearchAndWaitForNavigation(
+          'Cold Load Config Test',
+        );
+      });
+
+      await test.step('Tweak SELECT without saving, so the link differs from the saved search', async () => {
+        await searchPage.setCustomSELECT(tweakedSelect);
+        await searchPage.submitEmptySearch();
+        await searchPage.table.waitForRowsToPopulate(true);
+
+        // Keep the query string: it is the thing under test.
+        linkWithTweak = page.url();
+        expect(new URL(linkWithTweak).searchParams.get('select')).toContain(
+          'lower(Body)',
+        );
+      });
+
+      await test.step('Load that link cold, the way a refresh or a new tab does', async () => {
+        await page.goto(linkWithTweak);
+        await expect(page.getByTestId('search-page')).toBeVisible();
+        await searchPage.table.waitForRowsToPopulate(true);
+        // The page submits on a 1s debounce, so give any rewrite time to land
+        // rather than asserting on the pre-rewrite state.
+        // eslint-disable-next-line playwright/no-wait-for-timeout
+        await page.waitForTimeout(2000);
+      });
+
+      await test.step('The tweak survives, in the form and in the URL', async () => {
+        await expect(searchPage.getSELECTEditor()).toContainText(
+          'lower(Body) as body_lower',
+        );
+        expect(new URL(page.url()).searchParams.get('select')).toContain(
+          'lower(Body)',
+        );
+      });
+    },
+  );
+
+  test(
     'should preserve default SELECT when saving a search',
     {},
     async ({ page }) => {
@@ -399,9 +494,16 @@ test.describe('Saved Search Functionality', () => {
       await test.step('Navigate to sessions page', async () => {
         await page.goto('/sessions');
         await expect(page.getByTestId('sessions-page')).toBeVisible();
+        // Settling the sessions page before going back keeps this
+        // deterministic: it writes its default time range to the URL as a
+        // *pushed* history entry shortly after mount, so whether Back lands on
+        // the saved search or on bare /sessions otherwise comes down to which
+        // happens first.
+        await page.waitForURL(/\/sessions\?.*\bfrom=/);
       });
 
       await test.step('Use browser back button', async () => {
+        await page.goBack(); // undoes the sessions time-range entry
         await page.goBack();
         await expect(page.getByTestId('search-page')).toBeVisible();
       });
@@ -639,8 +741,6 @@ test.describe('Saved Search Functionality', () => {
       });
 
       await test.step('Verify both filters are restored', async () => {
-        await searchPage.filters.openFilterGroup(firstFilterGroup);
-        await searchPage.filters.openFilterGroup(secondFilterGroup);
         await expect(
           searchPage.filters.getFilterCheckboxInput(
             firstFilterGroup,

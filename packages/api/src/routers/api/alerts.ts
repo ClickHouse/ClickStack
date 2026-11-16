@@ -1,5 +1,8 @@
+import { isTileAlertUnaddressable } from '@hyperdx/common-utils/dist/iac';
 import type {
   AlertApiResponse,
+  AlertEvaluationsApiResponse,
+  AlertHistoryRangeApiResponse,
   AlertsApiResponse,
   AlertsPageItem,
 } from '@hyperdx/common-utils/dist/types';
@@ -10,6 +13,8 @@ import { z } from 'zod';
 import { processRequest, validateRequest } from 'zod-express-middleware';
 
 import {
+  getAlertEvaluations,
+  getAlertTransitionsInRange,
   getRecentAlertHistories,
   getRecentAlertHistoriesBatch,
 } from '@/controllers/alertHistory';
@@ -18,13 +23,16 @@ import {
   deleteAlert,
   getAlertById,
   getAlertEnhanced,
-  getAlertsEnhanced,
   updateAlert,
   validateAlertInput,
 } from '@/controllers/alerts';
+import { alertsPageQuerySchema, getAlertsPage } from '@/controllers/alertsPage';
+import { AlertSource, getAlertChannels } from '@/models/alert';
 import { IAlertHistory } from '@/models/alertHistory';
+import { resolveAlertDisplayFields } from '@/utils/alerts';
+import { setBusinessContext } from '@/utils/instrumentation';
 import { PreSerialized, sendJson } from '@/utils/serialization';
-import { alertSchema, objectIdSchema } from '@/utils/zod';
+import { internalAlertSchema, objectIdSchema } from '@/utils/zod';
 
 const router = express.Router();
 
@@ -33,9 +41,17 @@ type EnhancedAlert = NonNullable<Awaited<ReturnType<typeof getAlertEnhanced>>>;
 const formatAlertResponse = (
   alert: EnhancedAlert,
   history: Omit<IAlertHistory, 'alert'>[],
+  { includeChartConfig = false }: { includeChartConfig?: boolean } = {},
 ): PreSerialized<AlertsPageItem> => {
   return {
     history,
+    // Resolved (stored ?? derived) so alerts written before the fields existed
+    // still render. Deliberately not in the `pick` below -- a stored
+    // `undefined` there would clobber the resolved value.
+    ...resolveAlertDisplayFields(alert, {
+      savedSearch: alert.savedSearch,
+      dashboard: alert.dashboard,
+    }),
     silenced: alert.silenced
       ? {
           by: alert.silenced.by?.email,
@@ -46,29 +62,44 @@ const formatAlertResponse = (
     createdBy: alert.createdBy
       ? pick(alert.createdBy, ['email', 'name'])
       : undefined,
-    channel: pick(alert.channel, ['type']),
+    // webhookId is included so edit surfaces (e.g. the alert detail page) can
+    // prefill the notification channel; webhook ids are already visible to
+    // team members via GET /webhooks.
+    channel: pick(alert.channel, ['type', 'webhookId']),
+    channels: getAlertChannels(alert).map(c => pick(c, ['type', 'webhookId'])),
+    // Computed here rather than on the client: `dashboard.tiles` below is
+    // filtered to this alert's own tile, so the response cannot show whether a
+    // sibling tile shares its name — which is what decides Terraform
+    // eligibility. Outside the `alert.dashboard` spread on purpose: a deleted
+    // dashboard populates as null, and that alert is the least addressable of
+    // the lot. Omitted rather than `false` when fine, matching the manifest.
+    ...(alert.source === AlertSource.TILE &&
+    isTileAlertUnaddressable(alert.dashboard ?? undefined, alert.tileId)
+      ? { unaddressableTile: true }
+      : {}),
     ...(alert.dashboard && {
       dashboardId: alert.dashboard._id,
       dashboard: {
+        name: alert.dashboard.name,
         tiles: alert.dashboard.tiles
           .filter(tile => tile.id === alert.tileId)
           .map(tile => ({
             id: tile.id,
-            config: { name: tile.config.name },
+            config: { name: tile.config?.name },
           })),
-        ...pick(alert.dashboard, ['_id', 'updatedAt', 'name', 'tags']),
       },
     }),
     ...(alert.savedSearch && {
       savedSearchId: alert.savedSearch._id,
-      savedSearch: pick(alert.savedSearch, [
-        '_id',
-        'createdAt',
-        'name',
-        'updatedAt',
-        'tags',
-      ]),
+      savedSearch: { name: alert.savedSearch.name },
     }),
+    // Inline alerts carry their persisted config so edit surfaces can seed
+    // the chart editor and the detail page can render the query — but only on
+    // the single-alert response. Attaching every alert's full config (raw SQL
+    // templates included) would bloat the list; surfaces that need it fetch
+    // the one alert.
+    ...(includeChartConfig &&
+      alert.chartConfig && { chartConfig: alert.chartConfig }),
     ...pick(alert, [
       '_id',
       'interval',
@@ -79,42 +110,61 @@ const formatAlertResponse = (
       'thresholdType',
       'state',
       'source',
-      'tileId',
+      'name',
+      'message',
+      'note',
       'createdAt',
       'updatedAt',
       'executionErrors',
+      'numConsecutiveWindows',
     ]),
+    tileId: alert.tileId ?? undefined,
+    groupBy: alert.groupBy ?? undefined,
   };
 };
 
 type AlertsExpRes = express.Response<AlertsApiResponse>;
-router.get('/', async (req, res: AlertsExpRes, next) => {
-  try {
-    const teamId = req.user?.team;
-    if (teamId == null) {
-      return res.sendStatus(403);
+router.get(
+  '/',
+  processRequest({ query: alertsPageQuerySchema }),
+  async (req, res: AlertsExpRes, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.sendStatus(403);
+      }
+
+      const params = alertsPageQuerySchema.parse(req.query ?? {});
+      const {
+        data: alerts,
+        hasMore,
+        nextCursor,
+      } = await getAlertsPage(teamId, params);
+
+      setBusinessContext({
+        'hyperdx.alerts.list.page_size': alerts.length,
+        'hyperdx.alerts.list.limit': params.limit,
+      });
+
+      const historyMap = await getRecentAlertHistoriesBatch(
+        alerts.map(alert => ({
+          alertId: new ObjectId(alert._id),
+          interval: alert.interval,
+        })),
+        20,
+      );
+
+      const data = alerts.map(alert => {
+        const history = historyMap.get(alert._id.toString()) ?? [];
+        return formatAlertResponse(alert, history);
+      });
+
+      sendJson(res, { data, hasMore, ...(nextCursor && { nextCursor }) });
+    } catch (e) {
+      next(e);
     }
-
-    const alerts = await getAlertsEnhanced(teamId);
-
-    const historyMap = await getRecentAlertHistoriesBatch(
-      alerts.map(alert => ({
-        alertId: new ObjectId(alert._id),
-        interval: alert.interval,
-      })),
-      20,
-    );
-
-    const data = alerts.map(alert => {
-      const history = historyMap.get(alert._id.toString()) ?? [];
-      return formatAlertResponse(alert, history);
-    });
-
-    sendJson(res, { data });
-  } catch (e) {
-    next(e);
-  }
-});
+  },
+);
 
 type AlertExpRes = express.Response<AlertApiResponse>;
 router.get(
@@ -142,7 +192,145 @@ router.get(
         limit: 20,
       });
 
-      const data = formatAlertResponse(alert, history);
+      const data = formatAlertResponse(alert, history, {
+        includeChartConfig: true,
+      });
+
+      sendJson(res, { data });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// Alert history has a ~30-day TTL, so cap queried spans to bound the
+// aggregations regardless of how small a startTime the caller sends.
+const MAX_HISTORY_SPAN_MS = 31 * 24 * 60 * 60 * 1000;
+
+// Paginated evaluation history for the alert detail page: one entry per
+// evaluation window (grouped across group-by groups), newest first, including
+// any errors recorded for the window. Scoped to [startTime, endTime] (epoch
+// ms; endTime defaults to now, startTime is clamped to the history retention
+// span). `before` (epoch ms, from the previous response's `nextBefore`) pages
+// to older windows within the range. Note: /:id/history (below) returns
+// firing transitions for chart annotations, which is a different shape.
+const EVALUATIONS_LIMIT = 200;
+type AlertEvaluationsExpRes = express.Response<AlertEvaluationsApiResponse>;
+router.get(
+  '/:id/evaluations',
+  processRequest({
+    params: z.object({ id: objectIdSchema }),
+    query: z
+      .object({
+        limit: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(EVALUATIONS_LIMIT)
+          .default(EVALUATIONS_LIMIT),
+        before: z.coerce.number().int().positive().optional(),
+        startTime: z.coerce.number().int().positive().optional(),
+        endTime: z.coerce.number().int().positive().optional(),
+      })
+      .refine(
+        q =>
+          q.startTime == null || q.endTime == null || q.startTime < q.endTime,
+        { message: 'startTime must be less than endTime' },
+      ),
+  }),
+  async (req, res: AlertEvaluationsExpRes, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.sendStatus(403);
+      }
+
+      // Scope to the caller's team (404 for alerts they can't see).
+      const alert = await getAlertById(req.params.id, teamId);
+      if (!alert) {
+        return res.sendStatus(404);
+      }
+
+      // zod applies the default at runtime, but the middleware types the
+      // parsed query with the input (pre-default) shape.
+      const limit = req.query.limit ?? EVALUATIONS_LIMIT;
+      const { before } = req.query;
+      const endTime =
+        req.query.endTime != null ? new Date(req.query.endTime) : new Date();
+      // Clamp the span so a tiny/zero startTime can't page beyond the history
+      // retention window (same cap as the /history transitions endpoint).
+      const startTime = new Date(
+        Math.max(
+          req.query.startTime ?? endTime.getTime() - MAX_HISTORY_SPAN_MS,
+          endTime.getTime() - MAX_HISTORY_SPAN_MS,
+        ),
+      );
+
+      const page = await getAlertEvaluations({
+        alertId: new ObjectId(alert._id),
+        interval: alert.interval,
+        limit,
+        startTime,
+        endTime,
+        before: before != null ? new Date(before) : undefined,
+      });
+
+      sendJson(res, {
+        data: page.data,
+        hasMore: page.hasMore,
+        ...(page.nextBefore != null && {
+          nextBefore: page.nextBefore.getTime(),
+        }),
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// Alert firing/recovery transitions within a time range, used to draw
+// annotations on dashboard charts (startTime/endTime are epoch milliseconds).
+type AlertHistoryRangeExpRes = express.Response<AlertHistoryRangeApiResponse>;
+router.get(
+  '/:id/history',
+  processRequest({
+    params: z.object({ id: objectIdSchema }),
+    query: z
+      .object({
+        startTime: z.coerce.number().int(),
+        endTime: z.coerce.number().int(),
+      })
+      .refine(q => q.startTime < q.endTime, {
+        message: 'startTime must be less than endTime',
+      }),
+  }),
+  async (req, res: AlertHistoryRangeExpRes, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.sendStatus(403);
+      }
+
+      // Scope to the caller's team (404 for alerts they can't see). Uses the
+      // populate-free lookup since we only need team ownership + interval.
+      const alert = await getAlertById(req.params.id, teamId);
+      if (!alert) {
+        return res.sendStatus(404);
+      }
+
+      // Clamp the span so a tiny/zero startTime can't force a scan wider than
+      // the history retention window.
+      const startTime = Math.max(
+        req.query.startTime,
+        req.query.endTime - MAX_HISTORY_SPAN_MS,
+      );
+
+      const data = await getAlertTransitionsInRange({
+        alertId: new ObjectId(alert._id),
+        interval: alert.interval,
+        startTime: new Date(startTime),
+        endTime: new Date(req.query.endTime),
+      });
 
       sendJson(res, { data });
     } catch (e) {
@@ -153,7 +341,7 @@ router.get(
 
 router.post(
   '/',
-  processRequest({ body: alertSchema }),
+  processRequest({ body: internalAlertSchema }),
   async (req, res, next) => {
     const teamId = req.user?.team;
     const userId = req.user?._id;
@@ -162,9 +350,9 @@ router.post(
     }
     try {
       const alertInput = req.body;
-      await validateAlertInput(teamId, alertInput);
+      const refs = await validateAlertInput(teamId, alertInput);
       return res.json({
-        data: await createAlert(teamId, alertInput, userId),
+        data: await createAlert(teamId, alertInput, userId, refs),
       });
     } catch (e) {
       next(e);
@@ -175,7 +363,7 @@ router.post(
 router.put(
   '/:id',
   processRequest({
-    body: alertSchema,
+    body: internalAlertSchema,
     params: z.object({
       id: objectIdSchema,
     }),
@@ -188,10 +376,18 @@ router.put(
       }
       const { id } = req.params;
       const alertInput = req.body;
-      await validateAlertInput(teamId, alertInput);
-      res.json({
-        data: await updateAlert(id, teamId, alertInput),
-      });
+      const refs = await validateAlertInput(teamId, alertInput);
+      const alert = await updateAlert(
+        id,
+        teamId,
+        alertInput,
+        refs,
+        req.user?._id,
+      );
+      if (alert == null) {
+        return res.sendStatus(404);
+      }
+      return res.json({ data: alert });
     } catch (e) {
       next(e);
     }

@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
+    ".": {
+      "entry": ["scripts/__tests__/*.test.mjs"]
+    },
     "packages/app": {
       "entry": ["pages/**/*.{ts,tsx}", "scripts/*.js", "tests/e2e/**/*.ts"],
       "project": ["src/**/*.{ts,tsx}", "pages/**/*.{ts,tsx}"],
@@ -8,7 +11,8 @@
       "ignoreDependencies": [
         "eslint-config-next",
         "@chromatic-com/storybook",
-        "@storybook/addon-themes"
+        "@storybook/addon-themes",
+        "react-is"
       ]
     },
     "packages/api": {
@@ -25,16 +29,35 @@
     },
     "packages/common-utils": {
       "entry": ["src/**/*.ts", "!src/__tests__/**", "!src/**/*.test.*"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["@stryker-mutator/core"],
+      "ignoreBinaries": ["stryker"]
+    },
+    "packages/cli": {
+      "ignoreBinaries": ["claude"]
+    },
+    "packages/hdx-eval": {
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["tsx"],
+      "ignoreBinaries": ["claude"]
     }
   },
-  "ignore": ["scripts/dev-portal/**", ".github/scripts/**"],
-  "ignoreBinaries": ["make", "migrate", "playwright"],
+  "ignore": [
+    "scripts/dev-portal/**",
+    ".github/scripts/**",
+    ".github/actions/**",
+    "docker/hyperdx/**",
+    ".claude/**"
+  ],
+  "ignoreBinaries": ["make", "migrate", "stryker"],
   "ignoreDependencies": [
     "@dotenvx/dotenvx",
     "concurrently",
     "dotenv",
-    "babel-plugin-react-compiler"
+    "babel-plugin-react-compiler",
+    "@stryker-mutator/core",
+    "jscpd"
   ],
+  "include": ["nsExports"],
   "exclude": ["enumMembers", "duplicates"]
 }

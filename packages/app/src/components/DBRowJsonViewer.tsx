@@ -1,4 +1,4 @@
-import { useCallback, useContext, useMemo, useState } from 'react';
+import { use, useCallback, useMemo, useState } from 'react';
 import router from 'next/router';
 import { useAtom, useAtomValue } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
@@ -20,15 +20,30 @@ import {
   IconCheck,
   IconCopy,
   IconFilter,
+  IconList,
   IconMinus,
   IconPlus,
   IconSearch,
   IconSettings,
+  IconSortAscendingLetters,
+  IconSortDescendingLetters,
   IconTextWrap,
 } from '@tabler/icons-react';
 
-import HyperJson, { GetLineActions, LineAction } from '@/components/HyperJson';
-import { mergePath } from '@/utils';
+import HyperJson, {
+  DEFAULT_KEY_ORDER,
+  FormatLeafValue,
+  GetLineActions,
+  KeyOrder,
+  LineAction,
+} from '@/components/HyperJson';
+import { useMaterializedAliasColumnsOption } from '@/hooks/useMaterializedAliasColumnsOption';
+import { useFormatTime } from '@/useFormatTime';
+import { isColumnInSelect, mergePath } from '@/utils';
+import {
+  CLIPBOARD_ERROR_MESSAGE,
+  copyTextToClipboard,
+} from '@/utils/clipboard';
 
 type JSONExtractFn =
   | 'JSONExtractString'
@@ -40,13 +55,20 @@ export function buildJSONExtractQuery(
   parsedJsonRootPath: string[],
   jsonColumns: string[] = [],
   jsonExtractFn: JSONExtractFn = 'JSONExtractString',
+  mapColumns: string[] = [],
 ): string | null {
   const nestedPath = keyPath.slice(parsedJsonRootPath.length);
   if (nestedPath.length === 0) {
     return null; // No nested path to extract
   }
 
-  const baseColumn = mergePath(parsedJsonRootPath, jsonColumns);
+  // `parsedJsonRootPath[0]` is the column the parsed-JSON view is anchored on.
+  // It can be a JSON column (auto-detected by ClickHouse JSON type) OR a Map
+  // column whose sub-value is a JSON-parseable string (HyperJson promotes those
+  // to `isInParsedJson=true`, see HyperJson.tsx:227). Thread `mapColumns` so a
+  // numeric-looking Map sub-key renders as `Map['1']` instead of the array
+  // `Map[2]`. See HDX-4369.
+  const baseColumn = mergePath(parsedJsonRootPath, jsonColumns, mapColumns);
   const jsonPathArgs = nestedPath.map(p => `'${p}'`).join(', ');
   return `${jsonExtractFn}(${baseColumn}, ${jsonPathArgs})`;
 }
@@ -116,6 +138,9 @@ type ViewerOptions = {
   whiteSpace?: 'pre' | 'pre-wrap';
   tabulate: boolean;
   filterBlanks: boolean;
+  // Absent for options stored before sorting was configurable; falls back to
+  // the alphabetical default.
+  keyOrder?: KeyOrder;
 };
 
 const VIEWER_OPTIONS_KEY = 'hdx_json_viewer_options';
@@ -125,7 +150,30 @@ const DEFAULT_VIEWER_OPTIONS: ViewerOptions = {
   whiteSpace: 'pre-wrap',
   tabulate: true,
   filterBlanks: false,
+  keyOrder: DEFAULT_KEY_ORDER,
 };
+
+const KEY_ORDER_OPTIONS: {
+  value: KeyOrder;
+  label: string;
+  icon: React.ReactNode;
+}[] = [
+  {
+    value: 'asc',
+    label: 'Sort keys A–Z',
+    icon: <IconSortAscendingLetters size={14} />,
+  },
+  {
+    value: 'desc',
+    label: 'Sort keys Z–A',
+    icon: <IconSortDescendingLetters size={14} />,
+  },
+  {
+    value: 'original',
+    label: 'Original order',
+    icon: <IconList size={14} />,
+  },
+];
 
 /**
  * Migrates old `lineWrap` boolean to `whiteSpace` enum.
@@ -211,20 +259,36 @@ const viewerOptionsAtom = atomWithStorage<ViewerOptions>(
   viewerOptionsStorage,
 );
 
-function HyperJsonMenu({ rowData }: { rowData: any }) {
+function HyperJsonMenu({
+  rowData,
+  showMaterializedAliasColumnsOption,
+}: {
+  rowData: any;
+  showMaterializedAliasColumnsOption: boolean;
+}) {
   const [jsonOptions, setJsonOptions] = useAtom(viewerOptionsAtom);
+  const [showMaterializedAliasColumns, setShowMaterializedAliasColumns] =
+    useMaterializedAliasColumnsOption();
   const effectiveWhiteSpace = jsonOptions.whiteSpace ?? 'pre-wrap';
+  const effectiveKeyOrder = jsonOptions.keyOrder ?? DEFAULT_KEY_ORDER;
 
   return (
     <Group>
       {rowData != null && (
         <UnstyledButton
-          onClick={() => {
-            window.navigator.clipboard.writeText(
+          onClick={async () => {
+            const copied = await copyTextToClipboard(
               typeof rowData === 'string'
                 ? rowData
                 : JSON.stringify(rowData, null, 2),
             );
+            if (!copied) {
+              notifications.show({
+                color: 'red',
+                message: CLIPBOARD_ERROR_MESSAGE,
+              });
+              return;
+            }
             notifications.show({
               color: 'green',
               message: `Value copied to clipboard`,
@@ -253,7 +317,7 @@ function HyperJsonMenu({ rowData }: { rowData: any }) {
       </UnstyledButton>
       <Menu width={240} withinPortal={false}>
         <Menu.Target>
-          <UnstyledButton>
+          <UnstyledButton data-testid="json-viewer-options-menu">
             <IconSettings size={14} />
           </UnstyledButton>
         </Menu.Target>
@@ -312,6 +376,46 @@ function HyperJsonMenu({ rowData }: { rowData: any }) {
           >
             Hide blank values
           </Menu.Item>
+          {showMaterializedAliasColumnsOption && (
+            <Menu.Item
+              lh="1"
+              py={8}
+              data-testid="json-viewer-materialized-alias-toggle"
+              rightSection={
+                showMaterializedAliasColumns ? (
+                  <IconCheck size={14} className="ps-2" />
+                ) : null
+              }
+              onClick={() =>
+                setShowMaterializedAliasColumns(!showMaterializedAliasColumns)
+              }
+            >
+              Show materialized and alias columns
+            </Menu.Item>
+          )}
+          <Menu.Divider />
+          <Menu.Label lh={1} py={6}>
+            Property order
+          </Menu.Label>
+          {KEY_ORDER_OPTIONS.map(({ value, label, icon }) => (
+            <Menu.Item
+              key={value}
+              data-testid={`json-viewer-key-order-${value}`}
+              lh="1"
+              py={8}
+              leftSection={icon}
+              rightSection={
+                effectiveKeyOrder === value ? (
+                  <IconCheck size={14} className="ps-2" />
+                ) : null
+              }
+              onClick={() =>
+                setJsonOptions({ ...jsonOptions, keyOrder: value })
+              }
+            >
+              {label}
+            </Menu.Item>
+          ))}
         </Menu.Dropdown>
       </Menu>
     </Group>
@@ -321,17 +425,27 @@ function HyperJsonMenu({ rowData }: { rowData: any }) {
 export function DBRowJsonViewer({
   data,
   jsonColumns,
+  mapColumns,
+  showMaterializedAliasColumnsOption = false,
 }: {
   data: any;
   jsonColumns?: string[];
+  // Map column names from the result-set metadata. Threaded into
+  // `mergePath` so numeric-looking sub-keys on a Map render as
+  // `Map['key']` instead of the array `Map[N+1]`. HDX-4369.
+  mapColumns?: string[];
+  // Only a viewer of the whole row from `useRowData` is affected by the option,
+  // and only when the source's row query would change.
+  showMaterializedAliasColumnsOption?: boolean;
 }) {
+  const formatTime = useFormatTime();
   const {
     onPropertyAddClick,
     generateSearchUrl,
     generateChartUrl,
     displayedColumns,
     toggleColumn,
-  } = useContext(RowSidePanelContext);
+  } = use(RowSidePanelContext);
 
   const [filter, setFilter] = useState<string>('');
   const [debouncedFilter] = useDebouncedValue(filter, 100);
@@ -355,40 +469,71 @@ export function DBRowJsonViewer({
     return filterObjectRecursively(cleanedData, debouncedFilter);
   }, [data, debouncedFilter, jsonOptions.filterBlanks]);
 
+  const formatLeafValue = useCallback<FormatLeafValue>(
+    ({ keyName, keyPath, value }) => {
+      if (
+        keyPath.length !== 1 ||
+        (keyName !== 'Timestamp' && keyName !== 'TimestampTime')
+      ) {
+        return undefined;
+      }
+
+      if (typeof value !== 'string' || value.length === 0) {
+        return undefined;
+      }
+
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return undefined;
+      }
+
+      return formatTime(date, { format: 'withMs' });
+    },
+    [formatTime],
+  );
+
   const getLineActions = useCallback<GetLineActions>(
     ({ keyPath, value, isInParsedJson, parsedJsonRootPath }) => {
       const actions: LineAction[] = [];
-      const fieldPath = mergePath(keyPath, jsonColumns);
+      const fieldPath = mergePath(keyPath, jsonColumns, mapColumns);
       const isJsonColumn =
         keyPath.length > 0 && jsonColumns?.includes(keyPath[0]);
 
-      // Add to Filters action (strings only)
+      // Add to Filters action
       // FIXME: TOTAL HACK To disallow adding timestamp to filters
       if (
         onPropertyAddClick != null &&
-        typeof value === 'string' &&
-        value &&
+        (typeof value === 'string' ||
+          typeof value === 'number' ||
+          typeof value === 'boolean') &&
+        value !== '' &&
+        value != null &&
         fieldPath != 'Timestamp' &&
         fieldPath != 'TimestampTime'
       ) {
         actions.push({
           key: 'add-to-search',
-          label: (
-            <Group gap={2}>
-              <IconFilter size={14} />
-              Add to Filters
-            </Group>
-          ),
+          label: <IconFilter size={14} />,
           title: 'Add to Filters',
           onClick: () => {
             let filterFieldPath = fieldPath;
 
             // Handle parsed JSON from string columns using JSONExtractString
             if (isInParsedJson && parsedJsonRootPath) {
+              let jsonExtractFn: JSONExtractFn = 'JSONExtractString';
+
+              if (typeof value === 'number') {
+                jsonExtractFn = 'JSONExtractFloat';
+              } else if (typeof value === 'boolean') {
+                jsonExtractFn = 'JSONExtractBool';
+              }
+
               const jsonQuery = buildJSONExtractQuery(
                 keyPath,
                 parsedJsonRootPath,
                 jsonColumns,
+                jsonExtractFn,
+                mapColumns,
               );
               if (jsonQuery) {
                 filterFieldPath = jsonQuery;
@@ -405,10 +550,16 @@ export function DBRowJsonViewer({
                 : fieldPath;
             }
 
-            onPropertyAddClick(filterFieldPath, value);
+            onPropertyAddClick(
+              filterFieldPath,
+              (filterFieldPath.startsWith('toString(') ||
+              typeof value !== 'boolean'
+                ? String(value)
+                : value) as string,
+            );
             notifications.show({
               color: 'green',
-              message: `Added "${fieldPath} = ${value}" to filters`,
+              message: `Added "${fieldPath} = ${String(value)}" to filters`,
             });
           },
         });
@@ -417,12 +568,7 @@ export function DBRowJsonViewer({
       if (generateSearchUrl && typeof value !== 'object') {
         actions.push({
           key: 'search',
-          label: (
-            <Group gap={2}>
-              <IconSearch size={14} />
-              Search
-            </Group>
-          ),
+          label: <IconSearch size={14} />,
           title: 'Search for this value only',
           onClick: () => {
             let searchFieldPath = fieldPath;
@@ -442,6 +588,7 @@ export function DBRowJsonViewer({
                 parsedJsonRootPath,
                 jsonColumns,
                 jsonExtractFn,
+                mapColumns,
               );
 
               if (jsonQuery) {
@@ -485,6 +632,8 @@ export function DBRowJsonViewer({
                 keyPath,
                 parsedJsonRootPath,
                 jsonColumns,
+                'JSONExtractString',
+                mapColumns,
               );
               if (jsonQuery) {
                 chartFieldPath = jsonQuery;
@@ -512,26 +661,18 @@ export function DBRowJsonViewer({
             keyPath,
             parsedJsonRootPath,
             jsonColumns,
+            'JSONExtractString',
+            mapColumns,
           );
           if (jsonQuery) {
             columnFieldPath = jsonQuery;
           }
         }
 
-        const isIncluded = displayedColumns?.includes(columnFieldPath);
+        const isIncluded = isColumnInSelect(displayedColumns, columnFieldPath);
         actions.push({
           key: 'toggle-column',
-          label: isIncluded ? (
-            <Group gap={2}>
-              <IconMinus size={14} />
-              Column
-            </Group>
-          ) : (
-            <Group gap={2}>
-              <IconPlus size={14} />
-              Column
-            </Group>
-          ),
+          label: isIncluded ? <IconMinus size={14} /> : <IconPlus size={14} />,
           title: isIncluded
             ? `Remove ${fieldPath} column from results table`
             : `Add ${fieldPath} column to results table`,
@@ -547,7 +688,7 @@ export function DBRowJsonViewer({
         });
       }
 
-      const handleCopyObject = () => {
+      const handleCopyObject = async () => {
         let copiedObj;
 
         // When in parsed JSON context (e.g., expanded stringified JSON),
@@ -559,9 +700,16 @@ export function DBRowJsonViewer({
           copiedObj = keyPath.length === 0 ? rowData : get(rowData, keyPath);
         }
 
-        window.navigator.clipboard.writeText(
+        const copied = await copyTextToClipboard(
           JSON.stringify(copiedObj, null, 2),
         );
+        if (!copied) {
+          notifications.show({
+            color: 'red',
+            message: CLIPBOARD_ERROR_MESSAGE,
+          });
+          return;
+        }
         notifications.show({
           color: 'green',
           message: `Copied object to clipboard`,
@@ -571,24 +719,28 @@ export function DBRowJsonViewer({
       if (typeof value === 'object') {
         actions.push({
           key: 'copy-object',
-          label: 'Copy Object',
+          label: <IconCopy size={14} />,
+          title: 'Copy object',
           onClick: handleCopyObject,
         });
       } else {
         actions.push({
           key: 'copy-value',
-          label: (
-            <Group gap={2}>
-              <IconCopy size={14} />
-              Copy Value
-            </Group>
-          ),
-          onClick: () => {
-            window.navigator.clipboard.writeText(
+          label: <IconCopy size={14} />,
+          title: 'Copy value',
+          onClick: async () => {
+            const copied = await copyTextToClipboard(
               typeof value === 'string'
                 ? value
                 : JSON.stringify(value, null, 2),
             );
+            if (!copied) {
+              notifications.show({
+                color: 'red',
+                message: CLIPBOARD_ERROR_MESSAGE,
+              });
+              return;
+            }
             notifications.show({
               color: 'green',
               message: `Value copied to clipboard`,
@@ -607,6 +759,7 @@ export function DBRowJsonViewer({
       rowData,
       toggleColumn,
       jsonColumns,
+      mapColumns,
     ],
   );
 
@@ -631,7 +784,12 @@ export function DBRowJsonViewer({
             </Button>
           )}
           <div className="flex-grow-1" />
-          <HyperJsonMenu rowData={rowData} />
+          <HyperJsonMenu
+            rowData={rowData}
+            showMaterializedAliasColumnsOption={
+              showMaterializedAliasColumnsOption
+            }
+          />
         </Group>
       </Box>
       <Paper bg="transparent" mt="sm">
@@ -639,6 +797,7 @@ export function DBRowJsonViewer({
           <HyperJson
             data={rowData}
             getLineActions={getLineActions}
+            formatLeafValue={formatLeafValue}
             {...jsonOptions}
           />
         ) : (

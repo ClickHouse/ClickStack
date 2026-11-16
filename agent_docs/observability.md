@@ -1,0 +1,368 @@
+# Observability & Instrumentation
+
+ClickStack is an observability product, so our own code should be a shining example
+of well-instrumented software. When you add or change a feature, instrument it
+as part of the change - not as an afterthought.
+
+This guide covers the conventions and the shared helpers. The principles are
+aligned with the
+[Instrumentation Score specification](https://github.com/instrumentation-score/spec/tree/main/rules).
+
+## TL;DR (the non-negotiables)
+
+1. **Every team-scoped operation carries team + user context.** Use
+   `setBusinessContext(...)` so `hyperdx.team.id` / `user.id` end up on
+   the trace. Auth middleware already does this for HTTP requests; background
+   jobs and other entry points must do it themselves.
+2. **If something is worth a log, put it on the span first.** The active span is
+   the wide event for the current unit of work — attach the fact there as an
+   attribute. If it also marks a countable event worth aggregating (an error, a
+   skip, a fired alert, a query), emit a counter or histogram alongside it.
+3. **Cardinality belongs on span _attributes_, not span _names_ or _metrics_.**
+   Never put raw queries, user input, IDs, or error messages into a span _name_
+   or a metric _attribute key/value_ — those must stay low-cardinality. Span
+   _attributes_ are the opposite: enrich them freely with high-cardinality
+   context (IDs, sizes, statuses), because that is what makes a trace queryable
+   after the fact.
+4. **Favor wide events for our own code — metrics stay first-class.** For the
+   instrumentation _in this repo_ we lean on richly-attributed spans: before
+   adding an instrument, ask whether the value belongs on the span for the work
+   already in flight, and put point-in-time / gauge-style values (sizes, counts,
+   depths, current state) there rather than in a gauge. This is an internal
+   engineering preference, not a rule against metrics — counters and histograms
+   remain first-class, feed alerts and SLOs, and many ClickStack deployments depend
+   heavily on them. See [Wide events over gauges](#wide-events-over-gauges).
+5. **Use the shared helpers** in
+   [`packages/api/src/utils/instrumentation.ts`](../packages/api/src/utils/instrumentation.ts).
+   Don't hand-roll tracer/meter lifecycle.
+6. **A new surface that queries ClickHouse declares its query attribution.**
+   One provider or one `withQueryAttribution` scope at the entry point, not a
+   change at each query. See [Query attribution](#query-attribution).
+
+## The shared helper library
+
+All manual instrumentation in `packages/api` goes through
+`@/utils/instrumentation`:
+
+| Helper                                                    | Purpose                                                                                                      |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `withSpan(name, fn, opts?)`                               | Run an async unit of work in an active span. Records exceptions, sets OK/ERROR status, always ends the span. |
+| `setBusinessContext({ teamId, userId, email, ...extra })` | Attach standardized incident-remediation context to the active span and the request's HTTP server span.      |
+| `getStaticFeatureFlags()`                                 | Returns the static (env/compile-time) feature-flag states as `feature_flag.*` attributes.                    |
+| `getCounter(name, opts?)` / `getHistogram(name, opts?)`   | Memoized OTel instrument accessors. Always use these instead of `meter.create*`.                             |
+| `recordDuration(histogram, fn, attrs?)`                   | Run `fn`, recording its wall-clock duration on a histogram (even on throw).                                  |
+
+The module also re-exports `SpanKind`, `SpanStatusCode`, and the relevant OTel
+types, so a single import is usually enough.
+
+### Tracing
+
+Rely on the ClickStack SDK (`@clickhouse/clickstack-node`) auto-instrumentation
+(HTTP, Express, Mongo, etc.) for the common path. Add a **manual span only for a
+meaningful unit of work** that auto-instrumentation can't see - a background job
+step, a fan-out, an expensive computation, an external tool invocation.
+
+```ts
+import { withSpan } from '@/utils/instrumentation';
+
+await withSpan(
+  'alerts.process_batch',
+  async span => {
+    span.setAttribute('hyperdx.alerts.batch.size', alerts.length);
+    return processBatch(alerts);
+  },
+  { attributes: { 'hyperdx.team.id': teamId } },
+);
+```
+
+Span rules to follow (from the Instrumentation Score spec):
+
+- **Bound span-name cardinality** (SPA-003): span names are constants or use
+  route templates - never interpolate IDs, queries, or URLs into the name. Put
+  those in attributes instead.
+- **Don't over-span** (SPA-001, SPA-005): keep `INTERNAL` spans limited and
+  meaningful. Never create a span per loop iteration or per trivial sub-call -
+  it bloats traces and hurts performance.
+- **Root spans are not `CLIENT`** (SPA-004): an entry point (HTTP handler, job
+  tick) should open a `SERVER`/`INTERNAL` span before issuing outbound `CLIENT`
+  calls. Auto-instrumentation handles this for HTTP; for headless workloads
+  (cron tasks), wrap the work in a top-level span.
+
+### Business context
+
+Attach team/user context as early as possible (at the auth boundary or the top
+of a job). `setBusinessContext` writes to the active span and, inside an HTTP
+request, to the request's HTTP server span, so the context stays on the request
+even when the active span is a short Express middleware span. Other spans in the
+trace do not get it.
+
+```ts
+import {
+  getStaticFeatureFlags,
+  setBusinessContext,
+} from '@/utils/instrumentation';
+
+setBusinessContext({
+  teamId: user.team?.toString(),
+  userId: user._id?.toString(),
+  email: user.email,
+  ...getStaticFeatureFlags(),
+});
+```
+
+Standard attribute keys:
+
+| Key                        | Meaning                                                    |
+| -------------------------- | ---------------------------------------------------------- |
+| `hyperdx.team.id`          | Owning team (multi-tenancy boundary). Set this everywhere. |
+| `user.id`                  | Acting user (OTel `user.*` semconv).                       |
+| `user.email`              | Acting user's email (OTel `user.*` semconv).               |
+| `hyperdx.<domain>.<field>` | Domain IDs, e.g. `hyperdx.alert.id`, `hyperdx.source.id`.  |
+| `feature_flag.<name>`      | Evaluated feature/config flag state.                       |
+
+### Wide events over gauges
+
+> **Scope:** this is ClickStack's _internal_ instrumentation philosophy for the
+> code in this repo — not a recommendation that users pick wide events over
+> metrics. Metrics are a first-class ClickStack signal that many operators rely on;
+> nothing here discourages them. What follows is simply how _we_ prefer to
+> instrument our own services.
+
+We instrument in the spirit of
+[wide events](https://boristane.com/blog/observability-wide-events-101/): one
+richly-attributed span per unit of work beats a scatter of pre-aggregated
+metrics. Pre-aggregation only answers the questions you thought to ask in
+advance; a wide event lets you slice by any dimension _after_ the incident —
+"aborted uploads, but only from agents on this collector version, over 5 MB" is
+a trace query, not a metric you had the foresight to define.
+
+The practical consequence for our code: **default away from gauges.** A gauge is
+a point-in-time sample of a value, and that value almost always belongs to some
+unit of work — a request body size, a batch length, a queue depth at dequeue, a
+team count used to build a config. Prefer putting it on that operation's span as
+an attribute. There it keeps its correlations (which agent, which team, which
+outcome) and stays queryable across every other attribute on the event; a gauge
+sheds all of that the moment it's recorded.
+
+```ts
+// Don't: a bare gauge, stripped of the context that makes it useful.
+// meter.createObservableGauge('opamp.request.body_size')...
+
+// Do: attach the point-in-time value to the span for the work in flight, where
+// it can be sliced by agent, team, outcome, or any other span attribute.
+span.setAttribute('opamp.request.body_size_bytes', req.body.length);
+span.setAttribute('opamp.teams.count', teams.length);
+```
+
+Metrics still earn their place for **aggregate signals that must exist
+independently of any single event** — availability/latency SLIs, error rates,
+alert thresholds — because those stay correct under trace sampling and are cheap
+to alert on. That's the counters and histograms below. What we skip is the
+gauge: if a value is worth recording at a point in time, the span is where it
+belongs.
+
+The rare exception is an ambient value with no owning operation (a pool size or
+queue depth sampled by a background poller). Even then, prefer emitting a
+periodic wide event — a heartbeat span carrying the readings — over a raw gauge,
+so the readings stay sliceable; fall back to a gauge only when no such event
+exists.
+
+### Metrics
+
+When you write a log line that marks a countable event, add a metric too.
+Counters for occurrences, histograms for durations/sizes. For our own code we
+favor span attributes over gauges (see
+[Wide events over gauges](#wide-events-over-gauges)), but metrics themselves are
+first-class — reach for them for aggregate signals, alerts, and SLOs.
+
+```ts
+import {
+  getCounter,
+  getHistogram,
+  recordDuration,
+} from '@/utils/instrumentation';
+
+const queryErrors = getCounter('hyperdx.search.query_errors', {
+  description: 'Search query failures, labeled by error type.',
+});
+const queryDuration = getHistogram('hyperdx.search.query.duration_ms', {
+  description: 'Search query duration.',
+  unit: 'ms',
+});
+
+const result = await recordDuration(queryDuration, () => runQuery(cfg));
+// ...on a known error:
+queryErrors.add(1, { error_type: chType });
+```
+
+Metric conventions:
+
+- **Naming**: `hyperdx.<domain>.<event>` (snake_case event), e.g.
+  `hyperdx.alerts.evaluations`, `hyperdx.api.errors`.
+- **Attributes are low-cardinality** (MET-001): use fixed enums
+  (`{ outcome: 'fired' | 'resolved' | 'skipped_silenced' }`), status codes, or
+  bounded error-type strings. Never user IDs, team IDs, raw messages, or query
+  text.
+- **Always pass a `description`** (and `unit` for histograms).
+- **Define instruments at module scope** via `getCounter`/`getHistogram` so they
+  are created once and reused.
+
+### SLOs (operation metrics)
+
+To make a piece of functionality SLO-able, wrap it with `withOperationMetrics`
+(or call `recordOperationOutcome` directly when timing is managed manually, e.g.
+a streaming proxy). Both emit a standard pair of SLI signals tagged with a
+stable, low-cardinality `operation` name and `outcome` (`success` | `error`):
+
+| Metric                          | Type      | Use as          |
+| ------------------------------- | --------- | --------------- |
+| `hyperdx.operation.requests`    | counter   | availability SLI |
+| `hyperdx.operation.duration_ms` | histogram | latency SLI     |
+
+```ts
+import { withOperationMetrics } from '@/utils/instrumentation';
+
+const chartConfig = await withOperationMetrics(
+  'ai.assistant',
+  () => generateChart(prompt),
+  { source_kind: source.kind },
+);
+```
+
+Because every operation reports through the same two metrics, an SLO is just a
+filter on `operation` — availability = `outcome:success` / total, latency =
+the duration histogram. Keep `operation` a constant (e.g. `ai.assistant`,
+`clickhouse_proxy.query`); never interpolate IDs or user input into it. Reach
+for this on functionality with real failure modes worth a target (external
+dependencies, query proxies, AI calls) — not on thin CRUD that the HTTP
+auto-instrumentation and error middleware already cover.
+
+## Query attribution
+
+Every ClickHouse query ClickStack runs is tagged with what asked for it, so a row
+in the customer's `system.query_log` points back to a dashboard tile, a saved
+search, an alert, or an MCP tool. This is the one piece of our instrumentation
+that lands in *their* data rather than ours, so it stays small, carries no
+identity, and must never be able to fail a query.
+
+Two channels carry it, set by `BaseClickhouseClient.query`:
+
+| Where | Shape | What it answers |
+| --- | --- | --- |
+| `log_comment` | JSON payload, e.g. `{"v":1,"surface":"dashboard","dashboard":"…","tile":"…"}` | After the fact: `GROUP BY JSONExtractString(log_comment, 'tile')` over `system.query_log` |
+| `query_id` | `hdx-<surface>-<uuid>` | Right now: reading `system.processes` while a query is still running |
+
+The vocabulary lives in
+[`packages/common-utils/src/clickhouse/attribution.ts`](../packages/common-utils/src/clickhouse/attribution.ts).
+`QUERY_SURFACES` is a fixed, short list, because it goes in the `query_id` and
+people group by it. Anything naming one specific dashboard, tile or search goes
+in the id fields instead.
+
+### Declaring it
+
+Not at the call site that runs the query: there are roughly sixty of those, and
+`Metadata` accounts for two dozen on its own. Set it once where the reason for
+the query is known, and everything underneath picks it up.
+
+**Browser** — React context, read by `useClickhouseClient`:
+
+```tsx
+<QueryAttributionProvider
+  attribution={{ surface: 'dashboard', dashboard: dashboardId, tile: chart.id }}
+>
+  {children}
+</QueryAttributionProvider>
+```
+
+Providers nest, and the innermost value wins, so a dashboard sets its id once
+and each tile adds only its own. A page that needs nothing finer than "which
+page" can use `withAppNavForSurface('…')` as its `getLayout` instead.
+
+Do **not** put attribution on the chart config: the config is the React Query
+cache key, so two surfaces asking the identical question would stop sharing a
+cache entry and query volume would double.
+
+**Server** — a scope around the request or job (`AsyncLocalStorage`, node only):
+
+```ts
+await withQueryAttribution({ surface: 'alert', alert: alert.id }, async () =>
+  processAlert(...),
+);
+```
+
+Wrap the whole request or job, not the query. One call at the top covers
+everything below it, including the materialized-view `EXPLAIN` probes.
+
+Order of precedence: the client's default, then the scope around the current
+request or job, then anything passed with an individual query.
+
+**Browser to API route** — for requests that reach ClickHouse through an API
+route instead of a ClickHouse client. PromQL is the case today: the browser
+calls `/api/v1/prometheus/query{,_range}`, and `/labels` and
+`/label/:name/values` for autocomplete and dashboard filters (tagged with
+`useMetadataQueryAttribution()`), over fetch. The caller sends
+`buildLogComment(attribution)` in the `x-hyperdx-query-attribution` header
+(`QUERY_ATTRIBUTION_HEADER`), and the router parses it with `parseLogComment`
+into a `withQueryAttribution` scope layered over the auth middleware's `api`
+scope. The browser's surface and ids win; `trace` and `label` stay the
+server's. Queries the route runs through a ClickHouse client (label lookups
+before 26.9, and the `prometheusQuery()`/`prometheusQueryRange()` fallback)
+pick the scope up as usual. Requests proxied to ClickHouse's Prometheus HTTP
+API (queries on 26.6+, label lookups on 26.9+) are tagged
+by `clickhousePrometheusRequest`: `log_comment` as a URL setting, `query_id` as
+the `X-ClickHouse-Query-Id` header, because the handler rejects `query_id` as an
+unknown setting in the URL.
+
+### Rules
+
+- **Values from the browser are hints, not proof.** The client controls them.
+  `sanitizeField` drops control characters and caps the length, and the payload
+  only ever becomes JSON strings, never SQL.
+- **It must never throw.** A tag describes the work; it does not gate it. Read
+  fields with `?.` even where the type says they are required, and keep helpers
+  like `getActiveTraceId` from throwing. A half-populated object must not be
+  able to stop an alert from running.
+- **Set it where the reason is known, not just on the page.** A page-level
+  surface is a fallback. A modal or panel rendered outside a tile only gets the
+  page's surface, so give it its own (`chart-preview`) when it has ids to
+  report.
+- **Keep the payload small.** It rides in the URL query string on every browser
+  query. The cap is 1 KB; real payloads are 100 to 200 bytes. Today's fields
+  cannot fill the budget even at full length, so nothing is ever shed. If you
+  add a field, check that still holds: over budget, fields are dropped whole
+  from the end rather than truncated, so the value stays parseable JSON.
+
+## Where to look for examples
+
+- Generic span + status handling: `packages/api/src/utils/instrumentation.ts`
+- Span + metrics wrapper around a unit of work:
+  `packages/api/src/mcp/utils/tracing.ts`
+- Context at the auth boundary: `packages/api/src/middleware/auth.ts`
+- Error counter: `packages/api/src/middleware/error.ts`
+- Outcome counters in a background job:
+  `packages/api/src/tasks/checkAlerts/index.ts`
+- Query duration + error metrics:
+  `packages/api/src/routers/external-api/v2/search.ts` and `charts.ts`
+- Scheduled-task metrics pattern: `packages/api/src/tasks/metrics.ts`
+- Outcome counter + span on a non-HTTP entry point:
+  `packages/api/src/opamp/controllers/opampController.ts`
+- Duration + swallowed-error counters where errors never reach the error
+  middleware: `packages/api/src/routers/api/prometheus.ts`
+- Delivery attempt counter + duration around an outbound webhook:
+  `packages/api/src/tasks/checkAlerts/transports/generic.ts`
+- Per-event cap counter on a fan-out loop:
+  `packages/api/src/tasks/checkAlerts/template.ts`
+- Connection lifecycle-event counter: `packages/api/src/models/index.ts`
+- SLO operation metrics (`withOperationMetrics`) on an external dependency:
+  `packages/api/src/routers/api/ai.ts`
+- SLO operation metrics (`recordOperationOutcome`) on a streaming proxy:
+  `packages/api/src/routers/api/clickhouseProxy.ts`
+- End-to-end + sub-operation SLO metrics on a background job (alert evaluation
+  and its data fetch): `packages/api/src/tasks/checkAlerts/index.ts`
+  (`alerts.evaluate`, `alerts.query`)
+- Query attribution scope at the auth boundary:
+  `packages/api/src/middleware/auth.ts` (`nextWithQueryAttribution`)
+- Query attribution around one alert evaluation:
+  `packages/api/src/tasks/checkAlerts/index.ts` (`alertQueryAttribution`)
+- Query attribution per React subtree: `packages/app/src/queryAttribution.tsx`,
+  mounted per tile in `packages/app/src/DBDashboardPage.tsx`

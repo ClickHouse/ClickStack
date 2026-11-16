@@ -1,24 +1,31 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { HTTPError } from 'ky';
 import { Controller, SubmitHandler, useForm, useWatch } from 'react-hook-form';
 import { ZodIssue } from 'zod';
 import { json, jsonParseLinter } from '@codemirror/lang-json';
 import { linter } from '@codemirror/lint';
+import { getWebhookTemplateError } from '@hyperdx/common-utils/dist/core/handlebarsEnv';
 import {
-  AlertState,
+  getDefaultWebhookBody,
+  WEBHOOK_TEMPLATE_VARIABLES,
   WebhookApiData,
   WebhookService,
+  WebhookTemplateVariable,
 } from '@hyperdx/common-utils/dist/types';
 import { isValidSlackUrl } from '@hyperdx/common-utils/dist/validation';
 import {
   Alert,
   Button,
+  Checkbox,
+  Code,
   Group,
   Radio,
+  SimpleGrid,
   Stack,
   Text,
   TextInput,
 } from '@mantine/core';
+import { useDebouncedValue } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconInfoCircleFilled } from '@tabler/icons-react';
 import ReactCodeMirror, {
@@ -27,20 +34,51 @@ import ReactCodeMirror, {
 } from '@uiw/react-codemirror';
 
 import api from '@/api';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
+import { useBrandDisplayName } from '@/brand';
+import { WebhookBodyValidationAlert } from '@/components/TeamSettings/WebhookBodyValidation';
 import { isValidUrl } from '@/utils';
 
-const DEFAULT_GENERIC_WEBHOOK_BODY = [
-  '{{title}}',
-  '{{body}}',
-  '{{link}}',
-  '{{state}}',
-  '{{startTime}}',
-  '{{endTime}}',
-  '{{eventId}}',
-];
-const DEFAULT_GENERIC_WEBHOOK_BODY_TEMPLATE =
-  DEFAULT_GENERIC_WEBHOOK_BODY.join(' | ');
+// The default body and the variable list both come from common-utils, so this
+// form and the API's fallback cannot drift. The docs page restates them by
+// hand; a unit test in common-utils keeps that table honest.
+// Keyed by WebhookTemplateVariable so a variable added in common-utils cannot
+// reach the transports without a description here.
+const describeTemplateVariable = (
+  brandName: string,
+): Record<WebhookTemplateVariable, string> => ({
+  title: 'Alert title',
+  body: 'Rendered message body (markdown)',
+  link: `Deep link back into ${brandName}`,
+  state: 'Raw internal alert state',
+  status: 'firing, resolved, no_data, pending or error',
+  eventId: 'Unique id for this firing',
+  alertId: 'Stable id of the alert — the key to dedupe on',
+  alertType: 'search, dashboard_chart or inline_query',
+  comparator: '>=, >, <, <=, =, !=, between or outside',
+  threshold: 'The configured threshold (number)',
+  thresholdMax: 'Upper bound of a between/outside range (number)',
+  value: 'Value that triggered or resolved the alert (number)',
+  groupKey: 'The breaching group, if grouped',
+  var: 'Group-by values by column, e.g. {{var.customer_id}}',
+  sourceQuery: 'Search expression or SQL behind the alert',
+  startTime: 'Window start, Unix ms (number)',
+  endTime: 'Window end, Unix ms (number)',
+  startTimeISO: 'Window start, ISO-8601',
+  endTimeISO: 'Window end, ISO-8601',
+  teamId: 'Team the alert belongs to',
+  note: "Alert's note, commonly a runbook link",
+  tags: "Alert's tags, comma-separated; iterate with {{#each tags}}",
+});
+
+export const getWebhookTemplateVariables = (
+  brandName: string,
+): { name: string; description: string }[] => {
+  const descriptions = describeTemplateVariable(brandName);
+  return WEBHOOK_TEMPLATE_VARIABLES.map(name => ({
+    name: `{{${name}}}`,
+    description: descriptions[name],
+  }));
+};
 
 const jsonLinterWithEmptyCheck = () => (editorView: EditorView) => {
   const text = editorView.state.doc.toString().trim();
@@ -53,6 +91,7 @@ type WebhookForm = {
   url: string;
   service: WebhookService;
   description?: string;
+  titleEmoji: boolean;
   body?: string;
   headers?: string;
 };
@@ -78,6 +117,7 @@ export function WebhookForm({
       name: webhook?.name || '',
       url: webhook?.url || '',
       description: webhook?.description || '',
+      titleEmoji: webhook?.titleEmoji !== false,
       body: webhook?.body || '',
       headers: webhook?.headers ? JSON.stringify(webhook.headers, null, 2) : '',
     },
@@ -91,6 +131,7 @@ export function WebhookForm({
           name: webhook.name,
           url: webhook.url,
           description: webhook.description,
+          titleEmoji: webhook.titleEmoji !== false,
           body: webhook.body,
           headers: webhook.headers
             ? JSON.stringify(webhook.headers, null, 2)
@@ -100,6 +141,19 @@ export function WebhookForm({
       );
     }
   }, [webhook, form]);
+
+  const service = useWatch({ control: form.control, name: 'service' });
+  const bodyText = useWatch({ control: form.control, name: 'body' });
+  // Debounced so the error doesn't flash while a {{ … }} is half-typed.
+  const [debouncedBody] = useDebouncedValue(bodyText, 300);
+  const bodyError = useMemo(
+    // Slack sends a fixed payload and never renders the body.
+    () =>
+      service === WebhookService.Slack
+        ? null
+        : getWebhookTemplateError(debouncedBody),
+    [service, debouncedBody],
+  );
 
   const handleTestWebhook = async (values: WebhookForm) => {
     const { service, url, body, headers } = values;
@@ -123,20 +177,10 @@ export function WebhookForm({
       }
     }
 
-    let defaultBody = body;
-    if (!body) {
-      if (service === WebhookService.Generic) {
-        defaultBody = `{"text": "${DEFAULT_GENERIC_WEBHOOK_BODY_TEMPLATE}"}`;
-      } else if (service === WebhookService.IncidentIO) {
-        defaultBody = `{
-  "title": "{{title}}",
-  "description": "{{body}}",
-  "deduplication_key": "{{eventId}}",
-  "status": "{{#if (eq state "${AlertState.ALERT}")}}firing{{else}}resolved{{/if}}",
-  "source_url": "{{link}}"
-}`;
-      }
-    }
+    const defaultBody =
+      service === WebhookService.Slack
+        ? body
+        : body || getDefaultWebhookBody(service);
 
     try {
       await testWebhook.mutateAsync({
@@ -144,6 +188,7 @@ export function WebhookForm({
         url,
         body: defaultBody,
         headers: parsedHeaders,
+        ...(isEditing && { webhookId: webhook._id }),
       });
       notifications.show({
         color: 'green',
@@ -174,7 +219,8 @@ export function WebhookForm({
   };
 
   const onSubmit: SubmitHandler<WebhookForm> = async values => {
-    const { service, name, url, description, body, headers } = values;
+    const { service, name, url, description, titleEmoji, body, headers } =
+      values;
 
     try {
       // Parse headers JSON if provided (API will validate the content)
@@ -196,26 +242,17 @@ export function WebhookForm({
         }
       }
 
-      let defaultBody = body;
-      if (!body) {
-        if (service === WebhookService.Generic) {
-          defaultBody = `{"text": "${DEFAULT_GENERIC_WEBHOOK_BODY_TEMPLATE}"}`;
-        } else if (service === WebhookService.IncidentIO) {
-          defaultBody = `{
-  "title": "{{title}}",
-  "description": "{{body}}",
-  "deduplication_key": "{{eventId}}",
-  "status": "{{#if (eq state "${AlertState.ALERT}")}}firing{{else}}resolved{{/if}}",
-  "source_url": "{{link}}"
-}`;
-        }
-      }
+      const defaultBody =
+        service === WebhookService.Slack
+          ? body
+          : body || getDefaultWebhookBody(service);
 
       const webhookData = {
         service,
         name,
         url,
         description: description || '',
+        titleEmoji,
         body: defaultBody,
         headers: parsedHeaders,
       };
@@ -275,7 +312,19 @@ export function WebhookForm({
     }
   };
 
-  const service = useWatch({ control: form.control, name: 'service' });
+  // A body left at the old service's default would still be sent verbatim, and
+  // each service's default is invalid to the others' receivers. A hand-edited
+  // body is the user's, so it survives the switch.
+  const onServiceChange = (next: WebhookService) => {
+    const body = form.getValues('body');
+    if (!body || body === getDefaultWebhookBody(service)) {
+      form.setValue('body', '');
+    }
+    form.setValue('service', next);
+  };
+  const templateVariables = getWebhookTemplateVariables(brandName);
+  const headersText = useWatch({ control: form.control, name: 'headers' });
+  const hasMaskedHeaders = isEditing && !!headersText?.includes('****');
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)}>
@@ -286,7 +335,7 @@ export function WebhookForm({
           label="Service Type"
           required
           value={service}
-          onChange={value => form.setValue('service', value as WebhookService)}
+          onChange={value => onServiceChange(value as WebhookService)}
         >
           <Group mt="xs">
             <Radio value={WebhookService.Slack} label="Slack" />
@@ -306,6 +355,11 @@ export function WebhookForm({
         <TextInput
           label="Webhook URL"
           data-testid="webhook-url-input"
+          description={
+            isEditing
+              ? 'URL is masked for security. Enter a new URL to update.'
+              : undefined
+          }
           placeholder={
             service === WebhookService.Slack
               ? 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'
@@ -332,10 +386,21 @@ export function WebhookForm({
           error={form.formState.errors.description?.message}
           {...form.register('description')}
         />
+        <Checkbox
+          label="Show state emoji in notification titles"
+          data-testid="webhook-title-emoji-checkbox"
+          {...form.register('titleEmoji')}
+        />
         {service === WebhookService.Generic && [
           <label className=".mantine-TextInput-label" key="1">
             Webhook Headers (optional)
           </label>,
+          hasMaskedHeaders && (
+            <Text key="1a" size="xs" c="dimmed" mt={-4}>
+              Header values are masked. Enter new values to update or remove
+              keys to delete them.
+            </Text>
+          ),
           <div className="mb-2" key="2">
             <Controller
               name="headers"
@@ -357,6 +422,8 @@ export function WebhookForm({
               )}
             />
           </div>,
+        ]}
+        {service !== WebhookService.Slack && [
           <label className=".mantine-TextInput-label" key="3">
             Webhook Body (optional)
           </label>,
@@ -370,9 +437,7 @@ export function WebhookForm({
                   extensions={[
                     json(),
                     linter(jsonLinterWithEmptyCheck()),
-                    placeholder(
-                      `{\n\t"text": "${DEFAULT_GENERIC_WEBHOOK_BODY_TEMPLATE}"\n}`,
-                    ),
+                    placeholder(getDefaultWebhookBody(service)),
                   ]}
                   theme="dark"
                   value={field.value}
@@ -381,25 +446,39 @@ export function WebhookForm({
               )}
             />
           </div>,
+          bodyError && (
+            <WebhookBodyValidationAlert key="4a" error={bodyError} />
+          ),
           <Alert
             icon={<IconInfoCircleFilled size={16} />}
             key="5"
             className="mb-4"
             color="gray"
           >
-            <span>
-              Currently the body supports the following message template
-              variables:
-            </span>
-            <br />
-            <span>
-              {DEFAULT_GENERIC_WEBHOOK_BODY.map((body, index) => (
-                <span key={index}>
-                  <code>{body}</code>
-                  {index < DEFAULT_GENERIC_WEBHOOK_BODY.length - 1 && ', '}
-                </span>
+            <Text size="sm">
+              The body supports the following template variables:
+            </Text>
+            <SimpleGrid
+              cols={{ base: 1, sm: 2 }}
+              spacing="xs"
+              verticalSpacing={4}
+              mt="xs"
+              data-testid="webhook-template-variables"
+            >
+              {templateVariables.map(({ name, description }) => (
+                <Group key={name} gap="xs" wrap="nowrap" align="baseline">
+                  <Code>{name}</Code>
+                  <Text size="xs" c="dimmed">
+                    {description}
+                  </Text>
+                </Group>
               ))}
-            </span>
+            </SimpleGrid>
+            <Text size="xs" c="dimmed" mt="xs">
+              Strings are JSON-escaped, so they are safe inside quotes. Numbers
+              are emitted raw for unquoted slots. A variable the alert
+              doesn&apos;t carry renders as an empty string.
+            </Text>
           </Alert>,
         ]}
         <Group justify="space-between">

@@ -14,7 +14,9 @@ import {
 } from '@/controllers/ai';
 import { getSource } from '@/controllers/sources';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
+import { llmTelemetry } from '@/utils/aiTelemetry';
 import { Api404Error, Api500Error } from '@/utils/errors';
+import { withOperationMetrics } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import { objectIdSchema } from '@/utils/zod';
 
@@ -32,7 +34,7 @@ router.post(
     try {
       const model = getAIModel();
 
-      const { teamId } = getNonNullUserWithTeam(req);
+      const { teamId, userId } = getNonNullUserWithTeam(req);
 
       const { text, sourceId } = req.body;
 
@@ -54,7 +56,7 @@ Generate a visualization or search that matches their request. The chart should 
 
 Here are some guidelines:
 - Use appropriate display types: 'line' for time series, 'table' for tabular data
-- Use appropriate aggregate functions depending on user's request: 'count', 'sum', 'avg', 'min', 'max', 'count_distinct'
+- Use appropriate aggregate functions depending on user's request: 'count', 'sum', 'avg', 'min', 'max', 'count_distinct', and 'p50', 'p90', 'p95', 'p99' for percentiles
 - If the user is requesting for a specific set of data (ex. "frontend service", filter the condition by the appropriate property based on the below properties ex. \`ServiceName = 'frontend'\`)
 - Pick an appropriate time range based on the user's request if one can be inferred from the request.
 
@@ -92,30 +94,39 @@ ${JSON.stringify(allFieldsWithKeys.slice(0, 200).map(f => ({ field: f.key, type:
 
       logger.info(prompt);
 
-      try {
-        const result = await generateText({
-          model,
-          output: Output.object({
-            schema: AssistantLineTableConfigSchema,
-          }),
-          experimental_telemetry: { isEnabled: true },
-          prompt,
-        });
+      // The AI generation call is the externally-dependent, latency-defining
+      // part of the assistant, so it carries the SLO signal. Source lookup /
+      // validation above are client-side concerns and intentionally excluded.
+      const chartConfig = await withOperationMetrics(
+        'ai.assistant',
+        async () => {
+          try {
+            const result = await generateText({
+              model,
+              output: Output.object({
+                schema: AssistantLineTableConfigSchema,
+              }),
+              ...llmTelemetry({
+                teamId: teamId.toString(),
+                userId: userId.toString(),
+              }),
+              prompt,
+            });
 
-        const chartConfig = getChartConfigFromResolvedConfig(
-          result.output,
-          source,
-        );
+            return getChartConfigFromResolvedConfig(result.output, source);
+          } catch (err) {
+            if (err instanceof APICallError) {
+              throw new Api500Error(
+                `AI Provider Error. Status: ${err.statusCode}. Message: ${err.message}`,
+              );
+            }
+            throw err;
+          }
+        },
+        { source_kind: source.kind },
+      );
 
-        return res.json(chartConfig);
-      } catch (err) {
-        if (err instanceof APICallError) {
-          throw new Api500Error(
-            `AI Provider Error. Status: ${err.statusCode}. Message: ${err.message}`,
-          );
-        }
-        throw err;
-      }
+      return res.json(chartConfig);
     } catch (e) {
       next(e);
     }

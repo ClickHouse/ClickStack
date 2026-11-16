@@ -5,7 +5,7 @@ import { Button, Code, Group, Modal, Stack, Text } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconArrowsDiagonal } from '@tabler/icons-react';
 
-import { SQLPreview } from '../ChartSQLPreview';
+import { SQLPreview } from '@/components/ChartSQLPreview';
 
 export type ChartErrorStateVariant = 'collapsible' | 'inline';
 
@@ -47,6 +47,7 @@ export default function ChartErrorState({
 
   return (
     <div
+      data-testid="chart-error-state"
       className={cx(
         'h-100 w-100 d-flex g-1 flex-column align-items-center text-muted overflow-scroll',
         {

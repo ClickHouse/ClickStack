@@ -1,57 +1,91 @@
 import {
-  SourceKind,
-  SourceSchema,
-  type TSource,
-} from '@hyperdx/common-utils/dist/types';
+  mapGranularityToInternalFormat,
+  toExternalSource,
+} from '@hyperdx/common-utils/dist/externalSource';
+import { SourceKind, SourceSchemaNoId } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
+import { z } from 'zod';
 
-import { getSources } from '@/controllers/sources';
+import * as config from '@/config';
+import { validateConnectionId } from '@/controllers/connection';
+import {
+  createSource,
+  deleteSource,
+  getSource,
+  getSources,
+  updateSource,
+} from '@/controllers/sources';
 import { SourceDocument } from '@/models/source';
+import { processRequestWithEnhancedErrors as validateRequest } from '@/utils/enhancedErrors';
 import logger from '@/utils/logger';
+import { objectIdSchema } from '@/utils/zod';
 
-export function mapGranularityToExternalFormat(granularity: string): string {
-  const matches = granularity.match(/^(\d+) (second|minute|hour|day)$/);
-  if (matches == null) return granularity;
+// Maps external short-form granularities (e.g. "5m") in the request body to
+// the internal SQL interval format (e.g. "5 minute") expected by SourceSchema.
+// Runs before body validation so external clients can use the same format the
+// API returns.
+function mapRequestGranularitiesToInternalFormat(
+  req: express.Request,
+  _res: express.Response,
+  next: express.NextFunction,
+) {
+  const body = req.body;
+  if (body != null && typeof body === 'object') {
+    if (Array.isArray(body.materializedViews)) {
+      for (const view of body.materializedViews) {
+        if (view != null && typeof view.minGranularity === 'string') {
+          view.minGranularity = mapGranularityToInternalFormat(
+            view.minGranularity,
+          );
+        }
+      }
+    }
+    if (
+      body.metadataMaterializedViews != null &&
+      typeof body.metadataMaterializedViews.granularity === 'string'
+    ) {
+      body.metadataMaterializedViews.granularity =
+        mapGranularityToInternalFormat(
+          body.metadataMaterializedViews.granularity,
+        );
+    }
+  }
+  next();
+}
 
-  const [, amount, unit] = matches;
-  switch (unit) {
-    case 'second':
-      return `${amount}s`;
-    case 'minute':
-      return `${amount}m`;
-    case 'hour':
-      return `${amount}h`;
-    case 'day':
-      return `${amount}d`;
-    default:
-      return granularity;
+// Runs after body validation so req.body is the parsed shape.
+async function requireValidConnectionId(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  try {
+    const result = await validateConnectionId(
+      req.body?.connection,
+      req.user?.team,
+    );
+    if (!result.ok) {
+      return res.status(result.status).json({ message: result.message });
+    }
+    next();
+  } catch (e) {
+    next(e);
   }
 }
 
-function mapSourceToExternalSource(source: TSource): TSource {
-  if (!('materializedViews' in source)) return source;
-  if (!Array.isArray(source.materializedViews)) return source;
-
-  return {
-    ...source,
-    materializedViews: source.materializedViews.map(view => {
-      return {
-        ...view,
-        minGranularity: mapGranularityToExternalFormat(view.minGranularity),
-      };
-    }),
-  };
-}
-
-function applyLegacyDefaults(
-  parsed: Record<string, unknown>,
-): Record<string, unknown> {
-  // Legacy Session sources were created before timestampValueExpression was
-  // required. The old code defaulted it to 'TimestampTime' at query time.
-  if (parsed.kind === SourceKind.Session && !parsed.timestampValueExpression) {
-    return { ...parsed, timestampValueExpression: 'TimestampTime' };
+// PromQL is a preview feature: without it enabled, a PromQL source cannot be
+// queried. Runs after body validation so req.body is the parsed shape.
+function rejectPromqlSourceWhenDisabled(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  if (req.body?.kind === SourceKind.Promql && !config.IS_PROMQL_ENABLED) {
+    return res
+      .status(400)
+      .json({ message: 'PromQL is not enabled on this deployment' });
   }
-  return parsed;
+  next();
 }
 
 function formatExternalSource(source: SourceDocument) {
@@ -67,6 +101,8 @@ function formatExternalSource(source: SourceDocument) {
           return source.toJSON({ getters: true });
         case SourceKind.Session:
           return source.toJSON({ getters: true });
+        case SourceKind.Promql:
+          return source.toJSON({ getters: true });
         default:
           source satisfies never;
           return {};
@@ -74,13 +110,8 @@ function formatExternalSource(source: SourceDocument) {
     })(),
   );
 
-  // Parse using the SourceSchema to strip out any fields not defined in the schema
-  const parseResult = SourceSchema.safeParse(
-    applyLegacyDefaults(JSON.parse(json)),
-  );
-  if (parseResult.success) {
-    return mapSourceToExternalSource(parseResult.data);
-  }
+  const parseResult = toExternalSource(JSON.parse(json));
+  if (parseResult.success) return parseResult.data;
 
   // If parsing fails, log the error and return undefined
   logger.error(
@@ -223,8 +254,8 @@ function formatExternalSource(source: SourceDocument) {
  *           example: ServiceName, SeverityText
  *         minGranularity:
  *           type: string
- *           description: The granularity of the timestamp column
- *           enum: [1s, 15s, 30s, 1m, 5m, 15m, 30m, 1h, 2h, 6h, 12h, 1d, 2d, 7d, 30d]
+ *           description: "The granularity of the timestamp column: a positive integer followed by a unit (s, m, h, d). Common values: 1s, 15s, 30s, 1m, 5m, 15m, 30m, 1h, 2h, 6h, 12h, 1d, 2d, 7d, 30d."
+ *           pattern: '^\d+(s|m|h|d)$'
  *           example: 5m
  *         minDate:
  *           type: string
@@ -244,7 +275,6 @@ function formatExternalSource(source: SourceDocument) {
  *     LogSource:
  *       type: object
  *       required:
- *         - id
  *         - name
  *         - kind
  *         - connection
@@ -254,12 +284,23 @@ function formatExternalSource(source: SourceDocument) {
  *       properties:
  *         id:
  *           type: string
- *           description: Unique source ID.
+ *           readOnly: true
+ *           description: Unique source ID. Server-generated; ignored if sent in create/update requests.
  *           example: 507f1f77bcf86cd799439011
  *         name:
  *           type: string
  *           description: Display name for the source.
  *           example: Logs
+ *         section:
+ *           type: string
+ *           maxLength: 256
+ *           description: Optional grouping label used to organize sources in the source selector. Sources that share a section value are displayed together.
+ *           example: Billing
+ *         disabled:
+ *           type: boolean
+ *           description: When true, the source is hidden from source selectors in the UI. Defaults to false.
+ *           nullable: true
+ *           example: false
  *         kind:
  *           type: string
  *           enum: [log]
@@ -291,16 +332,31 @@ function formatExternalSource(source: SourceDocument) {
  *           description: Expression to extract the service name from log rows.
  *           nullable: true
  *           example: ServiceName
+ *         serviceVersionExpression:
+ *           type: string
+ *           description: Expression identifying the running release of a service. Defaults to the OpenTelemetry service.version resource attribute when unset. Where services carry the release on different attributes, fall back across them with coalesce(nullIf(a, ''), nullIf(b, '')).
+ *           nullable: true
+ *           example: ResourceAttributes['service.version']
  *         severityTextExpression:
  *           type: string
  *           description: Expression to extract the severity/log level text.
  *           nullable: true
  *           example: SeverityText
+ *         severityNumberExpression:
+ *           type: string
+ *           description: Expression for the numeric OpenTelemetry SeverityNumber (1-24).
+ *           nullable: true
+ *           example: SeverityNumber
  *         bodyExpression:
  *           type: string
  *           description: Expression to extract the log message body.
  *           nullable: true
  *           example: Body
+ *         eventNameExpression:
+ *           type: string
+ *           description: Expression for the OpenTelemetry log EventName.
+ *           nullable: true
+ *           example: EventName
  *         eventAttributesExpression:
  *           type: string
  *           description: Expression to extract event-level attributes.
@@ -316,6 +372,10 @@ function formatExternalSource(source: SourceDocument) {
  *           description: This DateTime column is used to display and order search results.
  *           nullable: true
  *           example: TimestampTime
+ *         orderByExpression:
+ *           type: string
+ *           description: Custom ORDER BY expression that overrides the default ordering. Leave empty to use the auto-detected default.
+ *           example: Timestamp DESC
  *         metricSourceId:
  *           type: string
  *           description: HyperDX Source for metrics associated with logs. Optional
@@ -341,6 +401,22 @@ function formatExternalSource(source: SourceDocument) {
  *           description: Column used for full text search if no property is specified in a Lucene-based search. Typically the message body of a log.
  *           nullable: true
  *           example: Body
+ *         knownColumnsListExpression:
+ *           type: string
+ *           description: For Distributed table sources whose target tables have non-matching column sets. A list of columns supported across all target tables, used instead of SELECT * when fetching full row data. Leave blank to select all columns.
+ *           nullable: true
+ *           example: Timestamp, Body, ServiceName
+ *         rowKeyExpression:
+ *           type: string
+ *           description: Comma-separated expressions that together identify one row, e.g. the partition key, primary key, _block_number and _block_offset. When set, row details are looked up by these columns only. Leave blank to detect keys from table metadata.
+ *           nullable: true
+ *           example: toDate(Timestamp), ServiceName, Timestamp, _block_number, _block_offset
+ *         useTextIndexForImplicitColumn:
+ *           type: string
+ *           enum: [auto, enabled, disabled]
+ *           description: Controls whether lucene rendering uses ClickHouse text indices via hasAllTokens() against the implicit column. "auto" detects a covering index at query time, "enabled" forces text index usage, "disabled" forces a LIKE/hasToken fallback.
+ *           nullable: true
+ *           example: auto
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.
@@ -359,14 +435,31 @@ function formatExternalSource(source: SourceDocument) {
  *           items:
  *             $ref: '#/components/schemas/MaterializedView'
  *           nullable: true
+ *         metadataMaterializedViews:
+ *           type: object
+ *           description: Configure materialized views for fast field discovery and value autocomplete.
+ *           nullable: true
+ *           properties:
+ *             keyRollupTable:
+ *               type: string
+ *               description: ClickHouse table name for the key rollup (field discovery).
+ *               example: otel_logs_key_rollup_15m
+ *             kvRollupTable:
+ *               type: string
+ *               description: ClickHouse table name for the key-value rollup (value autocomplete).
+ *               example: otel_logs_kv_rollup_15m
+ *             granularity:
+ *               type: string
+ *               description: The time granularity of the rollup tables.
+ *               example: 15m
  *     TraceSource:
  *       type: object
  *       required:
- *         - id
  *         - name
  *         - kind
  *         - connection
  *         - from
+ *         - defaultTableSelectExpression
  *         - timestampValueExpression
  *         - durationExpression
  *         - durationPrecision
@@ -378,12 +471,23 @@ function formatExternalSource(source: SourceDocument) {
  *       properties:
  *         id:
  *           type: string
- *           description: Unique source ID.
+ *           readOnly: true
+ *           description: Unique source ID. Server-generated; ignored if sent in create/update requests.
  *           example: 507f1f77bcf86cd799439021
  *         name:
  *           type: string
  *           description: Display name for the source.
  *           example: Traces
+ *         section:
+ *           type: string
+ *           maxLength: 256
+ *           description: Optional grouping label used to organize sources in the source selector. Sources that share a section value are displayed together.
+ *           example: Billing
+ *         disabled:
+ *           type: boolean
+ *           description: When true, the source is hidden from source selectors in the UI. Defaults to false.
+ *           nullable: true
+ *           example: false
  *         kind:
  *           type: string
  *           enum: [trace]
@@ -405,7 +509,6 @@ function formatExternalSource(source: SourceDocument) {
  *         defaultTableSelectExpression:
  *           type: string
  *           description: Default columns selected in search results (this can be customized per search later)
- *           nullable: true
  *           example: Timestamp, SpanName, ServiceName, Duration
  *         timestampValueExpression:
  *           type: string
@@ -471,6 +574,15 @@ function formatExternalSource(source: SourceDocument) {
  *           description: Expression to extract the service name from trace rows.
  *           nullable: true
  *           example: ServiceName
+ *         serviceVersionExpression:
+ *           type: string
+ *           description: Expression identifying the running release of a service. Defaults to the OpenTelemetry service.version resource attribute when unset. Where services carry the release on different attributes, fall back across them with coalesce(nullIf(a, ''), nullIf(b, '')).
+ *           nullable: true
+ *           example: ResourceAttributes['service.version']
+ *         sampleRateExpression:
+ *           type: string
+ *           description: Column or expression for upstream sampling weight (1/N). When set, aggregations (count, avg, sum, quantile) are corrected for sampling. Percentiles use quantileTDigestWeighted, which is an approximation. Leave empty if spans are not sampled.
+ *           example: SampleRate
  *         resourceAttributesExpression:
  *           type: string
  *           description: Expression to extract resource-level attributes.
@@ -486,11 +598,31 @@ function formatExternalSource(source: SourceDocument) {
  *           description: Expression to extract span events. Used to capture events associated with spans. Expected to be Nested ( Timestamp DateTime64(9), Name LowCardinality(String), Attributes Map(LowCardinality(String), String)
  *           nullable: true
  *           example: Events
+ *         spanLinksValueExpression:
+ *           type: string
+ *           description: Expression to extract span links. Used to capture links from a span to spans in other traces. Expected to be Nested ( TraceId String, SpanId String, TraceState String, Attributes Map(LowCardinality(String), String) )
+ *           example: Links
  *         implicitColumnExpression:
  *           type: string
  *           description: Column used for full text search if no property is specified in a Lucene-based search. Typically the message body of a log.
  *           nullable: true
  *           example: SpanName
+ *         knownColumnsListExpression:
+ *           type: string
+ *           description: For Distributed table sources whose target tables have non-matching column sets. A list of columns supported across all target tables, used instead of SELECT * when fetching full row data. Leave blank to select all columns.
+ *           nullable: true
+ *           example: Timestamp, Body, ServiceName
+ *         rowKeyExpression:
+ *           type: string
+ *           description: Comma-separated expressions that together identify one row, e.g. the partition key, primary key, _block_number and _block_offset. When set, row details are looked up by these columns only. Leave blank to detect keys from table metadata.
+ *           nullable: true
+ *           example: toDate(Timestamp), SpanName, Timestamp, _block_number, _block_offset
+ *         useTextIndexForImplicitColumn:
+ *           type: string
+ *           enum: [auto, enabled, disabled]
+ *           description: Controls whether lucene rendering uses ClickHouse text indices via hasAllTokens() against the implicit column. "auto" detects a covering index at query time, "enabled" forces text index usage, "disabled" forces a LIKE/hasToken fallback.
+ *           nullable: true
+ *           example: auto
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.
@@ -503,16 +635,40 @@ function formatExternalSource(source: SourceDocument) {
  *           items:
  *             $ref: '#/components/schemas/HighlightedAttributeExpression'
  *           nullable: true
+ *         displayedTimestampValueExpression:
+ *           type: string
+ *           description: This DateTime column is used to display and order search results.
+ *           example: Timestamp
+ *         orderByExpression:
+ *           type: string
+ *           description: Custom ORDER BY expression that overrides the default ordering. Leave empty to use the auto-detected default.
+ *           example: Timestamp DESC
  *         materializedViews:
  *           type: array
  *           description: Configure materialized views for query optimization. These pre-aggregated views can significantly improve query performance on aggregation queries.
  *           items:
  *             $ref: '#/components/schemas/MaterializedView'
  *           nullable: true
+ *         metadataMaterializedViews:
+ *           type: object
+ *           description: Configure materialized views for fast field discovery and value autocomplete.
+ *           nullable: true
+ *           properties:
+ *             keyRollupTable:
+ *               type: string
+ *               description: ClickHouse table name for the key rollup (field discovery).
+ *               example: otel_traces_key_rollup_15m
+ *             kvRollupTable:
+ *               type: string
+ *               description: ClickHouse table name for the key-value rollup (value autocomplete).
+ *               example: otel_traces_kv_rollup_15m
+ *             granularity:
+ *               type: string
+ *               description: The time granularity of the rollup tables.
+ *               example: 15m
  *     MetricSource:
  *       type: object
  *       required:
- *         - id
  *         - name
  *         - kind
  *         - connection
@@ -523,12 +679,23 @@ function formatExternalSource(source: SourceDocument) {
  *       properties:
  *         id:
  *           type: string
- *           description: Unique source ID.
+ *           readOnly: true
+ *           description: Unique source ID. Server-generated; ignored if sent in create/update requests.
  *           example: 507f1f77bcf86cd799439041
  *         name:
  *           type: string
  *           description: Display name for the source.
  *           example: Metrics
+ *         section:
+ *           type: string
+ *           maxLength: 256
+ *           description: Optional grouping label used to organize sources in the source selector. Sources that share a section value are displayed together.
+ *           example: Billing
+ *         disabled:
+ *           type: boolean
+ *           description: When true, the source is hidden from source selectors in the UI. Defaults to false.
+ *           nullable: true
+ *           example: false
  *         kind:
  *           type: string
  *           enum: [metric]
@@ -563,10 +730,14 @@ function formatExternalSource(source: SourceDocument) {
  *           description: HyperDX Source for logs associated with metrics. Optional
  *           nullable: true
  *           example: 507f1f77bcf86cd799439011
+ *         minAutoGranularity:
+ *           type: string
+ *           description: Floor for the auto-inferred chart granularity. Set it to the scrape/report interval of the metrics so a short time range does not produce buckets smaller than that interval (sparse, steppy series). Only constrains "Auto" granularity; an explicit granularity picked on a tile is never overridden. Omit for no minimum. Uses the SQL interval format (a positive integer followed by second, minute, hour, or day), not the short form of the materialized view granularity fields.
+ *           pattern: '^\d+ (second|minute|hour|day)$'
+ *           example: 1 minute
  *     SessionSource:
  *       type: object
  *       required:
- *         - id
  *         - name
  *         - kind
  *         - connection
@@ -575,12 +746,23 @@ function formatExternalSource(source: SourceDocument) {
  *       properties:
  *         id:
  *           type: string
- *           description: Unique source ID.
+ *           readOnly: true
+ *           description: Unique source ID. Server-generated; ignored if sent in create/update requests.
  *           example: 507f1f77bcf86cd799439031
  *         name:
  *           type: string
  *           description: Display name for the source.
  *           example: Sessions
+ *         section:
+ *           type: string
+ *           maxLength: 256
+ *           description: Optional grouping label used to organize sources in the source selector. Sources that share a section value are displayed together.
+ *           example: Billing
+ *         disabled:
+ *           type: boolean
+ *           description: When true, the source is hidden from source selectors in the UI. Defaults to false.
+ *           nullable: true
+ *           example: false
  *         kind:
  *           type: string
  *           enum: [session]
@@ -608,12 +790,78 @@ function formatExternalSource(source: SourceDocument) {
  *           type: string
  *           description: HyperDX Source for traces associated with sessions.
  *           example: 507f1f77bcf86cd799439021
+ *         resourceAttributesExpression:
+ *           type: string
+ *           description: Expression to extract resource-level attributes.
+ *           example: ResourceAttributes
+ *     PromqlSource:
+ *       type: object
+ *       description: A source queried with PromQL. It reads either a ClickHouse TimeSeries table (through a ClickHouse connection) or a Prometheus-compatible endpoint (through a connection with isPrometheusEndpoint set to true). PromQL is a preview feature, so creating or updating a PromQL source is rejected unless it is enabled on the deployment (ENABLE_PROMQL).
+ *       required:
+ *         - name
+ *         - kind
+ *         - connection
+ *         - from
+ *         - timestampValueExpression
+ *       properties:
+ *         id:
+ *           type: string
+ *           readOnly: true
+ *           description: Unique source ID. Server-generated; ignored if sent in create/update requests.
+ *           example: 507f1f77bcf86cd799439051
+ *         name:
+ *           type: string
+ *           description: Display name for the source.
+ *           example: Prometheus Metrics
+ *         section:
+ *           type: string
+ *           maxLength: 256
+ *           description: Optional grouping label used to organize sources in the source selector. Sources that share a section value are displayed together.
+ *           example: Billing
+ *         disabled:
+ *           type: boolean
+ *           description: When true, the source is hidden from source selectors in the UI. Defaults to false.
+ *           nullable: true
+ *           example: false
+ *         kind:
+ *           type: string
+ *           enum: [promql]
+ *           description: Source kind discriminator. Must be "promql" for PromQL sources.
+ *           example: promql
+ *         connection:
+ *           type: string
+ *           description: ID of the connection used by this source. Either a ClickHouse connection holding the TimeSeries table, or a Prometheus-compatible connection.
+ *           example: 507f1f77bcf86cd799439012
+ *         from:
+ *           $ref: '#/components/schemas/SourceFrom'
+ *           description: The database and TimeSeries table to query on a ClickHouse connection. Not used for a Prometheus-compatible connection, but still required (empty strings are not accepted — use placeholder values such as "default").
+ *         querySettings:
+ *           type: array
+ *           description: Optional ClickHouse query settings applied when querying this source.
+ *           items:
+ *             $ref: '#/components/schemas/QuerySetting'
+ *           nullable: true
+ *         timestampValueExpression:
+ *           type: string
+ *           description: Required by the API for all source kinds; not used by PromQL queries.
+ *           example: timestamp
+ *         minAutoGranularity:
+ *           type: string
+ *           description: Floor for the auto-inferred chart granularity, and the scrape interval that `$__rate_interval` is computed from. Set it to the Prometheus scrape interval so a short time range does not produce buckets smaller than that interval. Only constrains "Auto" granularity; an explicit granularity picked on a tile is never overridden. Omit for no minimum. Uses the SQL interval format (a positive integer followed by second, minute, hour, or day), not the short form of the materialized view granularity fields.
+ *           pattern: '^\d+ (second|minute|hour|day)$'
+ *           example: 1 minute
+ *         promqlBackend:
+ *           type: string
+ *           enum: [auto, clickhouse-http, table-function]
+ *           description: How PromQL is evaluated on a ClickHouse connection. "clickhouse-http" uses ClickHouse's Prometheus HTTP API, which needs ClickHouse 26.6+ with the prometheus_api_v1 handler configured; queries fail with an error when the server does not serve it. "table-function" uses the prometheusQuery table functions. "auto" (the default when omitted) checks the server and prefers the HTTP API. Ignored when the connection is a Prometheus-compatible endpoint.
+ *           example: auto
  *     Source:
  *       oneOf:
  *         - $ref: '#/components/schemas/LogSource'
  *         - $ref: '#/components/schemas/TraceSource'
  *         - $ref: '#/components/schemas/MetricSource'
  *         - $ref: '#/components/schemas/SessionSource'
+ *         - $ref: '#/components/schemas/PromqlSource'
  *       discriminator:
  *         propertyName: kind
  *         mapping:
@@ -621,6 +869,7 @@ function formatExternalSource(source: SourceDocument) {
  *           trace: '#/components/schemas/TraceSource'
  *           metric: '#/components/schemas/MetricSource'
  *           session: '#/components/schemas/SessionSource'
+ *           promql: '#/components/schemas/PromqlSource'
  *     SourcesListResponse:
  *       type: object
  *       properties:
@@ -629,6 +878,12 @@ function formatExternalSource(source: SourceDocument) {
  *           description: List of source objects.
  *           items:
  *             $ref: '#/components/schemas/Source'
+ *     SourceResponseEnvelope:
+ *       type: object
+ *       properties:
+ *         data:
+ *           $ref: '#/components/schemas/Source'
+ *           description: The source object.
  */
 
 const router = express.Router();
@@ -667,7 +922,7 @@ router.get('/', async (req, res, next) => {
   try {
     const teamId = req.user?.team;
     if (teamId == null) {
-      return res.sendStatus(403);
+      return res.status(403).json({ message: 'Forbidden' });
     }
 
     const sources: SourceDocument[] = await getSources(teamId.toString());
@@ -679,5 +934,359 @@ router.get('/', async (req, res, next) => {
     next(e);
   }
 });
+
+/**
+ * @openapi
+ * /api/v2/sources/{id}:
+ *   get:
+ *     summary: Get Source
+ *     description: Retrieves a specific source by ID
+ *     operationId: getSource
+ *     tags: [Sources]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Source ID
+ *         example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       '200':
+ *         description: Successfully retrieved source
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SourceResponseEnvelope'
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Unauthorized access. API key is missing or invalid."
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '404':
+ *         description: Source not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Source not found"
+ */
+router.get(
+  '/:id',
+  validateRequest({
+    params: z.object({
+      id: objectIdSchema,
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const source = await getSource(teamId.toString(), req.params.id);
+
+      if (source == null) {
+        return res.status(404).json({ message: 'Source not found' });
+      }
+
+      const data = formatExternalSource(source);
+      if (data === undefined) {
+        throw new Error(
+          `Failed to serialize source ${source._id} for external API`,
+        );
+      }
+
+      res.json({ data });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v2/sources:
+ *   post:
+ *     summary: Create Source
+ *     description: |
+ *       Creates a new source.
+ *
+ *       The request body is a source object without the `id` field. If an
+ *       `id` is sent anyway it is silently ignored (stripped before
+ *       validation — the request is never rejected because of it).
+ *       Granularity fields
+ *       (`materializedViews[].minGranularity` and
+ *       `metadataMaterializedViews.granularity`) accept the same short format
+ *       the API returns (e.g. `5m`, `15s`, `1h`, `1d`).
+ *     operationId: createSource
+ *     tags: [Sources]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Source'
+ *     responses:
+ *       '200':
+ *         description: Successfully created source
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SourceResponseEnvelope'
+ *       '400':
+ *         description: Bad request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Body validation failed: name: Required"
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Unauthorized access. API key is missing or invalid."
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post(
+  '/',
+  mapRequestGranularitiesToInternalFormat,
+  validateRequest({
+    body: SourceSchemaNoId,
+  }),
+  rejectPromqlSourceWhenDisabled,
+  requireValidConnectionId,
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const source = await createSource(teamId.toString(), {
+        ...req.body,
+        team: teamId.toJSON(),
+      });
+
+      const data = formatExternalSource(source);
+      if (data === undefined) {
+        throw new Error(
+          `Failed to serialize source ${source._id} for external API`,
+        );
+      }
+
+      res.json({ data });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v2/sources/{id}:
+ *   put:
+ *     summary: Update Source
+ *     description: |
+ *       Updates an existing source. The full source object must be provided;
+ *       this is a replace, not a patch.
+ *
+ *       The request body is a source object without the `id` field. If an
+ *       `id` is sent anyway it is silently ignored (stripped before
+ *       validation — never a 400); the path parameter alone identifies the
+ *       source. Granularity fields (`materializedViews[].minGranularity` and
+ *       `metadataMaterializedViews.granularity`) accept the same short format
+ *       the API returns (e.g. `5m`, `15s`, `1h`, `1d`).
+ *     operationId: updateSource
+ *     tags: [Sources]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Source ID
+ *         example: "507f1f77bcf86cd799439011"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Source'
+ *     responses:
+ *       '200':
+ *         description: Successfully updated source
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SourceResponseEnvelope'
+ *       '400':
+ *         description: Bad request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Body validation failed: name: Required"
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Unauthorized access. API key is missing or invalid."
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '404':
+ *         description: Source not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Source not found"
+ */
+router.put(
+  '/:id',
+  mapRequestGranularitiesToInternalFormat,
+  validateRequest({
+    params: z.object({
+      id: objectIdSchema,
+    }),
+    body: SourceSchemaNoId,
+  }),
+  rejectPromqlSourceWhenDisabled,
+  requireValidConnectionId,
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const source = await updateSource(teamId.toString(), req.params.id, {
+        ...req.body,
+        team: teamId.toJSON(),
+      });
+
+      if (source == null) {
+        return res.status(404).json({ message: 'Source not found' });
+      }
+
+      const data = formatExternalSource(source);
+      if (data === undefined) {
+        throw new Error(
+          `Failed to serialize source ${source._id} for external API`,
+        );
+      }
+
+      res.json({ data });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v2/sources/{id}:
+ *   delete:
+ *     summary: Delete Source
+ *     description: Deletes a source
+ *     operationId: deleteSource
+ *     tags: [Sources]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Source ID
+ *         example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       '200':
+ *         description: Successfully deleted source
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/EmptyResponse'
+ *             example: {}
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Unauthorized access. API key is missing or invalid."
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '404':
+ *         description: Source not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: "Source not found"
+ */
+router.delete(
+  '/:id',
+  validateRequest({
+    params: z.object({
+      id: objectIdSchema,
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const deletedSource = await deleteSource(
+        teamId.toString(),
+        req.params.id,
+      );
+
+      if (deletedSource == null) {
+        return res.status(404).json({ message: 'Source not found' });
+      }
+
+      res.json({});
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 export default router;

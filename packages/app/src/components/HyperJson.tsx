@@ -34,18 +34,40 @@ export type GetLineActions = (arg0: {
   parsedJsonRootPath?: string[];
 }) => LineAction[];
 
+export type FormatLeafValue = (arg0: {
+  keyName: string;
+  keyPath: string[];
+  value: unknown;
+}) => React.ReactNode | undefined;
+
+/**
+ * How object keys are ordered at every level of the tree.
+ *
+ * `original` keeps the object's own key order — for ClickHouse `Map(...)`
+ * columns, physical storage order — except that integer-like keys (`"200"`,
+ * `Map(UInt64, …)` keys) always come first in ascending numeric order. JS
+ * objects order keys that way, so the true order is already gone once the
+ * query result is parsed.
+ */
+export type KeyOrder = 'asc' | 'desc' | 'original';
+
+export const DEFAULT_KEY_ORDER: KeyOrder = 'asc';
+
 // Store common state in an atom so that it can be shared between components
 // to avoid prop drilling
 type HyperJsonAtom = {
   normallyExpanded: boolean;
+  keyOrder: KeyOrder;
   getLineActions?: GetLineActions;
+  formatLeafValue?: FormatLeafValue;
 };
 const hyperJsonAtom = atom<HyperJsonAtom>({
   normallyExpanded: false,
+  keyOrder: DEFAULT_KEY_ORDER,
 });
 
 const ValueRenderer = React.memo(
-  React.forwardRef<HTMLSpanElement, { value: any }>(({ value }, ref) => {
+  ({ value, ref }: { value: any; ref?: React.Ref<HTMLSpanElement> }) => {
     if (isNull(value)) {
       return (
         <span ref={ref} className={styles.null}>
@@ -89,7 +111,7 @@ const ValueRenderer = React.memo(
       );
     }
     return null;
-  }),
+  },
 );
 
 const LineMenu = React.memo(
@@ -217,11 +239,20 @@ const Line = React.memo(
       return value;
     }, [isStringValueValidJson, value]);
 
+    const { formatLeafValue } = useAtomValue(hyperJsonAtom);
+
     const nestedLevel = parentKeyPath.length;
     const keyPath = React.useMemo(
       () => [...parentKeyPath, keyName],
       [keyName, parentKeyPath],
     );
+
+    const formattedLeafValue = React.useMemo(() => {
+      if (formatLeafValue == null) {
+        return undefined;
+      }
+      return formatLeafValue({ keyName, keyPath, value });
+    }, [formatLeafValue, keyName, keyPath, value]);
 
     // Determine the context for nested parsed JSON
     const childIsInParsedJson = isInParsedJson || isStringValueValidJson;
@@ -256,6 +287,8 @@ const Line = React.memo(
       <>
         <div
           ref={ref}
+          data-testid="json-viewer-line"
+          data-depth={nestedLevel}
           onClick={handleToggle}
           className={cx(styles.line, {
             [styles.nestedLine]: nestedLevel > 0,
@@ -289,6 +322,10 @@ const Line = React.memo(
                   <div className={styles.jsonBtn}>Expand JSON</div>
                 </>
               )
+            ) : formattedLeafValue !== undefined ? (
+              <span ref={valueRef} className={styles.string}>
+                {formattedLeafValue}
+              </span>
             ) : (
               <ValueRenderer value={value} ref={valueRef} />
             )}
@@ -336,11 +373,30 @@ function TreeNode({
   const keyPath = React.useMemo(() => _keyPath ?? [], [_keyPath]);
 
   const originalLength = React.useMemo(() => Object.keys(data).length, [data]);
+
+  const { keyOrder } = useAtomValue(hyperJsonAtom);
+
+  // ClickHouse hands back `Map(...)` keys in physical storage order, which reads
+  // as random for wide maps like `ProfileEvents`. Sorting here (rather than
+  // upstream) covers every nesting level for free, since TreeNode recurses, and
+  // it puts the sort ahead of the MAX_TREE_NODE_ITEMS slice below so the
+  // truncated view shows a predictable prefix instead of an arbitrary subset.
+  const entries = React.useMemo(() => {
+    const raw = Object.entries(data);
+    // Arrays are index-keyed — reordering them would change the data.
+    if (isArray(data) || keyOrder === 'original') {
+      return raw;
+    }
+    const direction = keyOrder === 'desc' ? -1 : 1;
+    return raw.sort(
+      ([a], [b]) =>
+        direction * a.localeCompare(b, undefined, { numeric: true }),
+    );
+  }, [data, keyOrder]);
+
   const visibleLines = React.useMemo(() => {
-    return isExpanded
-      ? Object.entries(data)
-      : Object.entries(data).slice(0, MAX_TREE_NODE_ITEMS);
-  }, [data, isExpanded]);
+    return isExpanded ? entries : entries.slice(0, MAX_TREE_NODE_ITEMS);
+  }, [entries, isExpanded]);
   const nestedLevel = keyPath?.length || 0;
 
   return (
@@ -394,7 +450,9 @@ type HyperJsonProps = {
   normallyExpanded?: boolean;
   tabulate?: boolean;
   whiteSpace?: 'pre' | 'pre-wrap';
+  keyOrder?: KeyOrder;
   getLineActions?: GetLineActions;
+  formatLeafValue?: FormatLeafValue;
 };
 
 const HyperJson = ({
@@ -402,13 +460,20 @@ const HyperJson = ({
   normallyExpanded = false,
   tabulate = false,
   whiteSpace = 'pre-wrap',
+  keyOrder = DEFAULT_KEY_ORDER,
   getLineActions,
+  formatLeafValue,
 }: HyperJsonProps) => {
   const isEmpty = React.useMemo(() => Object.keys(data).length === 0, [data]);
 
+  const initialValues = React.useMemo(
+    () => ({ normallyExpanded, keyOrder, getLineActions, formatLeafValue }),
+    [normallyExpanded, keyOrder, getLineActions, formatLeafValue],
+  );
+
   return (
     <Provider>
-      <HydrateAtoms initialValues={{ normallyExpanded, getLineActions }}>
+      <HydrateAtoms initialValues={initialValues}>
         <div
           className={cx(styles.container, {
             [styles.withTabulate]: tabulate,

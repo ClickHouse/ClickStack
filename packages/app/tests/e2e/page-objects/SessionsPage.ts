@@ -32,6 +32,13 @@ export class SessionsPage {
     await dataSourceOption.click();
   }
 
+  /** Run a search over the sessions' spans. */
+  async search(query: string) {
+    await this.whereInput.fill(query);
+    await this.whereInput.blur();
+    await this.searchForm.getByRole('button', { name: 'Run' }).click();
+  }
+
   /**
    * Get all session cards
    */
@@ -76,6 +83,32 @@ export class SessionsPage {
   }
 
   /**
+   * The page-level WHERE input and its language switch. Both are scoped to the
+   * search form so they can't match the replay drawer's own event filter,
+   * which renders the same component with the same placeholder.
+   */
+  get whereLanguageSwitch() {
+    return this.searchForm.getByTestId('where-language-switch');
+  }
+
+  get whereInput() {
+    return this.searchForm.getByPlaceholder(
+      'Search your events w/ Lucene ex. column:foo',
+    );
+  }
+
+  /** The replay drawer's event-list filter and its language switch. */
+  get eventsWhereLanguageSwitch() {
+    return this.sessionSidePanel.getByTestId('where-language-switch');
+  }
+
+  get eventsWhereInput() {
+    return this.sessionSidePanel.getByPlaceholder(
+      'Search your events w/ Lucene ex. column:foo',
+    );
+  }
+
+  /**
    * Get all session event rows inside the replay drawer
    */
   getSessionEventRows() {
@@ -87,25 +120,6 @@ export class SessionsPage {
    */
   async clickFirstSessionEvent() {
     await this.getSessionEventRows().first().click();
-  }
-
-  /**
-   * Get the row side panel (event detail drawer opened from within session replay)
-   */
-  get rowSidePanel() {
-    return this.page.getByTestId('row-side-panel');
-  }
-
-  /**
-   * Click the Mantine overlay of the topmost open drawer to close it.
-   * Mantine renders one overlay per open Drawer. The last one belongs to
-   * the innermost (topmost) drawer.
-   */
-  async clickTopmostDrawerOverlay() {
-    // Mantine overlays are siblings of the drawer content inside the portal root.
-    // Use the last one since the inner panel's overlay is rendered on top.
-    const overlay = this.page.locator('.mantine-Drawer-overlay').last();
-    await overlay.click({ position: { x: 10, y: 10 } });
   }
 
   // Getters for assertions

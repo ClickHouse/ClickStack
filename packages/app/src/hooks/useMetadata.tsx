@@ -1,16 +1,29 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import objectHash from 'object-hash';
 import {
   ColumnMeta,
+  ColumnMetaType,
   filterColumnMetaByType,
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
 import {
   Field,
+  FieldsCondition,
+  MetricNames,
+  parseKeyPath,
   TableConnection,
   TableMetadata,
 } from '@hyperdx/common-utils/dist/core/metadata';
-import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
+import {
+  FilterState,
+  serializeFilterState,
+} from '@hyperdx/common-utils/dist/filters';
+import {
+  BuilderChartConfigWithDateRange,
+  isLogSource,
+  isTraceSource,
+  MetadataMaterializedViews,
+} from '@hyperdx/common-utils/dist/types';
 import {
   keepPreviousData,
   useQuery,
@@ -22,15 +35,24 @@ import api from '@/api';
 import { IS_LOCAL_MODE } from '@/config';
 import { LOCAL_STORE_CONNECTIONS_KEY } from '@/connection';
 import { DEFAULT_FILTER_KEYS_FETCH_LIMIT } from '@/defaults';
+import { mergeStreams, useStreamingQuery } from '@/hooks/useStreamingQuery';
 import { getMetadata } from '@/metadata';
 import { useSource, useSources } from '@/source';
 import { toArray } from '@/utils';
+
+export type Facet = { key: string; value: string[] };
+
+/**
+ * The most values to load when one key's values are looked up in full, e.g.
+ * the search sidebar's "Load more".
+ */
+export const SINGLE_KEY_VALUES_LIMIT = 10000;
 
 // Hook to get metadata with proper settings applied
 export function useMetadataWithSettings() {
   const [metadata, setMetadata] = useState(getMetadata());
   const { data: me } = api.useMe();
-  const settingsApplied = useRef(false);
+  const settingsAppliedRef = useRef(false);
   const queryClient = useQueryClient();
 
   // Create a listener that triggers when connections are updated in local mode
@@ -44,7 +66,7 @@ export function useMetadataWithSettings() {
         // Create a new metadata instance with a new ClickHouse client,
         // since the existing one will not have connection / auth info.
         setMetadata(getMetadata());
-        settingsApplied.current = false;
+        settingsAppliedRef.current = false;
         // Clear react-query cache so that metadata is refetched with
         // the new connection info, and error states are cleared.
         queryClient.resetQueries();
@@ -58,11 +80,11 @@ export function useMetadataWithSettings() {
   }, [queryClient]);
 
   useEffect(() => {
-    if (me?.team?.metadataMaxRowsToRead && !settingsApplied.current) {
+    if (me?.team?.metadataMaxRowsToRead && !settingsAppliedRef.current) {
       metadata.setClickHouseSettings({
         max_rows_to_read: String(me.team.metadataMaxRowsToRead),
       });
-      settingsApplied.current = true;
+      settingsAppliedRef.current = true;
     }
   }, [me?.team?.metadataMaxRowsToRead, metadata]);
 
@@ -83,7 +105,10 @@ export function useColumns(
 ) {
   const metadata = useMetadataWithSettings();
   return useQuery<ColumnMeta[]>({
-    queryKey: ['useMetadata.useColumns', { databaseName, tableName }],
+    queryKey: [
+      'useMetadata.useColumns',
+      { connectionId, databaseName, tableName },
+    ],
     queryFn: async () => {
       return metadata.getColumns({
         databaseName,
@@ -94,6 +119,64 @@ export function useColumns(
     enabled: !!databaseName && !!tableName && !!connectionId,
     ...options,
   });
+}
+
+// Derives a map of DateTime/Date column name → ClickHouse type.
+export function useDateTimeColumns(
+  columns: ColumnMetaType[] | undefined,
+): Map<string, string> {
+  return useMemo(
+    () =>
+      new Map(
+        filterColumnMetaByType(columns ?? [], [JSDataType.Date])?.map(
+          c => [c.name, c.type] as const,
+        ),
+      ),
+    [columns],
+  );
+}
+
+/**
+ * Resolves the Date/DateTime columns from two sources, with the live
+ * query result taking precedence.
+ *
+ * - **Table schema** (`schemaColumns`): every column on the table, available
+ *   before any query runs — but blind to SELECT aliases and computed
+ *   expressions, which don't exist on the table.
+ * - **Query result** (fed via the returned `onResolvedColumnsChange`): the
+ *   resolved type of every column the current query actually returns, including
+ *   aliases (`Timestamp AS time`) and expressions (`toDate(Timestamp)`). These
+ *   are exactly the cells a user can click to filter on, so they win.
+ */
+export function useResolvedDateTimeColumns(
+  schemaColumns: ColumnMetaType[] | undefined,
+): {
+  dateTimeColumns: Map<string, string>;
+  onResolvedColumnsChange: (meta: ColumnMetaType[]) => void;
+} {
+  const schemaDateTimeColumns = useDateTimeColumns(schemaColumns);
+
+  const [resultColumns, setResultColumns] = useState<ColumnMetaType[]>([]);
+  const resultDateTimeColumns = useDateTimeColumns(resultColumns);
+
+  const dateTimeColumns = useMemo(() => {
+    const merged = new Map(schemaDateTimeColumns);
+
+    // The query result is authoritative for the columns it returns. A column
+    // can be a date on the table yet non-date as displayed (e.g.
+    // `toString(Timestamp) AS Timestamp`); drop any such column so its string
+    // value isn't wrongly date-wrapped.
+    for (const { name } of resultColumns) {
+      if (!resultDateTimeColumns.has(name)) merged.delete(name);
+    }
+    // Add or override the columns the query reports as dates — this is what
+    // brings in aliases and computed expressions absent from the schema.
+    for (const [name, type] of resultDateTimeColumns) merged.set(name, type);
+
+    return merged;
+  }, [schemaDateTimeColumns, resultDateTimeColumns, resultColumns]);
+
+  return { dateTimeColumns, onResolvedColumnsChange: setResultColumns };
 }
 
 export function useJsonColumns(
@@ -121,56 +204,188 @@ export function useJsonColumns(
   });
 }
 
-export function useMultipleAllFields(
-  tableConnections: TableConnection[],
-  options?: Partial<UseQueryOptions<Field[]>>,
+// Mirrors `useJsonColumns` for Map-typed columns. Used by `mergePath`
+// callers (notably `DBSearchPageFilters`) so numeric-looking sub-keys on a
+// Map render as `Map['key']` instead of the illegal array `Map[N+1]`.
+// HDX-4369.
+export function useMapColumns(
+  tableConnection: TableConnection | undefined,
+  options?: Partial<UseQueryOptions<string[]>>,
 ) {
   const metadata = useMetadataWithSettings();
-  const { data: me, isFetched } = api.useMe();
-  return useQuery<Field[]>({
-    queryKey: [
-      'useMetadata.useMultipleAllFields',
-      ...tableConnections.map(tc => ({ ...tc })),
-    ],
+  return useQuery<string[]>({
+    queryKey: ['useMetadata.useMapColumns', tableConnection],
     queryFn: async () => {
-      const team = me?.team;
-      if (team?.fieldMetadataDisabled) {
-        return [];
-      }
-
-      const promiseResults = await Promise.allSettled(
-        tableConnections.map(tc => metadata.getAllFields(tc)),
+      if (!tableConnection) return [];
+      const columns = await metadata.getColumns(tableConnection);
+      return (
+        filterColumnMetaByType(columns, [JSDataType.Map])?.map(
+          column => column.name,
+        ) ?? []
       );
-
-      const fields2d: Field[][] = promiseResults.map(result => {
-        if (result.status === 'rejected') {
-          console.warn(
-            'Failed to fetch fields for table connection',
-            result.reason,
-          );
-          return [];
-        }
-        return result.value;
-      });
-
-      // skip deduplication if not needed
-      if (fields2d.length === 1) return fields2d[0];
-
-      return deduplicate2dArray<Field>(fields2d);
     },
     enabled:
-      tableConnections.length > 0 &&
-      tableConnections.every(
-        tc => !!tc.databaseName && !!tc.tableName && !!tc.connectionId,
-      ) &&
-      isFetched,
+      tableConnection &&
+      !!tableConnection.databaseName &&
+      !!tableConnection.tableName &&
+      !!tableConnection.connectionId,
     ...options,
   });
 }
 
+type TableConnectionFields = {
+  fields: Field[];
+  columns: ColumnMeta[];
+  /** The lookup failed; `columns` is kept if it loaded first. */
+  error?: Error;
+};
+
+type MultipleAllFieldsOptions = {
+  dateRange?: [Date, Date];
+  timestampValueExpression?: string;
+  // Return only fields present in EVERY table connection instead of the
+  // union. Use for a shared expression (e.g. a chart-level Group By over
+  // multiple series) that must be valid against all of them — the union
+  // would offer fields that exist in one table but not another.
+  intersect?: boolean;
+  enabled?: boolean;
+  conditions?: (FieldsCondition | undefined)[];
+};
+
+/**
+ * Fields (columns plus Map / JSON keys) across one or more tables, merged into
+ * `data`, with each table connection's fields and raw columns also returned by index.
+ *
+ * A table connection whose lookup fails counts as no fields, so `data` still holds
+ * the others'. With `intersect`, a failed table connection makes `data` empty, since
+ * no field can be confirmed for it. Each failed table connection's error is in
+ * `errorsByTableConnection`; `isError` and `error` are set only when every
+ * table connection failed.
+ *
+ * When the team disables field metadata, `data` is `[]` but
+ * `columnsByTableConnection` is still filled.
+ */
+export function useMultipleAllFields(
+  tableConnections: TableConnection[],
+  {
+    dateRange,
+    timestampValueExpression,
+    intersect,
+    enabled = true,
+    conditions,
+  }: MultipleAllFieldsOptions = {},
+) {
+  const metadata = useMetadataWithSettings();
+  const { data: me, isFetched } = api.useMe();
+  const isFieldMetadataDisabled = !!me?.team?.fieldMetadataDisabled;
+  const allPopulated = tableConnections.every(
+    tc => !!tc.databaseName && !!tc.tableName && !!tc.connectionId,
+  );
+
+  const query = useQuery<TableConnectionFields[]>({
+    queryKey: [
+      'useMetadata.useMultipleAllFields',
+      ...tableConnections.map(tc => ({ ...tc })),
+      dateRange ? [dateRange[0].getTime(), dateRange[1].getTime()] : undefined,
+      timestampValueExpression,
+      isFieldMetadataDisabled,
+      conditions,
+    ],
+    queryFn: () =>
+      Promise.all(
+        tableConnections.map(async (tc, i): Promise<TableConnectionFields> => {
+          let columns: ColumnMeta[] = [];
+          try {
+            columns = await metadata.getColumns({
+              databaseName: tc.databaseName,
+              tableName: tc.tableName,
+              connectionId: tc.connectionId,
+            });
+            const fields = isFieldMetadataDisabled
+              ? []
+              : await metadata.getAllFields({
+                  ...tc,
+                  dateRange,
+                  timestampValueExpression:
+                    timestampValueExpression ?? tc.timestampValueExpression,
+                  condition: conditions?.[i],
+                });
+            return { fields, columns };
+          } catch (error) {
+            console.warn('Failed to fetch fields for table connection', error);
+            return {
+              fields: [],
+              columns,
+              error: error instanceof Error ? error : new Error(String(error)),
+            };
+          }
+        }),
+      ),
+    enabled:
+      enabled && tableConnections.length > 0 && allPopulated && isFetched,
+  });
+
+  const tableConnectionFields = query.data;
+  const merged = useMemo(() => {
+    const fieldsByTableConnection = new Map<number, Field[]>();
+    const columnsByTableConnection = new Map<number, ColumnMeta[]>();
+    const errorsByTableConnection = new Map<number, Error>();
+    tableConnectionFields?.forEach(({ fields, columns, error }, index) => {
+      fieldsByTableConnection.set(index, fields);
+      columnsByTableConnection.set(index, columns);
+      if (error) errorsByTableConnection.set(index, error);
+    });
+    const isError =
+      !!tableConnectionFields?.length &&
+      errorsByTableConnection.size === tableConnectionFields.length;
+
+    let data: Field[] | undefined;
+    if (tableConnectionFields) {
+      const fields2d = tableConnectionFields.map(({ fields }) => fields);
+      // skip set logic if not needed
+      if (fields2d.length === 1) data = fields2d[0];
+      else
+        data = intersect
+          ? intersect2dArray<Field>(fields2d)
+          : deduplicate2dArray<Field>(fields2d);
+    }
+
+    return {
+      data,
+      error: isError ? (tableConnectionFields?.[0].error ?? null) : null,
+      isError,
+      fieldsByTableConnection: fieldsByTableConnection as ReadonlyMap<
+        number,
+        Field[]
+      >,
+      columnsByTableConnection: columnsByTableConnection as ReadonlyMap<
+        number,
+        ColumnMeta[]
+      >,
+      errorsByTableConnection: errorsByTableConnection as ReadonlyMap<
+        number,
+        Error
+      >,
+    };
+  }, [tableConnectionFields, intersect]);
+
+  // The status fields come from `merged` rather than spreading `query`:
+  // `queryFn` never throws, so the query's own `status` and `isError` would
+  // report success when every table connection failed.
+  return {
+    ...merged,
+    isPending: query.isPending,
+    isSuccess: query.isSuccess && !merged.isError,
+    isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    refetch: query.refetch,
+    isFieldMetadataDisabled,
+  };
+}
+
 export function useAllFields(
   tableConnection: TableConnection | undefined,
-  options?: Partial<UseQueryOptions<Field[]>>,
+  options?: Omit<MultipleAllFieldsOptions, 'intersect'>,
 ) {
   return useMultipleAllFields(
     tableConnection ? [tableConnection] : [],
@@ -192,7 +407,10 @@ export function useTableMetadata(
 ) {
   const metadata = useMetadataWithSettings();
   return useQuery<TableMetadata | undefined>({
-    queryKey: ['useMetadata.useTableMetadata', { databaseName, tableName }],
+    queryKey: [
+      'useMetadata.useTableMetadata',
+      { connectionId, databaseName, tableName },
+    ],
     queryFn: async () => {
       return await metadata.getTableMetadata({
         databaseName,
@@ -206,61 +424,211 @@ export function useTableMetadata(
   });
 }
 
+/** Fetches server MergeTree settings; null on failure. */
+export function useMergeTreeSettings(
+  connectionId: string,
+  options?: Omit<
+    UseQueryOptions<Map<string, string> | null, Error>,
+    'queryKey' | 'queryFn'
+  >,
+) {
+  const metadata = useMetadataWithSettings();
+  return useQuery<Map<string, string> | null>({
+    queryKey: ['useMetadata.useMergeTreeSettings', { connectionId }],
+    // react-query rejects undefined
+    queryFn: async () =>
+      (await metadata.getMergeTreeSettings({ connectionId })) ?? null,
+    // Keep failures stale to refetch on next mount.
+    staleTime: query => (query.state.data ? 1000 * 60 * 5 : 0),
+    enabled: !!connectionId,
+    ...options,
+  });
+}
+
+/** How many keys a filter values query reads, per the team's setting. */
+export function useFilterKeysFetchLimit() {
+  const { data: me } = api.useMe();
+  return me?.team?.filterKeysFetchLimit ?? DEFAULT_FILTER_KEYS_FETCH_LIMIT;
+}
+
+/**
+ * Throw the first rejection when every lookup failed, otherwise return what
+ * succeeded, so one failing source doesn't empty a multi-source result.
+ */
+async function settleAllOrThrow<T>(promises: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(promises);
+  const fulfilled = results.flatMap(result =>
+    result.status === 'fulfilled' ? [result.value] : [],
+  );
+  const firstRejected = results.find(result => result.status === 'rejected');
+  if (firstRejected && fulfilled.length === 0) throw firstRejected.reason;
+  return fulfilled;
+}
+
+/**
+ * Values for `keys` across one or more sources.
+ *
+ * - `'exact'` reads metadata MVs, else the raw table, sampling the first
+ *   `max_rows_to_read` rows unless `disableRowLimit` is set. Supports
+ *   `keyConditions`.
+ * - `'all'` tries text indexes, then metadata MVs, then the raw table, so it is
+ *   cheaper for typeahead. It skips JSON-column keys, and its lookups return no
+ *   values instead of failing, so it rarely errors. When no values are showing
+ *   yet, each query's values land in `data` within 100ms of it finishing,
+ *   while `isFetching` is still true.
+ *
+ * `limit` caps the values returned per key in both modes.
+ *
+ * Errors only when every source's lookup fails.
+ */
 export function useMultipleGetKeyValues(
   {
     chartConfigs,
     keys,
+    keyConditions,
     limit,
     disableRowLimit,
+    mode = 'exact',
+    metadataMVs: metadataMVsOverride,
   }: {
     chartConfigs:
       | BuilderChartConfigWithDateRange
       | BuilderChartConfigWithDateRange[];
     keys: string[];
+    /** Per-key constraints for faceted ('exact' mode) value lookups. */
+    keyConditions?: (FilterState | undefined)[];
     limit?: number;
     disableRowLimit?: boolean;
+    mode?: 'all' | 'exact';
+    /**
+     * MVs for 'all' mode, used instead of resolving them from the config's
+     * source (e.g. when chartConfig has no source). Ignored when there is more
+     * than one config, since MVs belong to a single table.
+     */
+    metadataMVs?: MetadataMaterializedViews;
   },
   options?: Omit<UseQueryOptions<any, Error>, 'queryKey'>,
 ) {
   const metadata = useMetadataWithSettings();
+  const queryClient = useQueryClient();
   const chartConfigsArr = toArray(chartConfigs);
 
   const { enabled = true } = options || {};
-  const { data: me, isLoading: isLoadingMe } = api.useMe();
+  const { isLoading: isLoadingMe } = api.useMe();
   const { data: sources, isLoading: isLoadingSources } = useSources();
+  const maxKeys = useFilterKeysFetchLimit();
 
-  const maxKeys =
-    me?.team?.filterKeysFetchLimit ?? DEFAULT_FILTER_KEYS_FETCH_LIMIT;
+  // 'exact' lookups don't stream, so they keep the client's defaults rather
+  // than the streaming hook's. An unset default stays `undefined` here, which
+  // React Query reads as its own default. `refetchOnWindowFocus` is React
+  // Query's default outright: the client's can be a function typed against
+  // `Query<unknown>`, which doesn't fit this query's data.
+  const { retry, structuralSharing } =
+    queryClient.getDefaultOptions().queries ?? {};
+  const exactModeOptions =
+    mode === 'exact'
+      ? { retry, structuralSharing, refetchOnWindowFocus: true }
+      : {};
 
-  const query = useQuery<{ key: string; value: string[] }[]>({
+  const query = useStreamingQuery<Facet>({
     queryKey: [
       'useMetadata.useGetKeyValues',
+      mode,
+      metadataMVsOverride,
       ...chartConfigsArr.map(cc => ({ ...cc })),
       ...keys,
+      // Serialized: react-query hashes keys with JSON.stringify, which would
+      // flatten every distinct Set selection to `{}`.
+      keyConditions?.map(c => c && serializeFilterState(c)),
       disableRowLimit,
       maxKeys,
+      limit,
     ],
-    queryFn: async ({ signal }) => {
-      return (
-        await Promise.all(
-          chartConfigsArr.map(chartConfig => {
-            const source = chartConfig.source
-              ? sources?.find(s => s.id === chartConfig.source)
-              : undefined;
-            return metadata.getKeyValuesWithMVs({
+    streamFactory: async function* ({ signal }) {
+      if (keys.length === 0) return;
+      const usableMVsOverride =
+        chartConfigsArr.length === 1 ? metadataMVsOverride : undefined;
+      // The limit applies per Map column, so one wide Map (e.g. LogAttributes)
+      // can't crowd out the others. Top-level columns share a single limit.
+      const { limitedKeys, limitedKeyConditions } = keys.reduce<{
+        countByColumn: Map<string, number>;
+        limitedKeys: string[];
+        limitedKeyConditions?: (FilterState | undefined)[];
+      }>(
+        (acc, key, i) => {
+          const path = parseKeyPath(key);
+          const column = path.length > 1 ? path[0] : '';
+          const count = acc.countByColumn.get(column) ?? 0;
+          acc.countByColumn.set(column, count + 1);
+          if (count < maxKeys) {
+            acc.limitedKeys.push(key);
+            acc.limitedKeyConditions?.push(keyConditions?.[i]);
+          }
+          return acc;
+        },
+        {
+          countByColumn: new Map(),
+          limitedKeys: [],
+          limitedKeyConditions: keyConditions ? [] : undefined,
+        },
+      );
+
+      const lookups = chartConfigsArr.map(chartConfig => {
+        const source = chartConfig.source
+          ? sources?.find(s => s.id === chartConfig.source)
+          : undefined;
+        const metadataMVs =
+          usableMVsOverride ??
+          (source && (isLogSource(source) || isTraceSource(source))
+            ? source.metadataMaterializedViews
+            : undefined);
+        return { chartConfig, source, metadataMVs };
+      });
+
+      if (mode === 'exact') {
+        const results = await settleAllOrThrow(
+          lookups.map(({ chartConfig, source }) =>
+            metadata.getKeyValuesWithMVs({
               chartConfig,
-              keys: keys.slice(0, maxKeys),
+              keys: limitedKeys,
+              keyConditions: limitedKeyConditions,
               limit,
               disableRowLimit,
               source,
               signal,
-            });
-          }),
-        )
-      ).flatMap(v => v);
+            }),
+          ),
+        );
+        // Numeric values have always passed through unconverted here; `useQuery`
+        // used to hide the mismatch with `Facet`. HDX-1548.
+        yield results.flat() as Facet[];
+        return;
+      }
+
+      // mode === 'all'
+      const streams = lookups.map(({ chartConfig, metadataMVs }) =>
+        metadata.streamAllKeyValues({
+          databaseName: chartConfig.from.databaseName,
+          tableName: chartConfig.from.tableName,
+          keyExpressions: limitedKeys,
+          maxValuesPerKey: limit,
+          connectionId: chartConfig.connection,
+          metadataMVs,
+          dateRange: chartConfig.dateRange,
+          timestampValueExpression: chartConfig.timestampValueExpression,
+          signal,
+        }),
+      );
+      for await (const keyValues of mergeStreams(streams)) {
+        yield keyValues.map(({ key, value }) => ({
+          key,
+          value: value.map(val => val.toString()),
+        }));
+      }
     },
     staleTime: 1000 * 60 * 5, // Cache every 5 min
     placeholderData: keepPreviousData,
+    ...exactModeOptions,
     ...options,
     enabled: !!enabled && !!keys.length && !isLoadingSources && !isLoadingMe,
   });
@@ -310,13 +678,20 @@ export function useGetKeyValues(
   {
     chartConfig,
     keys,
+    keyConditions,
     limit,
     disableRowLimit,
+    mode,
+    metadataMVs,
   }: {
     chartConfig?: BuilderChartConfigWithDateRange;
     keys: string[];
+    /** Per-key constraints for faceted value lookups (groupUniqArrayIf). */
+    keyConditions?: (FilterState | undefined)[];
     limit?: number;
     disableRowLimit?: boolean;
+    mode?: 'all' | 'exact';
+    metadataMVs?: MetadataMaterializedViews;
   },
   options?: Omit<UseQueryOptions<any, Error>, 'queryKey'>,
 ) {
@@ -324,15 +699,81 @@ export function useGetKeyValues(
     {
       chartConfigs: chartConfig ? [chartConfig] : [],
       keys,
+      keyConditions,
       limit,
       disableRowLimit,
+      mode,
+      metadataMVs,
     },
     options,
   );
 }
 
-export function deduplicateArray<T extends object>(array: T[]): T[] {
-  return deduplicate2dArray([array]);
+/**
+ * List metric names for one metrics table, ordered and matched server-side.
+ *
+ * Prefer this over `useGetKeyValues({ keys: ['MetricName'] })`, which samples an
+ * arbitrary subset via `groupUniqArray` and can silently omit metrics on
+ * high-cardinality sources.
+ */
+export function useGetMetricNames(
+  {
+    databaseName,
+    tableName,
+    connectionId,
+    dateRange,
+    timestampValueExpression,
+    namePattern,
+  }: {
+    databaseName: string;
+    tableName: string;
+    connectionId: string;
+    dateRange: [Date, Date];
+    timestampValueExpression: string;
+    namePattern?: string;
+  },
+  options?: Partial<UseQueryOptions<MetricNames>>,
+) {
+  const metadata = useMetadataWithSettings();
+  return useQuery<MetricNames>({
+    queryKey: [
+      'useMetadata.useGetMetricNames',
+      {
+        databaseName,
+        tableName,
+        connectionId,
+        dateRange,
+        timestampValueExpression,
+        namePattern,
+      },
+    ],
+    queryFn: async ({ signal }) =>
+      metadata.getMetricNames({
+        databaseName,
+        tableName,
+        connectionId,
+        dateRange,
+        timestampValueExpression,
+        namePattern,
+        signal,
+      }),
+    // An empty table name means the source has no table for this metric kind.
+    enabled:
+      !!databaseName &&
+      !!tableName &&
+      !!connectionId &&
+      !!timestampValueExpression,
+    placeholderData: keepPreviousData,
+    // Four of these run per debounced keystroke, each an unbounded aggregation
+    // capped only by execution time. Retrying would turn one slow pattern into
+    // sixteen such scans, and refetching on focus would re-run them all — the
+    // replaced MetadataCache path served repeats from memory, so without these
+    // this would be busier than what it replaced.
+    retry: false,
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+    ...options,
+  });
 }
 
 export function deduplicate2dArray<T extends object>(array2d: T[][]): T[] {
@@ -348,4 +789,26 @@ export function deduplicate2dArray<T extends object>(array2d: T[][]): T[] {
     }
   }
   return array;
+}
+
+// Keep only elements present in every sub-array (set intersection). A rejected
+// fetch yields an empty sub-array, which correctly collapses the result to
+// empty — fail closed rather than offer a field that isn't in every table.
+export function intersect2dArray<T extends object>(array2d: T[][]): T[] {
+  if (array2d.length === 0) return [];
+  const counts = new Map<string, { elem: T; n: number }>();
+  for (const _array of array2d) {
+    const seenInArray = new Set<string>();
+    for (const elem of _array) {
+      const key = objectHash.sha1(elem);
+      if (seenInArray.has(key)) continue; // dedupe within a table first
+      seenInArray.add(key);
+      const entry = counts.get(key);
+      if (entry) entry.n += 1;
+      else counts.set(key, { elem, n: 1 });
+    }
+  }
+  return Array.from(counts.values())
+    .filter(({ n }) => n === array2d.length)
+    .map(({ elem }) => elem);
 }

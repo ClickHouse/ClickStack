@@ -14,21 +14,43 @@ import { Button, Divider, Flex, Loader, Modal, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconArrowLeft } from '@tabler/icons-react';
 
+import { useBrandDisplayName } from '@/brand';
 import { ConnectionForm } from '@/components/ConnectionForm';
-import { IS_CLICKHOUSE_BUILD, IS_LOCAL_MODE } from '@/config';
-import { useConnections, useCreateConnection } from '@/connection';
+import {
+  IS_CLICKHOUSE_BUILD,
+  IS_LOCAL_MODE,
+  IS_PROMQL_ENABLED,
+} from '@/config';
+import {
+  fetchPrometheusHttpApiSupport,
+  useConnections,
+  useCreateConnection,
+  useUpdateConnection,
+} from '@/connection';
 import { useMetadataWithSettings } from '@/hooks/useMetadata';
 import {
   inferTableSourceConfig,
+  pickTimeSeriesTable,
+  PROMQL_TIMESTAMP_EXPRESSION,
   useCreateSource,
   useDeleteSource,
   useSources,
   useUpdateSource,
 } from '@/source';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 
 import { TableSourceForm } from './Sources/SourceForm';
 import { SourcesList } from './Sources/SourcesList';
+
+const DEMO_CONNECTION = {
+  name: 'Demo',
+  host: 'https://b1g1gnrrz3.us-central1.gcp.clickhouse-staging.com:8443',
+  username: 'otel_demo',
+  password: '',
+};
+const LEGACY_DEMO_CONNECTION = {
+  host: 'https://sql-clickhouse.clickhouse.com',
+  username: 'otel_demo',
+};
 
 async function addOtelDemoSources({
   connectionId,
@@ -95,6 +117,7 @@ async function addOtelDemoSources({
           'Timestamp, ServiceName, SeverityText, Body',
         serviceNameExpression: 'ServiceName',
         severityTextExpression: 'SeverityText',
+        severityNumberExpression: 'SeverityNumber',
         eventAttributesExpression: 'LogAttributes',
         resourceAttributesExpression: 'ResourceAttributes',
         traceIdExpression: 'TraceId',
@@ -134,6 +157,7 @@ async function addOtelDemoSources({
       statusCodeExpression: 'StatusCode',
       statusMessageExpression: 'StatusMessage',
       spanEventsValueExpression: 'Events',
+      spanLinksValueExpression: 'Links',
       highlightedTraceAttributeExpressions:
         traceSourceHighlightedTraceAttributes,
       materializedViews: traceSourceMaterializedViews,
@@ -252,6 +276,7 @@ function OnboardingModalComponent({
 
   const createSourceMutation = useCreateSource();
   const createConnectionMutation = useCreateConnection();
+  const updateConnectionMutation = useUpdateConnection();
   const updateSourceMutation = useUpdateSource();
   const deleteSourceMutation = useDeleteSource();
   const metadata = useMetadataWithSettings();
@@ -308,10 +333,25 @@ function OnboardingModalComponent({
         setIsAutoDetecting(true);
         setHasAutodetected(true);
 
-        // Try to detect OTEL tables
-        const otelTables = await metadata.getOtelTables({ connectionId });
+        const getTimeSeriesTables = IS_PROMQL_ENABLED
+          ? metadata.getTimeSeriesTables({ connectionId }).catch(err => {
+              console.error('Error detecting TimeSeries tables:', err);
+              return [];
+            })
+          : [];
 
-        if (!otelTables) {
+        // Try to detect OTEL tables, and a TimeSeries table for PromQL
+        const [otelTables, timeSeriesTables] = await Promise.all([
+          metadata.getOtelTables({ connectionId }),
+          getTimeSeriesTables,
+        ]);
+
+        const timeSeriesTable = pickTimeSeriesTable(
+          timeSeriesTables,
+          otelTables?.database,
+        );
+
+        if (!otelTables && !timeSeriesTable) {
           // No tables detected, go to manual source setup
           setStep('source');
           return;
@@ -320,7 +360,7 @@ function OnboardingModalComponent({
         const createdSources: TSource[] = [];
 
         // Create Log Source if available
-        if (otelTables.tables.logs) {
+        if (otelTables?.tables.logs) {
           const inferredConfig = await inferTableSourceConfig({
             kind: SourceKind.Log,
             databaseName: otelTables.database,
@@ -358,7 +398,7 @@ function OnboardingModalComponent({
         }
 
         // Create Trace Source if available
-        if (otelTables.tables.traces) {
+        if (otelTables?.tables.traces) {
           const inferredConfig = await inferTableSourceConfig({
             kind: SourceKind.Trace,
             databaseName: otelTables.database,
@@ -405,9 +445,9 @@ function OnboardingModalComponent({
         }
 
         // Create Metrics Source if any metrics tables are available
-        const hasMetrics = Object.values(otelTables.tables.metrics).some(
-          t => t != null,
-        );
+        const hasMetrics =
+          otelTables != null &&
+          Object.values(otelTables.tables.metrics).some(t => t != null);
         if (hasMetrics) {
           const metricTables: MetricTable = {
             [MetricsDataType.Gauge]: '',
@@ -454,7 +494,7 @@ function OnboardingModalComponent({
         }
 
         // Create Session Source if available
-        if (otelTables.tables.sessions) {
+        if (otelTables?.tables.sessions) {
           const inferredConfig = await inferTableSourceConfig({
             kind: SourceKind.Session,
             databaseName: otelTables.database,
@@ -491,6 +531,31 @@ function OnboardingModalComponent({
               'Session source was found but missing required fields',
               inferredConfig,
             );
+          }
+        }
+
+        // Create PromQL Source if a TimeSeries table is available
+        if (timeSeriesTable) {
+          try {
+            // Pin the source to the HTTP API only when the server answers it
+            // now. Otherwise leave it on Auto, which keeps checking.
+            const servesHttpApi =
+              await fetchPrometheusHttpApiSupport(connectionId);
+            const promqlSource = await createSourceMutation.mutateAsync({
+              source: {
+                kind: SourceKind.Promql,
+                name: 'PromQL',
+                connection: connectionId,
+                from: timeSeriesTable,
+                timestampValueExpression: PROMQL_TIMESTAMP_EXPRESSION,
+                ...(servesHttpApi
+                  ? { promqlBackend: 'clickhouse-http' as const }
+                  : {}),
+              },
+            });
+            createdSources.push(promqlSource);
+          } catch (err) {
+            console.error('Error creating PromQL source:', err);
           }
         }
 
@@ -611,16 +676,19 @@ function OnboardingModalComponent({
       // Reuse existing demo connection if available, otherwise create one
       const existingDemoConnection = connections?.find(c => c.name === 'Demo');
       let createdConnectionId = existingDemoConnection?.id ?? '';
-      if (!existingDemoConnection) {
+      if (
+        existingDemoConnection?.host === LEGACY_DEMO_CONNECTION.host &&
+        existingDemoConnection.username === LEGACY_DEMO_CONNECTION.username
+      ) {
+        // Demo connections created before the demo server moved still point
+        // at the old host
+        await updateConnectionMutation.mutateAsync({
+          id: existingDemoConnection.id,
+          connection: { ...existingDemoConnection, ...DEMO_CONNECTION },
+        });
+      } else if (!existingDemoConnection) {
         await createConnectionMutation.mutateAsync(
-          {
-            connection: {
-              name: 'Demo',
-              host: 'https://sql-clickhouse.clickhouse.com',
-              username: 'otel_demo',
-              password: '',
-            },
-          },
+          { connection: DEMO_CONNECTION },
           {
             onSuccess(data) {
               createdConnectionId = data.id;
@@ -639,23 +707,23 @@ function OnboardingModalComponent({
         createSourceMutation,
         deleteSourceMutation,
 
-        logSourceDatabaseName: 'otel_v2',
+        logSourceDatabaseName: 'otel',
         logSourceName: 'Demo Logs',
         logSourceTableName: 'otel_logs',
 
-        metricsSourceDatabaseName: 'otel_v2',
+        metricsSourceDatabaseName: 'otel',
         metricsSourceName: 'Demo Metrics',
 
-        sessionSourceDatabaseName: 'otel_v2',
+        sessionSourceDatabaseName: 'otel',
         sessionSourceName: 'Demo Sessions',
         sessionSourceTableName: 'hyperdx_sessions',
 
-        traceSourceDatabaseName: 'otel_v2',
+        traceSourceDatabaseName: 'otel',
         traceSourceName: 'Demo Traces',
         traceSourceTableName: 'otel_traces',
         traceSourceMaterializedViews: [
           {
-            databaseName: 'otel_v2',
+            databaseName: 'otel',
             tableName: 'otel_traces_1m',
             dimensionColumns: 'ServiceName, StatusCode',
             minGranularity: '1 minute',
@@ -675,7 +743,7 @@ function OnboardingModalComponent({
             ],
           },
           {
-            databaseName: 'otel_v2',
+            databaseName: 'otel',
             tableName: 'otel_traces_1m_v2',
             dimensionColumns: 'ServiceName, SpanName, SpanKind',
             minGranularity: '1 minute',
@@ -747,6 +815,7 @@ function OnboardingModalComponent({
     connections,
     createSourceMutation,
     createConnectionMutation,
+    updateConnectionMutation,
     updateSourceMutation,
     deleteSourceMutation,
     sources,

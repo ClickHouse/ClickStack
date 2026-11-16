@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useController, UseControllerProps } from 'react-hook-form';
 import { acceptCompletion } from '@codemirror/autocomplete';
 import { TableConnection } from '@hyperdx/common-utils/dist/core/metadata';
@@ -7,6 +7,7 @@ import CodeMirror, {
   Compartment,
   EditorView,
   keymap,
+  Prec,
   ReactCodeMirrorRef,
 } from '@uiw/react-codemirror';
 
@@ -28,7 +29,18 @@ type SQLEditorProps = {
   enableLineWrapping?: boolean;
   tableConnections?: TableConnection[];
   additionalCompletions?: SQLCompletion[];
+  dateRange?: [Date, Date];
+  timestampValueExpression?: string;
+  onSubmit?: () => void;
 };
+
+export const createRunQueryKeyBinding = (onSubmit: () => void) => ({
+  key: 'Mod-Enter',
+  run: () => {
+    onSubmit();
+    return true;
+  },
+});
 
 export default function SQLEditor({
   onChange,
@@ -38,12 +50,26 @@ export default function SQLEditor({
   enableLineWrapping = false,
   tableConnections,
   additionalCompletions,
+  dateRange,
+  timestampValueExpression,
+  onSubmit,
 }: SQLEditorProps) {
   const { colorScheme } = useMantineColorScheme();
   const ref = useRef<ReactCodeMirrorRef>(null);
   const compartmentRef = useRef<Compartment>(new Compartment());
 
-  const { data: fields } = useMultipleAllFields(tableConnections ?? []);
+  const runQueryKeymap = useMemo(
+    () =>
+      onSubmit == null
+        ? []
+        : [Prec.highest(keymap.of([createRunQueryKeyBinding(onSubmit)]))],
+    [onSubmit],
+  );
+
+  const { data: fields } = useMultipleAllFields(tableConnections ?? [], {
+    dateRange,
+    timestampValueExpression,
+  });
 
   const updateAutocompleteColumns = useCallback(
     (viewRef: EditorView) => {
@@ -104,6 +130,7 @@ export default function SQLEditor({
               upperCaseKeywords: true,
             }),
           ),
+          ...runQueryKeymap,
           keymap.of([
             {
               key: 'Tab',

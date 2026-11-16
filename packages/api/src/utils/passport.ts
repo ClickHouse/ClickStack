@@ -14,8 +14,14 @@ passport.serializeUser(function (user, done) {
 passport.deserializeUser(function (id: string, done) {
   findUserById(id)
     .then(user => {
-      if (user == null) {
-        return done(new Error('User not found'));
+      // A session can never belong to a service account.
+      if (user == null || user.isVirtual) {
+        // The session outlived the user, e.g. the account was deleted. That is
+        // not a server fault, and reporting it as one turned every request
+        // still carrying the cookie into a 500, public routes included, so the
+        // browser could not even reach the login page. `false` is passport's
+        // "no such user" signal: the request continues unauthenticated.
+        return done(null, false);
       }
       done(null, user as UserDocument);
     })
@@ -36,6 +42,14 @@ passport.use(
           username,
           password,
         );
+        if (user?.isVirtual) {
+          logger.info({
+            message: `Login for "${username}" rejected, service account`,
+            type: 'user_login',
+            authType: 'password',
+          });
+          return done(null, false);
+        }
         if (error) {
           logger.info({
             message: `Login for "${username}" failed, ${error}"`,

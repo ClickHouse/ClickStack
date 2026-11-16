@@ -1,4 +1,21 @@
-jest.retryTimes(1, { logErrorsBeforeRetry: true });
+// Overridable via JEST_RETRY_TIMES (e.g. the nightly zero-retry flake hunt).
+// Honours an explicit 0 so retries can be forced off; an unset/blank/negative/
+// non-integer value falls back to the default of 1 rather than coercing to 0.
+const rawJestRetries = process.env.JEST_RETRY_TIMES;
+const parsedJestRetries = rawJestRetries ? Number(rawJestRetries) : NaN;
+jest.retryTimes(
+  Number.isInteger(parsedJestRetries) && parsedJestRetries >= 0
+    ? parsedJestRetries
+    : 1,
+  { logErrorsBeforeRetry: true },
+);
+
+// http-proxy-middleware v4 is ESM-only and Jest's CJS module loader cannot
+// load ESM packages. Auto-mock it; the clickhouse-proxy int tests opt out via
+// jest.unmock() (jest.int.config.js transpiles the package for them).
+jest.mock('http-proxy-middleware', () => ({
+  createProxyMiddleware: jest.fn(() => jest.fn()),
+}));
 
 // Suppress noisy console output during test runs.
 // - debug/info: ClickHouse query logging, server startup messages
@@ -13,9 +30,20 @@ jest.mock('@/utils/slack', () => ({
   postMessageToWebhook: jest.fn().mockResolvedValue(null),
 }));
 
-// Mock global fetch for generic webhook calls
+// Mock global fetch for generic webhook calls. The real one is kept on
+// `globalThis.realFetch` so a test that needs to reach a live service (e.g.
+// ClickHouse's Prometheus API) can `mockFetch.mockImplementation(realFetch)`
+// for its duration.
+Object.assign(globalThis, { realFetch: global.fetch });
 global.fetch = jest.fn().mockResolvedValue({
   ok: true,
   text: jest.fn().mockResolvedValue(''),
   json: jest.fn().mockResolvedValue({}),
 } as any);
+
+// Webhook delivery uses undici's fetch; route it to the global mock so tests
+// stub and assert on `global.fetch` as before.
+jest.mock('undici', () => ({
+  ...jest.requireActual('undici'),
+  fetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+}));

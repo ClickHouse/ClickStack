@@ -1,5 +1,69 @@
 // Utility functions for parsing and grouping map-like field names
 
+import SqlString from 'sqlstring';
+import {
+  type Field,
+  parseKeyPath,
+} from '@hyperdx/common-utils/dist/core/metadata';
+import type { FilterState } from '@hyperdx/common-utils/dist/filters';
+
+import type { Facet } from '@/hooks/useMetadata';
+import { mergePath } from '@/utils';
+
+/** A filter key and its values, as the sidebar lists it. */
+export type FacetEntry = {
+  key: string;
+  value: (string | boolean)[];
+  /** The key's values are still being fetched. */
+  isLoading?: boolean;
+};
+
+/**
+ * Lists the requested keys in request order, each with its values once they
+ * arrive. While `isFetching`, a key still waiting on its values gets an empty
+ * placeholder and is reported in `pendingKeys`, so every filter can be listed
+ * before any values land. The fixed order keeps each filter in place as
+ * values arrive, in whatever order the queries finish.
+ */
+export function listRequestedFacets({
+  requestedKeys,
+  arrived,
+  isFetching,
+  toUiKey,
+}: {
+  /** SQL key expressions, as sent to the values query. */
+  requestedKeys: string[];
+  arrived: Facet[] | undefined;
+  isFetching: boolean;
+  toUiKey: (sqlKey: string) => string;
+}): { facets: Facet[] | undefined; pendingKeys: Set<string> } {
+  const pendingKeys = new Set<string>();
+  if (!arrived && !isFetching) return { facets: undefined, pendingKeys };
+
+  const arrivedByKey = new Map(arrived?.map(facet => [facet.key, facet]));
+  const listed = new Set<string>();
+  const facets: Facet[] = [];
+  for (const sqlKey of requestedKeys) {
+    if (listed.has(sqlKey)) continue;
+    listed.add(sqlKey);
+    const facet = arrivedByKey.get(sqlKey);
+    if (facet) {
+      facets.push({ ...facet, key: toUiKey(sqlKey) });
+    } else if (isFetching) {
+      pendingKeys.add(toUiKey(sqlKey));
+      facets.push({ key: toUiKey(sqlKey), value: [] });
+    }
+  }
+  // Results the request didn't name verbatim: a re-quoted identifier, or a
+  // previous request's keys still on screen while the next one loads.
+  for (const facet of arrived ?? []) {
+    if (!listed.has(facet.key)) {
+      facets.push({ ...facet, key: toUiKey(facet.key) });
+    }
+  }
+  return { facets, pendingKeys };
+}
+
 // Clean ClickHouse expressions to extract clean property paths
 export function cleanClickHouseExpression(key: string): string {
   // Remove toString() wrapper if present
@@ -12,21 +76,29 @@ export function cleanClickHouseExpression(key: string): string {
   return cleanKey;
 }
 
+const isLowCardinality = (type: string) => type.includes('LowCardinality');
+
+// Low-cardinality fields first: they make the most useful facets and groupings.
+export function sortLowCardinalityFirst<T extends Pick<Field, 'type'>>(
+  fields: T[],
+): T[] {
+  return [...fields].sort(
+    (a, b) =>
+      Number(isLowCardinality(b.type)) - Number(isLowCardinality(a.type)),
+  );
+}
+
 // Parse map-like field names and extract the base name and property path
 export function parseMapFieldName(
   key: string,
 ): { baseName: string; propertyPath: string } | null {
-  // First clean the ClickHouse expression
   const cleanKey = cleanClickHouseExpression(key);
+  const path = parseKeyPath(cleanKey);
 
-  // Match patterns like: ResourceAttributes['some.property'], SpanAttributes['key'], or json_column.key
-  const mapPattern = /^([^[]+)\[['"]([^'"]+)['"]\]$/;
-  const match = cleanKey.match(mapPattern);
-
-  if (match) {
+  if (path.length >= 2) {
     return {
-      baseName: match[1],
-      propertyPath: match[2],
+      baseName: path[0],
+      propertyPath: path.slice(1).join('.'),
     };
   }
 
@@ -44,23 +116,32 @@ export function parseMapFieldName(
   return null;
 }
 
-// Group facets by their base names for map-like fields
-export function groupFacetsByBaseName(
-  facets: { key: string; value: (string | boolean)[] }[],
-) {
+// Bracket-form keys (e.g. LogAttributes['time']) are the canonical SQL form
+// produced by mergePath for Map columns, while dot-form keys
+// (e.g. LogAttributes.time) are what setFilterValue stores after its
+// parseKeyPath().join('.') normalization and what parseLuceneFilter returns
+// on URL load. Same logical field, different raw string.
+function isBracketFormMapKey(key: string): boolean {
+  return key.includes("['") || key.includes('["');
+}
+
+// Group facets by their base names for map-like fields.
+//
+// De-duplicates children that resolve to the same (baseName, propertyPath)
+// — a filterState entry like `LogAttributes.time` and a facet entry like
+// `LogAttributes['time']` refer to the same logical field and must collapse
+// into a single child. When merging, we keep the bracket-form key so
+// `child.key` remains a valid ClickHouse expression for "Load more" SQL.
+export function groupFacetsByBaseName(facets: FacetEntry[]) {
   const grouped: Map<
     string,
     {
       key: string;
       value: (string | boolean)[];
-      children: {
-        key: string;
-        value: (string | boolean)[];
-        propertyPath: string;
-      }[];
+      children: (FacetEntry & { propertyPath: string })[];
     }
   > = new Map();
-  const nonGrouped: { key: string; value: (string | boolean)[] }[] = [];
+  const nonGrouped: FacetEntry[] = [];
 
   for (const facet of facets) {
     const parsed = parseMapFieldName(facet.key);
@@ -74,14 +155,173 @@ export function groupFacetsByBaseName(
         });
       }
       const group = grouped.get(baseName)!;
-      group.children.push({
-        ...facet,
-        propertyPath,
-      });
+      const existing = group.children.find(
+        c => c.propertyPath === propertyPath,
+      );
+      if (existing) {
+        const mergedValues: (string | boolean)[] = [...existing.value];
+        for (const v of facet.value) {
+          if (!mergedValues.includes(v)) {
+            mergedValues.push(v);
+          }
+        }
+        existing.value = mergedValues;
+        if (facet.isLoading) {
+          existing.isLoading = true;
+        }
+        if (
+          isBracketFormMapKey(facet.key) &&
+          !isBracketFormMapKey(existing.key)
+        ) {
+          existing.key = facet.key;
+        }
+      } else {
+        group.children.push({
+          ...facet,
+          propertyPath,
+        });
+      }
     } else {
       nonGrouped.push(facet);
     }
   }
 
   return { grouped: Array.from(grouped.values()), nonGrouped };
+}
+
+const naturalCompare = new Intl.Collator(undefined, { numeric: true }).compare;
+
+// Sorts the keys inside each nested group A–Z, keeping groups in the order they
+// first appear. Other facets keep their order and move ahead of the nested
+// ones, which is harmless because grouped and non-grouped facets render
+// separately.
+export function sortNestedFacetKeys(facets: { key: string }[]) {
+  const groupOrder = new Map<string, number>();
+  for (const { key } of facets) {
+    const baseName = parseMapFieldName(key)?.baseName;
+    if (baseName != null && !groupOrder.has(baseName)) {
+      groupOrder.set(baseName, groupOrder.size);
+    }
+  }
+  facets.sort((a, b) => {
+    const nestedA = parseMapFieldName(a.key);
+    const nestedB = parseMapFieldName(b.key);
+    if (!nestedA || !nestedB) return Number(!!nestedA) - Number(!!nestedB);
+    return (
+      groupOrder.get(nestedA.baseName)! - groupOrder.get(nestedB.baseName)! ||
+      naturalCompare(nestedA.propertyPath, nestedB.propertyPath)
+    );
+  });
+}
+
+// Look up a filterState entry by either bracket-form or dot-form map sub-key.
+// Bracket form is the canonical SQL key used in facet results; dot form is
+// what setFilterValue stores after its parseKeyPath().join('.') normalization
+// and what parseLuceneFilter restores from a Lucene URL round-trip. Reads
+// need to tolerate either so the user's selection still resolves regardless
+// of which form `child.key` carries after groupFacetsByBaseName's merge.
+export function getFilterStateEntry(
+  filterState: FilterState,
+  key: string,
+): FilterState[string] | undefined {
+  const direct = filterState[key];
+  if (direct) return direct;
+  const parsed = parseMapFieldName(key);
+  if (!parsed) return undefined;
+  return (
+    filterState[`${parsed.baseName}.${parsed.propertyPath}`] ??
+    filterState[`${parsed.baseName}['${parsed.propertyPath}']`]
+  );
+}
+
+// A key that begins with `identifier(` is a raw SQL function call (e.g.
+// `toString(...)`, `JSONExtractString(...)`), not a column name or a dot-form
+// Map sub-key, so it is already a valid ClickHouse expression.
+const isSqlFunctionCallExpression = (key: string): boolean =>
+  /^[A-Za-z_]\w*\(/.test(key);
+
+// Coerce a filterState key into a ClickHouse expression suitable for raw SQL.
+// A dot-form Map sub-key like `LogAttributes.host.name` is rewritten to bracket
+// form `LogAttributes['host.name']` via `mergePath` so the conversion stays
+// consistent with the keys produced by the facet-discovery path. Bracket form,
+// backtick-quoted JSON paths, raw SQL function-call expressions
+// (`toString(...)`, `JSONExtractString(...)`), and plain column names are
+// returned unchanged. Use this when handing a filterState key off to a SQL
+// caller (e.g. "Load more" via metadata.getKeyValues), since `setFilterValue`
+// normalizes Map sub-keys to dot form which ClickHouse cannot resolve as map
+// access.
+//
+// `parseMapFieldName` already guarantees `parsed.baseName` is a Map (its only
+// callers are the dot-form facet keys that originate from Map columns), so
+// `mergePath` must treat it as one. Without the third argument, a numeric-
+// looking sub-key like `LogAttributes.1` collapses into the Array branch and
+// emits the illegal `LogAttributes[2]`. HDX-4369.
+export function toClickHouseKeyExpression(key: string): string {
+  if (
+    key.includes("['") ||
+    key.includes('["') ||
+    key.includes('`') ||
+    // "Add to Filters" on a value inside parsed JSON from a String column builds
+    // a function-call key (e.g. JSONExtractString(Body, 'app.user.currency'));
+    // it must pass through untouched. Without this, parseMapFieldName splits on
+    // the dot inside the quoted argument and mergePath mangles it into the
+    // invalid `JSONExtractString(Body, 'app['user.currency')']`. HDX-4427.
+    isSqlFunctionCallExpression(key)
+  ) {
+    return key;
+  }
+  const parsed = parseMapFieldName(key);
+  if (!parsed) return key;
+  return mergePath(
+    [parsed.baseName, parsed.propertyPath],
+    [],
+    [parsed.baseName],
+  );
+}
+
+/**
+ * Quote a single identifier if it isn't already a valid bare ClickHouse identifier.
+ * @param id - The identifier to quote
+ * @returns The quoted identifier if needed, otherwise the original identifier
+ */
+function quoteIdentifierIfNeeded(id: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(id)
+    ? id
+    : SqlString.escapeId(id, true);
+}
+
+/**
+ * Coerce a filterState key into a ClickHouse expression suitable for raw SQL,
+ * backtick-quoting identifiers with special characters.
+ *
+ * `knownColumns` is the set of real top-level column names on the table. Only
+ * keys matching a known column or accessing a map key of a known column will
+ * be quoted.
+ */
+export function toQuotedClickHouseKeyExpression(
+  key: string,
+  knownColumns: Set<string>,
+): string {
+  // A whole-key match against a real column wins: quote the entire name as one
+  // identifier (handles flat columns whose name contains dots/hyphens/etc.).
+  if (knownColumns.has(key)) {
+    return quoteIdentifierIfNeeded(key);
+  }
+
+  // Normalize dot-form (ResourceAttributes.host.name) to map access form (ResourceAttributes['host.name'])
+  const expr = toClickHouseKeyExpression(key);
+
+  // Already quoted: leave untouched
+  if (expr.startsWith('`') || expr.startsWith('"')) {
+    return expr;
+  }
+
+  // Quote a map column name and leave the property path untouched, e.g. `LogAttributes`['host.name'].
+  const path = parseKeyPath(expr);
+  if (path.length >= 2 && knownColumns.has(path[0])) {
+    const bracketStart = expr.indexOf('[');
+    return `${quoteIdentifierIfNeeded(path[0])}${expr.slice(bracketStart)}`;
+  }
+
+  return expr;
 }

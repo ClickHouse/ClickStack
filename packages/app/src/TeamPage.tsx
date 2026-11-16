@@ -14,35 +14,59 @@ import {
   TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconPencil } from '@tabler/icons-react';
+import {
+  IconAdjustmentsHorizontal,
+  IconApi,
+  IconDatabase,
+  IconPencil,
+  IconPlug,
+  IconShieldLock,
+  IconUsers,
+} from '@tabler/icons-react';
 
 import { PageHeader } from './components/PageHeader';
 import ApiKeysSection from './components/TeamSettings/ApiKeysSection';
 import ConnectionsSection from './components/TeamSettings/ConnectionsSection';
+import IacMigrationSection from './components/TeamSettings/IacMigrationSection';
 import IntegrationsSection from './components/TeamSettings/IntegrationsSection';
+import McpServerSection from './components/TeamSettings/McpServerSection';
+import OrgApiKeysSection from './components/TeamSettings/OrgApiKeysSection';
 import SecurityPoliciesSection from './components/TeamSettings/SecurityPoliciesSection';
 import SourcesSection from './components/TeamSettings/SourcesSection';
 import TeamMembersSection from './components/TeamSettings/TeamMembersSection';
 import TeamQueryConfigSection from './components/TeamSettings/TeamQueryConfigSection';
-import { useBrandDisplayName } from './theme/ThemeProvider';
 import api from './api';
-import { withAppNav } from './layout';
+import { usePageTitle } from './brand';
+import { IS_IAC_EXPORT_ENABLED, IS_LOCAL_MODE } from './config';
+import { APP_CONTENT_SCROLL_CONTAINER_ID, withAppNav } from './layout';
 
 type TeamTab = {
   value: string;
   label: string;
+  icon: ReactNode;
   sections: {
     id: string;
-    content: ReactNode;
+    // Always a function of whether this tab is the visible one. Mantine `Tabs`
+    // keeps every panel mounted, so a section that fetches on mount would
+    // otherwise do so on every Team Settings visit. Uniform rather than a
+    // `ReactNode | fn` union: the union let a bare `<Section />` be passed where
+    // the closure form was needed, silently reinstating the eager fetch.
+    content: (active: boolean) => ReactNode;
   }[];
 };
 
-function TeamTabContent({ sections }: { sections: TeamTab['sections'] }) {
+function TeamTabContent({
+  sections,
+  active,
+}: {
+  sections: TeamTab['sections'];
+  active: boolean;
+}) {
   return (
     <Stack gap="lg" pt="lg">
       {sections.map(section => (
         <Box key={section.id} id={section.id}>
-          {section.content}
+          {section.content(active)}
         </Box>
       ))}
     </Stack>
@@ -50,7 +74,7 @@ function TeamTabContent({ sections }: { sections: TeamTab['sections'] }) {
 }
 
 export default function TeamPage() {
-  const brandName = useBrandDisplayName();
+  const title = usePageTitle('My Team');
   const router = useRouter();
   const { data: team, refetch: refetchTeam, isLoading } = api.useTeam();
   const setTeamName = api.useSetTeamName();
@@ -92,24 +116,26 @@ export default function TeamPage() {
     {
       value: 'data',
       label: 'Data',
+      icon: <IconDatabase size={16} />,
       sections: [
         {
           id: 'team-data-sources',
-          content: <SourcesSection />,
+          content: () => <SourcesSection />,
         },
         {
           id: 'team-data-connections',
-          content: <ConnectionsSection />,
+          content: () => <ConnectionsSection />,
         },
       ],
     },
     {
       value: 'team',
       label: 'Members',
+      icon: <IconUsers size={16} />,
       sections: [
         {
           id: 'team-members',
-          content: <TeamMembersSection />,
+          content: () => <TeamMembersSection />,
         },
       ],
     },
@@ -118,10 +144,11 @@ export default function TeamPage() {
           {
             value: 'access',
             label: 'Access',
+            icon: <IconShieldLock size={16} />,
             sections: [
               {
                 id: 'team-access-security-policies',
-                content: (
+                content: () => (
                   <SecurityPoliciesSection
                     allowedAuthMethods={allowedAuthMethods}
                   />
@@ -132,26 +159,58 @@ export default function TeamPage() {
         ]
       : []),
     {
+      value: 'api-agents',
+      label: 'API & Agents',
+      icon: <IconApi size={16} />,
+      sections: [
+        {
+          id: 'team-api-agents-api-keys',
+          content: () => <ApiKeysSection />,
+        },
+        // Org keys are stored by the API, which local mode doesn't run.
+        ...(IS_LOCAL_MODE
+          ? []
+          : [
+              {
+                id: 'team-api-agents-org-api-keys',
+                content: () => <OrgApiKeysSection />,
+              },
+            ]),
+        {
+          id: 'team-api-agents-mcp-server',
+          content: () => <McpServerSection />,
+        },
+        ...(IS_IAC_EXPORT_ENABLED
+          ? [
+              {
+                id: 'team-api-agents-iac',
+                content: (active: boolean) => (
+                  <IacMigrationSection active={active} />
+                ),
+              },
+            ]
+          : []),
+      ],
+    },
+    {
       value: 'integrations',
       label: 'Integrations',
+      icon: <IconPlug size={16} />,
       sections: [
         {
           id: 'team-integrations-webhooks',
-          content: <IntegrationsSection />,
-        },
-        {
-          id: 'team-integrations-api-keys',
-          content: <ApiKeysSection />,
+          content: () => <IntegrationsSection />,
         },
       ],
     },
     {
       value: 'advanced',
       label: 'Query Settings',
+      icon: <IconAdjustmentsHorizontal size={16} />,
       sections: [
         {
           id: 'team-advanced-query-settings',
-          content: <TeamQueryConfigSection />,
+          content: () => <TeamQueryConfigSection />,
         },
       ],
     },
@@ -168,6 +227,10 @@ export default function TeamPage() {
       return;
     }
 
+    // Preserve any hash (e.g. `#source-<id>` deep links consumed by
+    // SourcesList) — this replace only normalizes the `tab` param and
+    // must not strip other parts of the URL.
+    const hash = window.location.hash.slice(1);
     void router.replace(
       {
         pathname: router.pathname,
@@ -175,6 +238,7 @@ export default function TeamPage() {
           ...router.query,
           tab: activeTab,
         },
+        hash: hash || undefined,
       },
       undefined,
       {
@@ -190,7 +254,7 @@ export default function TeamPage() {
         return;
       }
 
-      document.getElementById('app-content-scroll-container')?.scrollTo({
+      document.getElementById(APP_CONTENT_SCROLL_CONTAINER_ID)?.scrollTo({
         top: 0,
       });
 
@@ -215,7 +279,7 @@ export default function TeamPage() {
   return (
     <div className="TeamPage" data-testid="team-page">
       <Head>
-        <title>My Team - {brandName}</title>
+        <title>{title}</title>
       </Head>
       <PageHeader>
         <div data-testid="team-name-section">
@@ -294,14 +358,21 @@ export default function TeamPage() {
             <Tabs value={activeTab} onChange={handleTabChange}>
               <Tabs.List>
                 {tabs.map(tab => (
-                  <Tabs.Tab key={tab.value} value={tab.value}>
+                  <Tabs.Tab
+                    key={tab.value}
+                    value={tab.value}
+                    leftSection={tab.icon}
+                  >
                     {tab.label}
                   </Tabs.Tab>
                 ))}
               </Tabs.List>
               {tabs.map(tab => (
                 <Tabs.Panel key={tab.value} value={tab.value}>
-                  <TeamTabContent sections={tab.sections} />
+                  <TeamTabContent
+                    sections={tab.sections}
+                    active={tab.value === activeTab}
+                  />
                 </Tabs.Panel>
               ))}
             </Tabs>

@@ -28,6 +28,9 @@ receivers:
       v__OTEL_COLLECTOR_VERSION__
   # Contrib
   - gomod:
+      github.com/open-telemetry/opentelemetry-collector-contrib/receiver/datadogreceiver
+      v__OTEL_COLLECTOR_VERSION__
+  - gomod:
       github.com/open-telemetry/opentelemetry-collector-contrib/receiver/dockerstatsreceiver
       v__OTEL_COLLECTOR_VERSION__
   - gomod:
@@ -47,6 +50,9 @@ receivers:
       v__OTEL_COLLECTOR_VERSION__
   - gomod:
       github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver
+      v__OTEL_COLLECTOR_VERSION__
+  - gomod:
+      github.com/open-telemetry/opentelemetry-collector-contrib/receiver/statsdreceiver
       v__OTEL_COLLECTOR_VERSION__
 
 processors:
@@ -119,6 +125,9 @@ exporters:
   - gomod:
       github.com/open-telemetry/opentelemetry-collector-contrib/exporter/clickhouseexporter
       v__OTEL_COLLECTOR_VERSION__
+  - gomod:
+      github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter
+      v__OTEL_COLLECTOR_VERSION__
 
 connectors:
   # Core
@@ -128,6 +137,9 @@ connectors:
   # Contrib
   - gomod:
       github.com/open-telemetry/opentelemetry-collector-contrib/connector/routingconnector
+      v__OTEL_COLLECTOR_VERSION__
+  - gomod:
+      github.com/open-telemetry/opentelemetry-collector-contrib/connector/spanmetricsconnector
       v__OTEL_COLLECTOR_VERSION__
 
 extensions:
@@ -141,6 +153,9 @@ extensions:
   # Contrib
   - gomod:
       github.com/open-telemetry/opentelemetry-collector-contrib/extension/bearertokenauthextension
+      v__OTEL_COLLECTOR_VERSION__
+  - gomod:
+      github.com/open-telemetry/opentelemetry-collector-contrib/extension/oidcauthextension
       v__OTEL_COLLECTOR_VERSION__
   - gomod:
       github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage

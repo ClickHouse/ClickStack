@@ -1,9 +1,55 @@
+import {
+  AlertErrorType,
+  AlertNotificationTargetTiming,
+} from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
 import ms from 'ms';
 
-import { AlertState } from '@/models/alert';
+import { AlertState, IAlertError } from '@/models/alert';
 
 import type { ObjectId } from '.';
+
+/**
+ * Diagnostics for the evaluation that wrote a history record.
+ * Evaluation-level: identical on every row one evaluation writes (including
+ * per-group rows).
+ */
+export interface IAlertHistoryAnalytics {
+  /**
+   * ClickHouse query duration for the evaluation (ms). On query-failure
+   * ERROR records, the time until the query failed — for QUERY_TIMEOUT this
+   * is approximately the configured evaluation timeout.
+   */
+  queryDurationMs?: number;
+  /** Wall time delivering the evaluation's notifications (ms) — dispatch only, including retries. */
+  webhookDurationMs?: number;
+  /**
+   * Earlier buckets backfilled in this run after missed ticks
+   * (expected buckets − 1). 0 in steady state.
+   */
+  backfilledBuckets?: number;
+  /** Per-target breakdown, slowest first. See AlertHistoryAnalyticsSchema for why these do not sum to the total. */
+  notificationTargets?: AlertNotificationTargetTiming[];
+}
+
+/** One group-by column and its value, stored as a pair. */
+export type GroupValue = { key: string; value: string };
+
+export const attributesToGroupValues = (
+  attributes: Record<string, string>,
+): GroupValue[] | undefined => {
+  const entries = Object.entries(attributes);
+  return entries.length > 0
+    ? entries.map(([key, value]) => ({ key, value }))
+    : undefined;
+};
+
+export const groupValuesToAttributes = (
+  groupValues: GroupValue[] | null | undefined,
+): Record<string, string> | undefined =>
+  groupValues?.length
+    ? Object.fromEntries(groupValues.map(v => [v.key, v.value]))
+    : undefined;
 
 export interface IAlertHistory {
   alert: ObjectId;
@@ -12,6 +58,22 @@ export interface IAlertHistory {
   state: AlertState;
   lastValues: { startTime: Date; count: number }[];
   group?: string; // For group-by alerts, stores the group identifier
+  fired?: boolean;
+  /**
+   * Group-by values of a group-by alert's group. Kept so a group that later
+   * vanishes from the data still resolves with its values, which the joined
+   * `group` string cannot be parsed back into. Stored as pairs because column
+   * names may contain dots, which Mongo would read as nested paths in a key.
+   */
+  groupValues?: GroupValue[];
+  /**
+   * Errors recorded for this evaluation window. Present on ERROR-state rows
+   * (query/processing failures where no normal history is written) and on
+   * the ERROR row created alongside normal rows when notifications fail.
+   */
+  errors?: IAlertError[];
+  /** Diagnostics for the evaluation that wrote this record. */
+  analytics?: IAlertHistoryAnalytics;
 }
 
 const AlertHistorySchema = new Schema<IAlertHistory>({
@@ -44,6 +106,61 @@ const AlertHistorySchema = new Schema<IAlertHistory>({
   group: {
     type: String,
     required: false,
+  },
+  fired: {
+    type: Boolean,
+    required: false,
+  },
+  groupValues: {
+    type: [
+      {
+        _id: false,
+        key: { type: String, required: true },
+        value: { type: String },
+      },
+    ],
+    required: false,
+    default: undefined,
+  },
+  errors: {
+    type: [
+      {
+        _id: false,
+        timestamp: { type: Date, required: true },
+        type: {
+          type: String,
+          enum: AlertErrorType,
+          required: true,
+        },
+        message: { type: String, required: true },
+      },
+    ],
+    required: false,
+    default: undefined,
+  },
+  analytics: {
+    type: {
+      _id: false,
+      queryDurationMs: { type: Number, required: false },
+      webhookDurationMs: { type: Number, required: false },
+      backfilledBuckets: { type: Number, required: false },
+      notificationTargets: {
+        type: [
+          {
+            _id: false,
+            targetId: { type: String, required: true },
+            target: { type: String, required: true },
+            durationMs: { type: Number, required: true },
+            dispatches: { type: Number, required: true },
+            failures: { type: Number, required: true },
+          },
+        ],
+        required: false,
+        default: undefined,
+      },
+    },
+    required: false,
+    default: undefined,
   },
 });
 

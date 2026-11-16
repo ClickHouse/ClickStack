@@ -3,10 +3,9 @@ import { initialize, mswLoader } from 'msw-storybook-addon';
 import type { Preview } from '@storybook/nextjs';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
+import { MANTINE_FONT_MAP } from '../src/config/fonts';
 import { ibmPlexMono, inter, roboto, robotoMono } from '../src/fonts';
 import { meHandler } from '../src/mocks/handlers';
-import { AppThemeProvider } from '../src/theme/ThemeProvider';
-import { ThemeName } from '../src/theme/types';
 import { ThemeWrapper } from '../src/ThemeWrapper';
 
 import '@mantine/core/styles.css';
@@ -17,11 +16,19 @@ import '../styles/globals.css';
 import '../styles/app.scss';
 
 export const parameters = {
-  layout: 'fullscreen',
+  layout: 'centered',
   options: {
     showPanel: false,
-    storySort: (a, b) =>
-      a.title.localeCompare(b.title, undefined, { numeric: true }),
+    storySort: {
+      order: [
+        'Guidelines',
+        'Brand',
+        'Icons',
+        'Design tokens',
+        'Components',
+        '*',
+      ],
+    },
   },
 };
 
@@ -39,44 +46,28 @@ export const globalTypes = {
       ],
     },
   },
-  brand: {
-    name: 'Brand',
-    description: 'Brand theme',
-    defaultValue: 'hyperdx',
-    toolbar: {
-      icon: 'paintbrush',
-      title: 'Brand',
-      items: [
-        { value: 'hyperdx', title: 'HyperDX' },
-        { value: 'clickstack', title: 'ClickStack' },
-      ],
-    },
-  },
-  font: {
-    name: 'Font',
-    description: 'App font family',
-    defaultValue: 'inter',
-    toolbar: {
-      icon: 'typography',
-      title: 'Font',
-      items: [
-        { value: 'inter', title: 'Inter' },
-        { value: 'roboto', title: 'Roboto' },
-        { value: 'ibm-plex-mono', title: 'IBM Plex Mono' },
-        { value: 'roboto-mono', title: 'Roboto Mono' },
-      ],
-    },
-  },
 };
 
 initialize();
 
-const fontMap = {
-  inter: inter,
-  roboto: roboto,
-  'ibm-plex-mono': ibmPlexMono,
-  'roboto-mono': robotoMono,
-};
+const NEXT_FONT_VARIABLE_CLASSES = [
+  inter.variable,
+  roboto.variable,
+  ibmPlexMono.variable,
+  robotoMono.variable,
+];
+
+/** Mirror `_document.tsx` + `_app.tsx`: font CSS vars live on <html> so body
+ * and portaled overlays (Popover, Tooltip, Modal) inherit the same family.
+ * The UI font is Inter. Mono faces stay loaded for logs and code. */
+function StorybookFontSync() {
+  React.useEffect(() => {
+    const html = document.documentElement;
+    html.classList.add(...NEXT_FONT_VARIABLE_CLASSES);
+    html.style.setProperty('--app-font-family', 'var(--font-inter)');
+  }, []);
+  return null;
+}
 
 // Create a new QueryClient for each story to avoid cache pollution between stories
 const createQueryClient = () =>
@@ -94,22 +85,31 @@ const preview: Preview = {
     (Story, context) => {
       const [queryClient] = React.useState(() => createQueryClient());
 
-      const selectedFont = context.globals.font || 'inter';
-      const font = fontMap[selectedFont as keyof typeof fontMap] || inter;
-      const fontFamily = font.style.fontFamily;
-      const brandTheme = (context.globals.brand || 'hyperdx') as ThemeName;
+      const layout = context.parameters.layout ?? 'centered';
 
       return (
-        <div className={font.className}>
+        <div
+          className={inter.className}
+          style={
+            layout === 'fullscreen'
+              ? { minHeight: '100vh' }
+              : layout === 'centered'
+                ? {
+                    width: 'fit-content',
+                    maxWidth: '100%',
+                    marginInline: 'auto',
+                  }
+                : { width: '100%' }
+          }
+        >
+          <StorybookFontSync />
           <QueryClientProvider client={queryClient}>
-            <AppThemeProvider themeName={brandTheme}>
-              <ThemeWrapper
-                colorScheme={context.globals.theme || 'light'}
-                fontFamily={fontFamily}
-              >
-                <Story />
-              </ThemeWrapper>
-            </AppThemeProvider>
+            <ThemeWrapper
+              colorScheme={context.globals.theme || 'light'}
+              fontFamily={MANTINE_FONT_MAP.Inter}
+            >
+              <Story />
+            </ThemeWrapper>
           </QueryClientProvider>
         </div>
       );

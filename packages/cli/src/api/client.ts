@@ -7,12 +7,13 @@
  *    with session cookies and connection-id header injection
  */
 
-import { createClient } from '@clickhouse/client';
+import { ClickHouseLogLevel, createClient } from '@clickhouse/client';
 import type {
   BaseResultSet,
+  ClickHouseClient as NodeClickHouseClient,
   ClickHouseSettings,
   DataFormat,
-} from '@clickhouse/client-common';
+} from '@clickhouse/client';
 
 import {
   BaseClickhouseClient,
@@ -25,7 +26,29 @@ import {
 } from '@hyperdx/common-utils/dist/core/metadata';
 
 import { loadSession, saveSession, clearSession } from '@/utils/config';
-import { AlertThresholdType } from '@hyperdx/common-utils/dist/types';
+import type {
+  AlertThresholdType,
+  DashboardWithoutId,
+  MetricTable,
+  SavedSearch,
+  Tile,
+  UseTextIndex,
+} from '@hyperdx/common-utils/dist/types';
+
+/**
+ * Extract a readable detail string from an error response body.
+ * Handles both plain-text errors and zod-express-middleware's JSON
+ * validation issue arrays.
+ */
+async function formatErrorBody(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    if (!text) return '';
+    return `\n${text.length > 2000 ? `${text.slice(0, 2000)}…` : text}`;
+  } catch {
+    return '';
+  }
+}
 
 // ------------------------------------------------------------------
 // API Client (session management + REST calls)
@@ -93,7 +116,11 @@ export class ApiClient {
 
   // ---- Auth --------------------------------------------------------
 
-  async login(email: string, password: string): Promise<boolean> {
+  /**
+   * Attempt to log in.  Returns `null` on success or a human-readable
+   * error string on failure so callers can display a meaningful message.
+   */
+  async login(email: string, password: string): Promise<string | null> {
     try {
       const res = await fetch(`${this.apiUrl}/login/password`, {
         method: 'POST',
@@ -102,13 +129,13 @@ export class ApiClient {
         redirect: 'manual',
       });
 
-      if (res.status === 302 || res.status === 200) {
+      if (res.status === 200 || res.status === 302 || res.status === 303) {
         this.extractCookies(res);
 
         // Verify the session is actually valid — some servers return
         // 302/200 without setting a real session (e.g. SSO redirects).
         if (!(await this.checkSession())) {
-          return false;
+          return 'Login succeeded but the session is not valid. The server may require SSO.';
         }
 
         // Reset active team on a fresh login — the previous selection
@@ -119,12 +146,37 @@ export class ApiClient {
           cookies: this.cookies,
           activeTeamId: undefined,
         });
-        return true;
+        return null; // success
       }
 
-      return false;
-    } catch {
-      return false;
+      if (res.status === 401 || res.status === 403) {
+        return 'Invalid email or password.';
+      }
+
+      // Try to extract a message from the response body
+      let detail = '';
+      try {
+        const body = await res.text();
+        if (body) {
+          try {
+            const json = JSON.parse(body);
+            detail = json.message || json.error || '';
+          } catch {
+            // Not JSON — use raw body if short enough
+            if (body.length < 200) detail = body;
+          }
+        }
+      } catch {
+        // ignore body read errors
+      }
+
+      return detail
+        ? `Login failed (HTTP ${res.status}): ${detail}`
+        : `Login failed (HTTP ${res.status}). Check your server URL and credentials.`;
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Unknown network error';
+      return `Could not reach the server: ${msg}`;
     }
   }
 
@@ -197,15 +249,39 @@ export class ApiClient {
   }
 
   async getSavedSearches(): Promise<SavedSearchResponse[]> {
-    const res = await this.get('/saved-searches');
-    if (!res.ok) throw new Error(`GET /saved-searches failed: ${res.status}`);
+    // NOTE: the API mounts this router at the singular `/saved-search`
+    // (see packages/api/src/api-app.ts).
+    const res = await this.get('/saved-search');
+    if (!res.ok) throw new Error(`GET /saved-search failed: ${res.status}`);
     return res.json() as Promise<SavedSearchResponse[]>;
+  }
+
+  async createSavedSearch(
+    input: SavedSearchCreateInput,
+  ): Promise<SavedSearchResponse> {
+    const res = await this.post('/saved-search', input);
+    if (!res.ok) {
+      throw new Error(
+        `POST /saved-search failed: ${res.status}${await formatErrorBody(res)}`,
+      );
+    }
+    return res.json() as Promise<SavedSearchResponse>;
   }
 
   async getDashboards(): Promise<DashboardResponse[]> {
     const res = await this.get('/dashboards');
     if (!res.ok) throw new Error(`GET /dashboards failed: ${res.status}`);
     return res.json() as Promise<DashboardResponse[]>;
+  }
+
+  async createDashboard(input: DashboardWithoutId): Promise<DashboardResponse> {
+    const res = await this.post('/dashboards', input);
+    if (!res.ok) {
+      throw new Error(
+        `POST /dashboards failed: ${res.status}${await formatErrorBody(res)}`,
+      );
+    }
+    return res.json() as Promise<DashboardResponse>;
   }
 
   async getAlerts(): Promise<AlertsResponse> {
@@ -264,6 +340,10 @@ export class ProxyClickhouseClient extends BaseClickhouseClient {
   ) {
     super({
       host: `${apiClient.getApiUrl()}/clickhouse-proxy`,
+      // This extends the base client, not the node one, so it never sees the
+      // AsyncLocalStorage scope the API uses. A client-level surface is all
+      // the attribution the CLI gets.
+      attribution: { surface: 'cli' },
       ...opts,
     });
     this.apiClient = apiClient;
@@ -307,11 +387,20 @@ export class ProxyClickhouseClient extends BaseClickhouseClient {
       application: 'hyperdx-tui',
       http_headers: baseHeaders,
       keep_alive: { enabled: false },
+      // Silence the client's internal logger. Its DefaultLogger writes
+      // via console.error at WARN level, and Ink's patchConsole re-routes
+      // console output into the TUI — so aborted in-flight queries
+      // (normal when tiles unmount or a time range changes) would spew
+      // stack traces over the UI despite silenceLogs.
+      log: { level: ClickHouseLogLevel.OFF },
     });
   }
 
-  // Silence the "Sending Query: ..." debug output from BaseClickhouseClient
-  protected override logDebugQuery(): void {}
+  // This subclass always builds a node client, so narrow the base class's
+  // platform-agnostic client type to the node-specific one.
+  protected getClient(): NodeClickHouseClient {
+    return super.getClient() as NodeClickHouseClient;
+  }
 
   protected async __query<Format extends DataFormat>({
     query,
@@ -325,10 +414,16 @@ export class ProxyClickhouseClient extends BaseClickhouseClient {
   }: QueryInputs<Format>): Promise<BaseResultSet<ReadableStream, Format>> {
     let clickhouseSettings: ClickHouseSettings | undefined;
     if (!shouldSkipApplySettings) {
-      clickhouseSettings = await this.processClickhouseSettings({
+      const neutralSettings = await this.processClickhouseSettings({
         connectionId,
         externalClickhouseSettings,
       });
+      // processClickhouseSettings returns the shared base class's settings type
+      // (from @clickhouse/client-common). It is structurally identical to the
+      // node client's own self-bundled ClickHouseSettings, but the two packages'
+      // copies are distinct nominal types since 1.23, so bridge explicitly.
+
+      clickhouseSettings = neutralSettings as ClickHouseSettings;
     }
 
     // Pass connection ID as HTTP header — the proxy uses this to
@@ -395,6 +490,7 @@ export interface SourceResponse {
   displayedTimestampValueExpression?: string;
   defaultTableSelectExpression?: string;
   implicitColumnExpression?: string;
+  useTextIndexForImplicitColumn?: UseTextIndex;
   orderByExpression?: string;
   querySettings?: Array<{ setting: string; value: string }>;
 
@@ -415,6 +511,11 @@ export interface SourceResponse {
   statusMessageExpression?: string;
   eventAttributesExpression?: string;
   resourceAttributesExpression?: string;
+  /** Trace sampling weight expression (used as chart sampleWeightExpression) */
+  sampleRateExpression?: string;
+
+  // Metric-specific: metric kind -> table name (gauge/sum/histogram/...)
+  metricTables?: MetricTable;
 
   // Correlated source IDs
   logSourceId?: string;
@@ -431,6 +532,9 @@ interface ConnectionResponse {
   username: string;
 }
 
+/** Body accepted by POST /saved-search (SavedSearchSchema minus the id). */
+export type SavedSearchCreateInput = Omit<SavedSearch, 'id'>;
+
 export interface SavedSearchResponse {
   id: string;
   _id: string;
@@ -443,24 +547,13 @@ export interface SavedSearchResponse {
   orderBy?: string;
 }
 
-interface DashboardTileConfig {
-  name?: string;
-  source?: string;
-  type?: string;
-  displayType?: string;
-  sql?: string;
-  [key: string]: unknown;
-}
-
-interface DashboardTile {
-  id: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  config: DashboardTileConfig;
-  containerId?: string;
-}
+/**
+ * A dashboard tile as returned by the internal API. `config` is the full
+ * SavedChartConfig union (builder / raw SQL / PromQL) from common-utils.
+ * Stored documents may carry legacy extra fields, hence the index signature
+ * escape hatch on top of the typed shape.
+ */
+type DashboardTile = Tile;
 
 interface DashboardFilter {
   key: string;
@@ -469,7 +562,7 @@ interface DashboardFilter {
   sourceId?: string;
 }
 
-interface DashboardResponse {
+export interface DashboardResponse {
   id: string;
   _id: string;
   name: string;
@@ -506,6 +599,8 @@ export interface AlertItem {
   tileId?: string;
   name?: string | null;
   message?: string | null;
+  displayName?: string;
+  tags?: string[];
   createdAt: string;
   updatedAt: string;
   history: AlertHistoryItem[];

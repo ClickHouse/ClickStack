@@ -1,16 +1,27 @@
+import { ColumnMetaType } from '@hyperdx/common-utils/dist/clickhouse';
+import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import {
+  ChartConfigWithOptTimestamp,
+  NumberFormat,
   SourceKind,
   TLogSource,
   TTraceSource,
 } from '@hyperdx/common-utils/dist/types';
 import { notifications } from '@mantine/notifications';
+import { renderHook } from '@testing-library/react';
 
 import {
+  getBuilderValueColumnCount,
   getEventBody,
   getSourceValidationNotificationId,
   getTraceDurationNumberFormat,
+  inferTableSourceConfig,
+  pickTimeSeriesTable,
+  useChartNumberFormats,
+  useSingleSeriesNumberFormat,
   useSources,
-} from '../source';
+  useUpdateSource,
+} from '@/source';
 
 jest.mock('../api', () => ({ hdxServer: jest.fn() }));
 jest.mock('../config', () => ({ IS_LOCAL_MODE: false }));
@@ -23,9 +34,9 @@ jest.mock('@tanstack/react-query', () => ({
   useQueryClient: jest.fn(),
 }));
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { hdxServer } from '../api';
+import { hdxServer } from '@/api';
 
 const TRACE_SOURCE: TTraceSource = {
   kind: SourceKind.Trace,
@@ -47,6 +58,119 @@ const TRACE_SOURCE: TTraceSource = {
   defaultTableSelectExpression: 'Timestamp, ServiceName',
 } as TTraceSource;
 
+describe('pickTimeSeriesTable', () => {
+  const table = (databaseName: string, tableName: string) => ({
+    databaseName,
+    tableName,
+  });
+
+  it('prefers metrics_ts in the preferred database', () => {
+    const tables = [
+      table('default', 'metrics_ts'),
+      table('otel', 'metrics_ts'),
+    ];
+    expect(pickTimeSeriesTable(tables, 'otel')).toEqual(
+      table('otel', 'metrics_ts'),
+    );
+  });
+
+  it('prefers prometheus.metrics over metrics_ts', () => {
+    const tables = [
+      table('otel', 'metrics_ts'),
+      table('prometheus', 'metrics'),
+    ];
+    expect(pickTimeSeriesTable(tables, 'otel')).toEqual(
+      table('prometheus', 'metrics'),
+    );
+  });
+
+  it('only treats metrics in the prometheus database as the docs table', () => {
+    const tables = [table('default', 'metrics'), table('otel', 'metrics_ts')];
+    expect(pickTimeSeriesTable(tables, 'otel')).toEqual(
+      table('otel', 'metrics_ts'),
+    );
+  });
+
+  it('falls back to metrics_ts in any database', () => {
+    const tables = [table('a_db', 'custom_ts'), table('b_db', 'metrics_ts')];
+    expect(pickTimeSeriesTable(tables)).toEqual(table('b_db', 'metrics_ts'));
+  });
+
+  it('picks a sole TimeSeries table without the default name', () => {
+    expect(pickTimeSeriesTable([table('otel', 'prom')])).toEqual(
+      table('otel', 'prom'),
+    );
+  });
+
+  it('picks nothing from several tables without the default name', () => {
+    const tables = [table('otel', 'prom_a'), table('otel', 'prom_b')];
+    expect(pickTimeSeriesTable(tables, 'otel')).toBeUndefined();
+  });
+
+  it('picks nothing from no tables', () => {
+    expect(pickTimeSeriesTable([])).toBeUndefined();
+  });
+});
+
+describe('inferTableSourceConfig', () => {
+  const inferOtelLogConfig = (
+    severityNumberType: string,
+    extraColumns: ColumnMetaType[] = [],
+  ) => {
+    const columns = [
+      'Timestamp',
+      'Body',
+      'SeverityText',
+      'TraceId',
+      'SpanId',
+      'ServiceName',
+      'LogAttributes',
+      'ResourceAttributes',
+    ].map(name => ({ name, type: 'String' }));
+    columns.push({ name: 'SeverityNumber', type: severityNumberType });
+    columns.push(...extraColumns);
+
+    return inferTableSourceConfig({
+      databaseName: 'default',
+      tableName: 'otel_logs',
+      connectionId: 'test-connection',
+      kind: SourceKind.Log,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      metadata: {
+        getColumns: async () => columns,
+        getTableMetadata: async () => undefined,
+      } as unknown as Metadata,
+    });
+  };
+
+  it('sets severityNumberExpression only for an integer SeverityNumber column', async () => {
+    for (const type of ['UInt8', 'Int32', 'LowCardinality(Nullable(UInt8))']) {
+      expect(await inferOtelLogConfig(type)).toHaveProperty(
+        'severityNumberExpression',
+        'SeverityNumber',
+      );
+    }
+    expect(await inferOtelLogConfig('String')).not.toHaveProperty(
+      'severityNumberExpression',
+    );
+  });
+
+  it('sets eventNameExpression only for a string EventName column', async () => {
+    for (const type of [
+      'String',
+      'LowCardinality(String)',
+      'Nullable(String)',
+    ]) {
+      expect(
+        await inferOtelLogConfig('UInt8', [{ name: 'EventName', type }]),
+      ).toHaveProperty('eventNameExpression', 'EventName');
+    }
+    expect(
+      await inferOtelLogConfig('UInt8', [{ name: 'EventName', type: 'UInt8' }]),
+    ).not.toHaveProperty('eventNameExpression');
+  });
+});
+
 describe('getEventBody', () => {
   it('returns spanNameExpression for trace kind source when both bodyExpression and spanNameExpression are present', () => {
     const result = getEventBody(TRACE_SOURCE);
@@ -60,23 +184,23 @@ describe('getTraceDurationNumberFormat', () => {
       kind: SourceKind.Log,
       id: 'log-source',
     } as TLogSource;
-    const result = getTraceDurationNumberFormat(logSource, [
-      { valueExpression: 'count()' },
-    ]);
+    const result = getTraceDurationNumberFormat(logSource, {
+      valueExpression: 'count()',
+    });
     expect(result).toBeUndefined();
   });
 
   it('returns undefined when source is undefined', () => {
-    const result = getTraceDurationNumberFormat(undefined, [
-      { valueExpression: 'count()' },
-    ]);
+    const result = getTraceDurationNumberFormat(undefined, {
+      valueExpression: 'count()',
+    });
     expect(result).toBeUndefined();
   });
 
-  it('returns undefined when select expressions do not reference duration', () => {
-    const result = getTraceDurationNumberFormat(TRACE_SOURCE, [
-      { valueExpression: 'count()' },
-    ]);
+  it('returns undefined when select expression does not reference duration', () => {
+    const result = getTraceDurationNumberFormat(TRACE_SOURCE, {
+      valueExpression: 'count()',
+    });
     expect(result).toBeUndefined();
   });
 
@@ -84,17 +208,18 @@ describe('getTraceDurationNumberFormat', () => {
 
   it('matches when valueExpression exactly equals durationExpression', () => {
     expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration', aggFn: 'avg' },
-      ]),
+      getTraceDurationNumberFormat(TRACE_SOURCE, {
+        valueExpression: 'Duration',
+        aggFn: 'avg',
+      }),
     ).toEqual({ output: 'duration', factor: 1e-9 });
   });
 
   it('matches without aggFn (raw expression passed through)', () => {
     expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration' },
-      ]),
+      getTraceDurationNumberFormat(TRACE_SOURCE, {
+        valueExpression: 'Duration',
+      }),
     ).toEqual({ output: 'duration', factor: 1e-9 });
   });
 
@@ -102,63 +227,47 @@ describe('getTraceDurationNumberFormat', () => {
 
   it('does not match expressions that only contain the duration name', () => {
     expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'avg(Duration)' },
-      ]),
+      getTraceDurationNumberFormat(TRACE_SOURCE, {
+        valueExpression: 'avg(Duration)',
+      }),
     ).toBeUndefined();
   });
 
-  it('does not match division expressions', () => {
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration/1e6' },
-      ]),
-    ).toBeUndefined();
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: '(Duration)/1e6' },
-      ]),
-    ).toBeUndefined();
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration / 1e9' },
-      ]),
-    ).toBeUndefined();
-  });
+  it.each(['Duration/1e6', '(Duration)/1e6', 'Duration / 1e9'])(
+    'does not match division expression %s',
+    valueExpression => {
+      expect(
+        getTraceDurationNumberFormat(TRACE_SOURCE, { valueExpression }),
+      ).toBeUndefined();
+    },
+  );
 
-  it('does not match modified or similar-named expressions', () => {
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration * 2' },
-      ]),
-    ).toBeUndefined();
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'LongerDuration' },
-      ]),
-    ).toBeUndefined();
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'round(Duration / 1e6, 2)' },
-      ]),
-    ).toBeUndefined();
-  });
+  it.each(['Duration * 2', 'LongerDuration', 'round(Duration / 1e6, 2)'])(
+    'does not match modified or similar-named expression %s',
+    valueExpression => {
+      expect(
+        getTraceDurationNumberFormat(TRACE_SOURCE, { valueExpression }),
+      ).toBeUndefined();
+    },
+  );
 
   // --- aggFn filtering ---
 
   it('returns undefined for count aggFn', () => {
     expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration', aggFn: 'count' },
-      ]),
+      getTraceDurationNumberFormat(TRACE_SOURCE, {
+        valueExpression: 'Duration',
+        aggFn: 'count',
+      }),
     ).toBeUndefined();
   });
 
   it('returns undefined for count_distinct aggFn', () => {
     expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration', aggFn: 'count_distinct' },
-      ]),
+      getTraceDurationNumberFormat(TRACE_SOURCE, {
+        valueExpression: 'Duration',
+        aggFn: 'count_distinct',
+      }),
     ).toBeUndefined();
   });
 
@@ -166,41 +275,45 @@ describe('getTraceDurationNumberFormat', () => {
     'detects duration with %s aggFn',
     aggFn => {
       expect(
-        getTraceDurationNumberFormat(TRACE_SOURCE, [
-          { valueExpression: 'Duration', aggFn },
-        ]),
+        getTraceDurationNumberFormat(TRACE_SOURCE, {
+          valueExpression: 'Duration',
+          aggFn,
+        }),
       ).toEqual({ output: 'duration', factor: 1e-9 });
     },
   );
 
   it('detects duration with combinator aggFn like avgIf', () => {
     expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration', aggFn: 'avgIf' },
-      ]),
+      getTraceDurationNumberFormat(TRACE_SOURCE, {
+        valueExpression: 'Duration',
+        aggFn: 'avgIf',
+      }),
     ).toEqual({ output: 'duration', factor: 1e-9 });
   });
+});
 
-  it('skips non-preserving aggFn and detects preserving one in mixed selects', () => {
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration', aggFn: 'count' },
-        { valueExpression: 'Duration', aggFn: 'avg' },
-      ]),
-    ).toEqual({ output: 'duration', factor: 1e-9 });
-  });
+describe('useUpdateSource', () => {
+  it("drops the updated source's cached PromQL lookups", () => {
+    const invalidateQueries = jest.fn();
+    // @ts-expect-error return value type
+    jest.mocked(useQueryClient).mockReturnValue({ invalidateQueries });
+    let onSuccess: ((data: unknown, vars: unknown) => void) | undefined;
+    // @ts-expect-error param type
+    jest.mocked(useMutation).mockImplementation(options => {
+      // @ts-expect-error return value type
+      onSuccess = options.onSuccess;
+    });
 
-  it('returns undefined when only non-preserving aggFns reference duration', () => {
-    expect(
-      getTraceDurationNumberFormat(TRACE_SOURCE, [
-        { valueExpression: 'Duration', aggFn: 'count' },
-        { valueExpression: 'Duration', aggFn: 'count_distinct' },
-      ]),
-    ).toBeUndefined();
-  });
+    useUpdateSource();
+    onSuccess?.(undefined, { source: { id: 'source-promql' } });
 
-  it('returns undefined when select is empty', () => {
-    expect(getTraceDurationNumberFormat(TRACE_SOURCE, [])).toBeUndefined();
+    expect(invalidateQueries.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
+      ['sources'],
+      ['promql-metric-names', 'source-promql'],
+      ['promql-label-names', 'source-promql'],
+      ['dashboard-filter-promql-label-values', 'source-promql'],
+    ]);
   });
 });
 
@@ -256,5 +369,447 @@ describe('useSources validation notifications', () => {
         autoClose: false,
       }),
     );
+  });
+});
+
+const METRIC_TABLES = {
+  gauge: 'otel_metrics_gauge',
+  sum: 'otel_metrics_sum',
+  histogram: 'otel_metrics_histogram',
+  summary: 'otel_metrics_summary',
+  'exponential histogram': 'otel_metrics_exponential_histogram',
+};
+
+const DURATION_FORMAT: NumberFormat = { output: 'duration', factor: 1e-9 };
+const CURRENCY_FORMAT: NumberFormat = { output: 'currency' };
+const PERCENT_FORMAT: NumberFormat = { output: 'percent' };
+const NUMBER_FORMAT: NumberFormat = { output: 'number' };
+
+function makeBuilderConfig(
+  overrides: Partial<ChartConfigWithOptTimestamp> = {},
+): ChartConfigWithOptTimestamp {
+  return {
+    connection: 'test-connection',
+    source: TRACE_SOURCE.id,
+    from: { databaseName: 'default', tableName: 'otel_traces' },
+    select: [],
+    where: '',
+    ...overrides,
+  } as unknown as ChartConfigWithOptTimestamp;
+}
+
+function makeRawSqlConfig(
+  overrides: Partial<ChartConfigWithOptTimestamp> = {},
+): ChartConfigWithOptTimestamp {
+  return {
+    configType: 'sql',
+    sqlTemplate: 'SELECT 1',
+    connection: 'test-connection',
+    source: TRACE_SOURCE.id,
+    ...overrides,
+  } as unknown as ChartConfigWithOptTimestamp;
+}
+
+describe('useSingleSeriesNumberFormat', () => {
+  const mockUseQuery = useQuery as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseQuery.mockReturnValue({ data: TRACE_SOURCE });
+  });
+
+  it.each<{
+    name: string;
+    config: ChartConfigWithOptTimestamp;
+    expected: NumberFormat | undefined;
+  }>([
+    {
+      name: 'returns config.numberFormat for raw SQL configs',
+      config: makeRawSqlConfig({ numberFormat: CURRENCY_FORMAT }),
+      expected: CURRENCY_FORMAT,
+    },
+    {
+      name: 'returns config.numberFormat for builder configs with empty select',
+      config: makeBuilderConfig({
+        select: [],
+        numberFormat: CURRENCY_FORMAT,
+      }),
+      expected: CURRENCY_FORMAT,
+    },
+    {
+      name: "returns the first series' numberFormat when defined",
+      config: makeBuilderConfig({
+        select: [{ valueExpression: 'count()', numberFormat: PERCENT_FORMAT }],
+        numberFormat: CURRENCY_FORMAT,
+      }),
+      expected: PERCENT_FORMAT,
+    },
+    {
+      name: 'falls back to config.numberFormat when the first series has no numberFormat',
+      config: makeBuilderConfig({
+        select: [{ valueExpression: 'count()' }],
+        numberFormat: CURRENCY_FORMAT,
+      }),
+      expected: CURRENCY_FORMAT,
+    },
+    {
+      name: 'prefers config.numberFormat over inferred duration on the first series',
+      config: makeBuilderConfig({
+        select: [{ valueExpression: 'Duration', aggFn: 'avg' }],
+        numberFormat: CURRENCY_FORMAT,
+      }),
+      expected: CURRENCY_FORMAT,
+    },
+    {
+      name: 'falls back to the inferred duration format from the first series when no explicit format is set',
+      config: makeBuilderConfig({
+        select: [{ valueExpression: 'Duration', aggFn: 'avg' }],
+      }),
+      expected: DURATION_FORMAT,
+    },
+    {
+      name: 'returns undefined when no format can be resolved',
+      config: makeBuilderConfig({
+        select: [{ valueExpression: 'count()' }],
+      }),
+      expected: undefined,
+    },
+    {
+      name: 'only inspects the first series — ignores formats and duration in later series',
+      config: makeBuilderConfig({
+        select: [
+          { valueExpression: 'count()' },
+          { valueExpression: 'Duration', aggFn: 'avg' },
+          { valueExpression: 'something', numberFormat: PERCENT_FORMAT },
+        ],
+      }),
+      expected: undefined,
+    },
+    // Metric formula configs display the formula column (number charts hide
+    // the operand series), so the format resolves from the formula — not
+    // from an operand that isn't rendered.
+    {
+      name: 'formula config: prefers the formula numberFormat over select[0]',
+      config: makeBuilderConfig({
+        metricTables: METRIC_TABLES,
+        select: [
+          { valueExpression: 'Value', numberFormat: NUMBER_FORMAT },
+          { valueExpression: 'Value' },
+        ],
+        formulas: [{ expression: 'A / B', numberFormat: PERCENT_FORMAT }],
+        showOperandSeries: false,
+      }),
+      expected: PERCENT_FORMAT,
+    },
+    {
+      name: 'formula config: falls back to config.numberFormat when the formula has none',
+      config: makeBuilderConfig({
+        metricTables: METRIC_TABLES,
+        select: [{ valueExpression: 'Value', numberFormat: NUMBER_FORMAT }],
+        formulas: [{ expression: 'A * 100' }],
+        numberFormat: CURRENCY_FORMAT,
+        showOperandSeries: false,
+      }),
+      expected: CURRENCY_FORMAT,
+    },
+  ])('$name', ({ config, expected }) => {
+    const { result } = renderHook(() => useSingleSeriesNumberFormat(config));
+    expect(result.current).toEqual(expected);
+  });
+});
+
+describe('useChartNumberFormats', () => {
+  const mockUseQuery = useQuery as jest.Mock;
+
+  const META_A = { name: 'col_a', type: 'Float64' } as ColumnMetaType;
+  const META_B = { name: 'col_b', type: 'Float64' } as ColumnMetaType;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseQuery.mockReturnValue({ data: TRACE_SOURCE });
+  });
+
+  // --- chartFormat resolution ---
+
+  it.each<{
+    name: string;
+    config: ChartConfigWithOptTimestamp;
+    expected: NumberFormat | undefined;
+  }>([
+    {
+      name: 'uses config.numberFormat when set',
+      config: makeBuilderConfig({
+        select: [{ valueExpression: 'count()', numberFormat: PERCENT_FORMAT }],
+        numberFormat: CURRENCY_FORMAT,
+      }),
+      expected: CURRENCY_FORMAT,
+    },
+    {
+      name: 'falls back to first series numberFormat when config.numberFormat is unset',
+      config: makeBuilderConfig({
+        select: [
+          { valueExpression: 'count()' },
+          { valueExpression: 'sum(x)', numberFormat: PERCENT_FORMAT },
+        ],
+      }),
+      expected: PERCENT_FORMAT,
+    },
+    {
+      name: 'falls back to inferred duration format when no explicit formats',
+      config: makeBuilderConfig({
+        select: [
+          { valueExpression: 'count()' },
+          { valueExpression: 'Duration', aggFn: 'avg' },
+        ],
+      }),
+      expected: DURATION_FORMAT,
+    },
+    {
+      name: 'returns undefined when no format can be resolved',
+      config: makeBuilderConfig({
+        select: [{ valueExpression: 'count()' }],
+      }),
+      expected: undefined,
+    },
+    {
+      name: 'uses config.numberFormat for raw SQL configs',
+      config: makeRawSqlConfig({ numberFormat: CURRENCY_FORMAT }),
+      expected: CURRENCY_FORMAT,
+    },
+  ])('chartFormat: $name', ({ config, expected }) => {
+    const { result } = renderHook(() => useChartNumberFormats(config));
+    expect(result.current.chartFormat).toEqual(expected);
+  });
+
+  // --- formatByColumn resolution ---
+
+  it('returns empty formatByColumn when meta is not provided', () => {
+    const config = makeBuilderConfig({
+      select: [{ valueExpression: 'count()', numberFormat: PERCENT_FORMAT }],
+    });
+    const { result } = renderHook(() => useChartNumberFormats(config));
+    expect(result.current.formatByColumn.size).toBe(0);
+  });
+
+  it('returns empty formatByColumn for raw SQL configs even when meta is provided', () => {
+    const config = makeRawSqlConfig({ numberFormat: CURRENCY_FORMAT });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A]),
+    );
+    expect(result.current.formatByColumn.size).toBe(0);
+  });
+
+  it('maps each series numberFormat to the meta column name at the same index', () => {
+    const config = makeBuilderConfig({
+      select: [
+        { valueExpression: 'count()', numberFormat: PERCENT_FORMAT },
+        { valueExpression: 'sum(x)', numberFormat: NUMBER_FORMAT },
+      ],
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A, META_B]),
+    );
+    expect(Array.from(result.current.formatByColumn.entries())).toEqual([
+      ['col_a', PERCENT_FORMAT],
+      ['col_b', NUMBER_FORMAT],
+    ]);
+  });
+
+  it('falls back to config.numberFormat when a series has no numberFormat', () => {
+    const config = makeBuilderConfig({
+      select: [
+        { valueExpression: 'count()' },
+        { valueExpression: 'sum(x)', numberFormat: PERCENT_FORMAT },
+      ],
+      numberFormat: CURRENCY_FORMAT,
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A, META_B]),
+    );
+    expect(result.current.formatByColumn.get('col_a')).toEqual(CURRENCY_FORMAT);
+    expect(result.current.formatByColumn.get('col_b')).toEqual(PERCENT_FORMAT);
+  });
+
+  it('falls back to inferred duration format when neither series nor config has a numberFormat', () => {
+    const config = makeBuilderConfig({
+      select: [
+        { valueExpression: 'count()' },
+        { valueExpression: 'Duration', aggFn: 'avg' },
+      ],
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A, META_B]),
+    );
+    expect(result.current.formatByColumn.has('col_a')).toBe(false);
+    expect(result.current.formatByColumn.get('col_b')).toEqual(DURATION_FORMAT);
+  });
+
+  // --- ratio config ---
+
+  it('ratio config: maps the first meta column with select[0].numberFormat', () => {
+    const config = makeBuilderConfig({
+      seriesReturnType: 'ratio',
+      select: [
+        { valueExpression: 'count()', numberFormat: PERCENT_FORMAT },
+        { valueExpression: 'sum(x)', numberFormat: NUMBER_FORMAT },
+      ],
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A]),
+    );
+    expect(Array.from(result.current.formatByColumn.entries())).toEqual([
+      ['col_a', PERCENT_FORMAT],
+    ]);
+  });
+
+  it('ratio config: falls back to select[1].numberFormat when select[0] has none', () => {
+    const config = makeBuilderConfig({
+      seriesReturnType: 'ratio',
+      select: [
+        { valueExpression: 'count()' },
+        { valueExpression: 'sum(x)', numberFormat: NUMBER_FORMAT },
+      ],
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A]),
+    );
+    expect(result.current.formatByColumn.get('col_a')).toEqual(NUMBER_FORMAT);
+  });
+
+  it('ratio config: falls back to config.numberFormat when neither series has one', () => {
+    const config = makeBuilderConfig({
+      seriesReturnType: 'ratio',
+      select: [{ valueExpression: 'count()' }, { valueExpression: 'sum(x)' }],
+      numberFormat: CURRENCY_FORMAT,
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A]),
+    );
+    expect(result.current.formatByColumn.get('col_a')).toEqual(CURRENCY_FORMAT);
+  });
+
+  it('ratio config: returns empty formatByColumn when no format can be resolved', () => {
+    const config = makeBuilderConfig({
+      seriesReturnType: 'ratio',
+      select: [{ valueExpression: 'count()' }, { valueExpression: 'sum(x)' }],
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A]),
+    );
+    expect(result.current.formatByColumn.size).toBe(0);
+  });
+
+  // --- metric formula configs (HDX-5080) ---
+  // The composed metric query projects operand series columns (unless
+  // showOperandSeries is false) followed by one column per formula.
+
+  const META_FORMULA = { name: 'A / B', type: 'Float64' } as ColumnMetaType;
+
+  const makeFormulaConfig = (
+    overrides: Partial<ChartConfigWithOptTimestamp> = {},
+  ) =>
+    makeBuilderConfig({
+      metricTables: METRIC_TABLES,
+      select: [
+        { valueExpression: 'Value', numberFormat: NUMBER_FORMAT },
+        { valueExpression: 'Value' },
+      ],
+      formulas: [{ expression: 'A / B', numberFormat: PERCENT_FORMAT }],
+      ...overrides,
+    });
+
+  it('formula config: maps operand columns then formula columns positionally', () => {
+    const config = makeFormulaConfig();
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A, META_B, META_FORMULA]),
+    );
+    expect(Array.from(result.current.formatByColumn.entries())).toEqual([
+      ['col_a', NUMBER_FORMAT],
+      ['A / B', PERCENT_FORMAT],
+    ]);
+  });
+
+  it('formula config: maps only formula columns when operand series are hidden', () => {
+    const config = makeFormulaConfig({ showOperandSeries: false });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_FORMULA]),
+    );
+    expect(Array.from(result.current.formatByColumn.entries())).toEqual([
+      ['A / B', PERCENT_FORMAT],
+    ]);
+  });
+
+  it('formula config: formula columns fall back to config.numberFormat', () => {
+    const config = makeFormulaConfig({
+      formulas: [{ expression: 'A / B' }],
+      numberFormat: CURRENCY_FORMAT,
+      showOperandSeries: false,
+    });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_FORMULA]),
+    );
+    expect(result.current.formatByColumn.get('A / B')).toEqual(CURRENCY_FORMAT);
+  });
+
+  it('formula config: formula supersedes ratio mapping when both are set', () => {
+    const config = makeFormulaConfig({ seriesReturnType: 'ratio' });
+    const { result } = renderHook(() =>
+      useChartNumberFormats(config, [META_A, META_B, META_FORMULA]),
+    );
+    // The ratio branch would map only meta[0]; the formula branch maps
+    // operands + formula columns.
+    expect(result.current.formatByColumn.get('A / B')).toEqual(PERCENT_FORMAT);
+  });
+
+  it('formula config: chartFormat prefers formula format when operands are hidden', () => {
+    const config = makeFormulaConfig({ showOperandSeries: false });
+    const { result } = renderHook(() => useChartNumberFormats(config));
+    expect(result.current.chartFormat).toEqual(PERCENT_FORMAT);
+  });
+
+  it('formula config: chartFormat prefers series format when operands are shown', () => {
+    const config = makeFormulaConfig();
+    const { result } = renderHook(() => useChartNumberFormats(config));
+    expect(result.current.chartFormat).toEqual(NUMBER_FORMAT);
+  });
+});
+
+describe('getBuilderValueColumnCount', () => {
+  it('counts one column per select entry by default', () => {
+    const config = makeBuilderConfig({
+      select: [{ valueExpression: 'count()' }, { valueExpression: 'sum(x)' }],
+    });
+    expect(getBuilderValueColumnCount(config)).toBe(2);
+  });
+
+  it('counts one merged column for ratio configs', () => {
+    const config = makeBuilderConfig({
+      seriesReturnType: 'ratio',
+      select: [{ valueExpression: 'count()' }, { valueExpression: 'sum(x)' }],
+    });
+    expect(getBuilderValueColumnCount(config)).toBe(1);
+  });
+
+  it('counts operand and formula columns for metric formula configs', () => {
+    const config = makeBuilderConfig({
+      metricTables: METRIC_TABLES,
+      select: [{ valueExpression: 'Value' }, { valueExpression: 'Value' }],
+      formulas: [{ expression: 'A / B' }],
+    });
+    expect(getBuilderValueColumnCount(config)).toBe(3);
+  });
+
+  it('counts only formula columns when operand series are hidden', () => {
+    const config = makeBuilderConfig({
+      metricTables: METRIC_TABLES,
+      select: [{ valueExpression: 'Value' }, { valueExpression: 'Value' }],
+      formulas: [{ expression: 'A / B' }, { expression: 'A + B' }],
+      showOperandSeries: false,
+    });
+    expect(getBuilderValueColumnCount(config)).toBe(2);
+  });
+
+  it('returns 0 for raw SQL configs', () => {
+    expect(getBuilderValueColumnCount(makeRawSqlConfig({}))).toBe(0);
   });
 });

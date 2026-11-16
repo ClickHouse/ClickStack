@@ -1,10 +1,51 @@
 import { useCallback, useMemo } from 'react';
 import { useController, UseControllerProps } from 'react-hook-form';
+import { getPercentileAggFnLevel } from '@hyperdx/common-utils/dist/core/utils';
+import { MetricsDataType } from '@hyperdx/common-utils/dist/types';
 import { Select } from '@mantine/core';
 
 import { AGG_FNS } from '@/ChartUtils';
 
 type AggFnValues = (typeof AGG_FNS)[number]['value'];
+
+// aggFn form values that are supported for histogram metrics.
+export const HISTOGRAM_SUPPORTED_AGG_FNS: string[] = ['count', 'quantile'];
+
+/**
+ * The aggregation to reach for when a metric is first picked, so a freshly
+ * selected metric charts something meaningful instead of inheriting whatever
+ * the previous series used.
+ *
+ * `level` is only set for quantiles: the form stores percentiles as
+ * `aggFn: 'quantile'` plus a separate level (see `AggFnSelectControlled`).
+ * Every value here survives the coercion effects in `ChartSeriesEditor`.
+ */
+export function defaultAggFnForMetricType(metricType: MetricsDataType): {
+  /** Form-level aggFn, matching the `string` typing of `HISTOGRAM_SUPPORTED_AGG_FNS`. */
+  aggFn: string;
+  level?: number;
+} {
+  switch (metricType) {
+    case MetricsDataType.Sum:
+      return { aggFn: 'sum' };
+    case MetricsDataType.Histogram:
+    case MetricsDataType.ExponentialHistogram:
+      // 'count' and 'quantile' are the only histogram-supported aggregations;
+      // p95 is the more useful of the two as a starting point.
+      return { aggFn: 'quantile', level: 0.95 };
+    default:
+      return { aggFn: 'avg' };
+  }
+}
+
+// Displayed versions of the supported aggregation functions for histogram metrics.
+const HISTOGRAM_SUPPORTED_AGG_FNS_DISPLAY: AggFnValues[] = [
+  'count',
+  'p99',
+  'p95',
+  'p90',
+  'p50',
+];
 
 type OnChangeValue =
   | { aggFn?: AggFnValues }
@@ -14,28 +55,46 @@ function AggFnSelect({
   defaultValue,
   onChange,
   hideCustom,
+  metricType,
 }: {
   value: string;
   defaultValue: string;
   onChange: (value: OnChangeValue) => void;
   hideCustom?: boolean;
+  metricType?: MetricsDataType;
 }) {
   const _onChange = useCallback(
     (value: string | null) => {
+      const percentileLevel = getPercentileAggFnLevel(value ?? undefined);
       if (value == null) {
         onChange({});
-      } else if (['p50', 'p90', 'p95', 'p99'].includes(value)) {
-        onChange({
-          aggFn: 'quantile',
-          level: Number.parseFloat(value.replace('p', '0.')),
-        });
+      } else if (percentileLevel != null) {
+        onChange({ aggFn: 'quantile', level: percentileLevel });
       } else {
-        // @ts-ignore
+        // @ts-expect-error Mantine Select passes a string; onChange expects a narrowed AggFn union
         onChange({ aggFn: value });
       }
     },
     [onChange],
   );
+
+  const options = useMemo(() => {
+    let opts = hideCustom ? AGG_FNS.filter(fn => fn.value !== 'none') : AGG_FNS;
+    // Only show 'increase' when the source is a Sum (counter) metric.
+    if (metricType !== MetricsDataType.Sum) {
+      opts = opts.filter(fn => fn.value !== 'increase');
+    }
+    // Filter out unsupported aggregation functions for histogram metrics.
+    if (
+      metricType === MetricsDataType.Histogram ||
+      metricType === MetricsDataType.ExponentialHistogram
+    ) {
+      opts = opts.filter(fn =>
+        HISTOGRAM_SUPPORTED_AGG_FNS_DISPLAY.includes(fn.value),
+      );
+    }
+    return opts;
+  }, [hideCustom, metricType]);
 
   return (
     <Select
@@ -44,7 +103,7 @@ function AggFnSelect({
       value={value}
       defaultValue={defaultValue}
       onChange={_onChange}
-      data={hideCustom ? AGG_FNS.filter(fn => fn.value !== 'none') : AGG_FNS}
+      data={options}
       data-testid="agg-fn-select"
     />
   );
@@ -55,12 +114,14 @@ export function AggFnSelectControlled({
   quantileLevelName,
   defaultValue,
   hideCustom,
+  metricType,
   ...props
 }: {
   defaultValue: string;
   aggFnName: string;
   quantileLevelName: string;
   hideCustom?: boolean;
+  metricType?: MetricsDataType;
 } & Omit<UseControllerProps<any>, 'name'>) {
   const {
     field: { onChange: onAggFnChange, value: aggFnValue },
@@ -101,6 +162,7 @@ export function AggFnSelectControlled({
       defaultValue={defaultValue}
       onChange={onChange}
       hideCustom={hideCustom}
+      metricType={metricType}
     />
   );
 }

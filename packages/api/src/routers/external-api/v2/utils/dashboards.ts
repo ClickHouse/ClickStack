@@ -1,10 +1,47 @@
-import { displayTypeSupportsRawSqlAlerts } from '@hyperdx/common-utils/dist/core/utils';
-import { isRawSqlSavedChartConfig } from '@hyperdx/common-utils/dist/guards';
+import { getHeatmapMode } from '@hyperdx/common-utils/dist/core/heatmap';
+import { getPromqlSeries } from '@hyperdx/common-utils/dist/core/promql';
+import {
+  isFormulaSourceKind,
+  savedChartConfigSupportsAlerts,
+  TIME_SERIES_DISPLAY_TYPE_BY_NAME,
+} from '@hyperdx/common-utils/dist/core/utils';
+import {
+  validateDashboardContainersStructure,
+  validateDashboardFilterFieldGating,
+  validateDashboardFilterModes,
+  validateDashboardFilterOptionUniqueness,
+  validateDashboardFilterVariableNames,
+  validateDashboardTileContainerRefs,
+} from '@hyperdx/common-utils/dist/dashboardValidation';
+import {
+  isPrometheusLabelFilter,
+  isStaticListFilter,
+} from '@hyperdx/common-utils/dist/filters';
+import {
+  isBuilderSavedChartConfig,
+  isHeatmapCompatibleSource,
+  isPromqlSavedChartConfig,
+  isRawSqlSavedChartConfig,
+} from '@hyperdx/common-utils/dist/guards';
 import {
   AggregateFunctionSchema,
   BuilderSavedChartConfig,
+  ColorCondition,
+  DASHBOARD_MAX_CONTAINERS,
+  DashboardContainer,
+  DashboardContainerSchema,
   DisplayType,
+  HeatmapMode,
+  isLogSource,
+  isOnClickDashboardById,
+  isOnClickSearchById,
+  isPromqlSource,
+  isTraceSource,
+  NumberTileColorCondition,
+  NumberTileColorConditionSchema,
+  PromqlSavedChartConfig,
   RawSqlSavedChartConfig,
+  resolveChartPaletteToken,
   SavedChartConfig,
 } from '@hyperdx/common-utils/dist/types';
 import { SearchConditionLanguageSchema as whereLanguageSchema } from '@hyperdx/common-utils/dist/types';
@@ -16,18 +53,23 @@ import { z } from 'zod';
 import { deleteDashboardAlerts } from '@/controllers/alerts';
 import { getConnectionsByTeam } from '@/controllers/connection';
 import { getSources } from '@/controllers/sources';
-import { DashboardDocument } from '@/models/dashboard';
+import Dashboard, { DashboardDocument } from '@/models/dashboard';
 import {
+  getExternalCompatibleFilters,
+  getExternalCompatibleFilterValues,
   translateExternalChartToTileConfig,
   translateExternalFilterToFilter,
   translateFilterToExternalFilter,
 } from '@/utils/externalApi';
 import logger from '@/utils/logger';
 import {
+  ExternalDashboardBuilderTileConfig,
   ExternalDashboardFilter,
   externalDashboardFilterSchema,
   externalDashboardFilterSchemaWithId,
   ExternalDashboardFilterWithId,
+  ExternalDashboardHeatmapSelectItem,
+  ExternalDashboardPromqlTileConfig,
   ExternalDashboardRawSqlTileConfig,
   externalDashboardSavedFilterValueSchema,
   ExternalDashboardSelectItem,
@@ -46,9 +88,7 @@ export type SeriesTile = ExternalDashboardTileWithId & {
   series: Exclude<ExternalDashboardTileWithId['series'], undefined>;
 };
 
-export function isSeriesTile(
-  tile: ExternalDashboardTileWithId,
-): tile is SeriesTile {
+function isSeriesTile(tile: ExternalDashboardTileWithId): tile is SeriesTile {
   return 'series' in tile && tile.series !== undefined;
 }
 
@@ -60,6 +100,35 @@ export function isRawSqlExternalTileConfig(
   config: ExternalDashboardTileConfig,
 ): config is ExternalDashboardRawSqlTileConfig {
   return 'configType' in config && config.configType === 'sql';
+}
+
+function isPromqlExternalTileConfig(
+  config: ExternalDashboardTileConfig,
+): config is ExternalDashboardPromqlTileConfig {
+  return 'configType' in config && config.configType === 'promql';
+}
+
+function isBuilderExternalTileConfig(
+  config: ExternalDashboardTileConfig,
+): config is ExternalDashboardBuilderTileConfig {
+  return !('configType' in config);
+}
+
+type ExternalHeatmapTileConfig = Extract<
+  ExternalDashboardBuilderTileConfig,
+  { displayType: 'heatmap' }
+>;
+
+function isSeriesHeatmapExternalConfig(
+  config: ExternalHeatmapTileConfig,
+): config is Extract<ExternalHeatmapTileConfig, { heatmapMode: 'series' }> {
+  return config.heatmapMode === 'series';
+}
+
+function getExternalHeatmapMode(
+  config: ExternalHeatmapTileConfig,
+): HeatmapMode {
+  return getHeatmapMode({ heatmap: { mode: config.heatmapMode } });
 }
 
 export function isConfigTile(
@@ -77,6 +146,7 @@ export type ExternalDashboard = {
   savedQuery?: string | null;
   savedQueryLanguage?: string | null;
   savedFilterValues?: DashboardDocument['savedFilterValues'];
+  containers?: DashboardContainer[];
 };
 
 // --------------------------------------------------------------------------------
@@ -88,6 +158,21 @@ const DEFAULT_SELECT_ITEM: ExternalDashboardSelectItem = {
   where: '',
 };
 
+const convertToExternalHeatmapSelectItem = (
+  item: Exclude<BuilderSavedChartConfig['select'][number], string>,
+): ExternalDashboardHeatmapSelectItem => ({
+  valueExpression: item.valueExpression,
+  // Use `!== undefined` (not truthy) to match the deserializer in
+  // convertToInternalTileConfig so empty-string round-trips do not
+  // silently drop fields.
+  ...(item.countExpression !== undefined
+    ? { countExpression: item.countExpression }
+    : {}),
+  ...(item.heatmapScaleType !== undefined
+    ? { heatmapScaleType: item.heatmapScaleType }
+    : {}),
+});
+
 const convertToExternalSelectItem = (
   item: Exclude<BuilderSavedChartConfig['select'][number], string>,
 ): ExternalDashboardSelectItem => {
@@ -97,9 +182,24 @@ const convertToExternalSelectItem = (
     'level' in item
       ? externalQuantileLevelSchema.safeParse(item.level)
       : undefined;
-  const level = parsedLevel?.success ? parsedLevel.data : undefined;
+  // Drop aggregation parameters the emitted aggFn cannot carry. Changing a
+  // tile's aggregation in the editor leaves the previous agg's field behind in
+  // the stored config, where it is inert: renderChartConfig reads `level` only
+  // for a quantile or histogram agg, and ignores `valueExpression` for a count.
+  // On the way out it is not inert — externalDashboardSelectItemSchema rejects
+  // both, so the GET body could not be PUT back and an imported dashboard
+  // failed `terraform plan` with "Level can only be used with quantile
+  // aggregation function". Same read-path heal as the container refs below.
+  //
+  // Scoped to exactly what that schema rejects: an *empty* valueExpression on a
+  // count is what the editor writes for every count tile and validates fine, so
+  // it stays. Only a leftover value is dropped.
+  const level =
+    aggFn === 'quantile' && parsedLevel?.success ? parsedLevel.data : undefined;
+  const staleValueExpression = aggFn === 'count' && !!item.valueExpression;
   return {
-    ...pick(item, ['valueExpression', 'alias', 'metricType', 'metricName']),
+    ...pick(item, ['alias', 'metricType', 'metricName', 'numberFormat']),
+    ...(staleValueExpression ? {} : pick(item, ['valueExpression'])),
     aggFn,
     where: item.aggCondition ?? '',
     whereLanguage: item.aggConditionLanguage ?? 'lucene',
@@ -108,7 +208,129 @@ const convertToExternalSelectItem = (
   };
 };
 
-const convertToExternalTileChartConfig = (
+// Normalize the per-rule palette colors of a number tile's `colorRules`
+// for the API response. `colorRules` shipped after the hue rename so
+// stored rules already hold hue-named tokens; running each through
+// `resolveChartPaletteToken` keeps the static `color` (which can hold a
+// legacy `chart-1`..`chart-10` token from before the rename) and the rule
+// colors on a single normalization path. A rule whose color cannot be
+// resolved (reachable only via a direct DB write, since the input schema
+// validates rule colors) is dropped, mirroring how the static `color`
+// field omits an unresolvable token, so the response always stays within
+// the palette-token enum instead of leaking an unknown string. When no
+// rule survives (or the stored array is empty) the field is omitted
+// entirely rather than emitted as `[]`, matching the static `color` omit.
+const toExternalColorRules = (
+  colorRules: ColorCondition[] | undefined,
+): NumberTileColorCondition[] | undefined => {
+  if (!colorRules) return undefined;
+  const resolved = colorRules.flatMap((rule): NumberTileColorCondition[] => {
+    const color = resolveChartPaletteToken(rule.color);
+    if (!color) return [];
+    // Re-validate against the number-tile subset so the response stays
+    // within the documented operator set: a string-match or regex rule
+    // (reachable only via a direct DB write, since neither the editor nor
+    // the input schema produces one on a number tile) is dropped, just
+    // like an unresolvable color token.
+    const parsed = NumberTileColorConditionSchema.safeParse({ ...rule, color });
+    return parsed.success ? [parsed.data] : [];
+  });
+  return resolved.length > 0 ? resolved : undefined;
+};
+
+const convertPromqlConfigToExternal = (
+  config: PromqlSavedChartConfig,
+): ExternalDashboardPromqlTileConfig => {
+  const base = {
+    configType: 'promql' as const,
+    sourceId: config.source,
+    granularity: config.granularity,
+    numberFormat: config.numberFormat,
+  };
+
+  const series = getPromqlSeries(config);
+  const rangeExpressions = series.map(s => pick(s, ['expression', 'alias']));
+  const instantExpressions = series.map(s =>
+    pick(s, ['expression', 'alias', 'queryType']),
+  );
+  const reducibleExpressions = series.map(s =>
+    pick(s, ['expression', 'alias', 'queryType', 'reducer']),
+  );
+  const timeChartFields = {
+    expressions: rangeExpressions,
+    legendTemplate: config.legendTemplate,
+    fillNulls: config.fillNulls !== false,
+    alignDateRangeToGranularity: config.alignDateRangeToGranularity,
+    seriesLimit: config.seriesLimit ?? undefined,
+  };
+
+  switch (config.displayType) {
+    case DisplayType.StackedBar:
+      return { ...base, ...timeChartFields, displayType: 'stacked_bar' };
+    case DisplayType.StackedLine:
+      return {
+        ...base,
+        ...timeChartFields,
+        displayType: 'stacked_line',
+        lineInterpolation: config.lineInterpolation,
+      };
+    case DisplayType.Table:
+      return { ...base, displayType: 'table', expressions: instantExpressions };
+    case DisplayType.Number:
+      return {
+        ...base,
+        displayType: 'number',
+        expressions: reducibleExpressions,
+        color: resolveChartPaletteToken(config.color),
+        colorRules: toExternalColorRules(config.colorRules),
+        backgroundChart: config.backgroundChart,
+      };
+    case DisplayType.Pie:
+    case DisplayType.Bar:
+      return {
+        ...base,
+        displayType: config.displayType === DisplayType.Pie ? 'pie' : 'bar',
+        expressions: reducibleExpressions,
+        legendTemplate: config.legendTemplate,
+        limit: config.seriesLimit ?? undefined,
+      };
+    case DisplayType.Heatmap:
+      return {
+        ...base,
+        displayType: 'heatmap',
+        expressions: rangeExpressions,
+        heatmapMode: config.heatmap?.mode,
+        heatmapScaleType: config.heatmap?.scaleType,
+        legendTemplate: config.legendTemplate,
+      };
+    case DisplayType.Search:
+    case DisplayType.Markdown:
+    case DisplayType.EventPatterns:
+      // The editor never saves these for PromQL. Emitting a line chart keeps
+      // the tile a PromQL tile on a GET -> PUT round-trip.
+      logger.error(
+        { displayType: config.displayType },
+        'PromQL tile has an unsupported display type; emitting it as a line chart',
+      );
+      break;
+    case DisplayType.Line:
+    case undefined:
+      break;
+    default:
+      config.displayType satisfies never;
+  }
+  return {
+    ...base,
+    ...timeChartFields,
+    displayType: 'line',
+    compareToPreviousPeriod: config.compareToPreviousPeriod,
+    lineInterpolation: config.lineInterpolation,
+  };
+};
+
+// Exported for the inline-alert converter (v2/utils/alertChartConfig.ts),
+// which reuses the tile-config translation for an alert's persisted config.
+export const convertToExternalTileChartConfig = (
   config: SavedChartConfig,
 ): ExternalDashboardTileConfig | undefined => {
   if (isRawSqlSavedChartConfig(config)) {
@@ -122,20 +344,37 @@ const convertToExternalTileChartConfig = (
           sourceId: config.source,
           alignDateRangeToGranularity: config.alignDateRangeToGranularity,
           fillNulls: config.fillNulls !== false,
+          fitYAxisToData: config.fitYAxisToData,
+          lineInterpolation: config.lineInterpolation,
           numberFormat: config.numberFormat,
           compareToPreviousPeriod: config.compareToPreviousPeriod,
+          // Three-state passthrough: 0 (unlimited) and positive N round-trip;
+          // null/undefined map to absent (the default-cap state).
+          seriesLimit: config.seriesLimit ?? undefined,
         };
       case DisplayType.StackedBar:
-        return {
-          configType: 'sql',
-          displayType: config.displayType,
+      case DisplayType.StackedLine: {
+        const stacked = {
+          configType: 'sql' as const,
           connectionId: config.connection,
           sqlTemplate: config.sqlTemplate,
           sourceId: config.source,
           alignDateRangeToGranularity: config.alignDateRangeToGranularity,
           fillNulls: config.fillNulls !== false,
           numberFormat: config.numberFormat,
+          // Three-state passthrough: 0 (unlimited) and positive N round-trip;
+          // null/undefined map to absent (the default-cap state).
+          seriesLimit: config.seriesLimit ?? undefined,
         };
+        // A union-typed displayType doesn't narrow to one union member.
+        return config.displayType === DisplayType.StackedLine
+          ? {
+              displayType: DisplayType.StackedLine,
+              lineInterpolation: config.lineInterpolation,
+              ...stacked,
+            }
+          : { displayType: DisplayType.StackedBar, ...stacked };
+      }
       case DisplayType.Table:
         return {
           configType: 'sql',
@@ -144,6 +383,7 @@ const convertToExternalTileChartConfig = (
           sqlTemplate: config.sqlTemplate,
           sourceId: config.source,
           numberFormat: config.numberFormat,
+          onClick: config.onClick,
         };
       case DisplayType.Number:
         return {
@@ -153,6 +393,8 @@ const convertToExternalTileChartConfig = (
           sqlTemplate: config.sqlTemplate,
           sourceId: config.source,
           numberFormat: config.numberFormat,
+          color: resolveChartPaletteToken(config.color),
+          colorRules: toExternalColorRules(config.colorRules),
         };
       case DisplayType.Pie:
         return {
@@ -163,11 +405,21 @@ const convertToExternalTileChartConfig = (
           sourceId: config.source,
           numberFormat: config.numberFormat,
         };
+      case DisplayType.Bar:
+        return {
+          configType: 'sql',
+          displayType: DisplayType.Bar,
+          connectionId: config.connection,
+          sqlTemplate: config.sqlTemplate,
+          sourceId: config.source,
+          numberFormat: config.numberFormat,
+        };
       // TODO(#2226): add Timeline raw-SQL external-API support when renderer lands
       case DisplayType.Search:
       case DisplayType.Markdown:
       case DisplayType.Heatmap:
       case DisplayType.Timeline:
+      case DisplayType.EventPatterns:
         logger.error(
           { config },
           'Error converting chart config to external chart - unsupported display type for raw SQL config',
@@ -179,6 +431,10 @@ const convertToExternalTileChartConfig = (
     return undefined;
   }
 
+  if (isPromqlSavedChartConfig(config)) {
+    return convertPromqlConfigToExternal(config);
+  }
+
   const sourceId = config.source?.toString() ?? '';
 
   const stringValueOrDefault = <D>(
@@ -187,6 +443,18 @@ const convertToExternalTileChartConfig = (
   ): string | D => {
     return typeof value === 'string' ? value : defaultValue;
   };
+
+  // Formulas are emitted only when present so formula-less tiles keep
+  // their pre-formula response shape. Number tiles never emit
+  // `showOperandSeries` — operands are always hidden there, and the
+  // internal converter re-persists the explicit `false` on the way in.
+  const externalFormulaFields = config.formulas?.length
+    ? { formulas: config.formulas }
+    : {};
+  const externalShowOperandSeriesField =
+    config.formulas?.length && config.showOperandSeries !== undefined
+      ? { showOperandSeries: config.showOperandSeries }
+      : {};
 
   switch (config.displayType) {
     case DisplayType.Line:
@@ -199,16 +467,23 @@ const convertToExternalTileChartConfig = (
           config.select.length == 2,
         alignDateRangeToGranularity: config.alignDateRangeToGranularity,
         fillNulls: config.fillNulls !== false,
+        fitYAxisToData: config.fitYAxisToData,
+        lineInterpolation: config.lineInterpolation,
         groupBy: stringValueOrDefault(config.groupBy, undefined),
         select: Array.isArray(config.select)
           ? config.select.map(convertToExternalSelectItem)
           : [DEFAULT_SELECT_ITEM],
         compareToPreviousPeriod: config.compareToPreviousPeriod,
         numberFormat: config.numberFormat,
+        // Three-state passthrough: 0 (unlimited) and positive N round-trip;
+        // null/undefined map to absent (the default-cap state).
+        seriesLimit: config.seriesLimit ?? undefined,
+        ...externalFormulaFields,
+        ...externalShowOperandSeriesField,
       };
     case DisplayType.StackedBar:
-      return {
-        displayType: DisplayType.StackedBar,
+    case DisplayType.StackedLine: {
+      const stacked = {
         sourceId,
         asRatio:
           config.seriesReturnType === 'ratio' &&
@@ -221,15 +496,50 @@ const convertToExternalTileChartConfig = (
           ? config.select.map(convertToExternalSelectItem)
           : [DEFAULT_SELECT_ITEM],
         numberFormat: config.numberFormat,
+        // Three-state passthrough: 0 (unlimited) and positive N round-trip;
+        // null/undefined map to absent (the default-cap state).
+        seriesLimit: config.seriesLimit ?? undefined,
+        ...externalFormulaFields,
+        ...externalShowOperandSeriesField,
       };
+      return config.displayType === DisplayType.StackedLine
+        ? {
+            displayType: DisplayType.StackedLine,
+            lineInterpolation: config.lineInterpolation,
+            ...stacked,
+          }
+        : { displayType: DisplayType.StackedBar, ...stacked };
+    }
     case DisplayType.Number:
       return {
         displayType: config.displayType,
         sourceId,
+        // A formula number tile carries every operand select item (the
+        // formula references them by position), so emit them all; a
+        // formula-less tile keeps its single-item response shape.
         select: Array.isArray(config.select)
-          ? [convertToExternalSelectItem(config.select[0])]
+          ? config.formulas?.length
+            ? config.select.map(convertToExternalSelectItem)
+            : [convertToExternalSelectItem(config.select[0])]
           : [DEFAULT_SELECT_ITEM],
         numberFormat: config.numberFormat,
+        ...externalFormulaFields,
+        // Normalize stored palette tokens on the way out. A static `color`
+        // saved before the hue rename holds a legacy `chart-1`..`chart-10`
+        // token in Mongo (the `tiles` field is `Mixed`), so map it to the
+        // hue name via `resolveChartPaletteToken`, matching the app's
+        // fetch-time `normalizeDashboardTileColors`. `colorRules` colors go
+        // through the same path (see `toExternalColorRules`). An absent or
+        // unrecognized token resolves to undefined and is omitted from the
+        // response, keeping it within the palette-token enum.
+        color: resolveChartPaletteToken(config.color),
+        colorRules: toExternalColorRules(config.colorRules),
+        // Pass `backgroundChart` through as-is: it shipped after the hue
+        // rename, so its optional `color` can only hold a hue-named token (no
+        // legacy normalization needed). Builder number tiles only; raw SQL
+        // number tiles never persist it (see the schema). Absent resolves to
+        // undefined and is omitted from the response.
+        backgroundChart: config.backgroundChart,
       };
     case DisplayType.Pie:
       return {
@@ -239,11 +549,34 @@ const convertToExternalTileChartConfig = (
           ? [convertToExternalSelectItem(config.select[0])]
           : [DEFAULT_SELECT_ITEM],
         groupBy: stringValueOrDefault(config.groupBy, undefined),
+        orderBy: stringValueOrDefault(config.orderBy, undefined),
         numberFormat: config.numberFormat,
+        // Three-state passthrough: 0 (unlimited) and positive N round-trip;
+        // null/undefined map to absent (the default-cap state).
+        limit: config.seriesLimit ?? undefined,
+      };
+    case DisplayType.Bar:
+      return {
+        displayType: config.displayType,
+        sourceId,
+        select: Array.isArray(config.select)
+          ? [convertToExternalSelectItem(config.select[0])]
+          : [DEFAULT_SELECT_ITEM],
+        groupBy: stringValueOrDefault(config.groupBy, undefined),
+        orderBy: stringValueOrDefault(config.orderBy, undefined),
+        numberFormat: config.numberFormat,
+        // Three-state passthrough: 0 (unlimited) and positive N round-trip;
+        // null/undefined map to absent (the default-cap state).
+        limit: config.seriesLimit ?? undefined,
       };
     case DisplayType.Table:
       return {
-        ...pick(config, ['having', 'numberFormat', 'groupByColumnsOnLeft']),
+        ...pick(config, [
+          'having',
+          'numberFormat',
+          'groupByColumnsOnLeft',
+          'onClick',
+        ]),
         displayType: config.displayType,
         sourceId,
         asRatio:
@@ -255,6 +588,8 @@ const convertToExternalTileChartConfig = (
           ? config.select.map(convertToExternalSelectItem)
           : [DEFAULT_SELECT_ITEM],
         orderBy: stringValueOrDefault(config.orderBy, undefined),
+        ...externalFormulaFields,
+        ...externalShowOperandSeriesField,
       };
     case DisplayType.Search:
       return {
@@ -269,8 +604,77 @@ const convertToExternalTileChartConfig = (
         displayType: config.displayType,
         markdown: stringValueOrDefault(config.markdown, ''),
       };
+    case DisplayType.Heatmap: {
+      if (getHeatmapMode(config) === 'series') {
+        return {
+          displayType: DisplayType.Heatmap,
+          heatmapMode: 'series',
+          sourceId,
+          select: Array.isArray(config.select)
+            ? config.select.slice(0, 1).map(convertToExternalSelectItem)
+            : [DEFAULT_SELECT_ITEM],
+          groupBy: stringValueOrDefault(config.groupBy, undefined),
+          numberFormat: config.numberFormat,
+        };
+      }
+      const heatmapField = config.heatmap
+        ? { heatmapMode: 'distribution' as const }
+        : {};
+      // The internal heatmap schema requires `select[0]` to be a builder
+      // item with a non-empty `valueExpression`. Legacy/corrupted Mongo
+      // docs that lack one would otherwise produce a tile that violates
+      // the external schema's `min(1)` rule. Returning undefined here
+      // would let the caller fall through to `defaultTileConfig`, which
+      // emits `displayType: 'line'`. A subsequent GET -> PUT round-trip
+      // through the API would then silently overwrite the heatmap with
+      // a line chart in Mongo (data loss). Instead, emit a
+      // heatmap-shaped placeholder with an empty valueExpression so the
+      // response preserves displayType, and a re-PUT surfaces the
+      // breakage as a clear validation error from the input schema's
+      // `min(1)` rule on `valueExpression` rather than silently
+      // downgrading the tile.
+      const item = Array.isArray(config.select) ? config.select[0] : undefined;
+      if (
+        item === undefined ||
+        typeof item === 'string' ||
+        !item.valueExpression
+      ) {
+        logger.warn(
+          { tileId: sourceId, hasItem: item !== undefined },
+          'Heatmap tile is missing select[0].valueExpression; emitting placeholder so callers do not silently downgrade to line',
+        );
+        const placeholderItem: ExternalDashboardHeatmapSelectItem = {
+          valueExpression: '',
+        };
+        return {
+          displayType: DisplayType.Heatmap,
+          ...heatmapField,
+          sourceId,
+          select: [placeholderItem],
+          where: stringValueOrDefault(config.where, ''),
+          whereLanguage: config.whereLanguage ?? 'lucene',
+          numberFormat: config.numberFormat,
+        };
+      }
+      return {
+        displayType: DisplayType.Heatmap,
+        ...heatmapField,
+        sourceId,
+        select: [convertToExternalHeatmapSelectItem(item)],
+        where: stringValueOrDefault(config.where, ''),
+        whereLanguage: config.whereLanguage ?? 'lucene',
+        numberFormat: config.numberFormat,
+      };
+    }
+    case DisplayType.EventPatterns:
+      return {
+        displayType: config.displayType,
+        sourceId,
+        select: stringValueOrDefault(config.select, ''),
+        where: stringValueOrDefault(config.where, ''),
+        whereLanguage: config.whereLanguage ?? 'lucene',
+      };
     // TODO(#2226): add Timeline builder external-API support when renderer lands
-    case DisplayType.Heatmap:
     case DisplayType.Timeline:
     case undefined:
       logger.error(
@@ -285,7 +689,9 @@ const convertToExternalTileChartConfig = (
 
 function convertTileToExternalChart(
   tile: DashboardDocument['tiles'][number],
-): ExternalDashboardTileWithId | undefined {
+  containerById: Map<string, DashboardContainer>,
+  dashboardId: string,
+): ExternalDashboardTileWithId {
   // Returned in case of a failure converting the saved chart config
   const defaultTileConfig: ExternalDashboardTileConfig =
     isRawSqlSavedChartConfig(tile.config)
@@ -301,27 +707,113 @@ function convertTileToExternalChart(
           select: [DEFAULT_SELECT_ITEM],
         };
 
+  // Treat empty-string container/tab refs as absent so legacy Mongo docs
+  // (the underlying `tiles` field is `Mixed`, so older entries may carry
+  // `containerId: ""`) round-trip through the external schema, which now
+  // enforces `min(1)`. Without this, a GET that hit a legacy doc would
+  // return a tile that the next PUT couldn't validate.
+  let containerId =
+    typeof tile.containerId === 'string' && tile.containerId.length > 0
+      ? tile.containerId
+      : undefined;
+  let tabId =
+    typeof tile.tabId === 'string' && tile.tabId.length > 0
+      ? tile.tabId
+      : undefined;
+
+  // Self-heal orphan refs on read. A doc may carry a containerId that
+  // points at a container that has since been removed (or never
+  // existed: legacy docs predating the containers feature can have any
+  // value in this `Mixed`-typed field). Round-trip these as if absent
+  // so a subsequent PUT validates instead of failing schema with
+  // "Tile references unknown containerId". Same idea for tabId.
+  if (containerId !== undefined) {
+    const container = containerById.get(containerId);
+    if (!container) {
+      logger.warn(
+        { dashboardId, tileId: tile.id, containerId },
+        'Tile references unknown containerId; dropping ref on read',
+      );
+      containerId = undefined;
+      tabId = undefined;
+    } else if (
+      tabId !== undefined &&
+      !container.tabs?.some(t => t.id === tabId)
+    ) {
+      logger.warn(
+        { dashboardId, tileId: tile.id, containerId, tabId },
+        'Tile references unknown tabId; dropping tabId on read',
+      );
+      tabId = undefined;
+    }
+  } else if (tabId !== undefined) {
+    // tabId without containerId is invalid in the schema; the legacy
+    // doc would fail a subsequent PUT, so drop it on read.
+    logger.warn(
+      { dashboardId, tileId: tile.id, tabId },
+      'Tile has tabId without containerId; dropping tabId on read',
+    );
+    tabId = undefined;
+  }
+
+  const { id, x, y, w, h } = tile;
   return {
-    ...pick(tile, ['id', 'x', 'y', 'w', 'h']),
+    id,
+    x,
+    y,
+    w,
+    h,
     name: tile.config.name ?? '',
     config: convertToExternalTileChartConfig(tile.config) ?? defaultTileConfig,
+    ...(containerId !== undefined ? { containerId } : {}),
+    ...(tabId !== undefined ? { tabId } : {}),
+    ...(tile.config.description
+      ? { description: tile.config.description }
+      : {}),
   };
 }
 
 export function convertToExternalDashboard(
   dashboard: DashboardDocument,
+  {
+    hidePromql = false,
+  }: {
+    // MCP hides PromQL tiles and PROMETHEUS_LABEL filters while PromQL is
+    // disabled on the deployment.
+    hidePromql?: boolean;
+  } = {},
 ): ExternalDashboard {
+  const containers = dashboard.containers ?? [];
+  // Dedupe by id when building the lookup map: a doc with duplicate
+  // container ids can only resolve tile refs against one of them, and
+  // last-write-wins is consistent with how Mongo would have persisted
+  // the array. Tile-resolution ambiguity in this case is logged when
+  // the tile ref turns out to point at a missing container.
+  const containerById = new Map<string, DashboardContainer>(
+    containers.map(c => [c.id, c]),
+  );
+  const dashboardId = dashboard._id.toString();
   return {
-    id: dashboard._id.toString(),
+    id: dashboardId,
     name: dashboard.name,
     tiles: dashboard.tiles
-      .map(convertTileToExternalChart)
-      .filter(t => t !== undefined),
+      .filter(tile => !(hidePromql && isPromqlSavedChartConfig(tile.config)))
+      .map(tile =>
+        convertTileToExternalChart(tile, containerById, dashboardId),
+      ),
     tags: dashboard.tags || [],
-    filters: dashboard.filters?.map(translateFilterToExternalFilter) || [],
+    filters: getExternalCompatibleFilters(dashboard.filters)
+      .filter(filter => !(hidePromql && isPrometheusLabelFilter(filter)))
+      .map(translateFilterToExternalFilter),
     savedQuery: dashboard.savedQuery ?? null,
     savedQueryLanguage: dashboard.savedQueryLanguage ?? null,
-    savedFilterValues: dashboard.savedFilterValues ?? [],
+    savedFilterValues: getExternalCompatibleFilterValues(
+      dashboard.savedFilterValues,
+    ),
+    // Mongoose persists missing arrays as []. Only emit containers when
+    // the user actually saved one or more, so dashboards without the
+    // organization layer round-trip with the field absent.
+    ...(containers.length > 0 ? { containers } : {}),
   };
 }
 
@@ -330,15 +822,100 @@ export function convertToExternalDashboard(
 // --------------------------------------------------------------------------------
 
 const convertToInternalSelectItem = (
-  item: ExternalDashboardSelectItem,
+  // `isDelta` is the MCP tile dialect's spelling of the gauge delta flag
+  // (`periodAggFn: 'delta'` in the REST dialect). MCP tiles are cast to
+  // ExternalDashboardTileWithId before reaching this converter
+  // (saveDashboard.ts), so honoring both spellings here is what keeps an
+  // MCP-authored gauge-delta series from silently evaluating raw values.
+  item: ExternalDashboardSelectItem & { isDelta?: boolean },
 ): Exclude<BuilderSavedChartConfig['select'][number], string> => {
   return {
-    ...pick(item, ['alias', 'metricType', 'metricName', 'aggFn', 'level']),
+    ...pick(item, [
+      'alias',
+      'metricType',
+      'metricName',
+      'aggFn',
+      'level',
+      'numberFormat',
+    ]),
     aggCondition: item.where,
     aggConditionLanguage: item.whereLanguage,
-    isDelta: item.periodAggFn === 'delta',
+    isDelta: item.periodAggFn === 'delta' || item.isDelta === true,
     valueExpression: item.valueExpression ?? '',
   };
+};
+
+const convertExternalPromqlConfigToInternal = (
+  config: ExternalDashboardPromqlTileConfig,
+  name: string,
+  description: string | undefined,
+): PromqlSavedChartConfig => {
+  const base = {
+    configType: 'promql' as const,
+    name,
+    description,
+    source: config.sourceId,
+    promqlExpression: config.expressions,
+    granularity: config.granularity,
+    numberFormat: config.numberFormat,
+  };
+
+  switch (config.displayType) {
+    case 'line':
+    case 'stacked_bar':
+    case 'stacked_line':
+      return {
+        ...base,
+        ...pick(config, [
+          'legendTemplate',
+          'alignDateRangeToGranularity',
+          'seriesLimit',
+        ]),
+        displayType: TIME_SERIES_DISPLAY_TYPE_BY_NAME[config.displayType],
+        fillNulls: config.fillNulls === false ? false : undefined,
+        compareToPreviousPeriod:
+          config.displayType === 'line'
+            ? config.compareToPreviousPeriod
+            : undefined,
+        lineInterpolation:
+          config.displayType === 'stacked_bar'
+            ? undefined
+            : config.lineInterpolation,
+      };
+    case 'table':
+      return { ...base, displayType: DisplayType.Table };
+    case 'number':
+      return {
+        ...base,
+        ...pick(config, ['color', 'colorRules', 'backgroundChart']),
+        displayType: DisplayType.Number,
+      };
+    case 'pie':
+    case 'bar':
+      return {
+        ...base,
+        displayType:
+          config.displayType === 'pie' ? DisplayType.Pie : DisplayType.Bar,
+        legendTemplate: config.legendTemplate,
+        seriesLimit: config.limit,
+      };
+    case 'heatmap':
+      return {
+        ...base,
+        displayType: DisplayType.Heatmap,
+        legendTemplate: config.legendTemplate,
+        ...(config.heatmapMode || config.heatmapScaleType
+          ? {
+              heatmap: {
+                ...(config.heatmapMode ? { mode: config.heatmapMode } : {}),
+                ...(config.heatmapScaleType
+                  ? { scaleType: config.heatmapScaleType }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+  }
 };
 
 export function convertToInternalTileConfig(
@@ -346,26 +923,37 @@ export function convertToInternalTileConfig(
 ): DashboardDocument['tiles'][number] {
   const externalConfig = externalTile.config;
   const name = externalTile.name || '';
+  const description = externalTile.description || undefined;
 
   let internalConfig: SavedChartConfig;
 
-  if (isRawSqlExternalTileConfig(externalConfig)) {
+  if (isPromqlExternalTileConfig(externalConfig)) {
+    internalConfig = convertExternalPromqlConfigToInternal(
+      externalConfig,
+      name,
+      description,
+    );
+  } else if (isRawSqlExternalTileConfig(externalConfig)) {
     switch (externalConfig.displayType) {
       case 'line':
       case 'stacked_bar':
+      case 'stacked_line':
         internalConfig = {
           configType: 'sql',
           ...pick(externalConfig, [
             'numberFormat',
             'alignDateRangeToGranularity',
             'compareToPreviousPeriod',
+            'fitYAxisToData',
+            'lineInterpolation',
+            // Round-trip the render cap so a GET→PUT does not silently wipe it.
+            'seriesLimit',
           ]),
           displayType:
-            externalConfig.displayType === 'stacked_bar'
-              ? DisplayType.StackedBar
-              : DisplayType.Line,
+            TIME_SERIES_DISPLAY_TYPE_BY_NAME[externalConfig.displayType],
           fillNulls: externalConfig.fillNulls === false ? false : undefined,
           name,
+          description,
           connection: externalConfig.connectionId,
           sqlTemplate: externalConfig.sqlTemplate,
           source: externalConfig.sourceId,
@@ -374,6 +962,7 @@ export function convertToInternalTileConfig(
       case 'table':
       case 'number':
       case 'pie':
+      case 'bar':
         internalConfig = {
           configType: 'sql',
           displayType:
@@ -381,12 +970,27 @@ export function convertToInternalTileConfig(
               ? DisplayType.Table
               : externalConfig.displayType === 'number'
                 ? DisplayType.Number
-                : DisplayType.Pie,
+                : externalConfig.displayType === 'bar'
+                  ? DisplayType.Bar
+                  : DisplayType.Pie,
           name,
+          description,
           connection: externalConfig.connectionId,
           sqlTemplate: externalConfig.sqlTemplate,
           source: externalConfig.sourceId,
           numberFormat: externalConfig.numberFormat,
+          onClick:
+            externalConfig.displayType === 'table'
+              ? externalConfig.onClick
+              : undefined,
+          color:
+            externalConfig.displayType === 'number'
+              ? externalConfig.color
+              : undefined,
+          colorRules:
+            externalConfig.displayType === 'number'
+              ? externalConfig.colorRules
+              : undefined,
         } satisfies RawSqlSavedChartConfig;
         break;
       default:
@@ -401,23 +1005,30 @@ export function convertToInternalTileConfig(
     switch (externalConfig.displayType) {
       case 'line':
       case 'stacked_bar':
+      case 'stacked_line':
         internalConfig = {
           ...pick(externalConfig, [
             'groupBy',
             'numberFormat',
             'alignDateRangeToGranularity',
             'compareToPreviousPeriod',
+            'fitYAxisToData',
+            'lineInterpolation',
+            // Formulas round-trip as-is; the input schema has already
+            // validated the expressions against `select`.
+            'formulas',
+            'showOperandSeries',
           ]),
           displayType:
-            externalConfig.displayType === 'stacked_bar'
-              ? DisplayType.StackedBar
-              : DisplayType.Line,
+            TIME_SERIES_DISPLAY_TYPE_BY_NAME[externalConfig.displayType],
           select: externalConfig.select.map(convertToInternalSelectItem),
           source: externalConfig.sourceId,
           where: '',
           fillNulls: externalConfig.fillNulls === false ? false : undefined,
           seriesReturnType: externalConfig.asRatio ? 'ratio' : undefined,
+          seriesLimit: externalConfig.seriesLimit,
           name,
+          description,
         } satisfies BuilderSavedChartConfig;
         break;
       case 'table':
@@ -428,6 +1039,11 @@ export function convertToInternalTileConfig(
             'having',
             'orderBy',
             'groupByColumnsOnLeft',
+            'onClick',
+            // Formulas round-trip as-is; the input schema has already
+            // validated the expressions against `select`.
+            'formulas',
+            'showOperandSeries',
           ]),
           displayType: DisplayType.Table,
           select: externalConfig.select.map(convertToInternalSelectItem),
@@ -435,34 +1051,155 @@ export function convertToInternalTileConfig(
           where: '',
           seriesReturnType: externalConfig.asRatio ? 'ratio' : undefined,
           name,
+          description,
         } satisfies BuilderSavedChartConfig;
         break;
       case 'number':
         internalConfig = {
           displayType: DisplayType.Number,
-          select: [convertToInternalSelectItem(externalConfig.select[0])],
+          // A formula number tile keeps every operand select item (formulas
+          // reference them by position); a formula-less tile persists its
+          // single item, preserving the pre-formula shape.
+          select: externalConfig.formulas?.length
+            ? externalConfig.select.map(convertToInternalSelectItem)
+            : [convertToInternalSelectItem(externalConfig.select[0])],
           source: externalConfig.sourceId,
           where: '',
           numberFormat: externalConfig.numberFormat,
+          // Number charts display the first value column, so operand series
+          // are always hidden — persist the explicit `false` so the saved
+          // config is self-describing, mirroring the chart editor's
+          // `convertFormStateToSavedChartConfig`.
+          formulas: externalConfig.formulas,
+          showOperandSeries: externalConfig.formulas?.length
+            ? false
+            : undefined,
+          // The input schema validates these as hue-only palette tokens,
+          // so pass them through directly; `_.omitBy(_.isNil)` below drops
+          // them when absent.
+          color: externalConfig.color,
+          colorRules: externalConfig.colorRules,
+          // Builder number tiles only; `_.omitBy(_.isNil)` below drops it when
+          // absent. The input schema validates the nested color as a hue-only
+          // palette token, so it passes through directly.
+          backgroundChart: externalConfig.backgroundChart,
           name,
+          description,
         } satisfies BuilderSavedChartConfig;
         break;
       case 'pie':
+      case 'bar':
         internalConfig = {
-          ...pick(externalConfig, ['groupBy', 'numberFormat']),
-          displayType: DisplayType.Pie,
+          ...pick(externalConfig, ['groupBy', 'numberFormat', 'orderBy']),
+          displayType:
+            externalConfig.displayType === 'bar'
+              ? DisplayType.Bar
+              : DisplayType.Pie,
           select: [convertToInternalSelectItem(externalConfig.select[0])],
           source: externalConfig.sourceId,
           where: '',
+          seriesLimit: externalConfig.limit,
           name,
+          description,
         } satisfies BuilderSavedChartConfig;
         break;
+      case 'heatmap': {
+        if (isSeriesHeatmapExternalConfig(externalConfig)) {
+          // Matches the editor's `normalizeHeatmapFields`: series heatmaps
+          // have no chart-level where, so it is saved empty.
+          internalConfig = {
+            ...pick(externalConfig, ['groupBy', 'numberFormat']),
+            displayType: DisplayType.Heatmap,
+            heatmap: { mode: 'series' },
+            select: [convertToInternalSelectItem(externalConfig.select[0])],
+            source: externalConfig.sourceId,
+            where: '',
+            name,
+            description,
+          } satisfies BuilderSavedChartConfig;
+          break;
+        }
+        // Heatmap is builder-only and uses a single select item with
+        // its own shape: aggFn is the literal 'heatmap' on the external
+        // surface, mapped to the internal 'count' aggFn that the editor
+        // form persists, with the heatmap-specific countExpression /
+        // heatmapScaleType fields preserved on the select item. The
+        // row-level filter lives at the chart-config level (matching
+        // HeatmapSeriesEditor in the UI), not on the select item.
+        const item = externalConfig.select[0];
+        internalConfig = {
+          ...pick(externalConfig, ['numberFormat']),
+          ...(externalConfig.heatmapMode
+            ? { heatmap: { mode: externalConfig.heatmapMode } }
+            : {}),
+          displayType: DisplayType.Heatmap,
+          // Match the editor's `applyHeatmapDefaults` (in
+          // `packages/app/src/components/DBEditTimeChartForm/EditTimeChartForm.tsx`,
+          // search for `aggFn: 'count'`) for the two fields the editor
+          // always writes on the select item: `aggFn: 'count'` and
+          // `aggCondition: ''`.
+          //
+          // Where this path intentionally diverges from the editor:
+          //
+          //   - `aggConditionLanguage` is hardcoded `'lucene'`; the
+          //     editor uses `getStoredLanguage() ?? 'lucene'` (a user
+          //     session preference). For a UI-saved heatmap whose
+          //     author had `'sql'` selected, a GET -> PUT round-trip
+          //     through this converter will downgrade the persisted
+          //     value to `'lucene'`. The chart renderer does not read
+          //     `aggConditionLanguage` for heatmap tiles (heatmap has
+          //     no per-select where), so the change is invisible at
+          //     render time.
+          //
+          //   - The editor unconditionally writes
+          //     `numberFormat: { output: 'duration', factor: 0.001 }`
+          //     and `series.0.countExpression: 'count()'`. Both are
+          //     passed through verbatim from the external payload here
+          //     and left absent otherwise, so an API-built tile
+          //     renders without duration formatting unless the caller
+          //     asks for it.
+          select: [
+            {
+              aggFn: 'count',
+              aggCondition: '',
+              aggConditionLanguage: 'lucene',
+              valueExpression: item.valueExpression,
+              ...(item.countExpression !== undefined
+                ? { countExpression: item.countExpression }
+                : {}),
+              ...(item.heatmapScaleType !== undefined
+                ? { heatmapScaleType: item.heatmapScaleType }
+                : {}),
+            },
+          ],
+          source: externalConfig.sourceId,
+          // `where` is `z.string().max(10000).optional().default('')` so
+          // it is always a string post-parse; sibling pie/number/table
+          // arms write the unconditional value too.
+          where: externalConfig.where,
+          whereLanguage: externalConfig.whereLanguage ?? 'lucene',
+          name,
+          description,
+        } satisfies BuilderSavedChartConfig;
+        break;
+      }
       case 'search':
         internalConfig = {
           ...pick(externalConfig, ['select', 'where']),
           displayType: DisplayType.Search,
           source: externalConfig.sourceId,
           name,
+          description,
+          whereLanguage: externalConfig.whereLanguage ?? 'lucene',
+        } satisfies BuilderSavedChartConfig;
+        break;
+      case 'event_patterns':
+        internalConfig = {
+          ...pick(externalConfig, ['select', 'where']),
+          displayType: DisplayType.EventPatterns,
+          source: externalConfig.sourceId,
+          name,
+          description,
           whereLanguage: externalConfig.whereLanguage ?? 'lucene',
         } satisfies BuilderSavedChartConfig;
         break;
@@ -474,6 +1211,7 @@ export function convertToInternalTileConfig(
           where: '',
           select: [],
           name,
+          description,
         } satisfies BuilderSavedChartConfig;
         break;
       default:
@@ -489,11 +1227,26 @@ export function convertToInternalTileConfig(
   // Omit keys that are null/undefined, so that they're not saved as null in Mongo.
   // We know that the resulting object will conform to SavedChartConfig since we're just
   // removing null properties and anything that is null will just be undefined instead.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+
   const strippedConfig = _.omitBy(internalConfig, _.isNil) as SavedChartConfig;
 
+  // Mirror the spread-conditional pattern used in `convertTileToExternalChart`:
+  // destructure statically (compile-time narrowing) and include the optional
+  // refs only when set, so a tile without a containerId never persists
+  // `containerId: undefined` to Mongo. The previous `pick(...)` over the
+  // external tile included `name`, but the internal `Tile` type stores the
+  // name on `config`, not at the top level (`strippedConfig` carries it).
+  // Stripping the top-level `name` brings the runtime shape back in line
+  // with `DashboardDocument['tiles'][number]`.
+  const { id, x, y, w, h, containerId, tabId } = externalTile;
   return {
-    ...pick(externalTile, ['id', 'x', 'y', 'w', 'h', 'name']),
+    id,
+    x,
+    y,
+    w,
+    h,
+    ...(containerId !== undefined ? { containerId } : {}),
+    ...(tabId !== undefined ? { tabId } : {}),
     config: strippedConfig,
   };
 }
@@ -502,12 +1255,40 @@ export function convertToInternalTileConfig(
 // Shared dashboard validation helpers (used by both the REST router and MCP tools)
 // --------------------------------------------------------------------------------
 
-/** Returns source IDs referenced in tiles/filters that do not exist for the team */
-export async function getMissingSources(
+/**
+ * The shape of a source as returned from `getSources(team)` (and reused
+ * by every dashboard validation helper below). Re-exported so the
+ * router can pass a single fetched array into multiple helpers without
+ * pulling in `controllers/sources` for the type alone.
+ */
+type SourceForValidation = Awaited<ReturnType<typeof getSources>>[number];
+
+/** Fetches sources for a team. Re-exports the controller call so callers
+ * outside `controllers/sources` don't need a second import for the
+ * validation flow. The return type is the awaited shape of `getSources`
+ * (an array of Source documents) so callers can `await` it directly. */
+async function fetchSourcesForValidation(
   team: string | mongoose.Types.ObjectId,
+): Promise<SourceForValidation[]> {
+  return getSources(team.toString());
+}
+
+/**
+ * Extract the tile's onClick config, if the tile uses the new "config" format
+ * and the display type supports onClick (currently only table).
+ */
+function getTileOnClick(tile: ExternalDashboardTileWithId) {
+  if (!isConfigTile(tile)) return undefined;
+  if (!('onClick' in tile.config)) return undefined;
+  return tile.config.onClick;
+}
+
+/** Returns source IDs referenced in tiles/filters that do not exist for the team */
+function getMissingSources(
+  sources: SourceForValidation[],
   tiles: ExternalDashboardTileWithId[],
   filters?: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[],
-): Promise<string[]> {
+): string[] {
   const sourceIds = new Set<string>();
 
   for (const tile of tiles) {
@@ -522,25 +1303,298 @@ export async function getMissingSources(
         sourceIds.add(tile.config.sourceId);
       }
     }
+
+    // Include source IDs referenced by OnClick link-outs (mode=id, type=search)
+    const onClick = getTileOnClick(tile);
+    if (isOnClickSearchById(onClick)) {
+      sourceIds.add(onClick.target.id);
+    }
   }
 
   if (filters?.length) {
     for (const filter of filters) {
-      if ('sourceId' in filter) {
+      // Every variant but the static one names a source.
+      if (!isStaticListFilter(filter)) {
         sourceIds.add(filter.sourceId);
       }
     }
   }
 
-  const existingSources = await getSources(team.toString());
   const existingSourceIds = new Set(
-    existingSources.map(source => source._id.toString()),
+    sources.map(source => source._id.toString()),
   );
   return [...sourceIds].filter(sourceId => !existingSourceIds.has(sourceId));
 }
 
+/**
+ * Returns source IDs referenced by heatmap tiles that exist but are not
+ * compatible with heatmap rendering in the tile's mode, grouped by mode. The
+ * heatmap UI gates the source picker via the same `getHeatmapSourceKinds`
+ * sets used here (see `packages/common-utils/src/guards.ts` and
+ * `ChartEditorControls.tsx`), so UI and API gates move together.
+ */
+function getHeatmapTilesWithIncompatibleSources(
+  sources: SourceForValidation[],
+  tiles: ExternalDashboardTileWithId[],
+): Record<HeatmapMode, string[]> {
+  const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
+  const distribution = new Set<string>();
+  const series = new Set<string>();
+  for (const tile of tiles) {
+    if (
+      !isConfigTile(tile) ||
+      !isBuilderExternalTileConfig(tile.config) ||
+      tile.config.displayType !== 'heatmap' ||
+      !tile.config.sourceId
+    ) {
+      continue;
+    }
+    const mode = getExternalHeatmapMode(tile.config);
+    const source = sourceById.get(tile.config.sourceId);
+    if (source !== undefined && !isHeatmapCompatibleSource(source, mode)) {
+      (mode === 'series' ? series : distribution).add(tile.config.sourceId);
+    }
+  }
+  return { distribution: [...distribution], series: [...series] };
+}
+
+/**
+ * Returns an error message string if any of the referenced source IDs is not
+ * a valid PromQL source, or null if all of them are. `subject` names what
+ * referenced them, e.g. "PromQL tiles".
+ */
+function getNonPromqlSourceError(
+  sources: SourceForValidation[],
+  referencedSourceIds: string[],
+  subject: string,
+): string | null {
+  const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
+  const invalid = [...new Set(referencedSourceIds)].filter(id => {
+    const source = sourceById.get(id);
+    return source === undefined || !isPromqlSource(source);
+  });
+  if (invalid.length === 0) return null;
+  return `${subject} require a PromQL source. The following source IDs are not PromQL sources: ${invalid.join(', ')}`;
+}
+
+/**
+ * Returns source IDs referenced by formula tiles that exist but are not
+ * formula-capable. Formulas render on metric and log/trace sources; other
+ * kinds (e.g. session) are deliberately gated off via the shared
+ * `isFormulaSourceKind` predicate — the same gate as the editor's
+ * "Add Formula" button — so the API cannot persist a config the editor
+ * refuses.
+ */
+function getFormulaTilesWithIncompatibleSources(
+  sources: SourceForValidation[],
+  tiles: ExternalDashboardTileWithId[],
+): string[] {
+  const formulaSourceIds = new Set<string>();
+  for (const tile of tiles) {
+    if (
+      isConfigTile(tile) &&
+      isBuilderExternalTileConfig(tile.config) &&
+      'formulas' in tile.config &&
+      (tile.config.formulas?.length ?? 0) > 0 &&
+      'sourceId' in tile.config &&
+      tile.config.sourceId
+    ) {
+      formulaSourceIds.add(tile.config.sourceId);
+    }
+  }
+  if (formulaSourceIds.size === 0) return [];
+
+  const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
+  return [...formulaSourceIds].filter(id => {
+    const source = sourceById.get(id);
+    return source !== undefined && !isFormulaSourceKind(source.kind);
+  });
+}
+
+/**
+ * For a PUT (update) request, return only the formula tiles that need to
+ * be re-validated against the source-kind gate. Mirrors
+ * `filterChangedHeatmapTiles` below: a tile that already carried the same
+ * formulas on the same source is kept as "unchanged" so the user can edit
+ * other parts of the dashboard without being blocked when the source's
+ * `kind` was changed after the formulas were originally accepted. New
+ * formula tiles, tiles with new or edited formulas, and tiles whose
+ * `sourceId` changed all flow through the check.
+ */
+function filterChangedFormulaTiles(
+  requestTiles: ExternalDashboardTileWithId[],
+  existingTiles: DashboardDocument['tiles'],
+): ExternalDashboardTileWithId[] {
+  const existingTilesById = new Map<string, DashboardDocument['tiles'][number]>(
+    existingTiles.map(t => [t.id, t]),
+  );
+  return requestTiles.filter(tile => {
+    if (
+      !isConfigTile(tile) ||
+      !isBuilderExternalTileConfig(tile.config) ||
+      !('formulas' in tile.config) ||
+      (tile.config.formulas?.length ?? 0) === 0
+    ) {
+      return false;
+    }
+    const existing = tile.id ? existingTilesById.get(tile.id) : undefined;
+    if (existing === undefined) {
+      // New formula tile: validate.
+      return true;
+    }
+    const existingConfig = existing.config;
+    if (!isBuilderSavedChartConfig(existingConfig)) {
+      // Existing tile was raw-SQL/PromQL; user is converting to a builder
+      // tile with formulas.
+      return true;
+    }
+    if (!_.isEqual(existingConfig.formulas, tile.config.formulas)) {
+      // Formulas newly added or edited: the user is actively touching
+      // the gated feature, so surface the source-kind error.
+      return true;
+    }
+    // Existing tile already carried these exact formulas. Re-check only
+    // when the source changed.
+    return existingConfig.source?.toString() !== tile.config.sourceId;
+  });
+}
+
+/**
+ * For a PUT (update) request, return only the heatmap tiles that need
+ * to be re-validated against the source-kind gate. A heatmap tile that
+ * was already on the same source in the existing dashboard is kept as
+ * "unchanged" so the user can edit other parts of the dashboard
+ * without being blocked when the underlying source's `kind` was
+ * changed after the heatmap was originally accepted. New heatmap
+ * tiles, tiles whose displayType just changed to heatmap, and tiles
+ * whose `sourceId` or heatmap mode changed all flow through the check.
+ */
+function filterChangedHeatmapTiles(
+  requestTiles: ExternalDashboardTileWithId[],
+  existingTiles: DashboardDocument['tiles'],
+): ExternalDashboardTileWithId[] {
+  const existingTilesById = new Map<string, DashboardDocument['tiles'][number]>(
+    existingTiles.map(t => [t.id, t]),
+  );
+  return requestTiles.filter(tile => {
+    if (
+      !isConfigTile(tile) ||
+      !isBuilderExternalTileConfig(tile.config) ||
+      tile.config.displayType !== 'heatmap'
+    ) {
+      return false;
+    }
+    const existing = tile.id ? existingTilesById.get(tile.id) : undefined;
+    if (existing === undefined) {
+      // New heatmap tile: validate.
+      return true;
+    }
+    const existingConfig = existing.config;
+    if (!isBuilderSavedChartConfig(existingConfig)) {
+      // Existing tile was raw-SQL or PromQL; user is converting to a heatmap.
+      return true;
+    }
+    if (existingConfig.displayType !== DisplayType.Heatmap) {
+      // displayType changed to heatmap.
+      return true;
+    }
+    // Existing tile was already a heatmap. Re-check only when the
+    // source or mode changed.
+    return (
+      existingConfig.source?.toString() !== tile.config.sourceId ||
+      getHeatmapMode(existingConfig) !== getExternalHeatmapMode(tile.config)
+    );
+  });
+}
+
+/**
+ * Returns the source IDs of PromQL tiles to check against the PromQL
+ * source-kind gate. With `existingTiles` (update paths), a tile that was already
+ * a PromQL tile on the same source is skipped, mirroring
+ * `filterChangedHeatmapTiles`: a source whose kind changed after the tile was
+ * saved must not block unrelated dashboard edits.
+ */
+function getChangedPromqlTileSourceIds(
+  tiles: ExternalDashboardTileWithId[],
+  existingTiles: DashboardDocument['tiles'] | undefined,
+): string[] {
+  const existingPromqlSources = new Map(
+    (existingTiles ?? []).flatMap(tile =>
+      isPromqlSavedChartConfig(tile.config)
+        ? [[tile.id, tile.config.source]]
+        : [],
+    ),
+  );
+  return tiles.flatMap(tile =>
+    isConfigTile(tile) &&
+    isPromqlExternalTileConfig(tile.config) &&
+    existingPromqlSources.get(tile.id) !== tile.config.sourceId
+      ? [tile.config.sourceId]
+      : [],
+  );
+}
+
+/**
+ * Returns source IDs referenced by onClick search link-outs (mode=id,
+ * type=search) whose source kind is not log or trace. The /search destination
+ * only supports log and trace sources, so linking to a metric/session source
+ * would produce a broken link at click time.
+ *
+ * Sources that don't exist are ignored here, getMissingSources handles that
+ * case separately with a clearer error message.
+ */
+async function getInvalidOnClickSearchSources(
+  team: string | mongoose.Types.ObjectId,
+  tiles: ExternalDashboardTileWithId[],
+): Promise<string[]> {
+  const sourceIds = new Set<string>();
+
+  for (const tile of tiles) {
+    const onClick = getTileOnClick(tile);
+    if (isOnClickSearchById(onClick)) {
+      sourceIds.add(onClick.target.id);
+    }
+  }
+
+  if (sourceIds.size === 0) return [];
+
+  const sources = await getSources(team.toString());
+  const validSources = sources.filter(s => isLogSource(s) || isTraceSource(s));
+  const validSourceIds = new Set(validSources.map(s => s._id.toString()));
+  return [...sourceIds].filter(id => !validSourceIds.has(id));
+}
+
+/**
+ * Returns dashboard IDs referenced by tile OnClick link-outs (mode=id,
+ * type=dashboard) that do not exist for the team.
+ */
+async function getMissingOnClickDashboards(
+  team: string | mongoose.Types.ObjectId,
+  tiles: ExternalDashboardTileWithId[],
+): Promise<string[]> {
+  const dashboardIds = new Set<string>();
+
+  for (const tile of tiles) {
+    const onClick = getTileOnClick(tile);
+    if (isOnClickDashboardById(onClick)) {
+      dashboardIds.add(onClick.target.id);
+    }
+  }
+
+  if (dashboardIds.size === 0) return [];
+
+  const existingDashboards = await Dashboard.find(
+    { team, _id: { $in: [...dashboardIds] } },
+    { _id: 1 },
+  ).lean();
+  const existingDashboardIds = new Set(
+    existingDashboards.map(d => d._id.toString()),
+  );
+  return [...dashboardIds].filter(id => !existingDashboardIds.has(id));
+}
+
 /** Returns connection IDs referenced in tiles that do not belong to the team */
-export async function getMissingConnections(
+async function getMissingConnections(
   team: string | mongoose.Types.ObjectId,
   tiles: ExternalDashboardTileWithId[],
 ): Promise<string[]> {
@@ -587,6 +1641,13 @@ const dashboardBodyBaseShape = {
   savedFilterValues: z
     .array(externalDashboardSavedFilterValueSchema)
     .optional(),
+  // The internal `DashboardContainerSchema` already caps individual
+  // container/tab/title sizes; the array cap mirrors what the editor
+  // would ever generate.
+  containers: z
+    .array(DashboardContainerSchema)
+    .max(DASHBOARD_MAX_CONTAINERS)
+    .optional(),
 };
 
 // --------------------------------------------------------------------------------
@@ -614,7 +1675,7 @@ export function convertExternalTilesToInternal(
     if (isSeriesTile(tileWithId)) {
       return translateExternalChartToTileConfig(tileWithId);
     }
-    // Fallback for tiles with neither config nor series — treat as empty series tile.
+    // Fallback for tiles with neither config nor series; treat as empty series tile.
     // This shouldn't happen with valid input, but matches the previous behavior.
     return translateExternalChartToTileConfig(tileWithId as SeriesTile);
   });
@@ -638,8 +1699,157 @@ export function convertExternalFiltersToInternal(
 }
 
 /**
- * Delete alerts for tiles that were removed or converted to raw SQL
- * (which doesn't support alerts).
+ * Returns source IDs on raw SQL tiles whose connection doesn't match
+ * the source's persisted connection. Catches copy-paste errors where
+ * the LLM mixes up sourceId and connectionId from different sources.
+ */
+function getSourceConnectionMismatches(
+  sources: SourceForValidation[],
+  tiles: ExternalDashboardTileWithId[],
+): string[] {
+  const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
+
+  const mismatched: string[] = [];
+  for (const tile of tiles) {
+    if (
+      isConfigTile(tile) &&
+      isRawSqlExternalTileConfig(tile.config) &&
+      tile.config.sourceId
+    ) {
+      const source = sourceById.get(tile.config.sourceId);
+      if (source && source.connection.toString() !== tile.config.connectionId) {
+        mismatched.push(tile.config.sourceId);
+      }
+    }
+  }
+
+  return mismatched;
+}
+
+// ── Shared tile validation ───────────────────────────────────────────────
+
+export type TileValidationContext = {
+  teamId: string;
+  tiles: ExternalDashboardTileWithId[];
+  /** Filters to check for missing source IDs (create/full-update paths). */
+  filters?: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[];
+  /** Existing internal tiles for scoping heatmap change detection (update paths). */
+  existingTiles?: DashboardDocument['tiles'];
+  /** Container set to validate tile containerId/tabId refs against. */
+  containers: DashboardContainer[];
+};
+
+/**
+ * Run the full suite of tile validation checks (sources, connections,
+ * heatmap and PromQL source-kind, onClick targets, container/tab refs). Returns
+ * `null` when all checks pass, or an error message string on failure.
+ *
+ * Consolidates the ~95-line validation block that was previously
+ * duplicated across REST v2 POST/PUT, MCP save (create/update), and
+ * MCP patch handlers.
+ */
+export async function validateDashboardTiles(
+  ctx: TileValidationContext,
+): Promise<string | null> {
+  const { teamId, tiles, filters, existingTiles, containers } = ctx;
+
+  // Container/tab ref resolution.
+  const tileRefIssues = collectTileContainerRefIssues(containers, tiles);
+  if (tileRefIssues.length > 0) {
+    return tileRefIssues.join('; ');
+  }
+
+  // Fetch sources/connections/onClick targets in parallel.
+  const [
+    sources,
+    missingConnections,
+    missingOnClickDashboards,
+    invalidOnClickSearchSources,
+  ] = await Promise.all([
+    fetchSourcesForValidation(teamId),
+    getMissingConnections(teamId, tiles),
+    getMissingOnClickDashboards(teamId, tiles),
+    getInvalidOnClickSearchSources(teamId, tiles),
+  ]);
+
+  const missingSources = getMissingSources(sources, tiles, filters);
+  if (missingSources.length > 0) {
+    return `Could not find the following source IDs: ${missingSources.join(', ')}`;
+  }
+  if (missingConnections.length > 0) {
+    return `Could not find the following connection IDs: ${missingConnections.join(', ')}`;
+  }
+
+  const sourceConnectionMismatches = getSourceConnectionMismatches(
+    sources,
+    tiles,
+  );
+  if (sourceConnectionMismatches.length > 0) {
+    return `The following source IDs do not match the specified connections: ${sourceConnectionMismatches.join(', ')}`;
+  }
+
+  // Heatmap source-kind gate. On create (no existingTiles), validate all
+  // tiles. On update, scope to tiles whose sourceId/displayType changed.
+  const heatmapTilesToCheck = existingTiles
+    ? filterChangedHeatmapTiles(tiles, existingTiles)
+    : tiles;
+  const heatmapIncompatibleSources = getHeatmapTilesWithIncompatibleSources(
+    sources,
+    heatmapTilesToCheck,
+  );
+  if (heatmapIncompatibleSources.distribution.length > 0) {
+    return `Heatmap tiles require a Trace source. The following source IDs are not Trace sources: ${heatmapIncompatibleSources.distribution.join(', ')}`;
+  }
+  if (heatmapIncompatibleSources.series.length > 0) {
+    return `Series heatmap tiles require a Trace, Log, or Metric source. The following source IDs are not Trace, Log, or Metric sources: ${heatmapIncompatibleSources.series.join(', ')}`;
+  }
+
+  // Formula source-kind gate. On create (no existingTiles), validate all
+  // tiles. On update, scope to tiles whose formulas/sourceId changed —
+  // mirroring the heatmap gate — so a source whose kind changed after
+  // acceptance doesn't block unrelated dashboard edits.
+  const formulaTilesToCheck = existingTiles
+    ? filterChangedFormulaTiles(tiles, existingTiles)
+    : tiles;
+  const formulaIncompatibleSources = getFormulaTilesWithIncompatibleSources(
+    sources,
+    formulaTilesToCheck,
+  );
+  if (formulaIncompatibleSources.length > 0) {
+    return `Tiles with formulas require a Metric, Log, or Trace source. The following source IDs are not formula-capable: ${formulaIncompatibleSources.join(', ')}`;
+  }
+
+  // PromQL tiles and PROMETHEUS_LABEL filters query through their source's
+  // connection and TimeSeries table, which only a PromQL source carries.
+  const promqlTileError = getNonPromqlSourceError(
+    sources,
+    getChangedPromqlTileSourceIds(tiles, existingTiles),
+    'PromQL tiles',
+  );
+  if (promqlTileError != null) return promqlTileError;
+
+  const promqlLabelFilters = (filters ?? []).filter(isPrometheusLabelFilter);
+  const promqlLabelFilterError = getNonPromqlSourceError(
+    sources,
+    promqlLabelFilters.map(f => f.sourceId),
+    'PROMETHEUS_LABEL filters',
+  );
+  if (promqlLabelFilterError != null) return promqlLabelFilterError;
+
+  if (missingOnClickDashboards.length > 0) {
+    return `Could not find the following onClick dashboard IDs: ${missingOnClickDashboards.join(', ')}`;
+  }
+  if (invalidOnClickSearchSources.length > 0) {
+    return `The following onClick search source IDs are not log or trace sources: ${invalidOnClickSearchSources.join(', ')}`;
+  }
+
+  return null;
+}
+
+/**
+ * Delete alerts for tiles that were removed or whose config no longer
+ * supports alerts (raw SQL with incompatible displayType, or builder
+ * tiles with incompatible displayType like Pie/Table/Heatmap/etc.).
  */
 export async function cleanupDashboardAlerts({
   dashboardId,
@@ -654,13 +1864,11 @@ export async function cleanupDashboardAlerts({
 }) {
   const newTileIdSet = new Set(internalTiles.map(t => t.id));
   const tileIdsToDeleteAlerts = [
+    // Tiles whose config no longer supports alerts (e.g. switched to PromQL).
     ...internalTiles
-      .filter(
-        tile =>
-          isRawSqlSavedChartConfig(tile.config) &&
-          !displayTypeSupportsRawSqlAlerts(tile.config.displayType),
-      )
+      .filter(tile => !savedChartConfigSupportsAlerts(tile.config))
       .map(tile => tile.id),
+    // Tiles that were completely removed.
     ...[...existingTileIds].filter(id => !newTileIdSet.has(id)),
   ];
   if (tileIdsToDeleteAlerts.length > 0) {
@@ -705,7 +1913,51 @@ function buildDashboardBodySchema(filterSchema: z.ZodTypeAny): z.ZodEffects<
           path: ['savedQueryLanguage'],
         });
       }
+
+      // Schema-level: only structural checks on containers (duplicate
+      // ids, per-container tab-id uniqueness). Cross-tile resolution
+      // moved to the request handler so a PUT can fall back to the
+      // existing dashboard's containers when the body omits the field
+      // (otherwise a tile that references a real preserved container
+      // would be rejected against an empty `data.containers ?? []`).
+      validateDashboardContainersStructure(data.containers ?? [], ctx);
+
+      // Mirrors the dashboard filter form's validations. Backwards compatible
+      // with pre-`isBroadcastEnabled` payloads.
+      validateDashboardFilterVariableNames(data.filters ?? [], ctx);
+      validateDashboardFilterModes(data.filters ?? [], ctx);
+      validateDashboardFilterFieldGating(data.filters ?? [], ctx);
+
+      validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx);
     });
+}
+
+/**
+ * Cross-tile container/tab reference resolution against an effective
+ * container set. Used by the POST and PUT handlers in
+ * `routers/external-api/v2/dashboards.ts`: POST validates against the
+ * request body's containers, PUT validates against the request body's
+ * containers when present, falling back to the existing dashboard's
+ * containers when the body omits the field. Returns a list of
+ * `path: message` strings shaped to mirror the body-schema validation
+ * error format used by `validateRequestWithEnhancedErrors`.
+ */
+export function collectTileContainerRefIssues(
+  containers: DashboardContainer[],
+  tiles: ExternalDashboardTileWithId[],
+): string[] {
+  const schema = z.object({}).superRefine((_, ctx) => {
+    const containerById = new Map<string, DashboardContainer>(
+      containers.map(c => [c.id, c]),
+    );
+    validateDashboardTileContainerRefs(containerById, tiles, ctx);
+  });
+  const result = schema.safeParse({});
+  if (result.success) return [];
+  return result.error.issues.map(issue => {
+    const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+    return `${path}${issue.message}`;
+  });
 }
 
 export const createDashboardBodySchema = buildDashboardBodySchema(

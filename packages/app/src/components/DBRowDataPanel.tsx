@@ -1,21 +1,38 @@
 import { useMemo } from 'react';
 import { flatten } from 'flat';
 import type { ResponseJSON } from '@hyperdx/common-utils/dist/clickhouse';
+import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   isLogSource,
   isTraceSource,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { Box } from '@mantine/core';
+import { Box, Center, Loader } from '@mantine/core';
+import type { Query } from '@tanstack/react-query';
 
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
+import {
+  getKnownColumnsList,
+  getSelectAllColumnsQuerySettings,
+  useSelectAllColumnsQuerySettings,
+} from '@/hooks/useMaterializedAliasColumnsOption';
+import { useColumns } from '@/hooks/useMetadata';
 import { WithClause } from '@/hooks/useRowWhere';
-import { getDisplayedTimestampValueExpression, getEventBody } from '@/source';
+import {
+  getDisplayedTimestampValueExpression,
+  getDurationMsExpression,
+  getEventBody,
+} from '@/source';
+import type { ChartQueryResult } from '@/types';
 import { getSelectExpressionsForHighlightedAttributes } from '@/utils/highlightedAttributes';
+import { getTimestampValueSelects } from '@/utils/rowTimestamps';
 
 import { DBRowJsonViewer } from './DBRowJsonViewer';
+import { getActiveInfraCorrelations } from './infraCorrelations';
 
+// The source's own `timestampValueExpression` columns are projected too, under
+// the `__hdx_timestamp_value_<i>` aliases owned by `@/utils/rowTimestamps`.
 export enum ROW_DATA_ALIASES {
   TIMESTAMP = '__hdx_timestamp',
   BODY = '__hdx_body',
@@ -27,18 +44,43 @@ export enum ROW_DATA_ALIASES {
   EVENT_ATTRIBUTES = '__hdx_event_attributes',
   EVENTS_EXCEPTION_ATTRIBUTES = '__hdx_events_exception_attributes',
   SPAN_EVENTS = '__hdx_span_events',
+  DURATION_MS = '__hdx_duration_ms',
+  SPAN_KIND = '__hdx_span_kind',
+  SPAN_LINKS = '__hdx_span_links',
+  EVENT_NAME = '__hdx_event_name',
+}
+
+// The side panel mounts its tabs once its own lookup settles, and each tab
+// looks the same row up again. Those lookups reuse a found row instead of
+// running `SELECT *` again. A miss stays stale so the next lookup retries it:
+// the row may not have been ingested yet.
+function rowLookupStaleTime(query: Query<ChartQueryResult>) {
+  return query.state.data?.data.length ? Infinity : 0;
 }
 
 export function useRowData({
   source,
   rowId,
   aliasWith,
+  dateRange,
 }: {
   source: TSource;
   rowId: string | undefined | null;
   aliasWith?: WithClause[];
+  /**
+   * Optional window to bound the lookup by. Applied against the source's
+   * `timestampValueExpression` (not the displayed timestamp), so a row id that
+   * carries no timestamp of its own — e.g. the `TraceId`/`SpanId` pair "View
+   * Trace" synthesizes — can still prune parts instead of scanning the table.
+   * Callers must memoize the tuple; it participates in the query key.
+   */
+  dateRange?: [Date, Date];
 }) {
   const eventBodyExpr = getEventBody(source);
+
+  const timestampValueExpr = source.timestampValueExpression?.trim()
+    ? source.timestampValueExpression
+    : undefined;
 
   const searchedTraceIdExpr =
     isLogSource(source) || isTraceSource(source)
@@ -62,101 +104,237 @@ export function useRowData({
         )
       : [];
 
-  const queryResult = useQueriedChartConfig(
+  // `SELECT *` can fail against a Distributed/Merge table whose underlying
+  // target tables declare different column sets. When the source declares a
+  // "known columns" list (columns known to exist across all target tables) we
+  // select that instead of `*` when fetching full row data.
+  const knownColumns = getKnownColumnsList(source);
+
+  // A bare column comes back from `*` or the Known Columns List whenever the
+  // table has it, so it is read from the row instead of selected: older OTel
+  // log tables have no EventName column, and selecting it would fail the whole
+  // lookup.
+  const eventNameExpr = isLogSource(source)
+    ? source.eventNameExpression?.trim()
+    : undefined;
+  const eventNameColumn =
+    eventNameExpr && /^[A-Za-z_][A-Za-z0-9_]*$/.test(eventNameExpr)
+      ? eventNameExpr
+      : undefined;
+
+  // `*` leaves out ALIAS and MATERIALIZED columns, so the table's columns
+  // decide whether a bare column is selected after all. renderChartConfig
+  // already reads these cached columns before the lookup runs, so waiting on
+  // them adds no query. A Known Columns List names its columns, so it returns
+  // such a column whenever it lists it.
+  const checksEventNameColumn =
+    rowId != null && eventNameColumn != null && knownColumns == null;
+  const { data: columns, isLoading: isColumnsLoading } = useColumns(
+    tcFromSource(source),
     {
-      connection: source.connection,
-      select: [
-        {
-          valueExpression: '*',
-        },
-        {
-          valueExpression: getDisplayedTimestampValueExpression(source),
-          alias: ROW_DATA_ALIASES.TIMESTAMP,
-        },
-        ...(eventBodyExpr
-          ? [
-              {
-                valueExpression: eventBodyExpr,
-                alias: ROW_DATA_ALIASES.BODY,
-              },
-            ]
-          : []),
-        ...(searchedTraceIdExpr
-          ? [
-              {
-                valueExpression: searchedTraceIdExpr,
-                alias: ROW_DATA_ALIASES.TRACE_ID,
-              },
-            ]
-          : []),
-        ...(searchedSpanIdExpr
-          ? [
-              {
-                valueExpression: searchedSpanIdExpr,
-                alias: ROW_DATA_ALIASES.SPAN_ID,
-              },
-            ]
-          : []),
-        ...(severityTextExpr
-          ? [
-              {
-                valueExpression: severityTextExpr,
-                alias: ROW_DATA_ALIASES.SEVERITY_TEXT,
-              },
-            ]
-          : []),
-        ...((isLogSource(source) || isTraceSource(source)) &&
-        source.serviceNameExpression
-          ? [
-              {
-                valueExpression: source.serviceNameExpression,
-                alias: ROW_DATA_ALIASES.SERVICE_NAME,
-              },
-            ]
-          : []),
-        ...(source.resourceAttributesExpression
-          ? [
-              {
-                valueExpression: source.resourceAttributesExpression,
-                alias: ROW_DATA_ALIASES.RESOURCE_ATTRIBUTES,
-              },
-            ]
-          : []),
-        ...((isLogSource(source) || isTraceSource(source)) &&
-        source.eventAttributesExpression
-          ? [
-              {
-                valueExpression: source.eventAttributesExpression,
-                alias: ROW_DATA_ALIASES.EVENT_ATTRIBUTES,
-              },
-            ]
-          : []),
-        ...(source.kind === SourceKind.Trace && source.spanEventsValueExpression
-          ? [
-              {
-                valueExpression: `${source.spanEventsValueExpression}.Attributes[indexOf(${source.spanEventsValueExpression}.Name, 'exception')]`,
-                alias: ROW_DATA_ALIASES.EVENTS_EXCEPTION_ATTRIBUTES,
-              },
-              {
-                valueExpression: source.spanEventsValueExpression,
-                alias: ROW_DATA_ALIASES.SPAN_EVENTS,
-              },
-            ]
-          : []),
-        ...selectHighlightedRowAttributes,
-      ],
-      where: rowId ?? '0=1',
-      from: source.from,
-      limit: { limit: 1 },
-      ...(aliasWith && aliasWith.length > 0 ? { with: aliasWith } : {}),
+      enabled: checksEventNameColumn,
+      // A failed DESCRIBE only costs the event name, so the lookup does not
+      // wait out retries.
+      retry: false,
+    },
+  );
+  const isEventNameColumnPending = checksEventNameColumn && isColumnsLoading;
+  // A disabled query still returns columns another page has cached.
+  const eventNameColumnKind = checksEventNameColumn
+    ? columns?.find(column => column.name === eventNameColumn)?.default_type
+    : undefined;
+  const selectsEventNameColumn =
+    eventNameColumnKind === 'ALIAS' || eventNameColumnKind === 'MATERIALIZED';
+  const selectedEventNameExpr =
+    eventNameColumn == null || selectsEventNameColumn
+      ? eventNameExpr
+      : undefined;
+
+  const baseConfig = {
+    source: source.id,
+    connection: source.connection,
+    select: [
+      {
+        valueExpression: knownColumns || '*',
+      },
+      {
+        valueExpression: getDisplayedTimestampValueExpression(source),
+        alias: ROW_DATA_ALIASES.TIMESTAMP,
+      },
+      ...getTimestampValueSelects(timestampValueExpr),
+      ...(eventBodyExpr
+        ? [
+            {
+              valueExpression: eventBodyExpr,
+              alias: ROW_DATA_ALIASES.BODY,
+            },
+          ]
+        : []),
+      ...(searchedTraceIdExpr
+        ? [
+            {
+              valueExpression: searchedTraceIdExpr,
+              alias: ROW_DATA_ALIASES.TRACE_ID,
+            },
+          ]
+        : []),
+      ...(searchedSpanIdExpr
+        ? [
+            {
+              valueExpression: searchedSpanIdExpr,
+              alias: ROW_DATA_ALIASES.SPAN_ID,
+            },
+          ]
+        : []),
+      ...(severityTextExpr
+        ? [
+            {
+              valueExpression: severityTextExpr,
+              alias: ROW_DATA_ALIASES.SEVERITY_TEXT,
+            },
+          ]
+        : []),
+      ...((isLogSource(source) || isTraceSource(source)) &&
+      source.serviceNameExpression
+        ? [
+            {
+              valueExpression: source.serviceNameExpression,
+              alias: ROW_DATA_ALIASES.SERVICE_NAME,
+            },
+          ]
+        : []),
+      ...('resourceAttributesExpression' in source &&
+      source.resourceAttributesExpression
+        ? [
+            {
+              valueExpression: source.resourceAttributesExpression,
+              alias: ROW_DATA_ALIASES.RESOURCE_ATTRIBUTES,
+            },
+          ]
+        : []),
+      ...((isLogSource(source) || isTraceSource(source)) &&
+      source.eventAttributesExpression
+        ? [
+            {
+              valueExpression: source.eventAttributesExpression,
+              alias: ROW_DATA_ALIASES.EVENT_ATTRIBUTES,
+            },
+          ]
+        : []),
+      ...(selectedEventNameExpr
+        ? [
+            {
+              valueExpression: selectedEventNameExpr,
+              alias: ROW_DATA_ALIASES.EVENT_NAME,
+            },
+          ]
+        : []),
+      ...(source.kind === SourceKind.Trace && source.spanEventsValueExpression
+        ? [
+            {
+              valueExpression: `${source.spanEventsValueExpression}.Attributes[indexOf(${source.spanEventsValueExpression}.Name, 'exception')]`,
+              alias: ROW_DATA_ALIASES.EVENTS_EXCEPTION_ATTRIBUTES,
+            },
+            {
+              valueExpression: source.spanEventsValueExpression,
+              alias: ROW_DATA_ALIASES.SPAN_EVENTS,
+            },
+          ]
+        : []),
+      ...(source.kind === SourceKind.Trace && source.durationExpression
+        ? [
+            {
+              valueExpression: getDurationMsExpression(source),
+              alias: ROW_DATA_ALIASES.DURATION_MS,
+            },
+          ]
+        : []),
+      ...(source.kind === SourceKind.Trace && source.spanKindExpression
+        ? [
+            {
+              valueExpression: source.spanKindExpression,
+              alias: ROW_DATA_ALIASES.SPAN_KIND,
+            },
+          ]
+        : []),
+      ...(source.kind === SourceKind.Trace && source.spanLinksValueExpression
+        ? [
+            {
+              valueExpression: source.spanLinksValueExpression,
+              alias: ROW_DATA_ALIASES.SPAN_LINKS,
+            },
+          ]
+        : []),
+      ...selectHighlightedRowAttributes,
+    ],
+    where: rowId ?? '0=1',
+    from: source.from,
+    limit: { limit: 1 },
+    ...(aliasWith && aliasWith.length > 0 ? { with: aliasWith } : {}),
+  };
+
+  const additionalQuerySettings = useSelectAllColumnsQuerySettings(source);
+
+  // This key replaces the config-derived one, so it has to carry the column
+  // check's effect on the select.
+  const baseQueryKey = [
+    'row_side_panel',
+    rowId,
+    aliasWith,
+    source,
+    selectsEventNameColumn,
+  ];
+  // Both halves of the filter are needed for `renderChartConfig` to emit one, so
+  // a source with no usable timestamp expression can't be bounded at all.
+  const hasWindow = dateRange != null && timestampValueExpr != null;
+
+  const boundedResult = useQueriedChartConfig(
+    {
+      ...baseConfig,
+      ...(hasWindow
+        ? { dateRange, timestampValueExpression: timestampValueExpr }
+        : {}),
     },
     {
-      queryKey: ['row_side_panel', rowId, aliasWith, source],
-      enabled: rowId != null,
+      queryKey: [...baseQueryKey, dateRange],
+      enabled: rowId != null && hasWindow && !isEventNameColumnPending,
+      additionalQuerySettings,
+      staleTime: rowLookupStaleTime,
     },
   );
 
-  // Normalize resource and event attributes to always use flat keys for both JSON and Map columns
+  // The window may be derived from a *different* row than the one we're
+  // looking for (eg. looking up a span based on a log's timestamp). If the
+  // window excludes the row, the bounded query returns zero rows.
+  const isBoundedEmpty =
+    hasWindow &&
+    boundedResult.isSuccess &&
+    boundedResult.data?.isComplete !== false && // Defensive check against chunked queries
+    boundedResult.data?.data?.length === 0;
+
+  const isFallbackActive = !hasWindow || isBoundedEmpty;
+
+  // Key is identical to the unbounded config so this shares cache entries
+  // with the call sites that never pass a `dateRange`, letting the retry
+  // often resolve from cache instead of scanning.
+  const fallbackResult = useQueriedChartConfig(baseConfig, {
+    queryKey: [...baseQueryKey, undefined],
+    enabled: rowId != null && isFallbackActive && !isEventNameColumnPending,
+    additionalQuerySettings,
+    staleTime: rowLookupStaleTime,
+  });
+
+  const queryResult = isFallbackActive ? fallbackResult : boundedResult;
+
+  // The bounded result is known-empty by the time the retry is enabled, so
+  // report loading until it settles rather than briefly claiming the row is
+  // absent.
+  const isLoading =
+    isEventNameColumnPending ||
+    queryResult.isLoading ||
+    (isBoundedEmpty && queryResult.isPending);
+
+  // Normalize resource, event and span-event exception attributes to always use flat keys for both JSON and Map columns
   const normalizedData = useMemo(() => {
     if (!queryResult.data?.data?.[0]) {
       return queryResult.data;
@@ -177,16 +355,55 @@ export function useRowData({
       );
     }
 
+    if (row[ROW_DATA_ALIASES.EVENTS_EXCEPTION_ATTRIBUTES]) {
+      normalizedRow[ROW_DATA_ALIASES.EVENTS_EXCEPTION_ATTRIBUTES] = flatten(
+        row[ROW_DATA_ALIASES.EVENTS_EXCEPTION_ATTRIBUTES],
+      );
+    }
+
+    if (eventNameColumn != null && !selectsEventNameColumn) {
+      normalizedRow[ROW_DATA_ALIASES.EVENT_NAME] = row[eventNameColumn];
+    }
+
     return {
       ...queryResult.data,
       data: [normalizedRow],
     };
-  }, [queryResult.data]);
+  }, [queryResult.data, eventNameColumn, selectsEventNameColumn]);
 
   return {
     ...queryResult,
     data: normalizedData,
+    isLoading,
   };
+}
+
+// Detects whether a normalized row carries resource attributes that match a
+// built-in infrastructure correlation (Kubernetes Pod or Node today), used to
+// conditionally surface the Infrastructure tab/panel. Delegates to the same
+// descriptor list the panel renders from, so the gate and the render never
+// drift apart. Requires the source to expose resource attributes; returns
+// false (rather than throwing) on any gap.
+export function rowHasK8sContext(
+  source: TSource | null | undefined,
+  normalizedRow: Record<string, any> | null | undefined,
+): boolean {
+  try {
+    if (
+      source == null ||
+      !('resourceAttributesExpression' in source) ||
+      !source.resourceAttributesExpression ||
+      !normalizedRow
+    ) {
+      return false;
+    }
+
+    const resourceAttrs = normalizedRow[ROW_DATA_ALIASES.RESOURCE_ATTRIBUTES];
+    return getActiveInfraCorrelations(resourceAttrs).length > 0;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
 }
 
 export function getJSONColumnNames(meta: ResponseJSON['meta'] | undefined) {
@@ -199,18 +416,56 @@ export function getJSONColumnNames(meta: ResponseJSON['meta'] | undefined) {
   );
 }
 
+// Returns the names of Map-typed columns in the result metadata. Used by
+// `mergePath` to keep numeric-looking sub-keys on a Map(String, ...) from
+// collapsing into ClickHouse array-index syntax (`Map[2]`), which the
+// server rejects with
+// `Illegal types of arguments: Map(String, ...), UInt8 for function
+// arrayElement`. HDX-4369.
+export function getMapColumnNames(meta: ResponseJSON['meta'] | undefined) {
+  return (
+    meta
+      // Match both `Map(K, V)` and the bare `Map` (rare; defensive).
+      ?.filter(m => m.type === 'Map' || m.type.startsWith('Map('))
+      .map(m => m.name) ?? []
+  );
+}
+
+export function RowPanelLoader({
+  'data-testid': dataTestId,
+}: {
+  'data-testid'?: string;
+}) {
+  return (
+    <Center py="xl" data-testid={dataTestId}>
+      <Loader size="sm" aria-label="Loading row" />
+    </Center>
+  );
+}
+
 export function RowDataPanel({
   source,
   rowId,
   aliasWith,
+  dateRange,
+  flush = false,
   'data-testid': dataTestId,
 }: {
   source: TSource;
   rowId: string | undefined | null;
   aliasWith?: WithClause[];
+  dateRange?: [Date, Date];
+  // When true, drop the horizontal margin so content aligns flush with
+  // surrounding chrome (e.g. the tab bar in the trace span detail panel).
+  flush?: boolean;
   'data-testid'?: string;
 }) {
-  const { data } = useRowData({ source, rowId, aliasWith });
+  const { data, isLoading } = useRowData({
+    source,
+    rowId,
+    aliasWith,
+    dateRange,
+  });
 
   const firstRow = useMemo(() => {
     const firstRow = { ...(data?.data?.[0] ?? {}) };
@@ -221,11 +476,23 @@ export function RowDataPanel({
   }, [data]);
 
   const jsonColumns = getJSONColumnNames(data?.meta);
+  const mapColumns = getMapColumnNames(data?.meta);
+
+  if (isLoading) {
+    return <RowPanelLoader data-testid={dataTestId} />;
+  }
 
   return (
     <div className="flex-grow-1 overflow-auto" data-testid={dataTestId}>
-      <Box mx="md" my="sm">
-        <DBRowJsonViewer data={firstRow} jsonColumns={jsonColumns} />
+      <Box mx={flush ? 0 : 'md'} my="sm">
+        <DBRowJsonViewer
+          data={firstRow}
+          jsonColumns={jsonColumns}
+          mapColumns={mapColumns}
+          showMaterializedAliasColumnsOption={
+            getSelectAllColumnsQuerySettings(source) != null
+          }
+        />
       </Box>
     </div>
   );

@@ -1,9 +1,14 @@
 import React from 'react';
 import Link from 'next/link';
 import cx from 'classnames';
+import { Badge } from '@clickhouse/click-ui';
+import {
+  setAttributes,
+  setUser,
+  startNewSession,
+} from '@clickhouse/clickstack-browser';
 import {
   Avatar,
-  Badge,
   Button,
   Group,
   Menu,
@@ -16,11 +21,12 @@ import { useDisclosure } from '@mantine/hooks';
 import {
   IconBook,
   IconBrandDiscord,
+  IconBug,
   IconBulb,
+  IconCheck,
   IconChevronDown,
   IconChevronRight,
   IconChevronUp,
-  IconHelp,
   IconKeyboard,
   IconLogout,
   IconSettings,
@@ -28,8 +34,13 @@ import {
 } from '@tabler/icons-react';
 
 import { IS_LOCAL_MODE } from '@/config';
+import { copyTextToClipboard } from '@/utils/clipboard';
 
+import { HelpSparkle } from './HelpSparkle';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
+import { useWhatsNewUnseen } from './useWhatsNewUnseen';
+import { WhatsNewDrawer } from './WhatsNewDrawer';
+import { WhatsNewSection } from './WhatsNewSection';
 
 import styles from './AppNav.module.scss';
 
@@ -43,7 +54,7 @@ export const AppNavContext = React.createContext<{
 
 export const AppNavCloudBanner = () => {
   return (
-    <div className="my-3 bg-muted rounded p-2 text-center">
+    <div className="mt-3 mb-1 bg-muted rounded p-2 text-center">
       <span className="fs-8">Ready to deploy on ClickHouse Cloud?</span>
       <div className="mt-2 mb-2">
         <Button
@@ -54,7 +65,7 @@ export const AppNavCloudBanner = () => {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Get Started for Free
+          Get started for free
         </Button>
       </div>
     </div>
@@ -84,7 +95,7 @@ export const AppNavUserMenu = ({
   logoutUrl,
   onClickUserPreferences,
 }: AppNavUserMenuProps) => {
-  const { isCollapsed } = React.useContext(AppNavContext);
+  const { isCollapsed } = React.use(AppNavContext);
   const resolvedUserName = userName.trim() || 'User';
 
   const initials = getUserInitials(resolvedUserName);
@@ -149,7 +160,7 @@ export const AppNavUserMenu = ({
             component={Link}
             leftSection={<IconSettings size={16} />}
           >
-            Team Settings
+            Team settings
           </Menu.Item>
         )}
         <Menu.Item
@@ -157,7 +168,7 @@ export const AppNavUserMenu = ({
           leftSection={<IconUserCog size={16} />}
           onClick={onClickUserPreferences}
         >
-          User Preferences
+          User preferences
         </Menu.Item>
         {logoutUrl && (
           <>
@@ -168,6 +179,12 @@ export const AppNavUserMenu = ({
               leftSection={<IconLogout size={16} />}
               component={Link}
               href={logoutUrl}
+              onClick={() => {
+                // The next user on this device gets a RUM session of their own
+                setUser(null);
+                setAttributes(null);
+                startNewSession();
+              }}
             >
               Logout
             </Menu.Item>
@@ -178,18 +195,74 @@ export const AppNavUserMenu = ({
   );
 };
 
-export const AppNavHelpMenu = ({ version }: { version?: string }) => {
-  const { isCollapsed } = React.useContext(AppNavContext);
+const AppNavVersionItem = ({ version }: { version?: string }) => {
+  const [copied, setCopied] = React.useState(false);
+
+  return (
+    <Menu.Item
+      data-testid="copy-debug-info-menu-item"
+      closeMenuOnClick={false}
+      leftSection={copied ? <IconCheck size={16} /> : <IconBug size={16} />}
+      onClick={async () => {
+        // window.hdx (installed in _app.tsx) builds the full report; copy via
+        // the shared util so the insecure-context textarea fallback applies and
+        // we get a real success boolean back. Only flip to "Copied" when the
+        // clipboard actually took the text.
+        const text = window.hdx?.report() ?? `frontend: ${version ?? 'dev'}`;
+        const ok = await copyTextToClipboard(text);
+        if (ok) {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }
+      }}
+    >
+      {copied ? 'Copied debug info' : 'Copy debug info'}
+    </Menu.Item>
+  );
+};
+
+// `version` is the running build. `whatsNewVersion` is the newest release in
+// the notes and drives the sparkle — see useWhatsNewUnseen.
+export const AppNavHelpMenu = ({
+  version,
+  whatsNewVersion,
+}: {
+  version?: string;
+  whatsNewVersion?: string;
+}) => {
+  const { isCollapsed } = React.use(AppNavContext);
   const [
     shortcutsOpened,
     { open: openShortcutsModal, close: closeShortcutsModal },
   ] = useDisclosure(false);
+  // Control the Help menu's open state so we can both fetch "What's new" lazily
+  // (only when the menu is open) and close it when the drawer takes over.
+  const [helpMenuOpened, setHelpMenuOpened] = React.useState(false);
+  const [
+    whatsNewDrawerOpened,
+    { open: openWhatsNewDrawer, close: closeWhatsNewDrawer },
+  ] = useDisclosure(false);
+  // Sparkle the Help button when a release newer than the one this browser
+  // acknowledged has been published.
+  const [hasUnseenWhatsNew, markWhatsNewSeen] =
+    useWhatsNewUnseen(whatsNewVersion);
+  // Opening the menu marks the release seen, which clears hasUnseenWhatsNew in
+  // the same tick — so the menu has to render off a snapshot taken at open time.
+  // Passing hasUnseenWhatsNew straight down gives a sparkle that never appears.
+  const [wasUnseenOnOpen, setWasUnseenOnOpen] = React.useState(false);
 
   return (
     <>
       <Menu
         position="right-start"
         transitionProps={{ transition: 'fade-right' }}
+        width={320}
+        opened={helpMenuOpened}
+        onChange={setHelpMenuOpened}
+        onOpen={() => {
+          setWasUnseenOnOpen(hasUnseenWhatsNew);
+          markWhatsNewSeen();
+        }}
       >
         <Menu.Target>
           <UnstyledButton
@@ -198,21 +271,14 @@ export const AppNavHelpMenu = ({ version }: { version?: string }) => {
           >
             <span className={styles.navItemContent}>
               <span className={styles.navItemIcon}>
-                <IconHelp size={16} />
+                <HelpSparkle hasUnseen={hasUnseenWhatsNew} />
               </span>
               {!isCollapsed && <span>Help</span>}
             </span>
           </UnstyledButton>
         </Menu.Target>
         <Menu.Dropdown>
-          <Menu.Label>
-            Help{' '}
-            {version && (
-              <Text size="xs" component="span">
-                v{version}
-              </Text>
-            )}
-          </Menu.Label>
+          <Menu.Label>Help</Menu.Label>
 
           <Menu.Item
             data-testid="documentation-menu-item"
@@ -232,7 +298,7 @@ export const AppNavHelpMenu = ({ version }: { version?: string }) => {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Setup Instructions
+            Setup instructions
           </Menu.Item>
           <Menu.Item
             data-testid="keyboard-shortcuts-menu-item"
@@ -249,13 +315,33 @@ export const AppNavHelpMenu = ({ version }: { version?: string }) => {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Discord Community
+            Discord community
           </Menu.Item>
+
+          <Menu.Divider />
+
+          <WhatsNewSection
+            enabled={helpMenuOpened}
+            hasUnseen={wasUnseenOnOpen}
+            version={version}
+            onViewAll={() => {
+              setHelpMenuOpened(false);
+              openWhatsNewDrawer();
+            }}
+          />
+
+          <Menu.Divider />
+
+          <AppNavVersionItem version={version} />
         </Menu.Dropdown>
       </Menu>
       <KeyboardShortcutsModal
         opened={shortcutsOpened}
         onClose={closeShortcutsModal}
+      />
+      <WhatsNewDrawer
+        opened={whatsNewDrawerOpened}
+        onClose={closeWhatsNewDrawer}
       />
     </>
   );
@@ -280,7 +366,7 @@ export const AppNavLink = ({
   isBeta?: boolean;
   isActive?: boolean;
 }) => {
-  const { pathname, isCollapsed } = React.useContext(AppNavContext);
+  const { pathname, isCollapsed } = React.use(AppNavContext);
 
   const testId = `nav-link-${href.replace(/^\//, '').replace(/\//g, '-') || 'home'}`;
 
@@ -313,17 +399,15 @@ export const AppNavLink = ({
       </span>
       {!isCollapsed && isBeta && (
         <Badge
-          size="xs"
-          color="blue"
-          variant="light"
+          size="sm"
+          text="Beta"
+          state="info"
           className={styles.navItemBadge}
-        >
-          Beta
-        </Badge>
+        />
       )}
       {!isCollapsed && onToggle && (
         <Tooltip
-          label={isExpanded ? 'Hide Favorites' : 'Show Favorites'}
+          label={isExpanded ? 'Hide favorites' : 'Show favorites'}
           position="right"
         >
           <button

@@ -1,18 +1,7 @@
 import { Head, Html, Main, NextScript } from 'next/document';
 
-import { IS_CLICKHOUSE_BUILD } from '@/config';
+import { IS_CLICKHOUSE_BUILD, IS_NOINDEX } from '@/config';
 import { ibmPlexMono, inter, roboto, robotoMono } from '@/fonts';
-
-// Get theme class for SSR - must match ThemeProvider's resolution
-// This ensures CSS variables are applied during server-side rendering
-// to prevent hydration mismatch with button styling
-function getThemeClass(): string {
-  const envTheme = process.env.NEXT_PUBLIC_THEME;
-  // Default to hyperdx if not set or invalid
-  const themeName =
-    envTheme === 'hyperdx' || envTheme === 'clickstack' ? envTheme : 'hyperdx';
-  return `theme-${themeName}`;
-}
 
 export default function Document() {
   const fontClasses = [
@@ -22,13 +11,36 @@ export default function Document() {
     roboto.variable,
   ].join(' ');
 
-  const themeClass = getThemeClass();
-
   return (
-    <Html lang="en" className={`${fontClasses} ${themeClass}`}>
+    <Html lang="en" className={fontClasses}>
       <Head>
+        {IS_NOINDEX && <meta name="robots" content="noindex, nofollow" />}
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="/__ENV.js" />
+        <link rel="icon" href="/favicons/clickstack/favicon.ico" sizes="any" />
+        <link
+          rel="icon"
+          type="image/svg+xml"
+          href="/favicons/clickstack/favicon.svg"
+        />
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="32x32"
+          href="/favicons/clickstack/favicon-32x32.png"
+        />
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="16x16"
+          href="/favicons/clickstack/favicon-16x16.png"
+        />
+        <link
+          rel="apple-touch-icon"
+          sizes="180x180"
+          href="/favicons/clickstack/apple-touch-icon.png"
+        />
+        <meta name="theme-color" content="#1a1a1a" />
         {!IS_CLICKHOUSE_BUILD && (
           <>
             {/* eslint-disable-next-line @next/next/no-sync-scripts */}

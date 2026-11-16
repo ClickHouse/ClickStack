@@ -1,36 +1,51 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import mongoose from 'mongoose';
 import { z } from 'zod';
 
+import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
+import { parseTimeRange, runConfigTile } from '@/mcp/tools/query/helpers';
+import type { ToolRegistrar } from '@/mcp/tools/types';
+import { mcpUserError } from '@/mcp/utils/errors';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
 import Dashboard from '@/models/dashboard';
 import { convertToExternalDashboard } from '@/routers/external-api/v2/utils/dashboards';
+import { objectIdSchema } from '@/utils/zod';
 
-import { withToolTracing } from '../../utils/tracing';
-import { parseTimeRange, runConfigTile } from '../query/helpers';
-import type { McpContext } from '../types';
+import {
+  getRawSqlTileMacroWarnings,
+  getTileVariableWarnings,
+} from './validation';
+import { mcpVariableValuesParam, resolveDashboardVariables } from './variables';
 
-export function registerQueryTile(
-  server: McpServer,
-  context: McpContext,
-): void {
+export function registerQueryTile({
+  context,
+  registerTool,
+}: ToolRegistrar): void {
   const { teamId } = context;
 
-  server.registerTool(
-    'hyperdx_query_tile',
+  registerTool(
+    'clickstack_query_tile',
     {
       title: 'Query a Dashboard Tile',
+      annotations: READ_ONLY_TOOL,
       description:
         'Execute the query for a specific tile on an existing dashboard. ' +
         'Useful for validating that a tile returns data or for spot-checking results ' +
         'without rebuilding the query from scratch. ' +
-        'Use hyperdx_get_dashboard with an ID to find tile IDs.',
+        'Returns JSON with `result` (the query output rows), plus `note` when the ' +
+        'result was trimmed for size, `hints` when no data matched, and `warnings` ' +
+        'for missing raw SQL macros or dashboard-variable reference problems. Event-pattern tiles ' +
+        'return pattern-mining output like clickstack_event_patterns; markdown tiles ' +
+        'return a plain "no query" message. Query failures come back as tool errors. ' +
+        'Use clickstack_get_dashboard with an ID to find tile IDs.',
       inputSchema: z.object({
-        dashboardId: z.string().describe('Dashboard ID.'),
+        dashboardId: objectIdSchema.describe(
+          'Dashboard ID, from clickstack_get_dashboard (no id lists dashboards) ' +
+            'or clickstack_search_dashboards.',
+        ),
         tileId: z
           .string()
           .describe(
             'Tile ID within the dashboard. ' +
-              'Obtain from hyperdx_get_dashboard.',
+              'Obtain from clickstack_get_dashboard.',
           ),
         startTime: z
           .string()
@@ -43,55 +58,72 @@ export function registerQueryTile(
           .string()
           .optional()
           .describe('End of the query window as ISO 8601. Default: now.'),
+        variableValues: mcpVariableValuesParam.optional(),
       }),
     },
-    withToolTracing(
-      'hyperdx_query_tile',
-      context,
-      async ({ dashboardId, tileId, startTime, endTime }) => {
-        const timeRange = parseTimeRange(startTime, endTime);
-        if ('error' in timeRange) {
-          return {
-            isError: true,
-            content: [{ type: 'text' as const, text: timeRange.error }],
-          };
-        }
-        const { startDate, endDate } = timeRange;
+    async ({ dashboardId, tileId, startTime, endTime, variableValues }) => {
+      const timeRange = parseTimeRange(startTime, endTime);
+      if ('error' in timeRange) {
+        return mcpUserError(timeRange.error);
+      }
+      const { startDate, endDate } = timeRange;
 
-        if (!mongoose.Types.ObjectId.isValid(dashboardId)) {
-          return {
-            isError: true,
-            content: [{ type: 'text' as const, text: 'Invalid dashboard ID' }],
-          };
-        }
+      const dashboard = await Dashboard.findOne({
+        _id: dashboardId,
+        team: teamId,
+      });
+      if (!dashboard) {
+        return mcpUserError('Dashboard not found');
+      }
 
-        const dashboard = await Dashboard.findOne({
-          _id: dashboardId,
-          team: teamId,
-        });
-        if (!dashboard) {
-          return {
-            isError: true,
-            content: [{ type: 'text' as const, text: 'Dashboard not found' }],
-          };
-        }
+      const externalDashboard = convertToExternalDashboard(dashboard, {
+        hidePromql: !isPromqlEnabled(context),
+      });
+      const tile = externalDashboard.tiles.find(t => t.id === tileId);
+      if (!tile) {
+        return mcpUserError(
+          `Tile not found: ${tileId}. Available tile IDs: ${externalDashboard.tiles.map(t => t.id).join(', ')}`,
+        );
+      }
 
-        const externalDashboard = convertToExternalDashboard(dashboard);
-        const tile = externalDashboard.tiles.find(t => t.id === tileId);
-        if (!tile) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text' as const,
-                text: `Tile not found: ${tileId}. Available tile IDs: ${externalDashboard.tiles.map(t => t.id).join(', ')}`,
-              },
-            ],
-          };
-        }
+      const resolvedVariables = resolveDashboardVariables(
+        externalDashboard.filters,
+        variableValues,
+      );
+      if ('error' in resolvedVariables) {
+        return mcpUserError(resolvedVariables.error);
+      }
 
-        return runConfigTile(teamId.toString(), tile, startDate, endDate);
-      },
-    ),
+      const result = await runConfigTile(
+        teamId.toString(),
+        tile,
+        startDate,
+        endDate,
+        { variables: resolvedVariables.variables },
+      );
+
+      // Surface non-blocking missing macro and variable warnings alongside
+      // the successful result so the agent can spot a tile that runs but
+      // ignores dashboard controls.
+      const warnings = [
+        ...getRawSqlTileMacroWarnings([tile]),
+        ...getTileVariableWarnings([tile], externalDashboard.filters),
+      ];
+      if (
+        warnings.length > 0 &&
+        !('isError' in result && result.isError) &&
+        result.content?.[0]?.type === 'text'
+      ) {
+        try {
+          const parsed = JSON.parse(result.content[0].text);
+          parsed.warnings = warnings;
+          result.content[0].text = JSON.stringify(parsed, null, 2);
+        } catch {
+          // leave result unmodified
+        }
+      }
+
+      return result;
+    },
   );
 }

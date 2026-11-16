@@ -1,3 +1,8 @@
+import { ResponseJSON } from '@hyperdx/common-utils/dist/clickhouse';
+import type {
+  AdhocConditionAction,
+  AdhocConditionEntry,
+} from '@hyperdx/common-utils/dist/filters';
 import {
   Alert,
   AlertsPageItem as _AlertsPageItem,
@@ -7,6 +12,29 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 
 export type NumberFormat = _NumberFormat;
+
+/**
+ * The rows and column metadata a chart query resolves to. Shaped like a
+ * ClickHouse response so the chart formatters can read a source that isn't SQL
+ * at all. `isComplete` is false while a chunked query is still streaming in.
+ */
+export type ChartQueryResult = Pick<
+  ResponseJSON<any>,
+  'data' | 'meta' | 'rows'
+> & {
+  isComplete: boolean;
+  /** PromQL time series only: each series' labels, by series name. */
+  promqlSeriesLabels?: Record<string, Record<string, string>>;
+};
+
+/**
+ * Applies a value clicked in a dashboard tile to the ad hoc filters that
+ * broadcast to the tile. A chart series passes one entry per group-by value.
+ */
+export type TileFilterHandler = (
+  entries: AdhocConditionEntry[],
+  action: AdhocConditionAction,
+) => void;
 
 export type AlertsPageItem = _AlertsPageItem;
 
@@ -30,15 +58,15 @@ export type StacktraceFrame = {
   filename: string;
   function: string;
   module?: string;
-  lineno: number;
-  colno: number;
+  lineno?: number;
+  colno?: number;
   in_app: boolean;
   context_line?: string;
   pre_context?: string[];
   post_context?: string[];
 };
 
-export type StacktraceBreadcrumbCategory =
+type StacktraceBreadcrumbCategory =
   | 'ui.click'
   | 'fetch'
   | 'xhr'
@@ -80,7 +108,7 @@ export type AggFn =
   | 'sum_rate'
   | 'sum';
 
-export type SourceTable = 'logs' | 'rrweb' | 'metrics';
+type SourceTable = 'logs' | 'rrweb' | 'metrics';
 
 export enum MetricsDataType {
   Gauge = 'Gauge',
@@ -105,7 +133,7 @@ export type TimeChartSeries = {
   groupBy: string[];
   numberFormat?: NumberFormat;
   color?: string;
-  displayType?: 'stacked_bar' | 'line';
+  displayType?: 'stacked_bar' | 'stacked_line' | 'line';
   implicitColumn?: string;
   whereSql?: string;
   groupBySql?: string;

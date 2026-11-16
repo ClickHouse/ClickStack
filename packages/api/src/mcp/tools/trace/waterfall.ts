@@ -1,0 +1,795 @@
+import type { ChSql } from '@hyperdx/common-utils/dist/clickhouse';
+import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
+import { pickBucketTimestampColumn } from '@hyperdx/common-utils/dist/core/utils';
+import {
+  type BuilderChartConfigWithDateRange,
+  type ChartConfigWithDateRange,
+  DisplayType,
+  type QuerySettings,
+  SourceKind,
+} from '@hyperdx/common-utils/dist/types';
+import { z } from 'zod';
+
+import type { ClickhouseClient } from '@/clickhouse';
+import { getSource } from '@/controllers/sources';
+import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
+import {
+  clickHouseErrorResult,
+  MCP_CLICKHOUSE_SETTINGS,
+  parseTimeRange,
+} from '@/mcp/tools/query/helpers';
+import {
+  durationDivisor,
+  getMcpClickhouseClient,
+  inclusiveTimeFilter,
+  mcpQuerySettings,
+  type TimeFilterParams,
+} from '@/mcp/tools/trace/shared';
+import type { ToolRegistrar } from '@/mcp/tools/types';
+import { mcpUserError } from '@/mcp/utils/errors';
+import logger from '@/utils/logger';
+
+// ─── Schema ──────────────────────────────────────────────────────────────────
+
+const traceSchema = z.object({
+  sourceId: z
+    .string()
+    .describe(
+      'Trace source ID. Must be a source of kind "trace". ' +
+        'Call clickstack_list_sources to find available sources.',
+    ),
+  traceId: z
+    .string()
+    .optional()
+    .describe(
+      'Specific TraceId to look up. When provided, the tool fetches every span ' +
+        'in this trace and returns them as a parent/child tree. When omitted, ' +
+        'the tool auto-picks one trace using pickFilter + pickBy. With an ' +
+        'explicit traceId and no startTime, the tool probes the trace back to ' +
+        '90 days; pass startTime only to reach a trace older than that.',
+    ),
+  pickFilter: z
+    .string()
+    .optional()
+    .default('')
+    .describe(
+      'Filter (Lucene by default, SQL via pickFilterLanguage) used to narrow which ' +
+        'trace to auto-pick when traceId is not provided. ' +
+        'Example shapes (Lucene): `ServiceName:<some-service>`, ' +
+        '`ServiceName:<svc> AND SpanName:"<some-operation>"`, ' +
+        '`StatusCode:<status-value>` (status values come from the source ' +
+        "schema's keyColumns). Ignored when traceId is provided.",
+    ),
+  pickFilterLanguage: z
+    .enum(['lucene', 'sql'])
+    .optional()
+    .default('lucene')
+    .describe('Language of pickFilter.'),
+  pickBy: z
+    .enum(['slowest', 'first_error', 'most_recent'])
+    .optional()
+    .default('slowest')
+    .describe(
+      'How to choose the trace when traceId is not provided:\n' +
+        '  slowest – trace with the longest single span (use for latency investigations)\n' +
+        '  first_error – earliest trace containing a span with STATUS_CODE_ERROR\n' +
+        '  most_recent – the most recent trace matching pickFilter',
+    ),
+  startTime: z
+    .string()
+    .optional()
+    .describe(
+      'Start of the search window as ISO 8601. Default: 15 minutes ago for ' +
+        'auto-pick. When traceId is set, the window is instead derived from ' +
+        "the trace's own span timestamps (probed back to 90 days), so pass " +
+        'startTime only to look up a trace older than 90 days.',
+    ),
+  endTime: z
+    .string()
+    .optional()
+    .describe('End of the search window as ISO 8601. Default: now.'),
+  maxSpans: z
+    .number()
+    .min(1)
+    .max(2000)
+    .optional()
+    .default(500)
+    .describe(
+      'Cap on spans returned in the tree. ' +
+        'A larger trace is truncated and the response notes the truncation.',
+    ),
+  includeLogs: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      'When true and the trace source has a linked logSourceId, also fetch ' +
+        'log rows that share the same TraceId and inline them in the response ' +
+        'as `logs[]`. Each log row carries its spanId so the agent can ' +
+        'attribute messages to specific spans. No-op if the trace source has ' +
+        'no logSourceId configured.',
+    ),
+  maxLogs: z
+    .number()
+    .min(1)
+    .max(1000)
+    .optional()
+    .default(100)
+    .describe(
+      'Cap on correlated log rows returned. Has no effect when includeLogs ' +
+        'is false or the trace source has no logSourceId.',
+    ),
+});
+
+type TraceInput = z.infer<typeof traceSchema>;
+
+// Probe-window tuning. The span/log fetch is time-bounded to the
+// trace's probed [min, max] extent so ClickHouse prunes partitions. The pads
+// absorb clock skew between emitters; they do NOT cover trace duration — the
+// [min, max] extent already does. MAX_FETCH_WINDOW clamps the width so a
+// reused/sentinel id (e.g. an all-zero TraceId) whose min and max are days
+// apart can't widen the scan back toward the retention edge or stitch two
+// occurrences into one tree. A trace older than these bounds needs an explicit
+// startTime.
+const TRACE_PROBE_LEAD_PAD_MS = 1 * 60 * 60 * 1000;
+const TRACE_PROBE_TRAIL_PAD_MS = 1 * 60 * 60 * 1000;
+const TRACE_PROBE_MAX_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
+const TRACE_MAX_FETCH_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// Auto-pick guarantees only one span inside the pick window; the root can
+// predate it and the tail can outlast it, so probe a bounded distance on both
+// sides to cover them.
+const TRACE_PROBE_AUTOPICK_MARGIN_MS = 6 * 60 * 60 * 1000;
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+type SpanRow = {
+  spanId: string;
+  parentSpanId: string;
+  serviceName: string;
+  spanName: string;
+  spanKind: string;
+  durationMs: number;
+  statusCode: string;
+  statusMessage: string;
+  timestamp: string;
+  spanAttributes: Record<string, string>;
+};
+
+type TreeSpan = SpanRow & { depth: number };
+
+function buildPreOrderTree(spans: SpanRow[]): TreeSpan[] {
+  // Map child spans by their parentSpanId. A span with no matching parent in
+  // the result set is treated as a root (typical when the trace was truncated
+  // mid-tree, or for the actual root span which has parentSpanId = '').
+  const childrenByParent = new Map<string, SpanRow[]>();
+  const idsInResult = new Set(spans.map(s => s.spanId));
+  const roots: SpanRow[] = [];
+  for (const s of spans) {
+    const parentInResult = idsInResult.has(s.parentSpanId);
+    if (!parentInResult) {
+      roots.push(s);
+      continue;
+    }
+    const list = childrenByParent.get(s.parentSpanId) ?? [];
+    list.push(s);
+    childrenByParent.set(s.parentSpanId, list);
+  }
+
+  // Sort each level by timestamp so the tree reads in execution order.
+  const sortByTimestamp = (a: SpanRow, b: SpanRow) =>
+    a.timestamp.localeCompare(b.timestamp);
+  roots.sort(sortByTimestamp);
+  for (const list of childrenByParent.values()) list.sort(sortByTimestamp);
+
+  const ordered: TreeSpan[] = [];
+  const visit = (span: SpanRow, depth: number) => {
+    ordered.push({ ...span, depth });
+    const children = childrenByParent.get(span.spanId) ?? [];
+    for (const c of children) visit(c, depth + 1);
+  };
+  for (const r of roots) visit(r, 0);
+  return ordered;
+}
+
+// min()/max() over an empty set yields the epoch, i.e. 0.
+function parseProbeTimestamp(
+  value: string | number | undefined,
+): number | null {
+  if (value == null) return null;
+  const ms = Number(value);
+  return isNaN(ms) || ms <= 0 ? null : ms;
+}
+
+type TimestampExprs = {
+  /** Highest-precision DateTime column, for event-time SELECT/ORDER BY. */
+  eventTs: string;
+  /** Inclusive filter over every configured timestamp column, so a
+   *  composite "EventDate, EventTime" source still prunes on its Date column. */
+  timeFilter: (start: Date, end: Date) => Promise<ChSql>;
+};
+
+async function resolveTimestampExprs(
+  params: TimeFilterParams,
+): Promise<TimestampExprs> {
+  const eventTs = await pickBucketTimestampColumn(params);
+  return {
+    eventTs,
+    timeFilter: (start, end) => inclusiveTimeFilter(params, start, end),
+  };
+}
+
+type ProbedWindow = { start: Date; end: Date; clamped: boolean };
+
+/**
+ * Probe a trace's [min, max] span timestamps within [startDate, endDate] and
+ * return a fetch window covering that extent (padded, then width-clamped).
+ * Rescues explicit `traceId` lookups older than the default 15-minute window
+ * and keeps a long trace from being truncated by a fixed lead. The probe is
+ * time-bounded so it prunes partitions; the caller sets [startDate, endDate].
+ *
+ * `clamped` is true when the trace's extent exceeded TRACE_MAX_FETCH_WINDOW_MS
+ * and the window was capped to the recent tail — the returned tree may then be
+ * missing early spans. Returns null when no span is found, so the caller falls
+ * back to its window.
+ */
+async function probeTraceWindow(
+  clickhouseClient: ClickhouseClient,
+  params: {
+    databaseName: string;
+    tableName: string;
+    connectionId: string;
+    traceIdExpr: string;
+    ts: TimestampExprs;
+    traceId: string;
+    startDate: Date;
+    endDate: Date;
+    querySettings: QuerySettings | undefined;
+  },
+): Promise<ProbedWindow | null> {
+  const timeFilter = await params.ts.timeFilter(
+    params.startDate,
+    params.endDate,
+  );
+  // Return epoch ms: a rendered DateTime string has no zone, so parsing it
+  // with new Date() would shift the window on a non-UTC API host.
+  const probeQuery = `
+    SELECT
+      toUnixTimestamp64Milli(toDateTime64(min(${params.ts.eventTs}), 3)) AS firstSeen,
+      toUnixTimestamp64Milli(toDateTime64(max(${params.ts.eventTs}), 3)) AS lastSeen
+    FROM {db:Identifier}.{tbl:Identifier}
+    WHERE ${params.traceIdExpr} = {tid:String}
+      AND ${timeFilter.sql}
+  `;
+  const result = await clickhouseClient.query({
+    query: probeQuery,
+    query_params: {
+      ...timeFilter.params,
+      db: params.databaseName,
+      tbl: params.tableName,
+      tid: params.traceId,
+    },
+    format: 'JSONEachRow',
+    connectionId: params.connectionId,
+    clickhouse_settings: mcpQuerySettings(params.querySettings),
+  });
+  const rows =
+    (await (
+      result as {
+        json: () => Promise<
+          { firstSeen: string | number; lastSeen: string | number }[]
+        >;
+      }
+    ).json()) ?? [];
+  const firstSeen = parseProbeTimestamp(rows[0]?.firstSeen);
+  const lastSeen = parseProbeTimestamp(rows[0]?.lastSeen);
+  if (firstSeen == null || lastSeen == null) return null;
+
+  const fetchEnd = lastSeen + TRACE_PROBE_TRAIL_PAD_MS;
+  // Anchor to the recent tail and clamp the width so a wide-spread/reused
+  // TraceId can't balloon the fetch back toward the 90-day probe range.
+  const unclampedStart = firstSeen - TRACE_PROBE_LEAD_PAD_MS;
+  const clampFloor = fetchEnd - TRACE_MAX_FETCH_WINDOW_MS;
+  const fetchStart = Math.max(unclampedStart, clampFloor);
+  return {
+    start: new Date(fetchStart),
+    end: new Date(fetchEnd),
+    // The lead pad is slack, so only a floor above firstSeen drops real spans.
+    clamped: firstSeen < fetchStart,
+  };
+}
+
+// ─── Tool definition ─────────────────────────────────────────────────────────
+
+export function registerTraceWaterfall({
+  context,
+  registerTool,
+}: ToolRegistrar) {
+  const { teamId } = context;
+
+  registerTool(
+    'clickstack_trace_waterfall',
+    {
+      title: 'Trace Waterfall (single trace)',
+      annotations: READ_ONLY_TOOL,
+      description:
+        'Fetch every span in ONE trace as a parent/child waterfall, pre-ordered for ' +
+        'reading. Use it for "show me an example trace" or "what happened in trace X" ' +
+        "instead of writing TraceId self-JOINs in raw SQL; it uses the source's " +
+        'configured trace, span, and parent-span ID expressions.\n\n' +
+        'NOT FOR AGGREGATE QUESTIONS. "Where does the time go across many slow traces ' +
+        'of operation X" is clickstack_trace_top_time_consuming_operations, called ' +
+        'once per (service, operation) with minParentDurationMs. Use this tool for a ' +
+        'single concrete example, typically after that breakdown has pointed at a ' +
+        'suspicious operation.\n\n' +
+        'Two modes:\n' +
+        '  1. Specific trace: pass traceId.\n' +
+        '  2. Auto-pick: omit traceId and pass pickFilter + pickBy; the tool picks one ' +
+        'matching trace and returns its full tree.\n\n' +
+        'Returns traceId, spanCount, totalDurationMs, rootSpan, and spans in ' +
+        'pre-order DFS, children after their parent in execution order. Each span has ' +
+        'depth (root=0), spanId, parentSpanId, serviceName, spanName, spanKind, ' +
+        'durationMs, statusCode, statusMessage, timestamp, and spanAttributes.\n\n' +
+        'If the trace source has a linked logSourceId, the response also has `logs[]`: ' +
+        'log rows sharing the TraceId, sorted by timestamp, each with its spanId. ' +
+        'Disable with includeLogs:false.',
+      inputSchema: traceSchema,
+    },
+    async (rawInput: TraceInput) => {
+      const input = traceSchema.parse(rawInput);
+      const timeRange = parseTimeRange(input.startTime, input.endTime);
+      if ('error' in timeRange) {
+        return mcpUserError(timeRange.error);
+      }
+      const { startDate, endDate } = timeRange;
+
+      const source = await getSource(teamId.toString(), input.sourceId);
+      if (!source) {
+        return mcpUserError(
+          `Source not found: ${input.sourceId}. Call clickstack_list_sources to find available source IDs.`,
+        );
+      }
+      if (source.kind !== SourceKind.Trace) {
+        return mcpUserError(
+          `Source ${input.sourceId} is kind="${source.kind}". clickstack_trace_waterfall requires a source of kind="trace".`,
+        );
+      }
+
+      const clickhouseClient = await getMcpClickhouseClient(
+        teamId.toString(),
+        source.connection.toString(),
+      );
+      if (!clickhouseClient) {
+        return mcpUserError(
+          `Connection not found for source: ${input.sourceId}`,
+        );
+      }
+      const metadata = getMetadata(clickhouseClient);
+
+      const traceIdExpr = source.traceIdExpression;
+      const spanIdExpr = source.spanIdExpression;
+      const parentSpanIdExpr = source.parentSpanIdExpression;
+      const spanNameExpr = source.spanNameExpression;
+      const spanKindExpr = source.spanKindExpression;
+      const durationExpr = source.durationExpression;
+      const tsExpr = source.timestampValueExpression;
+      const ts = await resolveTimestampExprs({
+        timestampValueExpression: tsExpr,
+        metadata,
+        databaseName: source.from.databaseName,
+        tableName: source.from.tableName,
+        connectionId: source.connection.toString(),
+      });
+      const serviceNameExpr = source.serviceNameExpression ?? "''";
+      const statusCodeExpr = source.statusCodeExpression ?? "''";
+      const statusMessageExpr = source.statusMessageExpression ?? "''";
+      const attrsExpr = source.eventAttributesExpression ?? 'map()';
+      const divisor = durationDivisor(source.durationPrecision);
+
+      let pickedTraceId = input.traceId;
+      if (!pickedTraceId) {
+        // Compose pickFilter with the pickBy-specific filter when needed.
+        let effectiveFilter = input.pickFilter;
+        let effectiveLanguage = input.pickFilterLanguage;
+        if (input.pickBy === 'first_error') {
+          // Statuses are typically stored as enum strings. Use SQL so we don't
+          // depend on lucene mapping the raw column name.
+          const errFilter = `${statusCodeExpr} = 'STATUS_CODE_ERROR'`;
+          if (effectiveFilter && effectiveLanguage === 'sql') {
+            effectiveFilter = `(${effectiveFilter}) AND (${errFilter})`;
+          } else if (effectiveFilter && effectiveLanguage === 'lucene') {
+            // Run lucene filter inside parens, AND with raw SQL.
+            // Easiest: convert to sql by AND-joining a fresh sql-only condition
+            // means we'd have to render lucene first. Compromise: tell user
+            // to express the error filter in pickFilter directly.
+            effectiveFilter = `(${effectiveFilter}) AND StatusCode:STATUS_CODE_ERROR`;
+            effectiveLanguage = 'lucene';
+          } else {
+            effectiveFilter = errFilter;
+            effectiveLanguage = 'sql';
+          }
+        }
+
+        const orderBy =
+          input.pickBy === 'slowest'
+            ? `max(${durationExpr}) DESC`
+            : input.pickBy === 'first_error'
+              ? `min(${ts.eventTs}) ASC`
+              : `max(${ts.eventTs}) DESC`;
+
+        const pickConfig: BuilderChartConfigWithDateRange = {
+          displayType: DisplayType.Table,
+          select: [
+            {
+              aggFn: 'count' as const,
+              valueExpression: '',
+              alias: 'span_count',
+              aggCondition: '',
+              aggConditionLanguage: 'sql' as const,
+            },
+          ],
+          from: source.from,
+          where: effectiveFilter,
+          whereLanguage: effectiveLanguage,
+          connection: source.connection.toString(),
+          timestampValueExpression: tsExpr,
+          implicitColumnExpression: source.implicitColumnExpression,
+          groupBy: traceIdExpr,
+          orderBy,
+          limit: { limit: 1 },
+          dateRange: [startDate, endDate],
+        };
+
+        let pickResult: { data?: Array<Record<string, unknown>> } = {};
+        try {
+          pickResult = (await clickhouseClient.queryChartConfig({
+            config: pickConfig as ChartConfigWithDateRange,
+            metadata,
+            querySettings: source.querySettings,
+            opts: { clickhouse_settings: MCP_CLICKHOUSE_SETTINGS },
+          })) as { data?: Array<Record<string, unknown>> };
+        } catch (e) {
+          return clickHouseErrorResult(e, 'Failed to pick a trace');
+        }
+
+        const firstRow = pickResult.data?.[0];
+        if (!firstRow) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    result: null,
+                    hint:
+                      'No traces matched. Widen the time range, relax pickFilter, or ' +
+                      'pass a specific traceId.',
+                    pickFilter: effectiveFilter,
+                    pickBy: input.pickBy,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+        // The grouped traceId column is rendered into the result with the
+        // expression text as its alias. Locate it by stripping non-data keys.
+        const candidate = Object.entries(firstRow).find(
+          ([k]) => k !== 'span_count' && k !== '__hdx_time_bucket',
+        );
+        if (!candidate || candidate[1] == null) {
+          return mcpUserError(
+            `Picker returned a row but no TraceId column was found. Row keys: ${Object.keys(firstRow).join(', ')}`,
+          );
+        }
+        pickedTraceId = String(candidate[1]);
+      }
+
+      // The fetch must be time-bounded so ClickHouse prunes partitions, but the
+      // [startDate, endDate] window is often too narrow to bound it safely:
+      //   - an explicit traceId with the default window may be for an older
+      //     trace outside it;
+      //   - in auto-pick mode startTime is the *pick* window ("find a slow
+      //     trace from the last hour"), not a fetch bound — the picked trace is
+      //     only guaranteed one span inside it, so its root/tail can lie outside
+      //     and the fetch would return a partial tree.
+      // Probe the trace's real [min, max] extent in both cases. The only time
+      // we honor the window verbatim is an explicit traceId WITH an explicit
+      // startTime, where the caller has deliberately set a fetch bound.
+      let fetchStart = startDate;
+      let fetchEnd = endDate;
+      let probeFailed = false;
+      let windowClamped = false;
+      const isAutoPick = input.traceId == null;
+      const usedDefaultWindow = input.startTime == null;
+      if (isAutoPick || usedDefaultWindow) {
+        const [probeStart, probeEnd] = isAutoPick
+          ? [
+              new Date(startDate.getTime() - TRACE_PROBE_AUTOPICK_MARGIN_MS),
+              new Date(endDate.getTime() + TRACE_PROBE_AUTOPICK_MARGIN_MS),
+            ]
+          : [
+              new Date(endDate.getTime() - TRACE_PROBE_MAX_LOOKBACK_MS),
+              endDate,
+            ];
+        try {
+          const probed = await probeTraceWindow(clickhouseClient, {
+            databaseName: source.from.databaseName,
+            tableName: source.from.tableName,
+            connectionId: source.connection.toString(),
+            traceIdExpr,
+            ts,
+            traceId: pickedTraceId,
+            startDate: probeStart,
+            endDate: probeEnd,
+            querySettings: source.querySettings,
+          });
+          if (probed) {
+            fetchStart = probed.start;
+            fetchEnd = probed.end;
+            windowClamped = probed.clamped;
+          }
+        } catch (e) {
+          // probeTraceWindow returns null (not throws) for the empty case, so a
+          // throw means the probe genuinely didn't complete. The fallback window
+          // will likely also come back empty, so flag it for an accurate hint.
+          logger.warn(
+            {
+              error: e,
+              teamId,
+              traceId: pickedTraceId,
+              sourceId: input.sourceId,
+            },
+            'trace waterfall extent probe failed',
+          );
+          probeFailed = true;
+        }
+      }
+
+      let rows: SpanRow[];
+      try {
+        const timeFilter = await ts.timeFilter(fetchStart, fetchEnd);
+        const treeQuery = `
+          SELECT
+            ${spanIdExpr} AS spanId,
+            ${parentSpanIdExpr} AS parentSpanId,
+            ${serviceNameExpr} AS serviceName,
+            ${spanNameExpr} AS spanName,
+            ${spanKindExpr} AS spanKind,
+            ${durationExpr} / {divisor:Float64} AS durationMs,
+            ${statusCodeExpr} AS statusCode,
+            ${statusMessageExpr} AS statusMessage,
+            ${ts.eventTs} AS timestamp,
+            ${attrsExpr} AS spanAttributes
+          FROM {db:Identifier}.{tbl:Identifier}
+          WHERE ${traceIdExpr} = {tid:String}
+            AND ${timeFilter.sql}
+          ORDER BY ${ts.eventTs} ASC
+          LIMIT {n:UInt32}
+        `;
+        const result = await clickhouseClient.query({
+          query: treeQuery,
+          query_params: {
+            ...timeFilter.params,
+            db: source.from.databaseName,
+            tbl: source.from.tableName,
+            tid: pickedTraceId,
+            n: input.maxSpans + 1, // +1 to detect truncation
+            divisor,
+          },
+          format: 'JSONEachRow',
+          connectionId: source.connection.toString(),
+          clickhouse_settings: mcpQuerySettings(source.querySettings),
+        });
+        rows =
+          (await (result as { json: () => Promise<SpanRow[]> }).json()) ?? [];
+      } catch (e) {
+        return clickHouseErrorResult(
+          e,
+          `Failed to fetch trace ${pickedTraceId}`,
+        );
+      }
+
+      const truncated = rows.length > input.maxSpans;
+      const spans = truncated ? rows.slice(0, input.maxSpans) : rows;
+
+      if (spans.length === 0) {
+        // The window was often chosen by the probe, not the caller, so the hint
+        // must reflect what actually ran rather than tell the user to widen a
+        // window they never set.
+        let hint: string;
+        if (probeFailed) {
+          hint =
+            'TraceId picked, but the timestamp probe failed (likely a query ' +
+            'timeout) and no spans were found in the fallback window. Retry, ' +
+            'or pass an explicit startTime/endTime around when the trace ran.';
+        } else if (input.traceId && usedDefaultWindow) {
+          hint =
+            'No spans found for this traceId within the last 90 days (the ' +
+            'probe ceiling). If the trace is older, pass an explicit startTime ' +
+            '(ISO 8601) covering when it ran.';
+        } else {
+          hint =
+            'TraceId picked, but no spans exist in the time window. The trace ' +
+            'may have spans outside startTime/endTime — widen the window.';
+        }
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  result: null,
+                  traceId: pickedTraceId,
+                  hint,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      const tree = buildPreOrderTree(spans);
+      const root = tree.find(s => s.depth === 0) ?? tree[0];
+      const totalDuration = Math.max(...spans.map(s => s.durationMs));
+
+      // When the extent probe failed we fell back to the default window, which
+      // may not cover the whole trace — so spans that came back could be a
+      // partial tree with a false root. Warn rather than present it as complete.
+      const probeNote = probeFailed
+        ? 'The span-extent probe failed (likely a query timeout), so the fetch ' +
+          'used the default window and this tree may be incomplete. Retry, or ' +
+          'pass an explicit startTime/endTime around when the trace ran.'
+        : undefined;
+
+      // The fetch window is capped so a wide-spread trace can't scan the world;
+      // that cap can drop the earliest spans of a trace that ran longer than
+      // the cap. Say so rather than promising the whole tree.
+      const windowNote = windowClamped
+        ? 'This trace spans longer than the fetch-window cap, so the earliest ' +
+          'spans may be missing. Pass an explicit startTime covering the ' +
+          "trace's start to see the full tree."
+        : undefined;
+
+      type LogRow = {
+        timestamp: string;
+        severityText: string;
+        body: string;
+        serviceName: string;
+        spanId: string;
+      };
+      let correlatedLogs: LogRow[] | undefined;
+      let logsTruncated = false;
+      let logsNote: string | undefined;
+      if (input.includeLogs && source.logSourceId) {
+        const logSource = await getSource(
+          teamId.toString(),
+          source.logSourceId,
+        );
+        if (!logSource) {
+          logsNote = `logSourceId ${source.logSourceId} configured but source not found`;
+        } else if (logSource.kind !== SourceKind.Log) {
+          logsNote = `logSourceId ${source.logSourceId} is kind="${logSource.kind}", not "log"`;
+        } else {
+          const logTraceIdExpr = logSource.traceIdExpression ?? 'TraceId';
+          const logSpanIdExpr = logSource.spanIdExpression ?? "''";
+          const logBodyExpr = logSource.bodyExpression ?? "''";
+          const logSevExpr = logSource.severityTextExpression ?? "''";
+          const logSvcExpr = logSource.serviceNameExpression ?? "''";
+
+          // Reuse the same connection only when the log source lives there.
+          let logClient: ClickhouseClient | null = clickhouseClient;
+          if (
+            logSource.connection.toString() !== source.connection.toString()
+          ) {
+            logClient = await getMcpClickhouseClient(
+              teamId.toString(),
+              logSource.connection.toString(),
+            );
+          }
+          if (!logClient) {
+            logsNote = `connection for log source ${source.logSourceId} not found`;
+          }
+
+          if (logClient && !logsNote) {
+            try {
+              const logTs = await resolveTimestampExprs({
+                timestampValueExpression: logSource.timestampValueExpression,
+                metadata:
+                  logClient === clickhouseClient
+                    ? metadata
+                    : getMetadata(logClient),
+                databaseName: logSource.from.databaseName,
+                tableName: logSource.from.tableName,
+                connectionId: logSource.connection.toString(),
+              });
+              const logTimeFilter = await logTs.timeFilter(
+                fetchStart,
+                fetchEnd,
+              );
+              const logsQuery = `
+                SELECT
+                  ${logTs.eventTs} AS timestamp,
+                  ${logSevExpr} AS severityText,
+                  ${logBodyExpr} AS body,
+                  ${logSvcExpr} AS serviceName,
+                  ${logSpanIdExpr} AS spanId
+                FROM {db:Identifier}.{tbl:Identifier}
+                WHERE ${logTraceIdExpr} = {tid:String}
+                  AND ${logTimeFilter.sql}
+                ORDER BY ${logTs.eventTs} ASC
+                LIMIT {n:UInt32}
+              `;
+              const logResult = await logClient.query({
+                query: logsQuery,
+                query_params: {
+                  ...logTimeFilter.params,
+                  db: logSource.from.databaseName,
+                  tbl: logSource.from.tableName,
+                  tid: pickedTraceId,
+                  n: input.maxLogs + 1, // +1 to detect truncation
+                },
+                format: 'JSONEachRow',
+                connectionId: logSource.connection.toString(),
+                clickhouse_settings: mcpQuerySettings(logSource.querySettings),
+              });
+              const allLogs =
+                (await (
+                  logResult as { json: () => Promise<LogRow[]> }
+                ).json()) ?? [];
+              logsTruncated = allLogs.length > input.maxLogs;
+              correlatedLogs = logsTruncated
+                ? allLogs.slice(0, input.maxLogs)
+                : allLogs;
+            } catch (e) {
+              logsNote = `Failed to fetch correlated logs: ${e instanceof Error ? e.message : String(e)}`;
+            }
+          }
+        }
+      }
+
+      const output = {
+        traceId: pickedTraceId,
+        spanCount: spans.length,
+        totalDurationMs: totalDuration,
+        rootSpan: {
+          spanId: root.spanId,
+          serviceName: root.serviceName,
+          spanName: root.spanName,
+          durationMs: root.durationMs,
+          statusCode: root.statusCode,
+        },
+        spans: tree,
+        ...(correlatedLogs
+          ? {
+              logs: correlatedLogs,
+              logsCount: correlatedLogs.length,
+              ...(logsTruncated
+                ? {
+                    logsNote: `Logs truncated to ${input.maxLogs}. Increase maxLogs (max 1000) if needed.`,
+                  }
+                : {}),
+            }
+          : {}),
+        ...(logsNote ? { logsNote } : {}),
+        ...(probeNote ? { probeNote } : {}),
+        ...(windowNote ? { windowNote } : {}),
+        ...(truncated
+          ? {
+              note: `Result truncated to ${input.maxSpans} spans. Increase maxSpans (max 2000) or narrow the trace if needed.`,
+            }
+          : {}),
+      };
+
+      return {
+        content: [
+          { type: 'text' as const, text: JSON.stringify(output, null, 2) },
+        ],
+      };
+    },
+  );
+}

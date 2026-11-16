@@ -23,6 +23,8 @@ export interface IWebhook {
   updatedAt: Date;
   url?: string;
   description?: string;
+  // false drops the state emoji prefix from notification titles
+  titleEmoji?: boolean;
   // reminder to serialize/convert the Mongoose model instance to a plain javascript object when using
   // to strip the additional properties that are related to the Mongoose internal representation -> webhook.headers.toJSON()
   queryParams?: MongooseMap;
@@ -50,6 +52,10 @@ const WebhookSchema = new Schema<IWebhook>(
       type: String,
       required: false,
     },
+    titleEmoji: {
+      type: Boolean,
+      required: false,
+    },
     queryParams: {
       type: Map,
       of: String,
@@ -71,5 +77,10 @@ const WebhookSchema = new Schema<IWebhook>(
 export type WebhookDocument = mongoose.HydratedDocument<IWebhook>;
 
 WebhookSchema.index({ team: 1, service: 1, name: 1 }, { unique: true });
+
+// Team-scoped list/count queries (external API pagination) filter on team and
+// sort by _id. The unique index's { team: 1 } prefix covers the filter but not
+// the _id sort, so add a compound index to keep the sort index-covered.
+WebhookSchema.index({ team: 1, _id: 1 });
 
 export default mongoose.model<IWebhook>('Webhook', WebhookSchema);

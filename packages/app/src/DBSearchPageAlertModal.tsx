@@ -1,13 +1,21 @@
 import React from 'react';
 import router from 'next/router';
-import { Controller, useForm, useWatch } from 'react-hook-form';
+import {
+  Control,
+  Controller,
+  useForm,
+  useFormState,
+  useWatch,
+} from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   type Alert,
+  alertDisplayNameSchema,
   AlertIntervalSchema,
   AlertSource,
+  alertTagsSchema,
   AlertThresholdType,
   Filter,
   isRangeThresholdType,
@@ -16,7 +24,7 @@ import {
   SearchConditionLanguage,
   validateAlertScheduleOffsetMinutes,
   validateAlertThresholdMax,
-  zAlertChannel,
+  zAlertChannels,
 } from '@hyperdx/common-utils/dist/types';
 import {
   Accordion,
@@ -32,34 +40,40 @@ import {
   Stack,
   Tabs,
   Text,
-  TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
   IconChartLine,
   IconInfoCircleFilled,
   IconPlus,
+  IconTags,
 } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { useBrandDisplayName } from '@/brand';
+import { InlineNameInputControlled } from '@/components/InlineNameInput/InlineNameInput';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
+import { Tags } from '@/components/Tags';
 import { useCreateSavedSearch } from '@/savedSearch';
 import { useSavedSearch } from '@/savedSearch';
 import { useSource } from '@/source';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 import {
   ALERT_CHANNEL_OPTIONS,
   ALERT_INTERVAL_OPTIONS,
   ALERT_THRESHOLD_TYPE_OPTIONS,
   intervalToMinutes,
   normalizeNoOpAlertScheduleFields,
+  toAlertChannels,
 } from '@/utils/alerts';
 
+import { AlertDisplayFields } from './components/AlertDisplayFields';
+import { AlertNoteField } from './components/AlertNoteField';
 import { AlertPreviewChart } from './components/AlertPreviewChart';
 import { AlertChannelForm } from './components/Alerts';
 import { AckAlert } from './components/alerts/AckAlert';
 import { AlertHistoryCardList } from './components/alerts/AlertHistoryCards';
 import { AlertScheduleFields } from './components/AlertScheduleFields';
+import { AlertStatusIcon } from './components/AlertStatusIcon';
 import { getStoredLanguage } from './components/SearchInput/SearchWhereInput';
 import { getWebhookChannelIcon } from './utils/webhookIcons';
 import api from './api';
@@ -74,11 +88,77 @@ const SavedSearchAlertFormSchema = z
     scheduleOffsetMinutes: z.number().int().min(0).default(0),
     scheduleStartAt: scheduleStartAtSchema,
     thresholdType: z.nativeEnum(AlertThresholdType),
-    channel: zAlertChannel,
+    channels: zAlertChannels,
+    displayName: alertDisplayNameSchema,
+    tags: alertTagsSchema,
+    // nullish() (not optional()): persisted alerts store this as null, which
+    // optional() would reject.
+    numConsecutiveWindows: z.number().int().min(1).nullish(),
   })
   .passthrough()
   .superRefine(validateAlertScheduleOffsetMinutes)
   .superRefine(validateAlertThresholdMax);
+
+type NewSavedSearchFormValues = { name: string };
+
+/**
+ * Name and tags for the search an alert is being created alongside. The alert
+ * inherits both, so this is the only naming the flow asks for.
+ */
+const NewSavedSearchFields = ({
+  control,
+  tags,
+  onTagsChange,
+}: {
+  control: Control<NewSavedSearchFormValues>;
+  tags: string[];
+  onTagsChange: (tags: string[]) => void;
+}) => {
+  const { errors } = useFormState({ control, name: 'name' });
+  const nameError = errors.name?.message;
+
+  return (
+    <>
+      <Group gap="xs" wrap="nowrap">
+        <Text size="sm" style={{ flexShrink: 0 }}>
+          Alerts for
+        </Text>
+        <InlineNameInputControlled
+          control={control}
+          name="name"
+          rules={{
+            validate: value =>
+              value.trim().length > 0 || 'Name the search before saving it.',
+          }}
+          size="xs"
+          placeholder="Untitled search"
+          aria-label="Saved search name"
+          data-testid="saved-search-name-input"
+        />
+        <Tags allowCreate values={tags} onChange={onTagsChange}>
+          <Button
+            data-testid="saved-search-tags-button"
+            variant="secondary"
+            size="xs"
+            style={{ flexShrink: 0 }}
+          >
+            <IconTags size={14} className="me-1" />
+            {tags.length}
+          </Button>
+        </Tags>
+      </Group>
+      {nameError ? (
+        <Text size="xs" c="red" data-testid="saved-search-name-error">
+          {nameError}
+        </Text>
+      ) : (
+        <Text size="xxs" opacity={0.5}>
+          Saving creates this search; the alert takes its name and tags.
+        </Text>
+      )}
+    </>
+  );
+};
 
 const AlertForm = ({
   sourceId,
@@ -90,8 +170,10 @@ const AlertForm = ({
   loading,
   deleteLoading,
   hasSavedSearch,
+  savedSearchName,
   onDelete,
   onSubmit,
+  onSubmitAttempt,
   onClose,
 }: {
   sourceId?: string | null;
@@ -103,8 +185,15 @@ const AlertForm = ({
   loading?: boolean;
   deleteLoading?: boolean;
   hasSavedSearch?: boolean;
+  savedSearchName?: string;
   onDelete: (id: string) => void;
   onSubmit: (data: Alert) => void;
+  /**
+   * Runs on every submit, before this form validates, so fields the parent
+   * owns can report their own errors in the same pass rather than only once
+   * the alert itself is valid.
+   */
+  onSubmitAttempt?: () => void;
   onClose: () => void;
 }) => {
   const { data: source } = useSource({ id: sourceId });
@@ -118,8 +207,12 @@ const AlertForm = ({
     defaultValues: defaultValues
       ? {
           ...defaultValues,
+          channels: toAlertChannels(defaultValues),
           scheduleOffsetMinutes: defaultValues.scheduleOffsetMinutes ?? 0,
           scheduleStartAt: defaultValues.scheduleStartAt ?? null,
+          // Persisted null -> undefined for the NumberInput.
+          numConsecutiveWindows:
+            defaultValues.numConsecutiveWindows ?? undefined,
         }
       : {
           interval: '5m',
@@ -128,17 +221,14 @@ const AlertForm = ({
           scheduleStartAt: null,
           thresholdType: AlertThresholdType.ABOVE,
           source: AlertSource.SAVED_SEARCH,
-          channel: {
-            type: 'webhook',
-            webhookId: '',
-          },
+          channels: [{ type: 'webhook', webhookId: '' }],
+          note: null,
         },
     resolver: zodResolver(SavedSearchAlertFormSchema),
   });
 
   const groupBy = useWatch({ control, name: 'groupBy' });
   const thresholdType = useWatch({ control, name: 'thresholdType' });
-  const channelType = useWatch({ control, name: 'channel.type' });
   const interval = useWatch({ control, name: 'interval' });
   const scheduleOffsetMinutes = useWatch({
     control,
@@ -147,6 +237,10 @@ const AlertForm = ({
   const groupByValue = useWatch({ control, name: 'groupBy' });
   const threshold = useWatch({ control, name: 'threshold' });
   const thresholdMax = useWatch({ control, name: 'thresholdMax' });
+  const numConsecutiveWindows = useWatch({
+    control,
+    name: 'numConsecutiveWindows',
+  });
   const maxScheduleOffsetMinutes = Math.max(
     intervalToMinutes(interval ?? '5m') - 1,
     0,
@@ -156,21 +250,48 @@ const AlertForm = ({
   const { data: alertData } = api.useAlert(defaultValues?.id);
   const alert = alertData?.data;
 
+  const submitAlert = handleSubmit(data =>
+    onSubmit(
+      normalizeNoOpAlertScheduleFields(
+        // `id` is not a registered form field, so carry it from the alert
+        // this form was opened with. This binds the submission to the
+        // originally-edited alert rather than whatever the parent's alerts
+        // list happens to index at submit time.
+        // `channel` is cleared (JSON drops undefined): the API derives it
+        // from channels[0], and echoing a stale value back would conflict
+        // with an edited list.
+        { ...data, channel: undefined, id: defaultValues?.id },
+        defaultValues,
+        {
+          preserveExplicitScheduleOffsetMinutes:
+            dirtyFields.scheduleOffsetMinutes === true,
+          preserveExplicitScheduleStartAt: dirtyFields.scheduleStartAt === true,
+        },
+      ),
+    ),
+  );
+
   return (
     <form
-      onSubmit={handleSubmit(data =>
-        onSubmit(
-          normalizeNoOpAlertScheduleFields(data, defaultValues, {
-            preserveExplicitScheduleOffsetMinutes:
-              dirtyFields.scheduleOffsetMinutes === true,
-            preserveExplicitScheduleStartAt:
-              dirtyFields.scheduleStartAt === true,
-          }),
-        ),
-      )}
+      onSubmit={e => {
+        onSubmitAttempt?.();
+        return submitAlert(e);
+      }}
     >
       <Paper px="sm" py="xs" radius="xs">
         <Stack gap="xs">
+          {/* The alert inherits the name and tags of the search it watches, so
+              there is nothing to override until that search exists. */}
+          {hasSavedSearch && (
+            <AlertDisplayFields
+              control={control}
+              displayNameName="displayName"
+              tagsName="tags"
+              derivedDisplayName={savedSearchName}
+              displayNameLabel="Alert name"
+              labelMarginTop="0"
+            />
+          )}
           <Text size="xxs" opacity={0.5}>
             Trigger
           </Text>
@@ -243,7 +364,7 @@ const AlertForm = ({
             </Text>
             <Controller
               control={control}
-              name="channel.type"
+              name="channels.0.type"
               render={({ field }) => (
                 <NativeSelect
                   data={optionsToSelectData(ALERT_CHANNEL_OPTIONS)}
@@ -261,12 +382,15 @@ const AlertForm = ({
             scheduleOffsetMinutes={scheduleOffsetMinutes}
             maxScheduleOffsetMinutes={maxScheduleOffsetMinutes}
             offsetWindowLabel={`from each ${intervalLabel} window`}
+            numConsecutiveWindowsName="numConsecutiveWindows"
+            numConsecutiveWindows={numConsecutiveWindows ?? undefined}
           />
           <Text size="xxs" opacity={0.5} mb={4} mt="xs">
             grouped by
           </Text>
           <SQLInlineEditorControlled
             tableConnection={tcFromSource(source)}
+            sourceId={sourceId ?? undefined}
             control={control}
             name={`groupBy`}
             placeholder="SQL Columns"
@@ -276,7 +400,8 @@ const AlertForm = ({
           <Text size="xxs" opacity={0.5} mb={4}>
             Send to
           </Text>
-          <AlertChannelForm control={control} type={channelType} />
+          <AlertChannelForm control={control} channelsName="channels" />
+          <AlertNoteField control={control} name="note" />
           {groupBy &&
             (thresholdType === AlertThresholdType.BELOW ||
               thresholdType === AlertThresholdType.BELOW_OR_EQUAL ||
@@ -373,7 +498,7 @@ const AlertForm = ({
               onClick={() => onDelete(defaultValues.id!)}
               loading={deleteLoading}
             >
-              Delete Alert
+              Delete alert
             </Button>
           )}
         </div>
@@ -383,10 +508,10 @@ const AlertForm = ({
           </Button>
           <Button variant="primary" type="submit" loading={loading}>
             {defaultValues
-              ? 'Save Alert'
+              ? 'Save alert'
               : hasSavedSearch
-                ? 'Create Alert'
-                : 'Save Search with Alert'}
+                ? 'Create alert'
+                : 'Save search and alert'}
           </Button>
         </Group>
       </Group>
@@ -431,22 +556,22 @@ export const DBSearchPageAlertModal = ({
     }
   };
 
-  const [name, setName] = React.useState<string>('');
+  const newSavedSearchForm = useForm<NewSavedSearchFormValues>({
+    defaultValues: { name: '' },
+  });
+  const [newSavedSearchTags, setNewSavedSearchTags] = React.useState<string[]>(
+    [],
+  );
 
   const onSubmit = async (data: Alert) => {
     try {
       // Create new search along with alert
       if (!id && searchedConfig) {
-        if (!name) {
-          notifications.show({
-            color: 'red',
-            message: 'Please provide a name for the saved search.',
-            autoClose: 5000,
-          });
+        if (!(await newSavedSearchForm.trigger())) {
           return;
         }
         const result = await createSavedSearch.mutateAsync({
-          name,
+          name: newSavedSearchForm.getValues('name').trim(),
           select: searchedConfig.select ?? '',
           where: searchedConfig.where ?? '',
           whereLanguage:
@@ -454,9 +579,9 @@ export const DBSearchPageAlertModal = ({
           source: searchedConfig.source ?? '',
           orderBy: searchedConfig.orderBy ?? '',
           filters: searchedConfig.filters ?? [],
-          tags: [],
+          tags: newSavedSearchTags,
         });
-        await createAlert.mutate({
+        await createAlert.mutateAsync({
           ...data,
           source: AlertSource.SAVED_SEARCH,
           savedSearchId: result.id,
@@ -466,14 +591,17 @@ export const DBSearchPageAlertModal = ({
       } else if (id) {
         // Create new alert
         if (activeIndex === 'stage') {
-          await createAlert.mutate({
+          await createAlert.mutateAsync({
             ...data,
             source: AlertSource.SAVED_SEARCH,
             savedSearchId: id,
           });
         } else if (data.id) {
-          // Update existing alert
-          await updateAlert.mutate({
+          // Update existing alert. `data.id` is the id of the alert the form
+          // was opened with (carried through by AlertForm), not a live
+          // re-index of the alerts list, so edits always target the intended
+          // alert even if the list changes while the modal is open.
+          await updateAlert.mutateAsync({
             ...data,
             id: data.id,
             source: AlertSource.SAVED_SEARCH,
@@ -502,7 +630,7 @@ export const DBSearchPageAlertModal = ({
 
   const onDelete = async (id: string) => {
     try {
-      await deleteAlert.mutate(id);
+      await deleteAlert.mutateAsync(id);
       notifications.show({
         color: 'green',
         message: 'Alert deleted!',
@@ -538,45 +666,49 @@ export const DBSearchPageAlertModal = ({
           }}
           loaderProps={{ type: 'dots' }}
         />
-        <Stack gap={0} mb="md">
-          <Group>
+        <Stack gap={4} mb="md">
+          {id ? (
             <Text size="sm">
               Alerts for <strong>{savedSearch?.name}</strong>
             </Text>
-            {!id && (
-              <TextInput
-                size="xs"
-                placeholder="Saved search name"
-                value={name}
-                onChange={e => setName(e.currentTarget.value)}
-                required
-              />
-            )}
-          </Group>
-          <Text size="xxs">{savedSearch?.where}</Text>
+          ) : (
+            <NewSavedSearchFields
+              control={newSavedSearchForm.control}
+              tags={newSavedSearchTags}
+              onTagsChange={setNewSavedSearchTags}
+            />
+          )}
+          <Text size="xxs">{savedSearch?.where ?? searchedConfig?.where}</Text>
         </Stack>
 
-        <Tabs value={activeIndex} onChange={setTab} mb="xs">
-          <Tabs.List>
-            {(savedSearch?.alerts || []).map((alert, index) => (
-              <Tabs.Tab key={alert.id} value={`${index}`}>
-                <Group gap="xs">
-                  {getWebhookChannelIcon(alert.channel.type)} Alert {index + 1}
+        {/* An unsaved search has no alerts to switch between, and the one tab
+            left reads as a control that does something. */}
+        {id && (
+          <Tabs value={activeIndex} onChange={setTab} mb="xs">
+            <Tabs.List>
+              {(savedSearch?.alerts || []).map((alert, index) => (
+                <Tabs.Tab key={alert.id} value={`${index}`}>
+                  <Group gap="xs">
+                    {getWebhookChannelIcon(alert.channel?.type)}
+                    Alert {index + 1}
+                    <AlertStatusIcon alerts={[alert]} />
+                  </Group>
+                </Tabs.Tab>
+              ))}
+              <Tabs.Tab value="stage">
+                <Group gap={4}>
+                  <IconPlus size={18} style={{ marginLeft: -8 }} />
+                  New alert
                 </Group>
               </Tabs.Tab>
-            ))}
-            <Tabs.Tab value="stage">
-              <Group gap={4}>
-                <IconPlus size={18} style={{ marginLeft: -8 }} />
-                New Alert
-              </Group>
-            </Tabs.Tab>
-          </Tabs.List>
-        </Tabs>
+            </Tabs.List>
+          </Tabs>
+        )}
 
         <AlertForm
           key={activeIndex}
           hasSavedSearch={!!savedSearch}
+          savedSearchName={savedSearch?.name}
           sourceId={searchedConfig?.source}
           where={searchedConfig?.where}
           whereLanguage={searchedConfig?.whereLanguage}
@@ -588,6 +720,9 @@ export const DBSearchPageAlertModal = ({
               : savedSearch?.alerts?.[parseInt(activeIndex)]
           }
           onSubmit={onSubmit}
+          onSubmitAttempt={
+            id ? undefined : () => void newSavedSearchForm.trigger()
+          }
           onDelete={onDelete}
           deleteLoading={deleteAlert.isPending}
           onClose={onClose}

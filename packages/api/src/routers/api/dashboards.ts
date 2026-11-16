@@ -1,8 +1,22 @@
 import {
+  validateDashboardFilterModes,
+  validateDashboardFilterOptionUniqueness,
+  validateDashboardFilterVariableNames,
+} from '@hyperdx/common-utils/dist/dashboardValidation';
+import {
+  getAdhocFilterSourceKinds,
+  isAdhocFilter,
+  isPrometheusLabelFilter,
+} from '@hyperdx/common-utils/dist/filters';
+import {
+  DashboardFilter,
   DashboardSchema,
   DashboardWithoutIdSchema,
   PresetDashboard,
   PresetDashboardFilterSchema,
+  resolveChartPaletteToken,
+  SourceKind,
+  walkRawDashboardTileColors,
 } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
 import _ from 'lodash';
@@ -22,12 +36,117 @@ import {
   getPresetDashboardFilters,
   updatePresetDashboardFilter,
 } from '@/controllers/presetDashboardFilters';
+import { getSources } from '@/controllers/sources';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
-import logger from '@/utils/logger';
+import type { ObjectId } from '@/models';
 import { objectIdSchema } from '@/utils/zod';
 
 // create routes that will get and update dashboards
 const router = express.Router();
+
+/**
+ * Additional filter validation (variable name and option uniqueness, at least one mode enabled).
+ */
+const addFilterIssues = (
+  data: {
+    filters?: {
+      name: string;
+      options?: string[];
+      variableName?: string;
+      isBroadcastEnabled?: boolean;
+      isVariableEnabled?: boolean;
+    }[];
+  },
+  ctx: z.RefinementCtx,
+) => {
+  validateDashboardFilterVariableNames(data.filters ?? [], ctx);
+  validateDashboardFilterModes(data.filters ?? [], ctx);
+  validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx);
+};
+
+/** The sources a filter reads from, each with the kinds it must be. */
+function getFilterSourceRefs(
+  filter: DashboardFilter,
+): { id: string; kinds: SourceKind[] }[] {
+  if (isPrometheusLabelFilter(filter)) {
+    return [{ id: filter.source, kinds: [SourceKind.Promql] }];
+  }
+  if (isAdhocFilter(filter)) {
+    const kinds = getAdhocFilterSourceKinds(filter.sourceType);
+    return [...filter.sources, ...(filter.appliesToSourceIds ?? [])].map(
+      id => ({ id, kinds }),
+    );
+  }
+  return [];
+}
+
+/**
+ * Rejects PROMETHEUS_LABEL and ADHOC filters that reference a source that is
+ * missing or of the wrong kind. Resolving these filters needs a live source of
+ * the right kind, unlike other filter types. References the stored filter with
+ * the same ID already made are skipped, so a since-deleted source doesn't block
+ * unrelated saves. Returns an error message, or null when there is nothing to
+ * reject.
+ */
+async function validateFilterSources(
+  teamId: ObjectId,
+  filters: DashboardFilter[] = [],
+  existingFilters: DashboardFilter[] = [],
+): Promise<string | null> {
+  const refKey = ({ id, kinds }: { id: string; kinds: SourceKind[] }) =>
+    `${id}:${kinds.join(',')}`;
+  const existingRefsById = new Map(
+    existingFilters.map(filter => [
+      filter.id,
+      new Set(getFilterSourceRefs(filter).map(refKey)),
+    ]),
+  );
+  const newRefs = filters.flatMap(filter =>
+    getFilterSourceRefs(filter).filter(
+      ref => !existingRefsById.get(filter.id)?.has(refKey(ref)),
+    ),
+  );
+  if (newRefs.length === 0) return null;
+
+  const sources = await getSources(teamId.toString());
+  const kindById = new Map(sources.map(s => [s._id.toString(), s.kind]));
+  const invalid = new Set(
+    newRefs
+      .filter(({ id, kinds }) => {
+        const kind = kindById.get(id);
+        return kind === undefined || !kinds.includes(kind);
+      })
+      .map(({ id }) => id),
+  );
+  if (invalid.size === 0) return null;
+  return `The following filter source IDs do not exist or are not a kind of source the filter supports: ${[...invalid].join(', ')}`;
+}
+
+/**
+ * Heal legacy `chart-1`..`chart-10` tile colors from #2265 on the request
+ * body *before* `validateRequest` runs `ChartPaletteTokenSchema`. Keeps the
+ * schema strict (so `z.input` == `z.output` and `req.body` infers cleanly)
+ * while still accepting payloads from any non-React HTTP client whose
+ * stored values haven't yet been healed by the app-side normalizer
+ * (`normalizeDashboardTileColors` in `packages/app/src/dashboard.ts`).
+ *
+ * This is a one-release deprecation shim — once stored data has converged
+ * on the hue-named tokens, it can be removed in favor of straight-strict
+ * validation. The actual walk delegates to `walkRawDashboardTileColors`
+ * in common-utils so this middleware, the app-side normalizer, the JSON
+ * import path, and the provisioner all share the same per-tile traversal.
+ */
+const migrateLegacyDashboardTileColors: express.RequestHandler = (
+  req,
+  _res,
+  next,
+) => {
+  req.body = walkRawDashboardTileColors(req.body, current => {
+    const resolved = resolveChartPaletteToken(current);
+    return resolved ?? current;
+  });
+  next();
+};
 
 router.get('/', async (req, res, next) => {
   try {
@@ -43,14 +162,26 @@ router.get('/', async (req, res, next) => {
 
 router.post(
   '/',
+  migrateLegacyDashboardTileColors,
   validateRequest({
-    body: DashboardWithoutIdSchema,
+    body: DashboardWithoutIdSchema.superRefine(addFilterIssues),
   }),
   async (req, res, next) => {
     try {
       const { teamId, userId } = getNonNullUserWithTeam(req);
 
-      const dashboard = req.body;
+      // `provisioned` marks a dashboard as machine-managed by
+      // ProvisionDashboardsTask, whose upsert overwrites tiles/tags/filters
+      // wholesale. It is server-owned: `validateRequest` validates without
+      // replacing `req.body`, and DashboardSchema is non-strict, so a
+      // client-supplied value would otherwise persist and hand the caller's
+      // dashboard to the provisioner.
+      const dashboard = _.omit(req.body, 'provisioned');
+
+      const sourceError = await validateFilterSources(teamId, req.body.filters);
+      if (sourceError != null) {
+        return res.status(400).json({ message: sourceError });
+      }
 
       const newDashboard = await createDashboard(teamId, dashboard, userId);
 
@@ -63,11 +194,12 @@ router.post(
 
 router.patch(
   '/:id',
+  migrateLegacyDashboardTileColors,
   validateRequest({
     params: z.object({
       id: objectIdSchema,
     }),
-    body: DashboardSchema.partial(),
+    body: DashboardSchema.partial().superRefine(addFilterIssues),
   }),
   async (req, res, next) => {
     try {
@@ -80,8 +212,25 @@ router.patch(
         return res.sendStatus(404);
       }
 
-      // Only omit undefined values, keep null (which signals field removal)
-      const updates = _.omitBy(req.body, _.isUndefined);
+      // Re-parse instead of omitting keys by name: DashboardWithoutIdSchema
+      // declares no `team`/`createdBy`/`provisioned`, so parsing drops them
+      // along with every other unknown key. All three are server-owned —
+      // `team`/`provisioned` for tenant isolation and the provisioner, and
+      // `createdBy` for ownership attribution (a smuggled `team` used to move
+      // a dashboard into another team's namespace; see the POST handler's
+      // comment for why validateRequest alone can't enforce this).
+      // Nulls survive: the schema's optional fields are `.nullable()`, and a
+      // null still signals field removal downstream.
+      const updates = DashboardWithoutIdSchema.partial().parse(req.body);
+
+      const sourceError = await validateFilterSources(
+        teamId,
+        req.body.filters,
+        dashboard.filters,
+      );
+      if (sourceError != null) {
+        return res.status(400).json({ message: sourceError });
+      }
 
       const updatedDashboard = await updateDashboard(
         dashboardId,

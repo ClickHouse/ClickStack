@@ -1,6 +1,1127 @@
-import { TimelineSeriesSchema } from '../types';
+import { z } from 'zod';
 
-const baseValid = {
+import { MAX_FORMULA_EXPRESSION_LENGTH } from '@/core/formula';
+import {
+  BackgroundChartSchema,
+  ColorConditionSchema,
+  DASHBOARD_VARIABLE_NAME_MAX_LENGTH,
+  DashboardFilterSchema,
+  DashboardFilterValueSchema,
+  DashboardSchema,
+  DerivedColumnSchema,
+  MAX_LEGEND_TEMPLATE_LENGTH,
+  MetricFormulaSchema,
+  MetricSourceSchema,
+  PresetDashboard,
+  PresetDashboardFilterSchema,
+  PromqlSourceSchema,
+  SavedChartConfigSchema,
+  TimelineSeriesSchema,
+} from '@/types';
+
+describe('ColorConditionSchema', () => {
+  // ─── Positive cases ─────────────────────────────────────────────────────────
+
+  describe('numeric ordered operators', () => {
+    it.each(['gt', 'gte', 'lt', 'lte'] as const)(
+      'parses operator %s with a valid numeric value',
+      operator => {
+        const result = ColorConditionSchema.safeParse({
+          operator,
+          value: 42,
+          color: 'chart-success',
+        });
+        expect(result.success).toBe(true);
+      },
+    );
+
+    it('parses with an optional label', () => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'gte',
+        value: 100,
+        color: 'chart-warning',
+        label: 'High',
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('between operator', () => {
+    it('parses a valid between rule', () => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'between',
+        value: [10, 100],
+        color: 'chart-blue',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('allows inverted between (first > second)', () => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'between',
+        value: [100, 10],
+        color: 'chart-blue',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    // `value` is a fixed-length array rather than a tuple so the MCP tools can
+    // publish a draft-2020-12-valid JSON Schema. These guard that the looser
+    // container still pins arity and element type exactly as a tuple did.
+    it.each([
+      ['too few bounds', [10]],
+      ['too many bounds', [10, 100, 1000]],
+      ['a non-numeric bound', [10, '100']],
+      ['a non-finite bound', [10, Infinity]],
+      ['a bare number', 10],
+    ])('rejects %s', (_label, value) => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'between',
+        value,
+        color: 'chart-blue',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('eq / neq operators', () => {
+    it('parses eq with a number value', () => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'eq',
+        value: 5,
+        color: 'chart-error',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('parses eq with a string value', () => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'eq',
+        value: 'CRIT',
+        color: 'chart-error',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('parses neq with a number value', () => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'neq',
+        value: 0,
+        color: 'chart-orange',
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('string operators', () => {
+    it.each(['contains', 'startsWith', 'endsWith'] as const)(
+      'parses operator %s with a non-empty string value',
+      operator => {
+        const result = ColorConditionSchema.safeParse({
+          operator,
+          value: 'error',
+          color: 'chart-error',
+        });
+        expect(result.success).toBe(true);
+      },
+    );
+
+    it('parses regex with a valid pattern', () => {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'regex',
+        value: '^error.*',
+        color: 'chart-error',
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  it('parses with all palette tokens', () => {
+    const tokens = [
+      'chart-blue',
+      'chart-orange',
+      'chart-red',
+      'chart-cyan',
+      'chart-green',
+      'chart-pink',
+      'chart-purple',
+      'chart-light-blue',
+      'chart-brown',
+      'chart-gray',
+      'chart-success',
+      'chart-warning',
+      'chart-error',
+    ] as const;
+    for (const token of tokens) {
+      const result = ColorConditionSchema.safeParse({
+        operator: 'gt',
+        value: 0,
+        color: token,
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  // ─── Negative cases ──────────────────────────────────────────────────────────
+
+  it('rejects an unknown operator', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'notAnOp',
+      value: 1,
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects NaN on numeric operators', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'gt',
+      value: Number.NaN,
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects Infinity on numeric operators', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'lt',
+      value: Infinity,
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a string value on a numeric operator (gt)', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'gt',
+      value: 'oops',
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a number value on a string operator (contains)', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'contains',
+      value: 42,
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an invalid palette token', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'gt',
+      value: 1,
+      color: 'not-a-token',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty string on contains', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'contains',
+      value: '',
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty string on startsWith', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'startsWith',
+      value: '',
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty string on endsWith', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'endsWith',
+      value: '',
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty string on regex', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'regex',
+      value: '',
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an unparseable regex pattern', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'regex',
+      value: '[invalid',
+      color: 'chart-blue',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a label longer than 40 characters', () => {
+    const result = ColorConditionSchema.safeParse({
+      operator: 'gt',
+      value: 1,
+      color: 'chart-blue',
+      label: 'a'.repeat(41),
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('colorRules array in SharedChartSettingsSchema', () => {
+  // Test array constraints directly with a z.array(ColorConditionSchema).max(10) schema,
+  // mirroring how SharedChartSettingsSchema declares colorRules.
+  const rulesSchema = z.array(ColorConditionSchema).max(10).optional();
+
+  it('accepts 0 rules', () => {
+    expect(rulesSchema.safeParse([]).success).toBe(true);
+  });
+
+  it('accepts 1 rule', () => {
+    expect(
+      rulesSchema.safeParse([{ operator: 'gt', value: 0, color: 'chart-blue' }])
+        .success,
+    ).toBe(true);
+  });
+
+  it('accepts 5 rules', () => {
+    const rules = Array.from({ length: 5 }, (_, i) => ({
+      operator: 'gt' as const,
+      value: i * 10,
+      color: 'chart-blue' as const,
+    }));
+    expect(rulesSchema.safeParse(rules).success).toBe(true);
+  });
+
+  it('accepts 10 rules', () => {
+    const rules = Array.from({ length: 10 }, (_, i) => ({
+      operator: 'gte' as const,
+      value: i * 10,
+      color: 'chart-blue' as const,
+    }));
+    expect(rulesSchema.safeParse(rules).success).toBe(true);
+  });
+
+  it('rejects 11 rules', () => {
+    const rules = Array.from({ length: 11 }, (_, i) => ({
+      operator: 'gte' as const,
+      value: i * 10,
+      color: 'chart-blue' as const,
+    }));
+    expect(rulesSchema.safeParse(rules).success).toBe(false);
+  });
+});
+
+describe('BackgroundChartSchema', () => {
+  // ─── Positive cases ─────────────────────────────────────────────────────────
+
+  it.each(['line', 'area'] as const)(
+    'parses type %s without a color override',
+    type => {
+      expect(BackgroundChartSchema.safeParse({ type }).success).toBe(true);
+    },
+  );
+
+  it('parses with a palette-token color override', () => {
+    expect(
+      BackgroundChartSchema.safeParse({ type: 'area', color: 'chart-success' })
+        .success,
+    ).toBe(true);
+  });
+
+  // ─── Negative cases ──────────────────────────────────────────────────────────
+
+  it('rejects an unknown chart type', () => {
+    expect(BackgroundChartSchema.safeParse({ type: 'bar' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects a missing type', () => {
+    expect(
+      BackgroundChartSchema.safeParse({ color: 'chart-blue' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an invalid palette token', () => {
+    expect(
+      BackgroundChartSchema.safeParse({ type: 'line', color: 'not-a-token' })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe('DerivedColumnSchema color fields', () => {
+  // A minimal valid select item (count aggregation) the table builder emits.
+  const baseColumn = {
+    aggFn: 'count' as const,
+    aggCondition: '',
+    aggConditionLanguage: 'sql' as const,
+    valueExpression: '',
+  };
+
+  // ─── Positive cases ─────────────────────────────────────────────────────────
+
+  it('parses a column with no color fields (backward compatible)', () => {
+    expect(DerivedColumnSchema.safeParse(baseColumn).success).toBe(true);
+  });
+
+  it('round-trips a static palette-token color', () => {
+    const result = DerivedColumnSchema.safeParse({
+      ...baseColumn,
+      color: 'chart-error',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.color).toBe('chart-error');
+    }
+  });
+
+  it.each(['gt', 'gte', 'lt', 'lte'] as const)(
+    'round-trips a %s colorRule',
+    operator => {
+      const result = DerivedColumnSchema.safeParse({
+        ...baseColumn,
+        colorRules: [{ operator, value: 500, color: 'chart-warning' }],
+      });
+      expect(result.success).toBe(true);
+    },
+  );
+
+  it('round-trips a between colorRule', () => {
+    const result = DerivedColumnSchema.safeParse({
+      ...baseColumn,
+      colorRules: [
+        { operator: 'between', value: [10, 100], color: 'chart-blue' },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each(['eq', 'neq'] as const)('round-trips a %s colorRule', operator => {
+    const result = DerivedColumnSchema.safeParse({
+      ...baseColumn,
+      colorRules: [{ operator, value: 'OK', color: 'chart-success' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('round-trips a static color and rules together', () => {
+    const result = DerivedColumnSchema.safeParse({
+      ...baseColumn,
+      color: 'chart-blue',
+      colorRules: [{ operator: 'gt', value: 500, color: 'chart-error' }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.color).toBe('chart-blue');
+      expect(result.data.colorRules).toHaveLength(1);
+    }
+  });
+
+  // ─── Negative cases ──────────────────────────────────────────────────────────
+
+  it('rejects an unknown static color token', () => {
+    expect(
+      DerivedColumnSchema.safeParse({ ...baseColumn, color: 'not-a-token' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects a colorRule with an unknown color token', () => {
+    expect(
+      DerivedColumnSchema.safeParse({
+        ...baseColumn,
+        colorRules: [{ operator: 'gt', value: 1, color: 'puce' }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects more than 10 colorRules', () => {
+    const colorRules = Array.from({ length: 11 }, (_, i) => ({
+      operator: 'gte' as const,
+      value: i * 10,
+      color: 'chart-blue' as const,
+    }));
+    expect(
+      DerivedColumnSchema.safeParse({ ...baseColumn, colorRules }).success,
+    ).toBe(false);
+  });
+});
+
+describe('alternateRowBackground on saved chart configs', () => {
+  // The field lives on SharedChartSettingsSchema, so both builder and raw SQL
+  // saved configs carry it (the zebra striping is purely presentational and
+  // renders the same way regardless of how the rows were produced). A schema
+  // that only declared it on the builder config would silently strip it from a
+  // raw SQL tile on save.
+
+  it('retains alternateRowBackground on a raw SQL table saved config', () => {
+    const parsed = SavedChartConfigSchema.parse({
+      configType: 'sql',
+      sqlTemplate: 'SELECT count() AS Count FROM t',
+      connection: 'test-connection',
+      displayType: 'table',
+      alternateRowBackground: true,
+    });
+
+    expect(parsed).toMatchObject({ alternateRowBackground: true });
+  });
+
+  it('retains alternateRowBackground on a builder table saved config', () => {
+    const parsed = SavedChartConfigSchema.parse({
+      source: 'test-source',
+      timestampValueExpression: 'Timestamp',
+      displayType: 'table',
+      select: [{ aggFn: 'count', valueExpression: '', alias: 'Count' }],
+      where: '',
+      alternateRowBackground: true,
+    });
+
+    expect(parsed).toMatchObject({ alternateRowBackground: true });
+  });
+});
+
+describe('DashboardFilterSchema variable fields', () => {
+  const baseFilter = {
+    id: 'f1',
+    type: 'QUERY_EXPRESSION' as const,
+    name: 'Service',
+    expression: 'ServiceName',
+    source: 'source-1',
+  };
+
+  it('parses a filter with none of the variable fields set', () => {
+    const parsed = DashboardFilterSchema.parse(baseFilter);
+    expect(parsed.isBroadcastEnabled).toBeUndefined();
+    expect(parsed.isVariableEnabled).toBeUndefined();
+    expect(parsed.variableName).toBeUndefined();
+  });
+
+  it('parses a fully configured variable filter', () => {
+    const parsed = DashboardFilterSchema.parse({
+      ...baseFilter,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'Service_Name_1',
+    });
+    expect(parsed).toMatchObject({
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'Service_Name_1',
+    });
+  });
+
+  // The requiredness of `variableName` is a form-level concern: readers fall back
+  // to a name derived from the filter's display name, so a filter written by any
+  // other path stays resolvable rather than being rejected.
+  it('accepts isVariableEnabled without a variableName', () => {
+    const result = DashboardFilterSchema.safeParse({
+      ...baseFilter,
+      isVariableEnabled: true,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    'has space',
+    'dollar$',
+    'dot.notation',
+    "quote'",
+    'br[ackets]',
+    'with-dash',
+    '1leading',
+    '_leading',
+    '',
+  ])('rejects variableName %p', variableName => {
+    const result = DashboardFilterSchema.safeParse({
+      ...baseFilter,
+      variableName,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a variableName longer than the maximum', () => {
+    const result = DashboardFilterSchema.safeParse({
+      ...baseFilter,
+      variableName: 'a'.repeat(DASHBOARD_VARIABLE_NAME_MAX_LENGTH + 1),
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a variableName at exactly the maximum length', () => {
+    const result = DashboardFilterSchema.safeParse({
+      ...baseFilter,
+      variableName: 'a'.repeat(DASHBOARD_VARIABLE_NAME_MAX_LENGTH),
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+// `DashboardFilterSchema` is a discriminated union, so most per-type rules are
+// structural and belong here. Only option *uniqueness* needs a refinement
+// (`validateDashboardFilterOptions`), covered in `dashboardValidation.test.ts`.
+describe('DashboardFilterSchema static-list variant', () => {
+  const staticFilter = {
+    id: 'f1',
+    type: 'STATIC_LIST' as const,
+    name: 'Environment',
+    options: ['prod', 'staging', 'dev'],
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'env',
+  };
+
+  it('parses a static-list filter and preserves the authored option order', () => {
+    const parsed = DashboardFilterSchema.parse(staticFilter);
+
+    expect(parsed).toEqual(staticFilter);
+    expect(parsed.type === 'STATIC_LIST' && parsed.options).toEqual([
+      'prod',
+      'staging',
+      'dev',
+    ]);
+  });
+
+  it('rejects an unknown filter type at the discriminator', () => {
+    const result = DashboardFilterSchema.safeParse({
+      ...staticFilter,
+      type: 'STATIC',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]).toMatchObject({
+      code: 'invalid_union_discriminator',
+      path: ['type'],
+    });
+  });
+
+  it.each([
+    ['a missing option list', { options: undefined }],
+    ['an empty option list', { options: [] }],
+    ['an empty option', { options: ['prod', ''] }],
+  ])('rejects %s', (_label, overrides) => {
+    expect(
+      DashboardFilterSchema.safeParse({ ...staticFilter, ...overrides })
+        .success,
+    ).toBe(false);
+  });
+
+  // Bounds mirror `VariableFilterValueSchema`, so a selection can always hold
+  // whatever the option list offers.
+  it('rejects an option longer than a selection could carry', () => {
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...staticFilter,
+        options: ['a'.repeat(10001)],
+      }).success,
+    ).toBe(false);
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...staticFilter,
+        options: ['a'.repeat(10000)],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects more options than a selection could carry', () => {
+    const options = Array.from({ length: 1001 }, (_, i) => `option-${i}`);
+
+    expect(
+      DashboardFilterSchema.safeParse({ ...staticFilter, options }).success,
+    ).toBe(false);
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...staticFilter,
+        options: options.slice(0, 1000),
+      }).success,
+    ).toBe(true);
+  });
+
+  // Variable-only by construction: with no expression there is nothing to
+  // broadcast into a WHERE clause, so the modes are literals rather than
+  // optional booleans.
+  it.each([
+    ['broadcast enabled', { isBroadcastEnabled: true }],
+    ['broadcast unset', { isBroadcastEnabled: undefined }],
+    ['variables disabled', { isVariableEnabled: false }],
+    ['variables unset', { isVariableEnabled: undefined }],
+  ])('rejects a static filter with %s', (_label, overrides) => {
+    const result = DashboardFilterSchema.safeParse({
+      ...staticFilter,
+      ...overrides,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].path).toEqual([Object.keys(overrides)[0]]);
+  });
+
+  // Not strict, on purpose: these variants parse unvalidated Mongo documents,
+  // where a key left behind by an older version must not make template export
+  // throw. The external API's variants *are* strict and reject it — see
+  // `dashboards.int.test.ts`.
+  it('strips a query-expression field rather than rejecting it', () => {
+    const parsed = DashboardFilterSchema.parse({
+      ...staticFilter,
+      expression: 'ServiceName',
+      source: 'source-1',
+      where: "ServiceName = 'api'",
+      appliesToSourceIds: ['source-1'],
+    });
+
+    expect(parsed).toEqual(staticFilter);
+  });
+});
+
+describe('DashboardFilterSchema query-expression variant', () => {
+  const queryFilter = {
+    id: 'f1',
+    type: 'QUERY_EXPRESSION' as const,
+    name: 'Service',
+    expression: 'ServiceName',
+    source: 'source-1',
+  };
+
+  it.each(['expression', 'source'] as const)(
+    'requires a non-empty %s',
+    field => {
+      for (const value of [undefined, '']) {
+        expect(
+          DashboardFilterSchema.safeParse({ ...queryFilter, [field]: value })
+            .success,
+        ).toBe(false);
+      }
+    },
+  );
+
+  it('strips an option list, which this type has no use for', () => {
+    expect(
+      DashboardFilterSchema.parse({ ...queryFilter, options: ['prod'] }),
+    ).toEqual(queryFilter);
+  });
+
+  // Unlike the static variant these stay optional booleans: a filter written
+  // before either field existed broadcasts, and must keep parsing.
+  it('accepts a filter carrying neither mode flag', () => {
+    expect(DashboardFilterSchema.parse(queryFilter)).toEqual(queryFilter);
+  });
+});
+
+describe('DashboardFilterSchema ad hoc variant', () => {
+  const adhocFilter = {
+    id: 'f1',
+    type: 'ADHOC' as const,
+    name: 'Conditions',
+    sourceType: 'sql' as const,
+    sources: ['source-1'],
+    isVariableEnabled: true as const,
+  };
+
+  it('keeps the condition that narrows its suggestions', () => {
+    const filter = {
+      ...adhocFilter,
+      where: 'Namespace IN ($namespace)',
+      whereLanguage: 'sql' as const,
+    };
+    expect(DashboardFilterSchema.parse(filter)).toEqual(filter);
+  });
+
+  it('rejects a PromQL condition language', () => {
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...adhocFilter,
+        where: 'up',
+        whereLanguage: 'promql',
+      }).success,
+    ).toBe(false);
+  });
+});
+
+// Preset dashboards are broadcast-only, so the preset schema extends the
+// query-expression variant rather than the union — a static filter is
+// unrepresentable rather than rejected by a refinement.
+describe('PresetDashboardFilterSchema', () => {
+  const presetFilter = {
+    id: 'f1',
+    type: 'QUERY_EXPRESSION' as const,
+    name: 'Service',
+    expression: 'ServiceName',
+    source: 'source-1',
+    presetDashboard: PresetDashboard.Services,
+  };
+
+  it('accepts a query-expression preset filter', () => {
+    expect(PresetDashboardFilterSchema.parse(presetFilter)).toEqual(
+      presetFilter,
+    );
+  });
+
+  it('rejects a static-list preset filter', () => {
+    const result = PresetDashboardFilterSchema.safeParse({
+      id: 'f1',
+      type: 'STATIC_LIST',
+      name: 'Environment',
+      options: ['prod'],
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      presetDashboard: PresetDashboard.Services,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].path).toEqual(['type']);
+  });
+
+  // The Mongoose model requires both, so the schema has to as well.
+  it.each(['expression', 'source'] as const)('requires %s', field => {
+    expect(
+      PresetDashboardFilterSchema.safeParse({
+        ...presetFilter,
+        [field]: undefined,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('DashboardFilterValueSchema', () => {
+  it('accepts the legacy condition-carrying entries', () => {
+    for (const entry of [
+      { type: 'sql', condition: "ServiceName IN ('api')" },
+      { type: 'lucene', condition: 'ServiceName:"api"' },
+      { type: 'sql_ast', operator: '=', left: 'ServiceName', right: 'api' },
+    ]) {
+      expect(DashboardFilterValueSchema.safeParse(entry).success).toBe(true);
+    }
+  });
+
+  it('accepts a variable-keyed entry, including with no values selected', () => {
+    expect(
+      DashboardFilterValueSchema.safeParse({
+        type: 'variable',
+        name: 'svc',
+        values: ['accounting'],
+      }).success,
+    ).toBe(true);
+    expect(
+      DashboardFilterValueSchema.safeParse({
+        type: 'variable',
+        name: 'svc',
+        values: [],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('requires a non-empty name and a values array', () => {
+    for (const entry of [
+      { type: 'variable', values: ['a'] },
+      { type: 'variable', name: '', values: ['a'] },
+      { type: 'variable', name: 'svc' },
+      { type: 'variable', name: 'svc', values: 'a' },
+      { type: 'variable', name: 'svc', values: [1] },
+      { type: 'variable', name: 'a'.repeat(1025), values: ['a'] },
+    ]) {
+      expect(DashboardFilterValueSchema.safeParse(entry).success).toBe(false);
+    }
+  });
+
+  it.each([
+    ['one the variable-name grammar would reject', 'not a token'],
+    ['far longer than the variable-name limit', 'a'.repeat(65)],
+    ['at the entry limit', 'a'.repeat(1024)],
+  ])('accepts a name that is %s', (_label, name) => {
+    // Both the grammar and the 64-character limit are enforced on the filter
+    // *definition*. Enforcing either here would make a selection written by a
+    // looser client unparseable, and an unmatched selection is meant to survive
+    // as an orphan rather than be dropped. The entry's own cap only bounds input.
+    expect(
+      DashboardFilterValueSchema.safeParse({
+        type: 'variable',
+        name,
+        values: ['a'],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('is accepted by DashboardSchema.savedFilterValues alongside sql entries', () => {
+    const result = DashboardSchema.safeParse({
+      id: 'd1',
+      name: 'Dashboard',
+      tiles: [],
+      tags: [],
+      savedFilterValues: [
+        { type: 'sql', condition: "Env IN ('prod')" },
+        { type: 'variable', name: 'svc', values: ['accounting'] },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('DashboardSchema.savedDateRange', () => {
+  const base = { id: 'd1', name: 'Dashboard', tiles: [], tags: [] };
+  const parse = (savedDateRange: unknown) =>
+    DashboardSchema.safeParse({ ...base, savedDateRange }).success;
+
+  it('accepts relative, historical, null, or absent', () => {
+    expect(parse({ type: 'relative', value: 3600 })).toBe(true);
+    expect(parse({ type: 'historical', value: [1700000000, 1700003600] })).toBe(
+      true,
+    );
+    expect(parse(null)).toBe(true);
+    expect(parse(undefined)).toBe(true);
+  });
+
+  it('rejects malformed values', () => {
+    expect(parse({ type: 'relative', value: '1h' })).toBe(false);
+    expect(parse({ type: 'historical', value: [1700000000] })).toBe(false);
+    expect(parse({ type: 'other', value: 1 })).toBe(false);
+    expect(parse(3600)).toBe(false);
+  });
+});
+
+describe('MetricSourceSchema.minAutoGranularity', () => {
+  const base = {
+    id: 'source-1',
+    kind: 'metric' as const,
+    name: 'Metrics',
+    connection: 'conn-1',
+    from: { databaseName: 'default', tableName: '' },
+    timestampValueExpression: 'TimeUnix',
+    resourceAttributesExpression: 'ResourceAttributes',
+    metricTables: { gauge: 'otel_metrics_gauge' },
+  };
+  const parse = (minAutoGranularity: unknown) =>
+    MetricSourceSchema.safeParse({ ...base, minAutoGranularity });
+
+  it('accepts a valid interval or absent', () => {
+    expect(parse('1 minute').success).toBe(true);
+    expect(parse(undefined).success).toBe(true);
+  });
+
+  it("coerces the form's \"No minimum\" value ('') to undefined", () => {
+    const result = parse('');
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.minAutoGranularity).toBeUndefined();
+    }
+  });
+
+  it('rejects a malformed interval', () => {
+    expect(parse('1 fortnight').success).toBe(false);
+    expect(parse('minute').success).toBe(false);
+  });
+});
+
+describe('PromqlSourceSchema.minAutoGranularity', () => {
+  const base = {
+    id: 'source-1',
+    kind: 'promql' as const,
+    name: 'Prometheus',
+    connection: 'conn-1',
+    from: { databaseName: 'default', tableName: 'metrics_ts' },
+    timestampValueExpression: 'timestamp',
+  };
+  const parse = (minAutoGranularity: unknown) =>
+    PromqlSourceSchema.safeParse({ ...base, minAutoGranularity });
+
+  it('accepts a valid interval or absent', () => {
+    const result = parse('1 minute');
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.minAutoGranularity).toBe('1 minute');
+    }
+    expect(parse(undefined).success).toBe(true);
+  });
+
+  it("coerces the form's \"No minimum\" value ('') to undefined", () => {
+    const result = parse('');
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.minAutoGranularity).toBeUndefined();
+    }
+  });
+
+  it('rejects a malformed interval', () => {
+    expect(parse('1 fortnight').success).toBe(false);
+    expect(parse('minute').success).toBe(false);
+  });
+});
+
+describe('PromqlSourceSchema.promqlBackend', () => {
+  const base = {
+    id: 'source-1',
+    kind: 'promql' as const,
+    name: 'Prometheus',
+    connection: 'conn-1',
+    from: { databaseName: 'default', tableName: 'metrics_ts' },
+    timestampValueExpression: 'timestamp',
+  };
+  const parse = (promqlBackend: unknown) =>
+    PromqlSourceSchema.safeParse({ ...base, promqlBackend });
+
+  it.each(['auto', 'clickhouse-http', 'table-function'])(
+    'accepts %s',
+    value => {
+      const result = parse(value);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.promqlBackend).toBe(value);
+      }
+    },
+  );
+
+  it('accepts an absent setting', () => {
+    const result = parse(undefined);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.promqlBackend).toBeUndefined();
+    }
+  });
+
+  it('rejects anything else', () => {
+    expect(parse('http').success).toBe(false);
+    expect(parse('').success).toBe(false);
+  });
+});
+
+describe('MetricFormulaSchema', () => {
+  it('parses an expression-only formula', () => {
+    const result = MetricFormulaSchema.safeParse({
+      expression: 'A / (A + B + C) * 100',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('parses a formula with alias and numberFormat', () => {
+    const result = MetricFormulaSchema.safeParse({
+      expression: 'A / B',
+      alias: 'Success rate',
+      numberFormat: { output: 'percent', mantissa: 1 },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('requires an expression', () => {
+    expect(MetricFormulaSchema.safeParse({ alias: 'x' }).success).toBe(false);
+    expect(MetricFormulaSchema.safeParse({ expression: 1 }).success).toBe(
+      false,
+    );
+  });
+
+  // The schema length cap and the parser's MAX_FORMULA_EXPRESSION_LENGTH
+  // must agree — types.ts is a leaf module (imports only zod), so the bound
+  // is duplicated as a literal there and pinned here.
+  it('caps expression length at MAX_FORMULA_EXPRESSION_LENGTH', () => {
+    expect(
+      MetricFormulaSchema.safeParse({
+        expression: 'A'.repeat(MAX_FORMULA_EXPRESSION_LENGTH),
+      }).success,
+    ).toBe(true);
+    expect(
+      MetricFormulaSchema.safeParse({
+        expression: 'A'.repeat(MAX_FORMULA_EXPRESSION_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('formulas on saved chart configs', () => {
+  // `formulas` / `showOperandSeries` live on _ChartConfigSchema (builder
+  // configs only — formulas reference `select` entries by position, which
+  // raw SQL / PromQL configs do not have).
+
+  it('retains formulas and showOperandSeries on a builder saved config', () => {
+    const parsed = SavedChartConfigSchema.parse({
+      source: 'test-source',
+      timestampValueExpression: 'Timestamp',
+      select: [
+        { aggFn: 'sum', valueExpression: 'Value', metricName: 'success' },
+        { aggFn: 'sum', valueExpression: 'Value', metricName: 'error' },
+      ],
+      where: '',
+      formulas: [{ expression: 'A / (A + B) * 100', alias: 'Success rate' }],
+      showOperandSeries: false,
+    });
+
+    expect(parsed).toMatchObject({
+      formulas: [{ expression: 'A / (A + B) * 100', alias: 'Success rate' }],
+      showOperandSeries: false,
+    });
+  });
+
+  it('parses a builder saved config without formulas (back-compat)', () => {
+    const parsed = SavedChartConfigSchema.parse({
+      source: 'test-source',
+      timestampValueExpression: 'Timestamp',
+      select: [{ aggFn: 'count', valueExpression: '' }],
+      where: '',
+    });
+
+    expect(parsed).not.toHaveProperty('formulas');
+  });
+});
+
+describe('PromQL legend templates on saved chart configs', () => {
+  const promqlConfig = (legendTemplate: string) => ({
+    configType: 'promql' as const,
+    promqlExpression: 'up',
+    connection: 'conn-1',
+    source: 'source-1',
+    legendTemplate,
+  });
+
+  // The editor rejects an over-long template inline using the same constant;
+  // if these drift, a template the editor accepts fails the dashboard save.
+  it('caps legendTemplate at MAX_LEGEND_TEMPLATE_LENGTH', () => {
+    expect(
+      SavedChartConfigSchema.safeParse(
+        promqlConfig('a'.repeat(MAX_LEGEND_TEMPLATE_LENGTH)),
+      ).success,
+    ).toBe(true);
+    expect(
+      SavedChartConfigSchema.safeParse(
+        promqlConfig('a'.repeat(MAX_LEGEND_TEMPLATE_LENGTH + 1)),
+      ).success,
+    ).toBe(false);
+  });
+});
+
+describe('PromQL saved chart config source', () => {
+  const base = {
+    configType: 'promql' as const,
+    promqlExpression: 'up',
+  };
+
+  // The PromQL API resolves the table from the source, so a tile without one
+  // could never be queried.
+  it('requires a source', () => {
+    expect(SavedChartConfigSchema.safeParse(base).success).toBe(false);
+    expect(
+      SavedChartConfigSchema.safeParse({ ...base, source: '' }).success,
+    ).toBe(false);
+    expect(
+      SavedChartConfigSchema.safeParse({ ...base, source: 'source-1' }).success,
+    ).toBe(true);
+  });
+
+  // The connection comes from the source at query time, so a stored copy is
+  // dropped rather than kept around to go stale.
+  it('drops a persisted connection', () => {
+    const parsed = SavedChartConfigSchema.parse({
+      ...base,
+      source: 'source-1',
+      connection: 'conn-1',
+    });
+    expect(parsed).not.toHaveProperty('connection');
+  });
+});
+
+const timelineBaseValid = {
   id: 'series-1',
   label: 'My Series',
   source: 'logs',
@@ -11,7 +1132,7 @@ describe('TimelineSeriesSchema', () => {
   describe('mode: events', () => {
     it('accepts a valid events series with labelExpression', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'events',
         labelExpression: 'Body',
       });
@@ -20,7 +1141,7 @@ describe('TimelineSeriesSchema', () => {
 
     it('accepts optional fields on a valid events series', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'events',
         labelExpression: 'Body',
         groupExpression: 'ServiceName',
@@ -36,7 +1157,7 @@ describe('TimelineSeriesSchema', () => {
 
     it('rejects an events series missing labelExpression', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'events',
       });
       expect(result.success).toBe(false);
@@ -44,7 +1165,7 @@ describe('TimelineSeriesSchema', () => {
 
     it('rejects an events series with an empty-string labelExpression', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'events',
         labelExpression: '',
       });
@@ -55,7 +1176,7 @@ describe('TimelineSeriesSchema', () => {
   describe('mode: value_change', () => {
     it('accepts a valid value_change series with trackColumn', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'value_change',
         trackColumn: "ResourceAttributes['service.version']",
       });
@@ -64,7 +1185,7 @@ describe('TimelineSeriesSchema', () => {
 
     it('rejects a value_change series missing trackColumn', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'value_change',
       });
       expect(result.success).toBe(false);
@@ -72,7 +1193,7 @@ describe('TimelineSeriesSchema', () => {
 
     it('rejects a value_change series with an empty-string trackColumn', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'value_change',
         trackColumn: '',
       });
@@ -83,7 +1204,7 @@ describe('TimelineSeriesSchema', () => {
   describe('invalid mode', () => {
     it('rejects an unrecognised mode value', () => {
       const result = TimelineSeriesSchema.safeParse({
-        ...baseValid,
+        ...timelineBaseValid,
         mode: 'unknown_mode',
         labelExpression: 'Body',
       });

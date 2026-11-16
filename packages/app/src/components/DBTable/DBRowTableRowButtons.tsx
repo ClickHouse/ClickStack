@@ -1,11 +1,22 @@
 import React, { useState } from 'react';
-import { IconCopy, IconLink, IconTextWrap } from '@tabler/icons-react';
+import { notifications } from '@mantine/notifications';
+import {
+  IconCopy,
+  IconLayoutSidebarRightExpand,
+  IconLink,
+  IconTextWrap,
+} from '@tabler/icons-react';
 
-import { INTERNAL_ROW_FIELDS, RowWhereResult } from '@/hooks/useRowWhere';
+import { RowWhereResult } from '@/hooks/useRowWhere';
+import {
+  CLIPBOARD_ERROR_MESSAGE,
+  copyTextToClipboard,
+} from '@/utils/clipboard';
 
 import { DBRowTableIconButton } from './DBRowTableIconButton';
+import { toExportableRow } from './rowExport';
 
-import styles from '../../../styles/LogTable.module.scss';
+import styles from '@styles/LogTable.module.scss';
 
 interface DBRowTableRowButtonsProps {
   row: Record<string, any>;
@@ -13,6 +24,8 @@ interface DBRowTableRowButtonsProps {
   sourceId?: string;
   isWrapped: boolean;
   onToggleWrap: () => void;
+  /** Omitted when clicking the row already opens the side panel. */
+  onOpenSidePanel?: () => void;
 }
 
 const DBRowTableRowButtons: React.FC<DBRowTableRowButtonsProps> = ({
@@ -21,63 +34,50 @@ const DBRowTableRowButtons: React.FC<DBRowTableRowButtonsProps> = ({
   sourceId,
   isWrapped,
   onToggleWrap,
+  onOpenSidePanel,
 }) => {
   const [isCopied, setIsCopied] = useState(false);
   const [isUrlCopied, setIsUrlCopied] = useState(false);
 
   const copyRowData = async () => {
     try {
-      // Filter out internal metadata fields that start with __ or are generated IDs
-
-      const { [INTERNAL_ROW_FIELDS.ID]: _id, ...cleanRow } = row;
-
-      // Parse JSON string fields to make them proper JSON objects
-      const parsedRow = Object.entries(cleanRow).reduce(
-        (acc, [key, value]) => {
-          if (
-            typeof value === 'string' &&
-            (value.startsWith('{') || value.startsWith('['))
-          ) {
-            try {
-              acc[key] = JSON.parse(value);
-            } catch {
-              // If parsing fails, keep the original string
-              acc[key] = value;
-            }
-          } else {
-            acc[key] = value;
-          }
-          return acc;
-        },
-        {} as Record<string, any>,
-      );
-
-      const rowData = JSON.stringify(parsedRow, null, 2);
-      await navigator.clipboard.writeText(rowData);
+      const rowData = JSON.stringify(toExportableRow(row), null, 2);
+      const copied = await copyTextToClipboard(rowData);
+      if (!copied) {
+        notifications.show({
+          color: 'red',
+          message: CLIPBOARD_ERROR_MESSAGE,
+        });
+        return;
+      }
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy row data to clipboard:', error);
-      // Optionally show an error toast notification to the user
+    } catch {
+      notifications.show({
+        color: 'red',
+        message: CLIPBOARD_ERROR_MESSAGE,
+      });
     }
   };
 
   const copyRowUrl = async () => {
-    try {
-      const rowWhereResult = getRowWhere(row);
-      const currentUrl = new URL(window.location.href);
-      // Add the row identifier as query parameters
-      currentUrl.searchParams.set('rowWhere', rowWhereResult.where);
-      if (sourceId) {
-        currentUrl.searchParams.set('rowSource', sourceId);
-      }
-      await navigator.clipboard.writeText(currentUrl.toString());
-      setIsUrlCopied(true);
-      setTimeout(() => setIsUrlCopied(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy URL to clipboard:', error);
-      // Optionally show an error toast notification to the user
+    const rowWhereResult = getRowWhere(row);
+    const currentUrl = new URL(window.location.href);
+    // Add the row identifier as query parameters
+    currentUrl.searchParams.set('rowWhere', rowWhereResult.where);
+    if (sourceId) {
+      currentUrl.searchParams.set('rowSource', sourceId);
     }
+    const copied = await copyTextToClipboard(currentUrl.toString());
+    if (!copied) {
+      notifications.show({
+        color: 'red',
+        message: CLIPBOARD_ERROR_MESSAGE,
+      });
+      return;
+    }
+    setIsUrlCopied(true);
+    setTimeout(() => setIsUrlCopied(false), 2000);
   };
 
   return (
@@ -113,6 +113,15 @@ const DBRowTableRowButtons: React.FC<DBRowTableRowButtonsProps> = ({
       >
         <IconLink size={16} />
       </DBRowTableIconButton>
+      {onOpenSidePanel && (
+        <DBRowTableIconButton
+          onClick={onOpenSidePanel}
+          variant="copy"
+          title="Open in side panel"
+        >
+          <IconLayoutSidebarRightExpand size={16} />
+        </DBRowTableIconButton>
+      )}
     </div>
   );
 };

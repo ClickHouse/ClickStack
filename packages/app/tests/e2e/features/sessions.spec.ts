@@ -1,5 +1,12 @@
 import { SessionsPage } from '../page-objects/SessionsPage';
+import { OTEL_SESSIONS } from '../seed-otel-sessions';
 import { expect, test } from '../utils/base-test';
+import {
+  clearLuceneInput,
+  expectFieldSuggestion,
+  expectValueSuggestion,
+  switchWhereToLucene,
+} from '../utils/lucene-autocomplete';
 
 test.describe('Client Sessions Functionality', { tag: ['@sessions'] }, () => {
   let sessionsPage: SessionsPage;
@@ -40,14 +47,201 @@ test.describe('Client Sessions Functionality', { tag: ['@sessions'] }, () => {
     });
   });
 
+  test('lists and opens a session from the OpenTelemetry browser SDK', async ({
+    page,
+  }) => {
+    await page.goto('/search');
+    await sessionsPage.goto();
+    await sessionsPage.selectDataSource();
+    await switchWhereToLucene(sessionsPage.whereLanguageSwitch);
+    await sessionsPage.search(
+      `SpanAttributes.session.id:"${OTEL_SESSIONS.newSdk}"`,
+    );
+
+    const card = page.getByTestId(`session-card-${OTEL_SESSIONS.newSdk}`);
+    await expect(card).toBeVisible();
+    await card.click();
+
+    await expect(sessionsPage.sessionSidePanel).toBeVisible();
+    const span = sessionsPage
+      .getSessionEventRows()
+      .filter({ hasText: '500 GET' });
+    await expect(span).toBeVisible({ timeout: 15000 });
+
+    await test.step('Its trace shows the triggering click and the request timings', async () => {
+      await span.click();
+      const trace = page.getByTestId('side-panel-tab-trace');
+      const trigger = trace.getByText(
+        'Triggered by: Clicked testid=checkout · 3ms before',
+      );
+      await expect(trigger).toBeVisible({ timeout: 15000 });
+      await expect(trace.getByTestId('span-event-marker')).toHaveCount(4);
+      // The timing log is drawn as the dots, so it isn't counted as a log.
+      await expect(trace.getByText(/^1 span, 1 error/)).toBeVisible();
+
+      await trigger.click();
+      await expect(
+        trace
+          .getByText('#root > main > button.checkout', { exact: true })
+          .first(),
+      ).toBeVisible();
+    });
+  });
+
+  test('shows browser log events from the OpenTelemetry SDK and opens them', async ({
+    page,
+  }) => {
+    const panel = sessionsPage.sessionSidePanel;
+    const rows = sessionsPage.getSessionEventRows();
+    const section = panel.getByTestId('browser-event-section');
+
+    await test.step('Highlighted shows the console error but not the click', async () => {
+      await page.goto('/search');
+      await sessionsPage.goto();
+      await sessionsPage.selectDataSource();
+      await switchWhereToLucene(sessionsPage.whereLanguageSwitch);
+      await sessionsPage.search(
+        `SpanAttributes.session.id:"${OTEL_SESSIONS.newSdk}"`,
+      );
+      await page.getByTestId(`session-card-${OTEL_SESSIONS.newSdk}`).click();
+      await expect(rows.filter({ hasText: 'console.error' })).toBeVisible({
+        timeout: 15000,
+      });
+      await expect(rows.filter({ hasText: 'Clicked button' })).toHaveCount(0);
+    });
+
+    await test.step('All events shows the click, which opens its log row', async () => {
+      await panel.getByText('All Events').click();
+      const click = rows.filter({ hasText: 'Clicked button' });
+      await expect(click).toContainText('testid=checkout');
+      await click.getByText('Clicked button').click();
+      await expect(panel.getByTestId('side-panel-tab-overview')).toBeVisible();
+      await expect(page.getByTestId('row-side-panel')).toHaveCount(0);
+      // The Log Attributes viewer below repeats these values verbatim.
+      await expect(
+        section.getByText('data-otel-testid', { exact: true }),
+      ).toBeVisible();
+      await expect(
+        section.getByText('#root > main > button.checkout', { exact: true }),
+      ).toBeVisible();
+      await expect(panel.getByText('No body for this event.')).toHaveCount(0);
+    });
+
+    await test.step('Escape returns to the event list', async () => {
+      await page.keyboard.press('Escape');
+      await expect(rows.first()).toBeVisible();
+    });
+
+    await test.step('A navigation opens as a browser event, not an HTTP request', async () => {
+      const navigation = rows.filter({ hasText: 'Navigated' });
+      await navigation.getByText('Navigated').click();
+      await expect(section.getByText('push', { exact: true })).toBeVisible();
+      await expect(panel.getByText('HTTP Request')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(rows.first()).toBeVisible();
+    });
+
+    await test.step('A session keyed on rum.sessionId shows no log events', async () => {
+      const logQueries: string[] = [];
+      // query_id marks ClickHouse queries; the app's own telemetry exports
+      // can carry the event name in captured URLs.
+      page.on('request', request => {
+        const body = request.postData() ?? '';
+        if (
+          new URL(request.url()).searchParams.has('query_id') &&
+          body.includes('browser.user_action.click')
+        ) {
+          logQueries.push(body);
+        }
+      });
+      await page.keyboard.press('Escape');
+      await sessionsPage.search(
+        `SpanAttributes.session.id:"${OTEL_SESSIONS.bothKeys}"`,
+      );
+      await page.getByTestId(`session-card-${OTEL_SESSIONS.bothKeys}`).click();
+      await panel.getByText('All Events').click();
+      // A log query would go out with the span query, so by the time the span
+      // row shows it would have been sent.
+      await expect(rows.first()).toBeVisible({ timeout: 15000 });
+      await expect(rows.filter({ hasText: 'Clicked' })).toHaveCount(0);
+      expect(logQueries).toHaveLength(0);
+    });
+  });
+
+  test('shows one card for a session that carries both session id keys', async ({
+    page,
+  }) => {
+    await page.goto('/search');
+    await sessionsPage.goto();
+    await sessionsPage.selectDataSource();
+    await switchWhereToLucene(sessionsPage.whereLanguageSwitch);
+    await sessionsPage.search(
+      `SpanAttributes.session.id:"${OTEL_SESSIONS.bothKeys}"`,
+    );
+
+    const card = page.getByTestId(`session-card-${OTEL_SESSIONS.bothKeys}`);
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText('1 Events');
+  });
+
+  // Both WHERE inputs on this page query the session source's *trace* source,
+  // not the session table — the sessions page filters sessions by the spans
+  // they contain, and the replay drawer lists those spans as events. Neither
+  // offered any suggestions until they were handed that source's id.
+  test(
+    'Lucene autocomplete suggests trace fields in the sessions search and the replay event filter',
+    { tag: ['@full-stack'] },
+    async ({ page }) => {
+      await test.step('Navigate to sessions and select the sessions source', async () => {
+        // Via /search first so the onboarding modal is handled.
+        await page.goto('/search');
+        await sessionsPage.goto();
+        await sessionsPage.selectDataSource();
+        await expect(sessionsPage.getFirstSessionCard()).toBeVisible();
+      });
+
+      await test.step('The sessions search suggests fields and values', async () => {
+        await switchWhereToLucene(sessionsPage.whereLanguageSwitch);
+        await expectFieldSuggestion(sessionsPage.whereInput, {
+          prefix: 'Servi',
+          field: 'ServiceName',
+        });
+        await expectValueSuggestion(sessionsPage.whereInput, {
+          field: 'ServiceName',
+        });
+        // Leave nothing overlaying the session cards below the input.
+        await clearLuceneInput(sessionsPage.whereInput);
+      });
+
+      await test.step('Open a session replay', async () => {
+        await sessionsPage.openFirstSession();
+        await expect(sessionsPage.sessionSidePanel).toBeVisible();
+        await expect(sessionsPage.getSessionEventRows().first()).toBeVisible({
+          timeout: 15000,
+        });
+      });
+
+      await test.step("The replay event filter suggests the trace source's fields", async () => {
+        // This one is also scoped to the replayed session's own time window, so
+        // it doubles as a check that the passed date range is a valid one.
+        await switchWhereToLucene(sessionsPage.eventsWhereLanguageSwitch);
+        await expectFieldSuggestion(sessionsPage.eventsWhereInput, {
+          prefix: 'Servi',
+          field: 'ServiceName',
+        });
+      });
+    },
+  );
+
   test(
     'clicking a session event opens the event detail panel with tabs, not another session replay',
     { tag: ['@full-stack'] },
     async ({ page }) => {
       await test.step('Navigate and open a session (with sidePanelTab=replay pre-set in URL to simulate search-page flow)', async () => {
         // Pre-set sidePanelTab=replay in the URL to simulate navigating from a search page
-        // row detail panel that had the Session Replay tab open. Without isNestedPanel=true,
-        // the inner DBRowSidePanel would inherit this URL param and open to the Replay tab again.
+        // row detail panel that had the Session Replay tab open. Selecting a session event
+        // must clear this param (clearInnerNavigation) so the in-place event detail opens to
+        // its default tab instead of re-rendering the Session Replay tab.
         await page.goto('/search');
         await sessionsPage.goto();
         await sessionsPage.selectDataSource();
@@ -75,43 +269,49 @@ test.describe('Client Sessions Functionality', { tag: ['@sessions'] }, () => {
         await sessionsPage.clickFirstSessionEvent();
       });
 
-      await test.step('Event detail panel opens alongside the session replay — not replacing it', async () => {
-        // The row-side-panel must be visible (event detail drawer opened on top of session replay)
-        await expect(sessionsPage.rowSidePanel).toBeVisible();
-
-        // The original session replay panel must still be open (not replaced/closed)
+      await test.step('Event detail opens in place inside the single session drawer — not as a second drawer', async () => {
+        // Single-drawer navigation: the event detail renders in place inside the
+        // existing session-side-panel (via DBRowSidePanelInner). No second
+        // row-side-panel Drawer is opened.
         await expect(sessionsPage.sessionSidePanel).toBeVisible();
 
-        // Only one session-side-panel must exist (not a second replay opened inside the detail panel)
+        // Exactly one session drawer exists, and no separate row-side-panel
+        // drawer was stacked on top of it.
         await expect(page.getByTestId('session-side-panel')).toHaveCount(1);
+        await expect(page.getByTestId('row-side-panel')).toHaveCount(0);
 
-        // The row-side-panel must show the event detail TabBar (Overview, Trace, etc.)
-        // This guards against the regression where the inner panel re-opened session replay
-        // instead of showing event details (which has no TabBar, just the replay player)
+        // The session drawer now shows the event detail TabBar (Overview, Trace,
+        // etc.). This guards against the regression where selecting an event
+        // re-opened session replay instead of showing event details (which has
+        // no TabBar, just the replay player).
         await expect(
-          sessionsPage.rowSidePanel.getByTestId('side-panel-tabs'),
+          sessionsPage.sessionSidePanel.getByTestId('side-panel-tabs'),
         ).toBeVisible();
 
-        // The inner panel must NOT be showing the Session Replay tab content.
-        // Without isNestedPanel=true (broken), the inner DBRowSidePanel reads sidePanelTab=replay
-        // from the URL (injected above) and renders the Session Replay tab content (side-panel-tab-replay).
-        // With isNestedPanel=true (fixed), the inner panel uses local state and ignores the URL,
-        // opening to its default tab (Trace/Overview) instead.
+        // The event detail must NOT land on the Session Replay tab. Selecting an
+        // event clears the sidePanelTab=replay param injected above
+        // (clearInnerNavigation), so the inner panel opens to its default tab
+        // (Trace/Overview) and the replay tab content is not rendered.
         await expect(
-          sessionsPage.rowSidePanel.getByTestId('side-panel-tab-replay'),
+          sessionsPage.sessionSidePanel.getByTestId('side-panel-tab-replay'),
         ).toHaveCount(0);
       });
 
-      await test.step('Clicking the overlay closes the event detail panel but keeps the session replay open', async () => {
-        // Without the fix, withOverlay={!isNestedPanel} removed the overlay on nested panels,
-        // so there was nothing to click to close the panel (it had to be ESC only).
-        // With the fix (withOverlay always true), clicking the Mantine overlay dismisses the inner panel.
-        await sessionsPage.clickTopmostDrawerOverlay();
+      await test.step('Pressing Escape returns to the session event list within the same drawer', async () => {
+        // With an event open, the embedded DBRowSidePanelInner owns Esc and pops
+        // one level at a time; at the event root it hands back to the session
+        // (onNavigateToParent), so a single Esc returns to the session event
+        // list instead of closing the whole drawer. (The parent's own Esc is
+        // disabled while an event is selected to avoid a double-fire.)
+        await page.keyboard.press('Escape');
 
-        // The event detail panel must close
-        await expect(sessionsPage.rowSidePanel).toBeHidden();
+        // The event detail TabBar collapses back to the session event list.
+        await expect(
+          sessionsPage.sessionSidePanel.getByTestId('side-panel-tabs'),
+        ).toBeHidden();
+        await expect(sessionsPage.getSessionEventRows().first()).toBeVisible();
 
-        // The session replay drawer must still be open
+        // The session drawer itself stays open.
         await expect(sessionsPage.sessionSidePanel).toBeVisible();
       });
     },

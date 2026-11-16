@@ -1,5 +1,38 @@
 import { z } from 'zod';
 
+import {
+  aliasMapToWithClauses,
+  convertDateRangeToGranularityString,
+  convertToCategoricalChartConfig,
+  convertToDashboardDocument,
+  convertToDashboardTemplate,
+  convertToNumberChartConfig,
+  extractSettingsClauseFromEnd,
+  findJsonExpressions,
+  formatDate,
+  fromWallClock,
+  getAlignedDateRange,
+  getDistributedTableArgs,
+  getFirstOrderingItem,
+  getPercentileAggFnLevel,
+  hasNonEmptyOrderBy,
+  hasPositiveSeriesLimit,
+  isFirstOrderByAscending,
+  isJsonExpression,
+  isTimestampExpressionInFirstOrderBy,
+  joinQuerySettings,
+  optimizeTimestampValueExpression,
+  parseTokenizerFromTextIndex,
+  parseToNumber,
+  parseToStartOfFunction,
+  pickBucketTimestampColumn,
+  replaceJsonExpressions,
+  resolvePercentileAggFn,
+  splitAndTrimCSV,
+  splitAndTrimWithBracket,
+  toWallClock,
+  UTC_TIME_ZONE,
+} from '@/core/utils';
 import { isBuilderSavedChartConfig } from '@/guards';
 import {
   BuilderChartConfigWithDateRange,
@@ -10,28 +43,6 @@ import {
   SourceKind,
   TSource,
 } from '@/types';
-
-import {
-  aliasMapToWithClauses,
-  convertToDashboardTemplate,
-  extractSettingsClauseFromEnd,
-  findJsonExpressions,
-  formatDate,
-  getAlignedDateRange,
-  getDistributedTableArgs,
-  getFirstOrderingItem,
-  isFirstOrderByAscending,
-  isJsonExpression,
-  isTimestampExpressionInFirstOrderBy,
-  joinQuerySettings,
-  optimizeTimestampValueExpression,
-  parseTokenizerFromTextIndex,
-  parseToNumber,
-  parseToStartOfFunction,
-  replaceJsonExpressions,
-  splitAndTrimCSV,
-  splitAndTrimWithBracket,
-} from '../core/utils';
 
 describe('utils', () => {
   // Suppress expected console.error noise from invalid text index types,
@@ -50,7 +61,7 @@ describe('utils', () => {
       expect(
         formatDate(date, {
           clock: '12h',
-          isUTC: true,
+          timeZone: UTC_TIME_ZONE,
         }),
       ).toEqual('Jan 1 12:00:00 PM');
     });
@@ -60,7 +71,7 @@ describe('utils', () => {
       expect(
         formatDate(date, {
           clock: '24h',
-          isUTC: true,
+          timeZone: UTC_TIME_ZONE,
           format: 'withMs',
         }),
       ).toEqual('Jan 1 12:00:00.000');
@@ -71,7 +82,6 @@ describe('utils', () => {
       expect(
         formatDate(date, {
           clock: '12h',
-          isUTC: false,
         }),
       ).toEqual('Jan 1 12:00:00 PM');
     });
@@ -81,11 +91,66 @@ describe('utils', () => {
       expect(
         formatDate(date, {
           clock: '24h',
-          isUTC: false,
           format: 'withMs',
         }),
       ).toEqual('Jan 1 12:00:00.000');
     });
+
+    it('formats in the given time zone', () => {
+      const date = new Date('2021-01-01T12:00:00Z');
+      expect(
+        formatDate(date, { clock: '24h', timeZone: 'Asia/Tokyo' }),
+      ).toEqual('Jan 1 21:00:00');
+    });
+  });
+
+  describe('toWallClock / fromWallClock', () => {
+    it('reads the clock in the given zone into UTC fields', () => {
+      expect(
+        toWallClock(
+          new Date('2026-10-22T15:00:00Z'),
+          'America/Los_Angeles',
+        ).toISOString(),
+      ).toBe('2026-10-22T08:00:00.000Z');
+    });
+
+    it('uses the offset in effect on each side of a DST change', () => {
+      // Los Angeles leaves daylight time (UTC-7) for standard time (UTC-8) on Nov 1 2026.
+      expect(
+        fromWallClock(
+          new Date('2026-10-31T08:00:00Z'),
+          'America/Los_Angeles',
+        ).toISOString(),
+      ).toBe('2026-10-31T15:00:00.000Z');
+      expect(
+        fromWallClock(
+          new Date('2026-11-02T08:00:00Z'),
+          'America/Los_Angeles',
+        ).toISOString(),
+      ).toBe('2026-11-02T16:00:00.000Z');
+    });
+
+    it('reads the clock correctly in the hours around a DST change', () => {
+      // New York goes from UTC-4 to UTC-5 at 06:00 UTC on Nov 1 2026.
+      const read = (iso: string) =>
+        toWallClock(new Date(iso), 'America/New_York').toISOString();
+      expect(read('2026-11-01T03:30:00Z')).toBe('2026-10-31T23:30:00.000Z');
+      expect(read('2026-11-01T05:30:00Z')).toBe('2026-11-01T01:30:00.000Z');
+      expect(read('2026-11-01T06:30:00Z')).toBe('2026-11-01T01:30:00.000Z');
+      // And from UTC-5 to UTC-4 at 07:00 UTC on Mar 8 2026.
+      expect(read('2026-03-08T06:30:00Z')).toBe('2026-03-08T01:30:00.000Z');
+      expect(read('2026-03-08T07:30:00Z')).toBe('2026-03-08T03:30:00.000Z');
+    });
+
+    it.each(['Etc/UTC', 'Asia/Kolkata', 'America/Los_Angeles'])(
+      'round-trips through %s',
+      timeZone => {
+        const date = new Date('2026-03-08T10:30:15.250Z');
+        expect(fromWallClock(toWallClock(date, timeZone), timeZone)).toEqual(
+          date,
+        );
+      },
+    );
   });
 
   describe('splitAndTrimCSV', () => {
@@ -203,6 +268,51 @@ describe('utils', () => {
       expect(splitAndTrimWithBracket(input)).toEqual(expected);
     });
 
+    it('should keep commas inside single-quoted strings with backslash-escaped quotes', () => {
+      const input = "'it\\'s,ok' AS label, count()";
+      const expected = ["'it\\'s,ok' AS label", 'count()'];
+      expect(splitAndTrimWithBracket(input)).toEqual(expected);
+    });
+
+    it('should keep commas inside double-quoted identifiers with escaped quotes', () => {
+      const input = '"foo\\"bar,baz" AS label, count()';
+      const expected = ['"foo\\"bar,baz" AS label', 'count()'];
+      expect(splitAndTrimWithBracket(input)).toEqual(expected);
+    });
+
+    it('should keep commas inside single-quoted strings with doubled quotes', () => {
+      const input = "'it''s,ok' AS label, count()";
+      const expected = ["'it''s,ok' AS label", 'count()'];
+      expect(splitAndTrimWithBracket(input)).toEqual(expected);
+    });
+
+    it('should close strings after an even number of backslashes', () => {
+      const input = "'path\\\\', count()";
+      const expected = ["'path\\\\'", 'count()'];
+      expect(splitAndTrimWithBracket(input)).toEqual(expected);
+    });
+
+    it('should keep commas and brackets inside backtick-quoted identifiers', () => {
+      const input = "Timestamp, `a,b`, `x(y`, `it's` AS label, Body";
+      const expected = [
+        'Timestamp',
+        '`a,b`',
+        '`x(y`',
+        "`it's` AS label",
+        'Body',
+      ];
+      expect(splitAndTrimWithBracket(input)).toEqual(expected);
+    });
+
+    it('should keep the text after an unclosed quote', () => {
+      expect(splitAndTrimWithBracket('Timestamp, `a')).toEqual([
+        'Timestamp',
+        '`a',
+      ]);
+      expect(splitAndTrimWithBracket('a`b, c')).toEqual(['a`b, c']);
+      expect(splitAndTrimWithBracket("x, 'y, z")).toEqual(['x', "'y, z"]);
+    });
+
     it('should handle mixed quotes with commas', () => {
       const input = `col1, "double, quoted", col2, 'single, quoted', col3`;
       const expected = [
@@ -260,6 +370,313 @@ describe('utils', () => {
         'ServiceName DESC',
       ];
       expect(splitAndTrimWithBracket(input)).toEqual(expected);
+    });
+  });
+
+  describe('hasPositiveSeriesLimit', () => {
+    it('is true only for positive integers', () => {
+      expect(hasPositiveSeriesLimit(1)).toBe(true);
+      expect(hasPositiveSeriesLimit(250)).toBe(true);
+    });
+
+    it('is false for 0 (unlimited) and null/undefined (unset)', () => {
+      expect(hasPositiveSeriesLimit(0)).toBe(false);
+      expect(hasPositiveSeriesLimit(null)).toBe(false);
+      expect(hasPositiveSeriesLimit(undefined)).toBe(false);
+    });
+
+    it('is false for negative values', () => {
+      expect(hasPositiveSeriesLimit(-5)).toBe(false);
+    });
+  });
+
+  describe('convertToCategoricalChartConfig', () => {
+    const dateRange: [Date, Date] = [
+      new Date('2025-11-26T00:00:00Z'),
+      new Date('2025-11-27T00:00:00Z'),
+    ];
+
+    it('should remove granularity but keep groupBy', () => {
+      const config = {
+        granularity: '5 minute',
+        groupBy: 'ServiceName',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.granularity).toBeUndefined();
+      expect(convertedConfig.groupBy).toEqual('ServiceName');
+    });
+
+    it('should not inject a limit or orderBy when no seriesLimit is set', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.orderBy).toBeUndefined();
+      expect(convertedConfig.limit).toBeUndefined();
+    });
+
+    it('should apply seriesLimit as a limit ordered by the first value descending', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        seriesLimit: 5,
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.select[0]).toMatchObject({ alias: 'Value' });
+      expect(convertedConfig.orderBy).toEqual([
+        { valueExpression: '"Value"', ordering: 'DESC' },
+        { valueExpression: 'ServiceName', ordering: 'ASC' },
+      ]);
+      expect(convertedConfig.limit).toEqual({ limit: 5 });
+    });
+
+    it('should order by the existing alias when the first series has one', () => {
+      const config = {
+        select: [
+          { aggFn: 'count', valueExpression: '', alias: 'Request "Count"' },
+        ],
+        groupBy: 'ServiceName',
+        seriesLimit: 3,
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.select[0]).toMatchObject({
+        alias: 'Request "Count"',
+      });
+      expect(convertedConfig.orderBy).toEqual([
+        { valueExpression: '"Request ""Count"""', ordering: 'DESC' },
+        { valueExpression: 'ServiceName', ordering: 'ASC' },
+      ]);
+      expect(convertedConfig.limit).toEqual({ limit: 3 });
+    });
+
+    it('should preserve a user-supplied string orderBy over the value-descending default when a limit is set', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        seriesLimit: 5,
+        orderBy: 'ServiceName ASC',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      // The user's explicit ORDER BY wins; the limit then keeps the top rows
+      // according to that ordering rather than the value-descending default.
+      expect(convertedConfig.orderBy).toEqual('ServiceName ASC');
+      expect(convertedConfig.limit).toEqual({ limit: 5 });
+      // The default value alias is only injected when we synthesize an
+      // ordering, so an untouched series keeps no alias.
+      expect(convertedConfig.select[0]).not.toHaveProperty('alias');
+    });
+
+    it('should preserve a user-supplied array orderBy over the value-descending default when a limit is set', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        seriesLimit: 5,
+        orderBy: [
+          { valueExpression: 'ServiceName', ordering: 'DESC' as const },
+        ],
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.orderBy).toEqual([
+        { valueExpression: 'ServiceName', ordering: 'DESC' },
+      ]);
+      expect(convertedConfig.limit).toEqual({ limit: 5 });
+    });
+
+    it('should preserve a user-supplied orderBy even when no limit is set', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        orderBy: 'ServiceName ASC',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.orderBy).toEqual('ServiceName ASC');
+      expect(convertedConfig.limit).toBeUndefined();
+    });
+
+    it('should inject the value-descending default when the user orderBy is an empty string', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        seriesLimit: 5,
+        orderBy: '',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.orderBy).toEqual([
+        { valueExpression: '"Value"', ordering: 'DESC' },
+        { valueExpression: 'ServiceName', ordering: 'ASC' },
+      ]);
+      expect(convertedConfig.limit).toEqual({ limit: 5 });
+    });
+
+    it('should inject the value-descending ordering for ratio configs too', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        seriesLimit: 5,
+        seriesReturnType: 'ratio',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.orderBy).toEqual([
+        { valueExpression: '"Value"', ordering: 'DESC' },
+        { valueExpression: 'ServiceName', ordering: 'ASC' },
+      ]);
+      expect(convertedConfig.limit).toEqual({ limit: 5 });
+    });
+
+    it('should preserve an explicit limit over seriesLimit', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        seriesLimit: 5,
+        limit: { limit: 2 },
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.limit).toEqual({ limit: 2 });
+    });
+
+    it('should not inject an orderBy when there is no groupBy', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        seriesLimit: 5,
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const convertedConfig = convertToCategoricalChartConfig(config);
+
+      expect(convertedConfig.orderBy).toBeUndefined();
+    });
+
+    it('should not mutate the input config', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        groupBy: 'ServiceName',
+        seriesLimit: 5,
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      convertToCategoricalChartConfig(config);
+
+      expect(config.select[0]).not.toHaveProperty('alias');
+      expect(config.orderBy).toBeUndefined();
+      expect(config.limit).toBeUndefined();
+    });
+  });
+
+  describe('convertToNumberChartConfig', () => {
+    const dateRange: [Date, Date] = [
+      new Date('2025-11-26T00:00:00Z'),
+      new Date('2025-11-27T00:00:00Z'),
+    ];
+
+    it('drops granularity and groupBy', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        granularity: '5 minute',
+        groupBy: 'ServiceName',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      const converted = convertToNumberChartConfig(config);
+
+      expect(converted.granularity).toBeUndefined();
+      expect(converted.groupBy).toBeUndefined();
+    });
+
+    it('leaves showOperandSeries untouched without formulas', () => {
+      const config = {
+        select: [{ aggFn: 'count', valueExpression: '' }],
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      expect(convertToNumberChartConfig(config).showOperandSeries).toBe(
+        undefined,
+      );
+    });
+
+    it('always hides operand series for formula configs (HDX-5080)', () => {
+      // A number chart displays the first value column of the result, so the
+      // formula column must be the only projection — even when the stored
+      // config shows operand series on other display types.
+      const config = {
+        select: [
+          { aggFn: 'max', valueExpression: 'Value' },
+          { aggFn: 'max', valueExpression: 'Value' },
+        ],
+        formulas: [{ expression: 'A / B * 100' }],
+        granularity: '5 minute',
+        dateRange,
+      } as BuilderChartConfigWithDateRange;
+
+      expect(convertToNumberChartConfig(config).showOperandSeries).toBe(false);
+      expect(
+        convertToNumberChartConfig({ ...config, showOperandSeries: true })
+          .showOperandSeries,
+      ).toBe(false);
+    });
+  });
+
+  describe('hasCategoricalUserOrderBy', () => {
+    it('returns false for undefined', () => {
+      expect(hasNonEmptyOrderBy(undefined)).toBe(false);
+    });
+
+    it('returns false for null', () => {
+      expect(hasNonEmptyOrderBy(null)).toBe(false);
+    });
+
+    it('returns false for an empty string', () => {
+      expect(hasNonEmptyOrderBy('')).toBe(false);
+    });
+
+    it('returns false for a whitespace-only string', () => {
+      expect(hasNonEmptyOrderBy('   ')).toBe(false);
+    });
+
+    it('returns true for a non-empty string', () => {
+      expect(hasNonEmptyOrderBy('ServiceName ASC')).toBe(true);
+    });
+
+    it('returns false for an empty array', () => {
+      expect(hasNonEmptyOrderBy([])).toBe(false);
+    });
+
+    it('returns true for a non-empty array of sort specifications', () => {
+      expect(
+        hasNonEmptyOrderBy([
+          { valueExpression: 'ServiceName', ordering: 'DESC' },
+        ]),
+      ).toBe(true);
     });
   });
 
@@ -604,6 +1021,591 @@ describe('utils', () => {
       });
     });
 
+    it('should include saved default query and filter values in the template', () => {
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'Dashboard With Defaults',
+        tags: [],
+        tiles: [
+          {
+            id: 'tile1',
+            config: {
+              name: 'Log Tile',
+              source: 'source1',
+              select: '',
+              where: '',
+            },
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 6,
+          },
+        ],
+        savedQuery: 'level:error',
+        savedQueryLanguage: 'lucene',
+        savedFilterValues: [
+          {
+            type: 'lucene',
+            condition: 'ServiceName:"accounting"',
+          },
+        ],
+      };
+
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: {
+            databaseName: 'db1',
+            tableName: 'logs_table',
+          },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+
+      const template = convertToDashboardTemplate(dashboard, sources);
+
+      expect(template.savedQuery).toBe('level:error');
+      expect(template.savedQueryLanguage).toBe('lucene');
+      expect(template.savedFilterValues).toEqual([
+        { type: 'lucene', condition: 'ServiceName:"accounting"' },
+      ]);
+
+      const document = convertToDashboardDocument(template);
+      expect(document.savedQuery).toBe('level:error');
+      expect(document.savedQueryLanguage).toBe('lucene');
+      expect(document.savedFilterValues).toEqual([
+        { type: 'lucene', condition: 'ServiceName:"accounting"' },
+      ]);
+    });
+
+    describe('savedFilterValues export/import round trip', () => {
+      const baseSources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'logs_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+
+      const makeDashboard = (
+        savedFilterValues?: z.infer<
+          typeof DashboardSchema
+        >['savedFilterValues'],
+      ): z.infer<typeof DashboardSchema> => ({
+        id: 'dashboard1',
+        name: 'Service Filter Dashboard',
+        tags: [],
+        tiles: [
+          {
+            id: 'tile1',
+            config: {
+              name: 'Log Tile',
+              source: 'source1',
+              select: '',
+              where: '',
+            },
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 6,
+          },
+        ],
+        filters: [
+          {
+            id: 'filter1',
+            type: 'QUERY_EXPRESSION',
+            name: 'ServiceName Filter',
+            expression: 'ServiceName',
+            source: 'source1',
+          },
+        ],
+        ...(savedFilterValues !== undefined ? { savedFilterValues } : {}),
+      });
+
+      it('omits savedFilterValues when no services are selected (undefined)', () => {
+        const dashboard = makeDashboard(undefined);
+
+        const template = convertToDashboardTemplate(dashboard, baseSources);
+        expect(template.savedFilterValues).toBeUndefined();
+        expect('savedFilterValues' in template).toBe(false);
+
+        const document = convertToDashboardDocument(template);
+        expect(document.savedFilterValues).toBeUndefined();
+        expect('savedFilterValues' in document).toBe(false);
+      });
+
+      it('omits savedFilterValues when the selection is an empty array', () => {
+        const dashboard = makeDashboard([]);
+
+        const template = convertToDashboardTemplate(dashboard, baseSources);
+        expect(template.savedFilterValues).toBeUndefined();
+        expect('savedFilterValues' in template).toBe(false);
+
+        const document = convertToDashboardDocument(template);
+        expect(document.savedFilterValues).toBeUndefined();
+        expect('savedFilterValues' in document).toBe(false);
+      });
+
+      it('carries a single selected service through the round trip', () => {
+        const savedFilterValues = [
+          {
+            type: 'lucene' as const,
+            condition: 'ServiceName:"hdx-oss-dev-api"',
+          },
+        ];
+        const dashboard = makeDashboard(savedFilterValues);
+
+        const template = convertToDashboardTemplate(dashboard, baseSources);
+        expect(template.savedFilterValues).toEqual(savedFilterValues);
+
+        const document = convertToDashboardDocument(template);
+        expect(document.savedFilterValues).toEqual(savedFilterValues);
+      });
+
+      it('carries multiple selected services through the round trip', () => {
+        const savedFilterValues = [
+          {
+            type: 'lucene' as const,
+            condition:
+              '(ServiceName:"hdx-oss-dev-api" OR ServiceName:"hdx-oss-dev-app")',
+          },
+        ];
+        const dashboard = makeDashboard(savedFilterValues);
+
+        const template = convertToDashboardTemplate(dashboard, baseSources);
+        expect(template.savedFilterValues).toEqual(savedFilterValues);
+
+        const document = convertToDashboardDocument(template);
+        expect(document.savedFilterValues).toEqual(savedFilterValues);
+      });
+
+      it('carries selected values across multiple filter expressions', () => {
+        const savedFilterValues = [
+          {
+            type: 'lucene' as const,
+            condition:
+              '(ServiceName:"hdx-oss-dev-api" OR ServiceName:"hdx-oss-dev-app")',
+          },
+          { type: 'lucene' as const, condition: 'SeverityText:"error"' },
+        ];
+        const dashboard = makeDashboard(savedFilterValues);
+
+        const template = convertToDashboardTemplate(dashboard, baseSources);
+        expect(template.savedFilterValues).toEqual(savedFilterValues);
+
+        const document = convertToDashboardDocument(template);
+        expect(document.savedFilterValues).toEqual(savedFilterValues);
+      });
+
+      it('deep-clones savedFilterValues so the template does not alias the input', () => {
+        const savedFilterValues = [
+          {
+            type: 'lucene' as const,
+            condition: 'ServiceName:"hdx-oss-dev-api"',
+          },
+        ];
+        const dashboard = makeDashboard(savedFilterValues);
+
+        const template = convertToDashboardTemplate(dashboard, baseSources);
+        expect(template.savedFilterValues).not.toBe(
+          dashboard.savedFilterValues,
+        );
+        expect(template.savedFilterValues?.[0]).not.toBe(savedFilterValues[0]);
+
+        // Mutating the source after export must not leak into the template.
+        savedFilterValues[0].condition = 'ServiceName:"mutated"';
+        const exported = template.savedFilterValues?.[0];
+        expect(exported).toEqual({
+          type: 'lucene',
+          condition: 'ServiceName:"hdx-oss-dev-api"',
+        });
+      });
+
+      it('produces a template that validates against DashboardTemplateSchema', () => {
+        const dashboard = makeDashboard([
+          {
+            type: 'lucene' as const,
+            condition: 'ServiceName:"hdx-oss-dev-api"',
+          },
+        ]);
+
+        const template = convertToDashboardTemplate(dashboard, baseSources);
+        expect(() => DashboardTemplateSchema.parse(template)).not.toThrow();
+      });
+    });
+
+    it('should remap filter.appliesToSourceIds from IDs to names', () => {
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'logs_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+        {
+          id: 'source2',
+          name: 'Traces',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'traces_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'Mixed-Source Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [
+          {
+            // Multi-source scope — every ID resolves; both become names.
+            id: 'filter-multi',
+            type: 'QUERY_EXPRESSION',
+            name: 'Service',
+            expression: 'ServiceName',
+            source: 'source1',
+            appliesToSourceIds: ['source1', 'source2'],
+          },
+          {
+            // Mixed: one resolvable + one stale ID. Stale ID is dropped
+            // silently so the surviving names land in the template.
+            id: 'filter-partial',
+            type: 'QUERY_EXPRESSION',
+            name: 'Region',
+            expression: 'Region',
+            source: 'source1',
+            appliesToSourceIds: ['source1', 'deleted-source-id'],
+          },
+          {
+            // Every ID is stale → the array would be empty, which would
+            // import as "no tiles match". Field is omitted instead so the
+            // template imports as broadcast-to-all (safer default).
+            id: 'filter-all-unresolved',
+            type: 'QUERY_EXPRESSION',
+            name: 'Cluster',
+            expression: 'Cluster',
+            source: 'source1',
+            appliesToSourceIds: ['deleted-source-id'],
+          },
+          {
+            // Unscoped filter (field omitted in the source doc) must stay
+            // unscoped — no array gets materialized in the template.
+            id: 'filter-broadcast',
+            type: 'QUERY_EXPRESSION',
+            name: 'Env',
+            expression: 'Env',
+            source: 'source1',
+          },
+        ],
+      };
+
+      const template = convertToDashboardTemplate(dashboard, sources);
+
+      expect(template.filters).toEqual([
+        {
+          id: 'filter-multi',
+          type: 'QUERY_EXPRESSION',
+          name: 'Service',
+          expression: 'ServiceName',
+          source: 'Logs',
+          appliesToSourceIds: ['Logs', 'Traces'],
+        },
+        {
+          id: 'filter-partial',
+          type: 'QUERY_EXPRESSION',
+          name: 'Region',
+          expression: 'Region',
+          source: 'Logs',
+          appliesToSourceIds: ['Logs'],
+        },
+        {
+          id: 'filter-all-unresolved',
+          type: 'QUERY_EXPRESSION',
+          name: 'Cluster',
+          expression: 'Cluster',
+          source: 'Logs',
+          // appliesToSourceIds intentionally absent — empty result is
+          // collapsed to undefined so the import treats it as broadcast.
+        },
+        {
+          id: 'filter-broadcast',
+          type: 'QUERY_EXPRESSION',
+          name: 'Env',
+          expression: 'Env',
+          source: 'Logs',
+        },
+      ]);
+      // Explicitly absent rather than an empty array, which the import would
+      // read as "matches no tiles". Both are queried filters, pinned above.
+      for (const index of [2, 3]) {
+        const filter = template.filters![index];
+        expect(filter.type).toBe('QUERY_EXPRESSION');
+        expect(
+          filter.type === 'QUERY_EXPRESSION' && filter.appliesToSourceIds,
+        ).toBeUndefined();
+      }
+    });
+
+    it('should remap ad hoc filter sources and applies-to sources from IDs to names', () => {
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'logs_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+        {
+          id: 'source2',
+          name: 'Traces',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'traces_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'Ad hoc Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [
+          {
+            id: 'filter-scoped',
+            type: 'ADHOC',
+            name: 'Scoped',
+            sourceType: 'sql',
+            sources: ['source1', 'source2'],
+            appliesToSourceIds: ['source2', 'deleted-source-id'],
+            isVariableEnabled: true,
+            variableName: 'scoped',
+          },
+          {
+            id: 'filter-unresolved',
+            type: 'ADHOC',
+            name: 'Unresolved',
+            sourceType: 'sql',
+            sources: ['source1'],
+            appliesToSourceIds: ['deleted-source-id'],
+            isVariableEnabled: true,
+            variableName: 'unresolved',
+          },
+        ],
+      };
+
+      const template = convertToDashboardTemplate(dashboard, sources);
+
+      expect(template.filters).toEqual([
+        {
+          id: 'filter-scoped',
+          type: 'ADHOC',
+          name: 'Scoped',
+          sourceType: 'sql',
+          sources: ['Logs', 'Traces'],
+          appliesToSourceIds: ['Traces'],
+          isVariableEnabled: true,
+          variableName: 'scoped',
+        },
+        {
+          id: 'filter-unresolved',
+          type: 'ADHOC',
+          name: 'Unresolved',
+          sourceType: 'sql',
+          sources: ['Logs'],
+          isVariableEnabled: true,
+          variableName: 'unresolved',
+        },
+      ]);
+      expect(() => DashboardTemplateSchema.parse(template)).not.toThrow();
+    });
+
+    // Variable settings are dashboard-local — unlike `source` and
+    // `appliesToSourceIds` they reference nothing in the workspace, so they need
+    // no name↔ID remapping and must survive export verbatim.
+    it('should export filter variable settings unchanged while still remapping sources', () => {
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'logs_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'Variables Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [
+          {
+            id: 'filter-variable',
+            type: 'QUERY_EXPRESSION',
+            name: 'Service Name',
+            expression: 'ServiceName',
+            source: 'source1',
+            appliesToSourceIds: ['source1'],
+            isBroadcastEnabled: false,
+            isVariableEnabled: true,
+            variableName: 'Service_Name',
+          },
+        ],
+      };
+
+      const template = convertToDashboardTemplate(dashboard, sources);
+
+      expect(template.filters).toEqual([
+        {
+          id: 'filter-variable',
+          type: 'QUERY_EXPRESSION',
+          name: 'Service Name',
+          expression: 'ServiceName',
+          source: 'Logs',
+          appliesToSourceIds: ['Logs'],
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+          variableName: 'Service_Name',
+        },
+      ]);
+    });
+
+    it('should export a promql-label filter with its source id remapped to a name', () => {
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Prom',
+          connection: 'connection1',
+          kind: SourceKind.Promql,
+          from: { databaseName: 'db1', tableName: 'timeseries_table' },
+          timestampValueExpression: 'Timestamp',
+        },
+      ];
+
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'PromQL Filter Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [
+          {
+            id: 'filter-promql',
+            type: 'PROMETHEUS_LABEL',
+            name: 'Pod',
+            source: 'source1',
+            label: 'pod',
+            isBroadcastEnabled: false,
+            isVariableEnabled: true,
+            variableName: 'pod',
+          },
+        ],
+      };
+
+      const template = convertToDashboardTemplate(dashboard, sources);
+
+      expect(template.filters).toEqual([
+        {
+          id: 'filter-promql',
+          type: 'PROMETHEUS_LABEL',
+          name: 'Pod',
+          source: 'Prom',
+          label: 'pod',
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+          variableName: 'pod',
+        },
+      ]);
+      // Only queried filters broadcast, so no applies-to key is stamped on.
+      expect('appliesToSourceIds' in template.filters![0]).toBe(false);
+    });
+
+    // A `STATIC_LIST` filter references nothing in the workspace at all, so it
+    // must survive export untouched — in particular `source` must stay absent
+    // rather than being stamped with the empty string the name lookup returns
+    // for an unresolvable id, which the re-import would then reject.
+    it('should export a static-list filter with no source', () => {
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'connection1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'logs_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+
+      const staticFilter = {
+        id: 'filter-static',
+        type: 'STATIC_LIST' as const,
+        name: 'Environment',
+        options: ['prod', 'staging', 'dev'],
+        isBroadcastEnabled: false as const,
+        isVariableEnabled: true as const,
+        variableName: 'env',
+      };
+
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'Static Filter Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [
+          staticFilter,
+          {
+            id: 'filter-queried',
+            type: 'QUERY_EXPRESSION',
+            name: 'Service',
+            expression: 'ServiceName',
+            source: 'source1',
+          },
+        ],
+      };
+
+      const template = convertToDashboardTemplate(dashboard, sources);
+
+      expect(template.filters).toEqual([
+        staticFilter,
+        {
+          id: 'filter-queried',
+          type: 'QUERY_EXPRESSION',
+          name: 'Service',
+          expression: 'ServiceName',
+          source: 'Logs',
+        },
+      ]);
+      // No `source` key at all, rather than one holding the empty string the
+      // name lookup returns for an unresolvable id.
+      expect('source' in template.filters![0]).toBe(false);
+
+      // And back: the import path carries the filter through verbatim, so a
+      // round-trip through the template format is lossless.
+      expect(
+        convertToDashboardDocument({ ...template, filters: template.filters })
+          .filters?.[0],
+      ).toEqual(staticFilter);
+    });
+
     it('should convert a dashboard without filters to a dashboard template', () => {
       const dashboard: z.infer<typeof DashboardSchema> = {
         id: 'dashboard1',
@@ -930,6 +1932,152 @@ describe('utils', () => {
       expect(template.tiles[0].config).toMatchObject({
         configType: 'sql',
         connection: '',
+      });
+    });
+
+    describe('onClick id-mode target rewriting', () => {
+      const source: TSource = {
+        id: 'source1',
+        name: 'Logs',
+        connection: 'conn1',
+        kind: SourceKind.Log,
+        from: { databaseName: 'db1', tableName: 'logs_table' },
+        timestampValueExpression: 'Timestamp',
+        defaultTableSelectExpression: '',
+      };
+
+      const makeDashboard = (
+        onClick: unknown,
+      ): z.infer<typeof DashboardSchema> =>
+        DashboardSchema.parse({
+          id: 'dashboard1',
+          name: 'My Dashboard',
+          tags: [],
+          tiles: [
+            {
+              id: 'tile1',
+              config: {
+                name: 'Table Tile',
+                source: 'source1',
+                select: '',
+                where: '',
+                ...(onClick != null ? { onClick } : {}),
+              },
+              x: 0,
+              y: 0,
+              w: 6,
+              h: 6,
+            },
+          ],
+        });
+
+      it('rewrites a search onClick id to the source name', () => {
+        const dashboard = makeDashboard({
+          type: 'search',
+          target: { mode: 'id', id: 'source1' },
+          whereLanguage: 'sql',
+        });
+
+        const template = convertToDashboardTemplate(dashboard, [source]);
+
+        expect(template.tiles[0].config).toMatchObject({
+          onClick: {
+            type: 'search',
+            target: { mode: 'id', id: 'Logs' },
+            whereLanguage: 'sql',
+          },
+        });
+      });
+
+      it('rewrites a dashboard onClick id to the dashboard name', () => {
+        const dashboard = makeDashboard({
+          type: 'dashboard',
+          target: { mode: 'id', id: 'target-dash-id' },
+          whereLanguage: 'lucene',
+        });
+
+        const template = convertToDashboardTemplate(
+          dashboard,
+          [source],
+          [],
+          [{ id: 'target-dash-id', name: 'Ops Overview' }],
+        );
+
+        expect(template.tiles[0].config).toMatchObject({
+          onClick: {
+            type: 'dashboard',
+            target: { mode: 'id', id: 'Ops Overview' },
+            whereLanguage: 'lucene',
+          },
+        });
+      });
+
+      it('leaves template-mode onClick targets untouched', () => {
+        const dashboard = makeDashboard({
+          type: 'search',
+          target: { mode: 'template', template: '{{Src}}' },
+          whereLanguage: 'sql',
+        });
+
+        const template = convertToDashboardTemplate(dashboard, [source]);
+
+        expect(template.tiles[0].config).toMatchObject({
+          onClick: {
+            type: 'search',
+            target: { mode: 'template', template: '{{Src}}' },
+            whereLanguage: 'sql',
+          },
+        });
+      });
+
+      it('leaves an external onClick untouched (no source mapping)', () => {
+        const dashboard = makeDashboard({
+          type: 'external',
+          urlTemplate: 'https://grafana.example.com/d/abc?svc={{ServiceName}}',
+        });
+
+        const template = convertToDashboardTemplate(dashboard, [source]);
+
+        expect(template.tiles[0].config).toMatchObject({
+          onClick: {
+            type: 'external',
+            urlTemplate:
+              'https://grafana.example.com/d/abc?svc={{ServiceName}}',
+          },
+        });
+      });
+
+      it('drops a search onClick whose source was deleted', () => {
+        const dashboard = makeDashboard({
+          type: 'search',
+          target: { mode: 'id', id: 'missing-source' },
+          whereLanguage: 'sql',
+        });
+
+        const template = convertToDashboardTemplate(dashboard, [source]);
+
+        expect(
+          (template.tiles[0].config as { onClick?: unknown }).onClick,
+        ).toBeUndefined();
+      });
+
+      it('drops a dashboard onClick whose dashboard was deleted', () => {
+        const dashboard = makeDashboard({
+          type: 'dashboard',
+          target: { mode: 'id', id: 'missing-dash' },
+          whereLanguage: 'sql',
+        });
+
+        const template = convertToDashboardTemplate(
+          dashboard,
+          [source],
+          [],
+          [{ id: 'other-dash', name: 'Other' }],
+        );
+
+        expect(
+          (template.tiles[0].config as { onClick?: unknown }).onClick,
+        ).toBeUndefined();
       });
     });
   });
@@ -1775,6 +2923,85 @@ describe('utils', () => {
         // This test case illustrates that subsequent clauses will also be extracted.
         settingsClause: 'SETTINGS opt = 1, cast = 1 FORMAT json',
       },
+      {
+        label: 'settings inside an identifier',
+        sql: 'SELECT * FROM table WHERE AppSettings = 1 SETTINGS opt = 1',
+        withoutSettingsClause: 'SELECT * FROM table WHERE AppSettings = 1',
+        settingsClause: 'SETTINGS opt = 1',
+      },
+      {
+        label: 'settings inside a string literal',
+        sql: "SELECT * FROM table WHERE MetricName = 'app.settings.reloads'",
+        withoutSettingsClause:
+          "SELECT * FROM table WHERE MetricName = 'app.settings.reloads'",
+        settingsClause: undefined,
+      },
+      {
+        label: 'settings as a dotted path or map column',
+        sql: "SELECT * FROM table WHERE LogAttributes.settings = 'x' AND settings['k'] = 'y'",
+        withoutSettingsClause:
+          "SELECT * FROM table WHERE LogAttributes.settings = 'x' AND settings['k'] = 'y'",
+        settingsClause: undefined,
+      },
+      {
+        label: 'apostrophe in a comment before SETTINGS',
+        sql: "SELECT * FROM table -- don't count retries\nWHERE a = 1 SETTINGS max_threads = 1",
+        withoutSettingsClause:
+          "SELECT * FROM table -- don't count retries\nWHERE a = 1",
+        settingsClause: 'SETTINGS max_threads = 1',
+      },
+      {
+        label: 'apostrophe in a block comment before SETTINGS',
+        sql: "SELECT * FROM table /* don't count retries */ WHERE a = 1 SETTINGS max_threads = 1",
+        withoutSettingsClause:
+          "SELECT * FROM table /* don't count retries */ WHERE a = 1",
+        settingsClause: 'SETTINGS max_threads = 1',
+      },
+      {
+        label: 'settings inside a comment',
+        sql: 'SELECT * FROM table -- SETTINGS in a comment\nWHERE a = 1',
+        withoutSettingsClause:
+          'SELECT * FROM table -- SETTINGS in a comment\nWHERE a = 1',
+        settingsClause: undefined,
+      },
+      {
+        label: 'escaped quote in a string literal before settings',
+        sql: "SELECT * FROM table WHERE a = 'it\\'s settings' SETTINGS max_threads = 1",
+        withoutSettingsClause:
+          "SELECT * FROM table WHERE a = 'it\\'s settings'",
+        settingsClause: 'SETTINGS max_threads = 1',
+      },
+      {
+        label: 'doubled quote in a string literal before settings',
+        sql: "SELECT * FROM table WHERE a = 'it''s settings' SETTINGS max_threads = 1",
+        withoutSettingsClause: "SELECT * FROM table WHERE a = 'it''s settings'",
+        settingsClause: 'SETTINGS max_threads = 1',
+      },
+      {
+        label: 'settings as a quoted identifier',
+        sql: 'SELECT `settings`, "settings" FROM table SETTINGS max_threads = 1',
+        withoutSettingsClause: 'SELECT `settings`, "settings" FROM table',
+        settingsClause: 'SETTINGS max_threads = 1',
+      },
+      {
+        label: 'settings as a table name',
+        sql: 'SELECT name FROM system.settings WHERE changed SETTINGS max_threads = 1',
+        withoutSettingsClause: 'SELECT name FROM system.settings WHERE changed',
+        settingsClause: 'SETTINGS max_threads = 1',
+      },
+      {
+        label: 'lowercase keyword followed by a newline',
+        sql: 'SELECT * FROM table WHERE a = 1 settings\n  max_threads = 1',
+        withoutSettingsClause: 'SELECT * FROM table WHERE a = 1',
+        settingsClause: 'settings\n  max_threads = 1',
+      },
+      {
+        label: 'string value inside the SETTINGS clause',
+        sql: "SELECT * FROM table SETTINGS short_circuit_function_evaluation = 'force_enable'",
+        withoutSettingsClause: 'SELECT * FROM table',
+        settingsClause:
+          "SETTINGS short_circuit_function_evaluation = 'force_enable'",
+      },
     ])(
       'Extracts SETTINGS clause from: "$label" query',
       ({ sql, settingsClause, withoutSettingsClause }) => {
@@ -2145,6 +3372,252 @@ describe('utils', () => {
         database: 'db',
         table: 'tbl',
       });
+    });
+  });
+
+  describe('pickBucketTimestampColumn', () => {
+    // Stubs the small subset of Metadata that pickBucketTimestampColumn needs.
+    function makeMetadata(types: Record<string, string>) {
+      return {
+        getColumn: async ({ column }: { column: string }) =>
+          // eslint-disable-next-line security/detect-object-injection
+          types[column] ? { type: types[column] } : undefined,
+      };
+    }
+
+    const opts = {
+      databaseName: 'logs',
+      tableName: 'events',
+      connectionId: 'conn',
+    };
+
+    it('single-column input passes through unchanged', async () => {
+      const metadata = makeMetadata({ Timestamp: 'DateTime64(9)' });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'Timestamp',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('Timestamp');
+    });
+
+    it('single-column input does not hit metadata', async () => {
+      const getColumn = jest.fn();
+      const metadata = { getColumn };
+      await pickBucketTimestampColumn({
+        timestampValueExpression: 'EventTime',
+        metadata,
+        ...opts,
+      });
+      expect(getColumn).not.toHaveBeenCalled();
+    });
+
+    it('multi-column: highest-precision DateTime wins, Date skipped (EventDate, EventTime)', async () => {
+      const metadata = makeMetadata({
+        EventDate: 'Date',
+        EventTime: 'DateTime',
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'EventDate, EventTime',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('EventTime');
+    });
+
+    it('multi-column: DateTime64 beats DateTime (EventDate, EventTime, Timestamp)', async () => {
+      const metadata = makeMetadata({
+        EventDate: 'Date',
+        EventTime: 'DateTime',
+        Timestamp: 'DateTime64(9)',
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'EventDate, EventTime, Timestamp',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('Timestamp');
+    });
+
+    it('multi-column: order does not change the pick (Timestamp first)', async () => {
+      const metadata = makeMetadata({
+        Timestamp: 'DateTime64(9)',
+        EventTime: 'DateTime',
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'Timestamp, EventTime',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('Timestamp');
+    });
+
+    it('all-Date fallback: returns first token with a warn', async () => {
+      const metadata = makeMetadata({
+        EventDate: 'Date',
+        OtherDate: 'Date',
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'EventDate, OtherDate',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('EventDate');
+    });
+
+    it('Nullable(DateTime) still classifies as DateTime', async () => {
+      const metadata = makeMetadata({
+        EventDate: 'Date',
+        EventTime: 'Nullable(DateTime)',
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'EventDate, EventTime',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('EventTime');
+    });
+
+    it('DateTime with an explicit timezone still classifies as DateTime', async () => {
+      const metadata = makeMetadata({
+        EventDate: 'Date',
+        EventTime: "DateTime('UTC')",
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'EventDate, EventTime',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('EventTime');
+    });
+
+    it('Nullable(DateTime) with an explicit timezone still classifies as DateTime', async () => {
+      const metadata = makeMetadata({
+        EventDate: 'Date',
+        EventTime: "Nullable(DateTime('Europe/Berlin'))",
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'EventDate, EventTime',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('EventTime');
+    });
+
+    it('higher DateTime64 precision wins over lower', async () => {
+      const metadata = makeMetadata({
+        TsMs: 'DateTime64(3)',
+        TsNs: 'DateTime64(9)',
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'TsMs, TsNs',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('TsNs');
+    });
+
+    it('unresolvable column does not block resolution of the resolvable sibling', async () => {
+      const metadata = makeMetadata({
+        EventTime: 'DateTime',
+        // CteAlias intentionally omitted; metadata.getColumn returns undefined
+      });
+      expect(
+        await pickBucketTimestampColumn({
+          timestampValueExpression: 'CteAlias, EventTime',
+          metadata,
+          ...opts,
+        }),
+      ).toBe('EventTime');
+    });
+  });
+
+  describe('convertDateRangeToGranularityString', () => {
+    const range = (seconds: number): [Date, Date] => [
+      new Date(0),
+      new Date(seconds * 1000),
+    ];
+
+    it('infers 30 second buckets for a short range with no minimum', () => {
+      // 60 buckets max -> a 30-minute range infers 30 second buckets
+      expect(convertDateRangeToGranularityString(range(30 * 60))).toBe(
+        '30 second',
+      );
+    });
+
+    it('floors a short range up to the given minimum', () => {
+      expect(
+        convertDateRangeToGranularityString(range(30 * 60), undefined, 60),
+      ).toBe('1 minute');
+    });
+
+    it('is a no-op when the inferred bucket is already above the minimum', () => {
+      // 5-hour range infers 5 minute buckets, well above a 1-minute floor
+      expect(
+        convertDateRangeToGranularityString(range(5 * 3600), undefined, 60),
+      ).toBe('5 minute');
+    });
+
+    it('rounds a minimum that falls between two granularities up to the next one', () => {
+      // a 90-second minimum has no exact match; 5 minute is the next granularity up
+      expect(
+        convertDateRangeToGranularityString(range(30 * 60), undefined, 90),
+      ).toBe('5 minute');
+    });
+
+    it('treats an unset minimum the same as 0 (no flooring)', () => {
+      expect(
+        convertDateRangeToGranularityString(range(30 * 60), undefined, 0),
+      ).toBe('30 second');
+    });
+  });
+
+  describe('getPercentileAggFnLevel', () => {
+    it.each([
+      ['p50', 0.5],
+      ['p90', 0.9],
+      ['p95', 0.95],
+      ['p99', 0.99],
+    ])('returns the level of %s', (aggFn, level) => {
+      expect(getPercentileAggFnLevel(aggFn)).toBe(level);
+    });
+
+    it.each(['quantile', 'avg', 'p75', 'toString', undefined])(
+      'returns undefined for %s',
+      aggFn => {
+        expect(getPercentileAggFnLevel(aggFn)).toBeUndefined();
+      },
+    );
+  });
+
+  describe('resolvePercentileAggFn', () => {
+    it('rewrites a percentile shorthand as quantile with its level', () => {
+      expect(
+        resolvePercentileAggFn({
+          aggFn: 'p95',
+          valueExpression: 'Duration',
+          aggCondition: "ServiceName = 'api'",
+        }),
+      ).toEqual({
+        aggFn: 'quantile',
+        level: 0.95,
+        valueExpression: 'Duration',
+        aggCondition: "ServiceName = 'api'",
+      });
+    });
+
+    it('returns other select items unchanged', () => {
+      const select = { aggFn: 'quantile', level: 0.5, valueExpression: 'x' };
+      expect(resolvePercentileAggFn(select)).toBe(select);
     });
   });
 });

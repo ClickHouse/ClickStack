@@ -56,17 +56,19 @@ custom OTel configurations without rebuilding the collector.
 
 ### Receivers
 
-| Component        | Module  | Used in                                           |
-| ---------------- | ------- | ------------------------------------------------- |
-| `nop`            | core    | OpAMP controller                                  |
-| `otlp`           | core    | standalone configs, OpAMP controller, smoke tests |
-| `dockerstats`    | contrib | user configs                                      |
-| `filelog`        | contrib | user configs                                      |
-| `fluentforward`  | contrib | standalone configs, OpAMP controller, smoke tests |
-| `hostmetrics`    | contrib | custom.config.yaml                                |
-| `k8scluster`     | contrib | user configs                                      |
-| `kubeletstats`   | contrib | user configs                                      |
-| `prometheus`     | contrib | OpAMP controller, smoke tests                     |
+| Component       | Module  | Used in                                                 |
+| --------------- | ------- | ------------------------------------------------------- |
+| `nop`           | core    | OpAMP controller                                        |
+| `otlp`          | core    | standalone configs, OpAMP controller, smoke tests       |
+| `datadog`       | contrib | OpAMP controller (opt-in via `ENABLE_DATADOG_RECEIVER`) |
+| `dockerstats`   | contrib | user configs                                            |
+| `filelog`       | contrib | user configs                                            |
+| `fluentforward` | contrib | standalone configs, OpAMP controller, smoke tests       |
+| `hostmetrics`   | contrib | custom.config.yaml                                      |
+| `k8scluster`    | contrib | user configs                                            |
+| `kubeletstats`  | contrib | user configs                                            |
+| `prometheus`    | contrib | OpAMP controller, smoke tests                           |
+| `statsd`        | contrib | user configs                                            |
 
 ### Processors
 
@@ -101,10 +103,11 @@ custom OTel configurations without rebuilding the collector.
 
 ### Connectors
 
-| Component | Module  | Used in                              |
-| --------- | ------- | ------------------------------------ |
-| `forward` | core    | included for utility                 |
-| `routing` | contrib | standalone configs, OpAMP controller |
+| Component      | Module  | Used in                              |
+| -------------- | ------- | ------------------------------------ |
+| `forward`      | core    | included for utility                 |
+| `routing`      | contrib | standalone configs, OpAMP controller |
+| `span_metrics` | contrib | user configs                         |
 
 ### Extensions
 
@@ -127,6 +130,401 @@ custom OTel configurations without rebuilding the collector.
 | `http`   | core   |
 | `https`  | core   |
 | `yaml`   | core   |
+
+## Ingesting Datadog traces, metrics, and logs
+
+The `datadogreceiver` contrib component is compiled into the binary so a
+Datadog Agent can ship **traces, metrics, and logs** to HyperDX. The receiver
+runs a single HTTP server on `:8126` that serves the Datadog intake API for
+all three signals and translates them into OTLP, which flows through the
+existing `traces`, `metrics`, and `logs` pipelines into ClickHouse. It is
+**opt-in**:
+
+- In OpAMP supervisor mode, set `ENABLE_DATADOG_RECEIVER=true` on the API/
+  OpAMP process. `buildOtelCollectorConfig()` then emits the `datadog`
+  receiver (listening on `0.0.0.0:8126`) and attaches it to the `traces`,
+  `metrics`, and `logs/in` pipelines.
+- In standalone mode, add a `datadog` receiver block to your collector config
+  and add `datadog` to the `traces`, `metrics`, and `logs/in` pipeline
+  receivers.
+
+Point the Datadog Agent at the collector's `:8126` endpoint (e.g.
+`DD_APM_DD_URL` for traces, `DD_DD_URL` for metrics, and the logs endpoint
+config for logs).
+
+### Authentication
+
+In OpAMP supervisor mode, when collector authentication is enforced the
+receiver authenticates against the team API keys (same as `otlp/hyperdx`) via
+the `DD-API-KEY` header. Set the Datadog Agent's `DD_API_KEY` to a HyperDX
+team ingestion API key.
+
+## Computing span metrics from ingested traces
+
+`spanmetricsconnector` is compiled in so span-derived RED metrics (call
+counts, a duration histogram) can be computed from any traces the collector
+ingests — works with `otlp/hyperdx` directly, and is most useful alongside
+[`datadogreceiver`](#ingesting-datadog-traces-metrics-and-logs) above, since
+Datadog Agent traces otherwise only get RED metrics the same way any other
+trace source does today: computed at query time from the traces table
+(`packages/app/src/serviceDashboard.ts`'s `getExpressions`). This connector
+precomputes them once at the collector instead of per query, and adds an
+exponential-histogram latency series HyperDX's ClickHouse schema already
+has a dedicated table for (below). The component's config key is
+`span_metrics` (the module is still named
+`spanmetricsconnector`, and `spanmetrics` still works as a deprecated
+alias, but new configs should use the current name).
+
+A connector has to be declared two places: under a top-level `connectors:`
+block *and* referenced in a pipeline's `receivers`/`exporters`. Declaring
+only the reference fails validation —
+`service::pipelines::traces: references exporter "span_metrics" which is
+not configured` — since the connector was never instantiated.
+
+Both examples set five more fields on the connector itself, beyond the
+bare minimum:
+
+- `aggregation_temporality: AGGREGATION_TEMPORALITY_DELTA` — the
+  connector defaults to cumulative, which doesn't mix safely with the
+  `series_expiration`/`aggregation_cardinality_limit` pair below: expiring
+  a series deletes its accumulator, so the *next* span for that same
+  service+operation restarts its `calls` counter from 1 rather than
+  continuing it — an ordinary counter reset, except HyperDX's own
+  cumulative-rate SQL (`packages/common-utils/src/core/renderChartConfig.ts`,
+  `greatest(Value - lagInFrame(Value), 0)`) doesn't special-case resets;
+  it clamps the negative/zero delta and moves on. For a series that's
+  quiet for long enough between spans to keep expiring, every emitted
+  value stays `1` forever and every diffed delta is `0` — an `increase`
+  chart on `traces.span.metrics.calls` reads flat zero for an endpoint
+  that's actually serving traffic. Delta temporality passes `Value`
+  straight through with no diffing (same file, `AggregationTemporality =
+  1` branch), so it isn't exposed to this at all.
+- `namespace: traces.span.metrics` — this is already the connector's
+  default (v0.155.0's `DefaultNamespace`), so it's set here for
+  explicitness rather than to avoid a collision: pinning it keeps the
+  emitted names (`traces.span.metrics.calls`/`.duration`) stable and
+  obvious from the local config even if a future version ever changes
+  that default.
+- `histogram.exponential.max_size: 160` — without it, the connector
+  defaults to an *explicit*-bucket duration histogram
+  (`otel_metrics_histogram`), not the exponential one
+  (`otel_metrics_exponential_histogram`) HyperDX's ClickHouse schema
+  already has a dedicated table for; this is what actually gets you
+  that table instead of the default bucket set.
+- `aggregation_cardinality_limit` — `spanmetrics` aggregates unbounded by
+  default, and its in-memory dimension map is a separate piece of state
+  from the pipeline's own data flow, so `memory_limiter` does not protect
+  it (that only refuses *incoming* data at the pipeline boundary). On a
+  Datadog-firehose source in particular, high-cardinality span names grow
+  that map until the collector OOMs regardless of `memory_limiter`'s own
+  limit. Set an explicit cap.
+- `series_expiration` — pairs with the cap above: without it, a cap alone
+  just changes *when* it hurts, since the connector never expires
+  anything by default. Specifically `series_expiration`, not
+  `metrics_expiration` — they're different fields (both real, both
+  default to "never"): `metrics_expiration` only retires a whole
+  service+operation's metric object once *no* spans for it arrive for
+  that long, while `series_expiration` evicts individual stale dimension
+  *combinations* from the cardinality-bounded map while other series
+  under the same metric stay active. A cardinality burst fills the map
+  with individual dimension combinations, not whole metrics, so
+  `series_expiration` is the one that actually frees room for new
+  series afterwards.
+
+**In standalone mode**, `traces`/`metrics` are plain pipelines in your own
+config file, so you can add `span_metrics` to them directly. They already
+inherit `processors: [memory_limiter, batch]` from the base
+`docker/otel-collector/config.yaml` (loaded first), so there's nothing to
+add for that here — see ["Overriding base
+components"](#overriding-base-components-via-custom_otelcol_config_file)
+below for when you'd want to retune it. Confmap replaces a pipeline's
+`receivers:`/`exporters:` list wholesale rather than appending to it, so
+Datadog *trace* data only reaches `span_metrics` if `datadog` is re-listed
+on `traces: receivers:` specifically — it's a receiver on the `traces`
+pipeline that `span_metrics` consumes as an exporter there, so putting
+`datadog` on `metrics: receivers:` instead (for the Datadog section's own
+native-metrics ingestion) does nothing for span-derived metrics. The
+example below deliberately leaves the trace-side `datadog` out: an
+unconditional reference here would break this exact example for anyone
+who *hasn't* configured it (`references receiver "datadog" which is not
+configured`, failing the whole config, not just this pipeline) — the two
+cases can't both be satisfied by one copy-pasted block, so check which one
+applies to you before using it:
+
+```yaml
+connectors:
+  span_metrics:
+    namespace: traces.span.metrics
+    aggregation_temporality: AGGREGATION_TEMPORALITY_DELTA
+    histogram:
+      exponential:
+        max_size: 160
+    aggregation_cardinality_limit: 10000
+    series_expiration: 5m
+service:
+  pipelines:
+    traces:
+      # Add `datadog` here too if (and only if) you configured it per the
+      # Datadog section above - this list replaces the base one rather
+      # than adding to it.
+      receivers: [otlp/hyperdx]
+      exporters: [clickhouse, span_metrics]
+    metrics:
+      receivers: [otlp/hyperdx, span_metrics]
+```
+
+**In OpAMP supervisor mode, editing the default `traces`/`metrics` pipelines
+will not work** — `receivers:`/`exporters:` on those pipelines are set
+dynamically by `opampController.ts`, and the remote config overwrites (not
+merges) those keys, the same way it does for every pipeline it manages (see
+`docker/otel-collector/config.yaml`'s note on `processors:` above). Adding
+`span_metrics` there from `CUSTOM_OTELCOL_CONFIG_FILE` gets silently
+dropped — no error, the connector is just compiled in and wired to nothing.
+Use separate pipeline names instead, which the remote config never touches.
+Unlike the standalone case, these are brand new pipeline names with nothing
+to inherit from, so `processors:` does need to be declared explicitly here
+— but only with `memory_limiter` on `traces/spanmetrics`, not `batch` too:
+its only exporter is the connector itself, not a network call, so batching
+a second copy of spans already batched in `traces` just adds latency
+(up to the batch timeout) and memory for no export benefit. `batch` earns
+its place on `metrics/spanmetrics`, which does export to ClickHouse:
+
+```yaml
+connectors:
+  span_metrics:
+    namespace: traces.span.metrics
+    aggregation_temporality: AGGREGATION_TEMPORALITY_DELTA
+    histogram:
+      exponential:
+        max_size: 160
+    aggregation_cardinality_limit: 10000
+    series_expiration: 5m
+service:
+  pipelines:
+    traces/spanmetrics:
+      # Add `datadog` here too if you've defined that receiver by any
+      # means (ENABLE_DATADOG_RECEIVER=true, or your own definition via
+      # CUSTOM_OTELCOL_CONFIG_FILE) - an undefined receiver fails the
+      # whole config (every pipeline, not just this one).
+      receivers: [otlp/hyperdx]
+      exporters: [span_metrics]
+      processors: [memory_limiter]
+    metrics/spanmetrics:
+      receivers: [span_metrics]
+      exporters: [clickhouse]
+      processors: [memory_limiter, batch]
+```
+
+Both shapes above are verified against the real compiled binary via
+`otelcontribcol validate --config`, including the two failure modes noted
+inline and every connector field. The standalone shape was also actually
+run (`otelcontribcol --config ...`, not just `validate`): it reaches
+`"Everything is ready. Begin running and processing data."` and starts the
+`span_metrics` connector, confirming `validate`'s static schema/graph
+checks aren't hiding a startup-only failure here.
+
+## Ingesting StatsD metrics
+
+`statsdreceiver` is compiled in so StatsD-formatted metrics can be ingested
+directly, without a separate StatsD-to-OTLP bridge — this covers any StatsD
+client, not just a particular vendor's dialect. It also understands the
+DogStatsD tag extension: valued tags (`#tag:value`) work with no extra
+config, but bare tags (`#mytag`, no value) need `enable_simple_tags: true`
+(set below) or they're silently dropped.
+
+**This component does not support horizontally-scaled deployments** — not
+a HyperDX-specific limitation, it's stated directly in the upstream
+component's own docs. Aggregation state lives independently in each
+collector instance's memory with no cross-replica coordination, so the
+same metric landing on two different replicas (e.g. behind a
+load-balanced Service) gets aggregated separately by each one instead of
+together, silently splitting/undercounting it. HyperDX's default
+deployments (`docker-compose.yml`, the all-in-one image) run the
+OpAMP-managed collector as a single instance, so this doesn't bite out of
+the box — it only matters once *some* collector instance ingesting
+`statsd` is scaled to multiple replicas, at which point that traffic
+needs to go to one dedicated single-replica instance instead.
+
+`docker-compose.yml`/`docker-compose.dev.yml` have an `8125/udp` port
+mapping for the `otel-collector` service, commented out by default —
+uncomment it to enable statsd ingestion. It's opt-in rather than always
+on because a fixed host port mapping fails that service's entire startup
+if something else on the host (e.g. a local StatsD daemon or Datadog
+Agent) already owns 8125/udp, which would otherwise break the default
+stack for anyone not using this feature. The standalone/all-in-one images
+also `EXPOSE 8125/udp` (metadata only, doesn't reserve the host port on
+its own).
+
+**In standalone mode**, `metrics` is a plain pipeline in your own config
+file, so add `statsd` to it directly:
+
+```yaml
+receivers:
+  statsd:
+    # Defaults to localhost:8125, which only accepts local traffic -
+    # 0.0.0.0 is required here since traffic arrives from outside the
+    # container (the published port above forwards to the container's
+    # own loopback otherwise).
+    endpoint: 0.0.0.0:8125
+    enable_simple_tags: true
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp/hyperdx, statsd]
+```
+
+**In OpAMP supervisor mode** (HyperDX's default), editing the `metrics`
+pipeline this way will not work: `receivers:`/`exporters:` on it are set
+dynamically by `opampController.ts`, and the remote config overwrites
+(not merges) those keys — see the [span metrics section
+above](#computing-span-metrics-from-ingested-traces) for the same
+behavior. Adding `statsd` to `metrics.receivers` from
+`CUSTOM_OTELCOL_CONFIG_FILE` gets silently dropped: no error, the receiver
+just starts and is wired to nothing. Use a separate pipeline name instead,
+which the remote config never touches:
+
+```yaml
+receivers:
+  statsd:
+    endpoint: 0.0.0.0:8125
+    enable_simple_tags: true
+service:
+  pipelines:
+    metrics/statsd:
+      receivers: [statsd]
+      exporters: [clickhouse]
+      processors: [memory_limiter, batch]
+```
+
+Both shapes are verified against the real compiled binary via
+`otelcontribcol validate --config`, and the standalone shape was also
+actually run (`otelcontribcol --config ...`, not just `validate`),
+reaching `"Everything is ready. Begin running and processing data."` —
+the same rigor as the span metrics section above, using the same
+multi-`--config` merge the container actually uses.
+
+## Overriding base components via `CUSTOM_OTELCOL_CONFIG_FILE`
+
+The collector ships with a default `memory_limiter` processor sized for a
+small (~2 GiB) container. On larger pods you typically want to switch to
+`limit_percentage`/`spike_limit_percentage` mode so the limit scales with
+the pod's memory allocation.
+
+The OTel `confmap` package merges YAML maps **leaf-by-leaf** rather than
+replacing a block wholesale, and the `memorylimiterprocessor` silently
+prefers `limit_mib` over `limit_percentage` when both are set. The
+combination means you cannot switch the default `memory_limiter` to
+percentage mode by leaf-merging into the existing block — your percentage
+values land in `effective.yaml` but the inherited mib values still win at
+runtime.
+
+The supported pattern is to **define a new processor with a different
+name** and swap the pipeline `processors:` lists in
+`CUSTOM_OTELCOL_CONFIG_FILE` to reference it:
+
+```yaml
+# custom.config.yaml
+processors:
+  memory_limiter/custom:
+    check_interval: 5s
+    limit_percentage: 75
+    spike_limit_percentage: 25
+
+service:
+  pipelines:
+    traces:
+      processors: [memory_limiter/custom, transform/session_id, batch]
+    metrics:
+      processors: [memory_limiter/custom, batch]
+    logs/out-default:
+      processors: [memory_limiter/custom, transform, transform/session_id, batch]
+    logs/out-rrweb:
+      processors: [memory_limiter/custom, transform/session_id, batch]
+```
+
+After restart, the collector instantiates `memory_limiter/custom` (and not
+the unused default `memory_limiter`). You can confirm by checking
+`/etc/otel/supervisor-data/effective.yaml` and the `"Memory limiter
+configured"` log line emitted at collector start.
+
+### Example: tuning the `batch` processor
+
+The default `batch` processor is sized for ClickHouse
+(`send_batch_size: 10000`, `timeout: 5s`). If your workload needs
+lower-latency exports — for example, latency-sensitive traces or a
+short-window smoke test that asserts shortly after emitting — define a
+new `batch` with the tuning you want and swap the pipelines to use it:
+
+```yaml
+# custom.config.yaml
+processors:
+  batch/lowlatency:
+    send_batch_size: 1000
+    send_batch_max_size: 2000
+    timeout: 500ms
+
+service:
+  pipelines:
+    traces:
+      processors: [memory_limiter, transform/session_id, batch/lowlatency]
+    logs/out-default:
+      processors: [memory_limiter, transform, transform/session_id, batch/lowlatency]
+```
+
+Notes:
+
+- You only need to re-declare the pipelines you want to retune; pipelines
+  you don't mention keep the default `batch` from the base config. In the
+  example above, `metrics` and `logs/out-rrweb` continue using the default
+  `batch`.
+- Processor list order matters. Keep `memory_limiter` ahead of the batch
+  processor so back-pressure applies before batching.
+- Larger batches are friendlier to ClickHouse (fewer inserts, fewer
+  MergeTree parts). The defaults — `send_batch_size: 10000`, `timeout: 5s`
+  — are the recommended starting point; only tune them when you have a
+  specific reason.
+- You can combine swap blocks. Define both `memory_limiter/custom` and
+  `batch/lowlatency`, and reference both in the same pipeline
+  (e.g. `processors: [memory_limiter/custom, batch/lowlatency]`).
+
+You can verify the new processor is actually running (not just present in
+`effective.yaml`) by querying the collector's Prometheus metrics endpoint
+on port `8888` and looking for the new `processor` label:
+
+```sh
+curl -s http://localhost:8888/metrics | grep 'processor="batch/lowlatency"'
+# otelcol_processor_batch_batch_send_size_count{processor="batch/lowlatency"} 15
+# otelcol_processor_batch_timeout_trigger_send_total{processor="batch/lowlatency"} 15
+```
+
+### Lighter-weight option: env vars for the default `batch`
+
+If you only need to tune `send_batch_size`, `send_batch_max_size`, or
+`timeout` on the default `batch` processor and don't need to define a
+second processor, the existing env vars also work without a custom config
+file:
+
+- `HYPERDX_OTEL_BATCH_SEND_BATCH_SIZE` (default `10000`)
+- `HYPERDX_OTEL_BATCH_SEND_BATCH_MAX_SIZE` (default `0`, meaning no upper
+  bound)
+- `HYPERDX_OTEL_BATCH_TIMEOUT` (default `5s`)
+
+These are read directly from the base `config.yaml`, so they apply
+everywhere the default `batch` is referenced. Use the swap pattern when
+you need different settings for different pipelines, when you want to
+combine batch + memory_limiter changes, or when you want to override
+`memory_limiter` (which has no equivalent env-var path).
+
+The same swap pattern works for any other base processor (`transform`,
+`resourcedetection`, …) — define a new component with a different name
+and re-declare the pipelines that should use it.
+
+> Pipeline `processors:` lists live in `docker/otel-collector/config.yaml`
+> (for OpAMP supervisor mode) and `docker/otel-collector/config.standalone.yaml`
+> (for standalone mode). The OpAMP remote config from
+> `packages/api/src/opamp/controllers/opampController.ts` intentionally
+> does **not** set `processors:` on pipelines, so your bootstrap+custom
+> merge is not overwritten.
 
 ## Upgrading the OTel Collector version
 
@@ -208,7 +606,7 @@ codebase without needing to publish a Go module tag on every change.
    ```yaml
    receivers:
      - gomod:
-         github.com/hyperdxio/hyperdx/packages/otel-collector/receiver/myreceiver
+         github.com/ClickHouse/ClickStack/packages/otel-collector/receiver/myreceiver
          v0.0.0
        path: ./receiver/myreceiver
    ```

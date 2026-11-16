@@ -1,8 +1,8 @@
-# HyperDX Technology Stack
+# ClickStack Technology Stack
 
 ## Frontend (`packages/app`)
 
-- **Framework**: Next.js 14 with TypeScript
+- **Framework**: Next.js 16 with TypeScript
 - **UI Components**: Mantine UI library (`@mantine/core`, `@mantine/dates`, `@mantine/hooks`)
 - **State Management**: Jotai (global client state), TanStack Query (server state), URL params (filters)
 - **Charts/Visualization**: Recharts, uPlot
@@ -19,7 +19,7 @@
 - **Database**: ClickHouse (telemetry data), MongoDB via Mongoose (metadata)
 - **Authentication**: Passport.js with local strategy
 - **Validation**: Zod schemas
-- **Telemetry**: Self-instrumented with `@hyperdx/node-opentelemetry`
+- **Telemetry**: Self-instrumented with `@clickhouse/clickstack-node` (API and Next.js server) and `@clickhouse/clickstack-browser` (frontend)
 
 ## Common Utilities (`packages/common-utils`)
 

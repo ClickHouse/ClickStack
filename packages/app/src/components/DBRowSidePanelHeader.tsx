@@ -1,156 +1,48 @@
-import React, {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
-import {
-  Box,
-  Breadcrumbs,
-  Button,
-  Flex,
-  Paper,
-  Text,
-  Tooltip,
-  UnstyledButton,
-} from '@mantine/core';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Box, Button, Flex, Paper, Text } from '@mantine/core';
 import {
   IconArrowsDiagonal,
   IconArrowsDiagonalMinimize2,
 } from '@tabler/icons-react';
 
-import { FormatTime } from '@/useFormatTime';
 import { useUserPreferences } from '@/useUserPreferences';
-import { formatDistanceToNowStrictShort } from '@/utils';
 
 import AISummarizeButton from './AISummarizeButton';
 import {
   DBHighlightedAttributesList,
   HighlightedAttribute,
 } from './DBHighlightedAttributesList';
-import { RowSidePanelContext } from './DBRowSidePanel';
-import { DrawerFullWidthToggle } from './DrawerUtils';
-import LogLevel from './LogLevel';
-
-const isValidDate = (date: Date) => 'getTime' in date && !isNaN(date.getTime());
 
 const MAX_MAIN_CONTENT_LENGTH = 2000;
-
-// Types for breadcrumb navigation
-export type BreadcrumbEntry = {
-  label: string;
-  rowData?: Record<string, any>;
-};
-
-export type BreadcrumbPath = BreadcrumbEntry[];
-
-// Navigation callback type - called when user wants to navigate to a specific level
-export type BreadcrumbNavigationCallback = (targetLevel: number) => void;
-
-function getBodyTextForBreadcrumb(rowData: Record<string, any>): string {
-  const bodyText = (rowData.__hdx_body || '').trim();
-  const BREADCRUMB_TOOLTIP_MAX_LENGTH = 200;
-  const BREADCRUMB_TOOLTIP_TRUNCATED_LENGTH = 197;
-
-  return bodyText.length > BREADCRUMB_TOOLTIP_MAX_LENGTH
-    ? `${bodyText.substring(0, BREADCRUMB_TOOLTIP_TRUNCATED_LENGTH)}...`
-    : bodyText;
-}
-
-function BreadcrumbNavigation({
-  breadcrumbPath,
-  onNavigateToLevel,
-}: {
-  breadcrumbPath: BreadcrumbPath;
-  onNavigateToLevel?: BreadcrumbNavigationCallback;
-}) {
-  const handleBreadcrumbItemClick = useCallback(
-    (clickedIndex: number) => {
-      // Navigate to the clicked breadcrumb level
-      // This will close all panels above this level
-      onNavigateToLevel?.(clickedIndex);
-    },
-    [onNavigateToLevel],
-  );
-
-  const breadcrumbItems = useMemo(() => {
-    if (breadcrumbPath.length === 0) return [];
-
-    const items = [];
-
-    // Add all previous levels from breadcrumbPath
-    breadcrumbPath.forEach((crumb, index) => {
-      const tooltipText = crumb.rowData
-        ? getBodyTextForBreadcrumb(crumb.rowData)
-        : '';
-
-      items.push(
-        <Tooltip
-          key={`crumb-${index}`}
-          label={tooltipText}
-          disabled={!tooltipText}
-          position="bottom"
-          withArrow
-        >
-          <UnstyledButton
-            onClick={() => handleBreadcrumbItemClick(index)}
-            style={{ textDecoration: 'none' }}
-          >
-            <Text size="sm" c="blue" style={{ cursor: 'pointer' }}>
-              {index === 0 ? 'Original Event' : crumb.label}
-            </Text>
-          </UnstyledButton>
-        </Tooltip>,
-      );
-    });
-
-    // Add current level
-    items.push(
-      <Text key="current" size="sm">
-        Selected Event
-      </Text>,
-    );
-
-    return items;
-  }, [breadcrumbPath, handleBreadcrumbItemClick]);
-
-  if (breadcrumbPath.length === 0) return null;
-
-  return (
-    <Box mb="sm" pb="sm" className="border-bottom border-dark">
-      <Breadcrumbs separator="›" separatorMargin="xs">
-        {breadcrumbItems}
-      </Breadcrumbs>
-    </Box>
-  );
-}
 
 export default function DBRowSidePanelHeader({
   attributes,
   mainContent = '',
   mainContentHeader,
-  date,
+  // When `true`, the source has a body column configured. An empty value
+  // for that column renders a soft empty-state paper. When `false` (the
+  // source has neither body nor implicit column configured), the body
+  // paper is suppressed entirely; the highlighted attributes still render.
+  bodyConfigured = true,
+  // When `true`, the panel title already shows `mainContent` in full (a
+  // trace span's name, for example), so the body paper is omitted rather
+  // than repeating the title directly below it.
+  bodyShownInTitle = false,
+  // Rows that never carry a body, such as browser events, skip the empty state.
+  hideEmptyBody = false,
   severityText,
   rowData,
-  breadcrumbPath,
-  onBreadcrumbClick,
-  isFullWidth,
-  onToggleFullWidth,
 }: {
-  date: Date;
   mainContent?: string;
   mainContentHeader?: string;
+  bodyConfigured?: boolean;
+  bodyShownInTitle?: boolean;
+  hideEmptyBody?: boolean;
   attributes?: HighlightedAttribute[];
   severityText?: string;
   rowData?: Record<string, any>;
-  breadcrumbPath?: BreadcrumbPath;
-  onBreadcrumbClick?: BreadcrumbNavigationCallback;
-  isFullWidth?: boolean;
-  onToggleFullWidth?: () => void;
 }) {
   const [bodyExpanded, setBodyExpanded] = React.useState(false);
-  const { generateSearchUrl } = useContext(RowSidePanelContext);
 
   const isContentTruncated = mainContent.length > MAX_MAIN_CONTENT_LENGTH;
   const mainContentDisplayed = React.useMemo(
@@ -188,58 +80,22 @@ export default function DBRowSidePanelHeader({
   const { expandSidebarHeader } = userPreferences;
   const maxBoxHeight = 120;
 
-  const _generateSearchUrl = useCallback(
-    (query?: string, queryLanguage?: 'sql' | 'lucene') => {
-      return (
-        generateSearchUrl?.({
-          where: query,
-          whereLanguage: queryLanguage,
-        }) ?? '/'
-      );
-    },
-    [generateSearchUrl],
-  );
-
-  const breadCrumbPathWithDefault = useMemo(() => {
-    return breadcrumbPath ?? [];
-  }, [breadcrumbPath]);
-
   const attributesWithDefault = useMemo(() => {
     return attributes ?? [];
   }, [attributes]);
 
+  const toggleExpandSidebarHeader = useCallback(() => {
+    setUserPreference({
+      ...userPreferences,
+      expandSidebarHeader: !expandSidebarHeader,
+    });
+  }, [expandSidebarHeader, setUserPreference, userPreferences]);
+
   return (
     <>
-      {/* Breadcrumb navigation */}
-      <BreadcrumbNavigation
-        breadcrumbPath={breadCrumbPathWithDefault}
-        onNavigateToLevel={onBreadcrumbClick}
-      />
-
-      {/* Event timestamp and severity */}
-      <Flex justify="space-between" align="center">
-        <Flex align="center">
-          {severityText && <LogLevel level={severityText} />}
-          {severityText && isValidDate(date) && (
-            <Text size="xs" mx="xs">
-              &middot;
-            </Text>
-          )}
-          {isValidDate(date) && (
-            <Text size="xs">
-              <FormatTime value={date} /> &middot;{' '}
-              {formatDistanceToNowStrictShort(date)} ago
-            </Text>
-          )}
-        </Flex>
-        {onToggleFullWidth && (
-          <DrawerFullWidthToggle
-            isFullWidth={isFullWidth}
-            onToggle={onToggleFullWidth}
-          />
-        )}
-      </Flex>
-      {mainContent ? (
+      {!bodyConfigured ||
+      bodyShownInTitle ||
+      (hideEmptyBody && !mainContent) ? null : mainContent ? (
         <Paper
           p="xs"
           mt="sm"
@@ -257,14 +113,8 @@ export default function DBRowSidePanelHeader({
               <Button
                 size="compact-xs"
                 variant="subtle"
-                onClick={() =>
-                  setUserPreference({
-                    ...userPreferences,
-                    expandSidebarHeader: !expandSidebarHeader,
-                  })
-                }
+                onClick={toggleExpandSidebarHeader}
               >
-                {/* TODO: Only show expand button when maxHeight = 120? */}
                 {expandSidebarHeader ? (
                   <IconArrowsDiagonalMinimize2 size={14} />
                 ) : (
@@ -289,15 +139,17 @@ export default function DBRowSidePanelHeader({
         </Paper>
       ) : (
         <Paper p="xs" mt="sm">
-          <Text size="xs" mb="xs">
-            [Empty]
+          <Text size="xs" c="dimmed">
+            No body for this event.
           </Text>
         </Paper>
       )}
       <AISummarizeButton rowData={rowData} severityText={severityText} />
-      <Box mt="xs">
-        <DBHighlightedAttributesList attributes={attributesWithDefault} />
-      </Box>
+      {attributesWithDefault.length > 0 && (
+        <Box mt="xs">
+          <DBHighlightedAttributesList attributes={attributesWithDefault} />
+        </Box>
+      )}
     </>
   );
 }

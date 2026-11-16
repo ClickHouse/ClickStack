@@ -1,0 +1,938 @@
+import {
+  validateDashboardContainersStructure,
+  validateDashboardTileContainerRefs,
+} from '@hyperdx/common-utils/dist/dashboardValidation';
+import { isBuilderSavedChartConfig } from '@hyperdx/common-utils/dist/guards';
+import {
+  DisplayType,
+  MetricsDataType,
+  PromqlReducer,
+  PromqlSavedChartConfig,
+} from '@hyperdx/common-utils/dist/types';
+import mongoose from 'mongoose';
+import { z } from 'zod';
+
+import { DashboardDocument } from '@/models/dashboard';
+import {
+  collectTileContainerRefIssues,
+  ConfigTile,
+  convertExternalTilesToInternal,
+  convertToExternalDashboard,
+  convertToInternalTileConfig,
+  isConfigTile,
+} from '@/routers/external-api/v2/utils/dashboards';
+import {
+  externalAlertChartConfigSchema,
+  externalDashboardSelectItemSchema,
+  externalDashboardTileSchemaWithId,
+  ExternalDashboardTileWithId,
+} from '@/utils/zod';
+
+function makeMarkdownTile(
+  markdown?: string,
+  overrides: Partial<ConfigTile> = {},
+): ConfigTile {
+  return {
+    id: 'test-id',
+    x: 0,
+    y: 0,
+    w: 12,
+    h: 4,
+    name: 'Text Tile',
+    config: { displayType: 'markdown', markdown },
+    ...overrides,
+  };
+}
+
+describe('convertToInternalTileConfig', () => {
+  describe('markdown tiles', () => {
+    it('sets displayType to Markdown', () => {
+      const result = convertToInternalTileConfig(makeMarkdownTile('# Hello'));
+      expect(result.config).toMatchObject({
+        displayType: DisplayType.Markdown,
+      });
+    });
+
+    it('preserves markdown content', () => {
+      const content = '## Guide\n\nSome instructions here.';
+      const result = convertToInternalTileConfig(makeMarkdownTile(content));
+      if (!isBuilderSavedChartConfig(result.config)) {
+        throw new Error('Expected BuilderSavedChartConfig for markdown tile');
+      }
+      expect(result.config.markdown).toBe(content);
+    });
+
+    it('handles missing markdown content', () => {
+      const result = convertToInternalTileConfig(makeMarkdownTile(undefined));
+      expect(result.config).toMatchObject({
+        displayType: DisplayType.Markdown,
+      });
+    });
+
+    it('preserves tile layout fields', () => {
+      const tile = makeMarkdownTile('Some text', {
+        x: 4,
+        y: 8,
+        w: 24,
+        h: 3,
+        name: 'How to Use',
+      });
+      const result = convertToInternalTileConfig(tile);
+      expect(result.x).toBe(4);
+      expect(result.y).toBe(8);
+      expect(result.w).toBe(24);
+      expect(result.h).toBe(3);
+      // The internal Tile shape carries name on config, not at the top
+      // level. The previous `pick(...)` swept name onto the top-level
+      // object (a stale extra field that the renderer never reads); the
+      // destructure refactor fixes that.
+      expect(result.config.name).toBe('How to Use');
+      expect(result).not.toHaveProperty('name');
+    });
+
+    it('does not set a real sourceId on the internal config', () => {
+      // Markdown tiles have source: '' in the internal format to satisfy the
+      // BuilderSavedChartConfig type. The frontend uses displayTypeRequiresSource()
+      // to exclude markdown tiles from "source unset" checks.
+      // See DBDashboardPage isSourceUnset and common-utils/src/guards.ts.
+      const result = convertToInternalTileConfig(makeMarkdownTile('# Hello'));
+      if (!isBuilderSavedChartConfig(result.config)) {
+        throw new Error('Expected BuilderSavedChartConfig for markdown tile');
+      }
+      expect(result.config.source).not.toMatch(/^[a-f0-9]{24}$/); // not a real ObjectId
+    });
+  });
+});
+
+describe('tile description', () => {
+  it('round-trips through the external and internal tile shapes', () => {
+    const internal = convertToInternalTileConfig(
+      makeMarkdownTile('# Hello', { description: 'What this tile shows.' }),
+    );
+    expect(internal.config.description).toBe('What this tile shows.');
+    expect(internal).not.toHaveProperty('description');
+
+    const ext = convertToExternalDashboard(makeDoc({ tiles: [internal] }));
+    expect(ext.tiles[0].description).toBe('What this tile shows.');
+  });
+
+  describe.each([
+    ['a series tile', 'series'],
+    ['a config tile', 'config'],
+  ] as const)(
+    'through convertExternalTilesToInternal for %s',
+    (_label, kind) => {
+      const makeTile = (
+        overrides: { description?: string } = {},
+      ): ExternalDashboardTileWithId => ({
+        id: 'test-id',
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 4,
+        name: 'Tile',
+        ...(kind === 'series'
+          ? {
+              series: [
+                {
+                  type: 'time',
+                  sourceId: new mongoose.Types.ObjectId().toString(),
+                  aggFn: 'count',
+                  where: '',
+                  groupBy: [],
+                  displayType: 'line',
+                },
+              ],
+            }
+          : { config: { displayType: 'markdown', markdown: '# Hello' } }),
+        ...overrides,
+      });
+
+      it('keeps the description', () => {
+        const [internal] = convertExternalTilesToInternal([
+          makeTile({ description: 'What this tile shows.' }),
+        ]);
+        expect(internal.config.description).toBe('What this tile shows.');
+      });
+
+      it('omits the description when unset', () => {
+        const [internal] = convertExternalTilesToInternal([makeTile()]);
+        expect(internal.config).not.toHaveProperty('description');
+      });
+    },
+  );
+
+  it('omits the field when unset', () => {
+    const internal = convertToInternalTileConfig(makeMarkdownTile('# Hello'));
+    expect(internal.config).not.toHaveProperty('description');
+    const ext = convertToExternalDashboard(makeDoc({ tiles: [internal] }));
+    expect(ext.tiles[0]).not.toHaveProperty('description');
+  });
+});
+
+describe('dashboard container validation helpers', () => {
+  // Drives the two helpers in sequence (mirroring production usage:
+  // schema-level structure check, then handler-level tile-ref check)
+  // through z.superRefine and inspects the resulting ZodError so we
+  // can assert path + message without standing up the full express +
+  // DB stack.
+  function runHelper<T extends { containerId?: string; tabId?: string }>(
+    containers: Parameters<typeof validateDashboardContainersStructure>[0],
+    tiles: T[],
+  ): z.ZodIssue[] {
+    const schema = z
+      .object({
+        containers: z.array(z.unknown()).optional() as unknown as z.ZodTypeAny,
+        tiles: z.array(z.unknown()) as unknown as z.ZodTypeAny,
+      })
+      .superRefine((data, ctx) => {
+        const { containerById, hasDuplicateContainerId } =
+          validateDashboardContainersStructure(
+            (data.containers ?? []) as typeof containers,
+            ctx,
+          );
+        // Skip tile-ref resolution when container ids weren't unique:
+        // the duplicate-id error is enough to flag, and tile-level
+        // errors against a last-write-wins map would just stack noise.
+        if (hasDuplicateContainerId) return;
+        validateDashboardTileContainerRefs(
+          containerById,
+          (data.tiles ?? []) as T[],
+          ctx,
+        );
+      });
+    const result = schema.safeParse({ containers, tiles });
+    return result.success ? [] : result.error.issues;
+  }
+
+  it('raises no issues for empty inputs', () => {
+    expect(runHelper([], [])).toEqual([]);
+  });
+
+  it('raises no issues for valid containers and tile refs', () => {
+    expect(
+      runHelper(
+        [
+          {
+            id: 'a',
+            title: 'A',
+            collapsed: false,
+            tabs: [{ id: 't1', title: 'T1' }],
+          },
+        ],
+        [{ containerId: 'a', tabId: 't1' }],
+      ),
+    ).toEqual([]);
+  });
+
+  it('flags duplicate container ids and stops tile resolution', () => {
+    const issues = runHelper(
+      [
+        { id: 'a', title: 'A', collapsed: false },
+        { id: 'a', title: 'B', collapsed: false },
+      ],
+      // Tile would otherwise raise an unknown-containerId error too;
+      // verifying the helper short-circuits keeps that error from
+      // stacking on top of the duplicate-id error.
+      [{ containerId: 'ghost' }],
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toEqual(['containers', 1, 'id']);
+    expect(issues[0].message).toContain('Container IDs must be unique');
+  });
+
+  it('flags duplicate tab ids inside a container', () => {
+    const issues = runHelper(
+      [
+        {
+          id: 'a',
+          title: 'A',
+          collapsed: false,
+          tabs: [
+            { id: 't1', title: 'T1' },
+            { id: 't1', title: 'T1 again' },
+          ],
+        },
+      ],
+      [],
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toEqual(['containers', 0, 'tabs', 1, 'id']);
+    expect(issues[0].message).toContain('Duplicate tab id');
+  });
+
+  it('flags an unknown containerId on a tile', () => {
+    const issues = runHelper(
+      [{ id: 'a', title: 'A', collapsed: false }],
+      [{ containerId: 'b' }],
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toEqual(['tiles', 0, 'containerId']);
+    expect(issues[0].message).toContain('unknown containerId');
+  });
+
+  it('flags a tabId without containerId', () => {
+    const issues = runHelper([], [{ tabId: 't1' }]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toEqual(['tiles', 0, 'tabId']);
+    expect(issues[0].message).toContain('tabId requires containerId');
+  });
+
+  it('flags an unknown tabId on a tile', () => {
+    const issues = runHelper(
+      [
+        {
+          id: 'a',
+          title: 'A',
+          collapsed: false,
+          tabs: [{ id: 't1', title: 'T1' }],
+        },
+      ],
+      [{ containerId: 'a', tabId: 'ghost' }],
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toEqual(['tiles', 0, 'tabId']);
+    expect(issues[0].message).toContain('unknown tabId');
+  });
+});
+
+describe('collectTileContainerRefIssues', () => {
+  // The handler-level wrapper around the canonical helper. Tests
+  // exercise the wrapper rather than the helper itself because the
+  // wrapper formats Zod issues into `path: message` strings, which is
+  // what the PUT/POST handlers send back to clients.
+  it('returns no issues when refs resolve', () => {
+    expect(
+      collectTileContainerRefIssues(
+        [{ id: 'real', title: 'Real', collapsed: false }],
+        [
+          {
+            id: 't',
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+            name: '',
+            containerId: 'real',
+          },
+        ],
+      ),
+    ).toEqual([]);
+  });
+
+  it('returns a formatted message for an unknown containerId', () => {
+    const issues = collectTileContainerRefIssues(
+      [],
+      [
+        {
+          id: 't',
+          x: 0,
+          y: 0,
+          w: 1,
+          h: 1,
+          name: '',
+          containerId: 'ghost',
+        },
+      ],
+    );
+    expect(issues).toEqual([
+      'tiles.0.containerId: Tile references unknown containerId "ghost"',
+    ]);
+  });
+
+  it('returns a formatted message for tabId without containerId', () => {
+    const issues = collectTileContainerRefIssues(
+      [],
+      [
+        {
+          id: 't',
+          x: 0,
+          y: 0,
+          w: 1,
+          h: 1,
+          name: '',
+          tabId: 'ghost',
+        },
+      ],
+    );
+    expect(issues).toEqual([
+      'tiles.0.tabId: tabId requires containerId to be set',
+    ]);
+  });
+});
+
+// `tiles` is `Mixed` in Mongoose, so the model layer enforces nothing and a
+// stored doc can hold shapes the TS types do not describe — an orphan container
+// ref, a select entry carrying a field its aggregation cannot use. Overrides are
+// loosely typed so a fixture can model that; the read-path heal is what these
+// tests are about.
+function makeDoc(overrides: Record<string, unknown> = {}): DashboardDocument {
+  return {
+    _id: new mongoose.Types.ObjectId(),
+    name: 'Test',
+    tiles: [],
+    tags: [],
+    filters: [],
+    savedQuery: null,
+    savedQueryLanguage: null,
+    savedFilterValues: [],
+    ...overrides,
+  } as unknown as DashboardDocument;
+}
+
+function makeTile(
+  overrides: Record<string, unknown> = {},
+): DashboardDocument['tiles'][number] {
+  return {
+    id: 't1',
+    x: 0,
+    y: 0,
+    w: 1,
+    h: 1,
+    config: {
+      displayType: DisplayType.Markdown,
+      markdown: '',
+      source: '',
+      where: '',
+      select: [],
+      name: '',
+    },
+    ...overrides,
+  } as DashboardDocument['tiles'][number];
+}
+
+describe('convertToExternalDashboard orphan-ref heal', () => {
+  // A tile pointing at a missing container or tab must round-trip on read as if
+  // the ref were absent. Without this, the next PUT body schema rejects the
+  // round-tripped tile and the dashboard becomes uneditable from the external
+  // API.
+
+  it('drops containerId on read when no container matches', () => {
+    const doc = makeDoc({
+      tiles: [makeTile({ containerId: 'ghost', tabId: 'whatever' })],
+      containers: [{ id: 'real', title: 'Real', collapsed: false }],
+    });
+    const ext = convertToExternalDashboard(doc);
+    expect(ext.tiles[0].containerId).toBeUndefined();
+    expect(ext.tiles[0].tabId).toBeUndefined();
+  });
+
+  it('drops tabId on read when no tab matches but the container resolves', () => {
+    const doc = makeDoc({
+      tiles: [makeTile({ containerId: 'real', tabId: 'ghost-tab' })],
+      containers: [
+        {
+          id: 'real',
+          title: 'Real',
+          collapsed: false,
+          tabs: [{ id: 'errors', title: 'Errors' }],
+        },
+      ],
+    });
+    const ext = convertToExternalDashboard(doc);
+    expect(ext.tiles[0].containerId).toBe('real');
+    expect(ext.tiles[0].tabId).toBeUndefined();
+  });
+
+  it('drops tabId on read when tabId is set without containerId', () => {
+    const doc = makeDoc({
+      tiles: [makeTile({ tabId: 'ghost-tab' })],
+      containers: [{ id: 'real', title: 'Real', collapsed: false }],
+    });
+    const ext = convertToExternalDashboard(doc);
+    expect(ext.tiles[0].containerId).toBeUndefined();
+    expect(ext.tiles[0].tabId).toBeUndefined();
+  });
+
+  it('keeps both containerId and tabId on read when both resolve', () => {
+    const doc = makeDoc({
+      tiles: [makeTile({ containerId: 'real', tabId: 'errors' })],
+      containers: [
+        {
+          id: 'real',
+          title: 'Real',
+          collapsed: false,
+          tabs: [{ id: 'errors', title: 'Errors' }],
+        },
+      ],
+    });
+    const ext = convertToExternalDashboard(doc);
+    expect(ext.tiles[0].containerId).toBe('real');
+    expect(ext.tiles[0].tabId).toBe('errors');
+  });
+
+  it('returns PromQL tiles and label filters unless hidePromql is set', () => {
+    const doc = makeDoc({
+      tiles: [
+        makeTile({
+          id: 'promql-tile',
+          config: {
+            configType: 'promql',
+            promqlExpression: 'up',
+            source: new mongoose.Types.ObjectId().toString(),
+            displayType: DisplayType.Line,
+            name: 'My PromQL tile',
+          },
+        }),
+        makeTile({ id: 'normal-tile' }),
+      ],
+      filters: [
+        {
+          id: 'label-filter',
+          type: 'PROMETHEUS_LABEL',
+          name: 'Job',
+          source: new mongoose.Types.ObjectId().toString(),
+          label: 'job',
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
+        {
+          id: 'static-filter',
+          type: 'STATIC_LIST',
+          name: 'Env',
+          options: ['prod'],
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
+      ],
+    });
+    const shown = convertToExternalDashboard(doc);
+    expect(shown.tiles.map(t => t.id)).toEqual(['promql-tile', 'normal-tile']);
+    expect(shown.filters?.map(f => f.id)).toEqual([
+      'label-filter',
+      'static-filter',
+    ]);
+
+    const hidden = convertToExternalDashboard(doc, { hidePromql: true });
+    expect(hidden.tiles.map(t => t.id)).toEqual(['normal-tile']);
+    expect(hidden.filters?.map(f => f.id)).toEqual(['static-filter']);
+  });
+
+  // seriesLimit is three-state (matching the internal schema): omitted =
+  // default cap, 0 = unlimited, positive N = top-N. All three must survive a
+  // GET->PUT round-trip: 0 and N pass through, null maps to absent (the
+  // default-cap state).
+  describe.each([
+    DisplayType.Line,
+    DisplayType.StackedBar,
+    DisplayType.StackedLine,
+  ])('seriesLimit serialization for %s tiles', displayType => {
+    function readSeriesLimit(seriesLimit: number | null): unknown {
+      const doc = makeDoc({
+        tiles: [
+          makeTile({
+            id: 'series-limit-tile',
+            config: {
+              displayType,
+              source: new mongoose.Types.ObjectId().toString(),
+              name: 'Series limit tile',
+              select: [{ aggFn: 'count', valueExpression: '' }],
+              where: '',
+              seriesLimit,
+            },
+          }),
+        ],
+      });
+      // Round-trip through JSON to observe what the wire body actually
+      // carries: `undefined` fields are dropped, so an omitted seriesLimit
+      // reads back as `undefined` here.
+      const wire = JSON.parse(JSON.stringify(convertToExternalDashboard(doc)));
+      return wire.tiles[0].config.seriesLimit;
+    }
+
+    it('round-trips 0 (unlimited) rather than dropping it', () => {
+      expect(readSeriesLimit(0)).toBe(0);
+    });
+
+    it('emits seriesLimit as absent when stored as null (default cap)', () => {
+      expect(readSeriesLimit(null)).toBeUndefined();
+    });
+
+    it('passes a positive seriesLimit through unchanged', () => {
+      expect(readSeriesLimit(25)).toBe(25);
+    });
+  });
+});
+
+describe('convertToExternalDashboard stale aggregation params', () => {
+  // Switching a tile's aggregation in the editor leaves the previous agg's
+  // parameter behind in the stored config. It is inert for rendering, but the
+  // external input schema rejects it, so emitting it on read produced a GET
+  // body that could not be PUT back — and broke `terraform plan` on an
+  // imported dashboard.
+  function firstSelect(select: Record<string, unknown>[]) {
+    const doc = makeDoc({
+      tiles: [
+        makeTile({
+          config: {
+            displayType: DisplayType.Line,
+            source: new mongoose.Types.ObjectId().toString(),
+            where: '',
+            select,
+            name: 'Tile',
+          },
+        }),
+      ],
+    });
+    const config = convertToExternalDashboard(doc).tiles[0].config;
+    if (config == null || !('select' in config) || config.select == null) {
+      throw new Error('expected a select on the converted tile');
+    }
+    return config.select[0];
+  }
+
+  it('drops level left over from a quantile agg on a count', () => {
+    const select = firstSelect([
+      { aggFn: 'count', level: 0.9, aggCondition: '' },
+    ]);
+    expect(select).not.toHaveProperty('level');
+  });
+
+  it('keeps level on a quantile agg', () => {
+    const select = firstSelect([
+      {
+        aggFn: 'quantile',
+        level: 0.95,
+        valueExpression: 'Duration',
+        aggCondition: '',
+      },
+    ]);
+    expect(select).toMatchObject({ aggFn: 'quantile', level: 0.95 });
+  });
+
+  it('drops valueExpression left over from a value agg on a count', () => {
+    const select = firstSelect([
+      { aggFn: 'count', valueExpression: 'Duration', aggCondition: '' },
+    ]);
+    expect(select).not.toHaveProperty('valueExpression');
+  });
+
+  it('keeps an empty valueExpression on a count', () => {
+    // What the editor writes for every count tile. The input schema accepts it,
+    // so healing it would change the response shape for no reason.
+    const select = firstSelect([
+      { aggFn: 'count', valueExpression: '', aggCondition: '' },
+    ]);
+    expect(select).toMatchObject({ aggFn: 'count', valueExpression: '' });
+  });
+
+  it('keeps valueExpression on a non-count agg', () => {
+    const select = firstSelect([
+      { aggFn: 'avg', valueExpression: 'Duration', aggCondition: '' },
+    ]);
+    expect(select).toMatchObject({ aggFn: 'avg', valueExpression: 'Duration' });
+  });
+
+  it('emits a select the input schema accepts', () => {
+    // The point of the heal: what GET returns must survive a PUT. Both stale
+    // fields at once, on a tile that also carries a real alias.
+    const select = firstSelect([
+      {
+        aggFn: 'count',
+        level: 0.99,
+        valueExpression: 'Duration',
+        alias: 'errors',
+        aggCondition: "ServiceName = 'api'",
+      },
+    ]);
+    expect(externalDashboardSelectItemSchema.safeParse(select).success).toBe(
+      true,
+    );
+    expect(select).toMatchObject({
+      aggFn: 'count',
+      alias: 'errors',
+      where: "ServiceName = 'api'",
+    });
+  });
+});
+
+describe('externalDashboardSelectItemSchema metric selects', () => {
+  // A metric select names its value with metricName; renderChartConfig builds
+  // the aggregate from that, and never reads valueExpression. Requiring one
+  // rejected dashboards the editor itself writes.
+  const metricSelect = {
+    aggFn: 'avg',
+    metricName: 'nodejs.eventloop.delay.p99',
+    metricType: MetricsDataType.Gauge,
+    where: '',
+    whereLanguage: 'lucene',
+  };
+
+  it('accepts a metric select whose valueExpression is empty', () => {
+    const res = externalDashboardSelectItemSchema.safeParse({
+      ...metricSelect,
+      valueExpression: '',
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it('accepts a metric select with no valueExpression at all', () => {
+    expect(
+      externalDashboardSelectItemSchema.safeParse(metricSelect).success,
+    ).toBe(true);
+  });
+
+  it('still requires a valueExpression when metricType is missing', () => {
+    // renderChartConfig dispatches on metricType and throws without it, so a
+    // bare metricName is not enough to earn the exemption.
+    expect(
+      externalDashboardSelectItemSchema.safeParse({
+        ...metricSelect,
+        metricType: undefined,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts the select convertToExternalDashboard emits for a metric tile', () => {
+    // The round trip this fix exists for: what GET returns has to pass
+    // /validate. Parsing a hand-built select cannot catch
+    // convertToExternalSelectItem dropping the metric fields on the way out.
+    const doc = makeDoc({
+      tiles: [
+        makeTile({
+          config: {
+            displayType: DisplayType.Line,
+            source: new mongoose.Types.ObjectId().toString(),
+            where: '',
+            name: 'Metric tile',
+            select: [
+              {
+                aggFn: 'avg',
+                metricName: 'nodejs.eventloop.delay.p99',
+                metricType: MetricsDataType.Gauge,
+                valueExpression: '',
+                aggCondition: '',
+              },
+            ],
+          },
+        }),
+      ],
+    });
+    const config = convertToExternalDashboard(doc).tiles[0].config;
+    if (config == null || !('select' in config) || config.select == null) {
+      throw new Error('expected a select on the converted tile');
+    }
+    expect(config.select[0]).toMatchObject({
+      metricName: 'nodejs.eventloop.delay.p99',
+      metricType: MetricsDataType.Gauge,
+    });
+    expect(
+      externalDashboardSelectItemSchema.safeParse(config.select[0]).success,
+    ).toBe(true);
+  });
+
+  it('still requires a valueExpression on a non-count select with no metric', () => {
+    const res = externalDashboardSelectItemSchema.safeParse({
+      aggFn: 'avg',
+      valueExpression: '',
+      where: '',
+    });
+    expect(res.success).toBe(false);
+    expect(res.error?.issues[0].message).toBe(
+      'Value expression is required for non-count aggregation functions',
+    );
+  });
+});
+
+describe('PromQL tiles', () => {
+  const source = new mongoose.Types.ObjectId().toString();
+
+  function readPromqlTile(config: Record<string, unknown>) {
+    const doc = makeDoc({ tiles: [makeTile({ id: 'promql-tile', config })] });
+    return convertToExternalDashboard(doc).tiles[0];
+  }
+
+  function parseTile(tile: unknown) {
+    const parsed = externalDashboardTileSchemaWithId.parse(
+      JSON.parse(JSON.stringify(tile)),
+    );
+    if (!isConfigTile(parsed)) throw new Error('expected a config tile');
+    return parsed;
+  }
+
+  const base = {
+    configType: 'promql',
+    name: 'PromQL tile',
+    source,
+    granularity: '5 minute',
+    numberFormat: { output: 'number' },
+  } as const;
+
+  it.each<[string, PromqlSavedChartConfig]>([
+    [
+      'line',
+      {
+        ...base,
+        displayType: DisplayType.Line,
+        promqlExpression: [
+          { expression: 'up', alias: 'Up' },
+          { expression: 'rate(errors_total[$__rate_interval])' },
+        ],
+        description: 'Targets that are up',
+        legendTemplate: '{{job}}',
+        fillNulls: false,
+        alignDateRangeToGranularity: true,
+        compareToPreviousPeriod: true,
+        lineInterpolation: 'step',
+        seriesLimit: 0,
+      },
+    ],
+    [
+      'stacked line',
+      {
+        ...base,
+        displayType: DisplayType.StackedLine,
+        promqlExpression: [{ expression: 'up' }],
+        lineInterpolation: 'smooth',
+      },
+    ],
+    [
+      'stacked bar',
+      {
+        ...base,
+        displayType: DisplayType.StackedBar,
+        promqlExpression: [{ expression: 'up' }],
+        legendTemplate: '{{job}}',
+        seriesLimit: 5,
+      },
+    ],
+    [
+      'table',
+      {
+        ...base,
+        displayType: DisplayType.Table,
+        promqlExpression: [{ expression: 'up', queryType: 'instant' }],
+      },
+    ],
+    [
+      'number',
+      {
+        ...base,
+        displayType: DisplayType.Number,
+        promqlExpression: [
+          { expression: 'up', queryType: 'range', reducer: PromqlReducer.Max },
+        ],
+        color: 'chart-blue',
+        colorRules: [{ operator: 'gt', value: 5, color: 'chart-red' }],
+        backgroundChart: { type: 'area' },
+      },
+    ],
+    [
+      'pie',
+      {
+        ...base,
+        displayType: DisplayType.Pie,
+        promqlExpression: [{ expression: 'up', reducer: PromqlReducer.Sum }],
+        legendTemplate: '{{job}}',
+        seriesLimit: 3,
+      },
+    ],
+    [
+      'heatmap',
+      {
+        ...base,
+        displayType: DisplayType.Heatmap,
+        promqlExpression: [{ expression: 'sum by (le) (rate(x_bucket[5m]))' }],
+        heatmap: { mode: 'histogram', scaleType: 'linear' },
+      },
+    ],
+  ])('round-trips a %s tile through GET and PUT', (_label, config) => {
+    const tile = parseTile(readPromqlTile(config));
+    expect(convertToInternalTileConfig(tile).config).toEqual(config);
+  });
+
+  it('reads a single-string expression as a one-item list', () => {
+    const tile = readPromqlTile({
+      ...base,
+      displayType: DisplayType.Line,
+      promqlExpression: 'up',
+    });
+    expect(tile.config).toMatchObject({ expressions: [{ expression: 'up' }] });
+    expect(convertToInternalTileConfig(parseTile(tile)).config).toMatchObject({
+      promqlExpression: [{ expression: 'up' }],
+    });
+  });
+
+  it('does not expose or persist a stored connection', () => {
+    const tile = readPromqlTile({
+      ...base,
+      displayType: DisplayType.Line,
+      promqlExpression: 'up',
+      connection: 'conn-1',
+    });
+    expect(JSON.stringify(tile)).not.toContain('conn-1');
+    expect(
+      convertToInternalTileConfig(parseTile(tile)).config,
+    ).not.toHaveProperty('connection');
+  });
+
+  it('drops expression options the display type does not offer', () => {
+    const tile = parseTile({
+      id: 'promql-tile',
+      name: 'PromQL tile',
+      x: 0,
+      y: 0,
+      w: 6,
+      h: 4,
+      config: {
+        configType: 'promql',
+        displayType: 'line',
+        sourceId: source,
+        expressions: [
+          { expression: 'up', queryType: 'instant', reducer: 'max' },
+        ],
+      },
+    });
+    expect(tile.config).toMatchObject({ expressions: [{ expression: 'up' }] });
+    expect(tile.config).not.toHaveProperty('expressions.0.queryType');
+  });
+
+  describe('schema', () => {
+    const tile = (config: Record<string, unknown>) => ({
+      id: 'promql-tile',
+      name: 'PromQL tile',
+      x: 0,
+      y: 0,
+      w: 6,
+      h: 4,
+      config: {
+        configType: 'promql',
+        displayType: 'line',
+        sourceId: source,
+        expressions: [{ expression: 'up' }],
+        ...config,
+      },
+    });
+
+    it.each([
+      ['no sourceId', { sourceId: undefined }],
+      ['no expressions', { expressions: [] }],
+      [
+        'more than 10 expressions',
+        { expressions: Array(11).fill({ expression: 'up' }) },
+      ],
+      ['an unsupported display type', { displayType: 'search' }],
+      ['an invalid granularity', { granularity: '5m' }],
+    ])('rejects a tile with %s', (_label, config) => {
+      expect(
+        externalDashboardTileSchemaWithId.safeParse(tile(config)).success,
+      ).toBe(false);
+    });
+
+    it('rejects an unknown configType', () => {
+      const result = externalDashboardTileSchemaWithId.safeParse(
+        tile({ configType: 'foo' }),
+      );
+      expect(result.error?.issues[0].message).toBe(
+        'configType must be "sql", "promql" or omitted (builder configs carry no configType)',
+      );
+    });
+
+    it('is not accepted as an inline alert config', () => {
+      const result = externalAlertChartConfigSchema.safeParse(tile({}).config);
+      expect(result.error?.issues[0].message).toBe(
+        'configType must be "sql" or omitted (builder configs carry no configType)',
+      );
+    });
+  });
+});

@@ -1,15 +1,14 @@
-import { ResponseJSON } from '@clickhouse/client-common';
-
 import {
   ChSql,
   chSqlToAliasMap,
-  computeRatio,
-  computeResultSetRatio,
+  chSqlToSelectColumns,
   convertCHDataTypeToJSType,
+  isCHFixedStringType,
   JSDataType,
 } from '@/clickhouse';
 import { ClickhouseClient } from '@/clickhouse/node';
 import { Metadata, MetadataCache } from '@/core/metadata';
+import { replaceMacros } from '@/macros';
 
 describe('convertCHDataTypeToJSType - unit - type', () => {
   it('Date type', () => {
@@ -145,6 +144,20 @@ describe('convertCHDataTypeToJSType - unit - type', () => {
   });
 });
 
+describe('isCHFixedStringType', () => {
+  it('matches FixedString and wrappers, and ignores String', () => {
+    expect(isCHFixedStringType('FixedString(32)')).toBe(true);
+    expect(isCHFixedStringType('Nullable(FixedString(32))')).toBe(true);
+    expect(isCHFixedStringType('LowCardinality(FixedString(16))')).toBe(true);
+    expect(
+      isCHFixedStringType('LowCardinality(Nullable(FixedString(32)))'),
+    ).toBe(true);
+    expect(isCHFixedStringType('String')).toBe(false);
+    expect(isCHFixedStringType('Nullable(String)')).toBe(false);
+    expect(isCHFixedStringType('LowCardinality(String)')).toBe(false);
+  });
+});
+
 describe('chSqlToAliasMap - alias unit test', () => {
   it('No alias', () => {
     const chSqlInput: ChSql = {
@@ -225,142 +238,197 @@ describe('chSqlToAliasMap - alias unit test', () => {
   });
 });
 
-describe('computeRatio', () => {
-  it('should correctly compute ratio of two numbers', () => {
-    expect(computeRatio('10', '2')).toBe(5);
-    expect(computeRatio('3', '4')).toBe(0.75);
-    expect(computeRatio('0', '5')).toBe(0);
+describe('chSqlToAliasMap - resilient parsing of ClickHouse-specific SQL', () => {
+  // A sampling CTE renders `greatest(CAST(total / N AS UInt32), 1)`. The
+  // `CAST(... AS UInt32)` cast is rejected by node-sql-parser's Postgresql
+  // dialect, so the full statement no longer parses. Before the outer-
+  // projection fallback this returned `{}`, which dropped every alias and
+  // broke filters on select-alias columns (Event Patterns, histogram, alerts).
+  const samplingCte =
+    'WITH tableStats AS (SELECT count() as total, greatest(CAST(total / 10000 AS UInt32), 1) as sample_factor FROM db.t)';
+  const samplingWhere =
+    'cityHash64(Timestamp, rand()) % (SELECT sample_factor FROM tableStats) = 0';
+
+  it('recovers plain aliases when a sampling CTE makes the full query unparseable', () => {
+    const chSqlInput: ChSql = {
+      sql: `${samplingCte} SELECT ServiceName as service, Timestamp as ts FROM db.t WHERE ${samplingWhere} GROUP BY service, ts`,
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({
+      service: 'ServiceName',
+      ts: 'Timestamp',
+    });
   });
 
-  it('should return NaN when denominator is zero', () => {
-    expect(isNaN(computeRatio('10', '0'))).toBe(true);
+  it('recovers bracket (map-access) aliases through the fallback', () => {
+    const chSqlInput: ChSql = {
+      sql: `${samplingCte} SELECT ResourceAttributes['service.name'] as svc, Timestamp as ts FROM db.t WHERE ${samplingWhere}`,
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({
+      svc: "ResourceAttributes['service.name']",
+      ts: 'Timestamp',
+    });
   });
 
-  it('should return NaN for non-numeric inputs', () => {
-    expect(isNaN(computeRatio('abc', '2'))).toBe(true);
-    expect(isNaN(computeRatio('10', 'xyz'))).toBe(true);
-    expect(isNaN(computeRatio('abc', 'xyz'))).toBe(true);
-    expect(isNaN(computeRatio('', '5'))).toBe(true);
+  it('recovers expression aliases through the fallback', () => {
+    const chSqlInput: ChSql = {
+      sql: `${samplingCte} SELECT toString(SpanId) as span, ServiceName as service FROM db.t WHERE ${samplingWhere}`,
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({
+      span: 'toString(SpanId)',
+      service: 'ServiceName',
+    });
   });
 
-  it('should handle string representations of numbers', () => {
-    expect(computeRatio('10.5', '2')).toBe(5.25);
-    expect(computeRatio('-10', '5')).toBe(-2);
-    expect(computeRatio('10', '-5')).toBe(-2);
+  it('recovers a quoted alias through the fallback', () => {
+    const chSqlInput: ChSql = {
+      sql: `${samplingCte} SELECT client_ip as \`x-host-header\`, ServiceName as service FROM db.t WHERE ${samplingWhere}`,
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({
+      'x-host-header': 'client_ip',
+      service: 'ServiceName',
+    });
   });
 
-  it('should handle number input types', () => {
-    expect(computeRatio(10, 2)).toBe(5);
-    expect(computeRatio(3, 4)).toBe(0.75);
-    expect(computeRatio(10.5, 2)).toBe(5.25);
-    expect(computeRatio(0, 5)).toBe(0);
-    expect(isNaN(computeRatio(10, 0))).toBe(true);
-    expect(computeRatio(-10, 5)).toBe(-2);
+  it('restores JSON-path aliases recovered through the fallback', () => {
+    const chSqlInput: ChSql = {
+      sql: `${samplingCte} SELECT ResourceAttributes.service.name as service, Timestamp as ts FROM db.t WHERE ${samplingWhere}`,
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({
+      service: 'ResourceAttributes.service.name',
+      ts: 'Timestamp',
+    });
   });
 
-  it('should handle mixed string and number inputs', () => {
-    expect(computeRatio('10', 2)).toBe(5);
-    expect(computeRatio(10, '2')).toBe(5);
-    expect(computeRatio(3, '4')).toBe(0.75);
-    expect(isNaN(computeRatio(10, ''))).toBe(true);
+  it('ignores SELECT / FROM keywords inside string literals in the CTE', () => {
+    const chSqlInput: ChSql = {
+      sql: `WITH cte AS (SELECT 'a SELECT b FROM c literal' as lit, greatest(CAST(count() / 10 AS UInt32), 1) as sf FROM db.t) SELECT ServiceName as service FROM db.t WHERE rand() % (SELECT sf FROM cte) = 0`,
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({
+      service: 'ServiceName',
+    });
+  });
+
+  it('ignores SELECT / FROM keywords inside SQL comments', () => {
+    const chSqlInput: ChSql = {
+      sql: `${samplingCte} SELECT /* not a real SELECT ... FROM */ ServiceName as service, -- trailing SELECT x FROM y\n Timestamp as ts FROM db.t WHERE ${samplingWhere}`,
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({
+      service: 'ServiceName',
+      ts: 'Timestamp',
+    });
+  });
+
+  it('returns an empty map when neither the full query nor the projection parses', () => {
+    const chSqlInput: ChSql = {
+      sql: 'NOT VALID SQL AT ALL )(',
+      params: {},
+    };
+    expect(chSqlToAliasMap(chSqlInput)).toEqual({});
   });
 });
 
-describe('computeResultSetRatio', () => {
-  it('should compute ratio for a valid result set with timestamp column', () => {
-    const mockResultSet: ResponseJSON<any> = {
-      meta: [
-        { name: 'timestamp', type: 'DateTime' },
-        { name: 'requests', type: 'UInt64' },
-        { name: 'errors', type: 'UInt64' },
-      ],
-      data: [
-        { timestamp: '2025-04-15 10:00:00', requests: '100', errors: '10' },
-        { timestamp: '2025-04-15 11:00:00', requests: '200', errors: '20' },
-      ],
-      rows: 2,
-      statistics: { elapsed: 0.1, rows_read: 2, bytes_read: 100 },
-    };
-
-    const result = computeResultSetRatio(mockResultSet);
-
-    expect(result.meta.length).toBe(2);
-    expect(result.meta[0].name).toBe('requests/errors');
-    expect(result.meta[0].type).toBe('Float64');
-    expect(result.meta[1].name).toBe('timestamp');
-
-    expect(result.data.length).toBe(2);
-    expect(result.data[0]['requests/errors']).toBe(10);
-    expect(result.data[0].timestamp).toBe('2025-04-15 10:00:00');
-    expect(result.data[1]['requests/errors']).toBe(10);
-    expect(result.data[1].timestamp).toBe('2025-04-15 11:00:00');
+describe('chSqlToAliasMap - backtick-quoted identifiers', () => {
+  it('resolves an alias whose name needs quoting, keeping its siblings', () => {
+    const res = chSqlToAliasMap({
+      sql: 'SELECT client_ip AS `x-host-header`,time AS `__hdx_timestamp`,ServiceName AS svc FROM otel.logs WHERE time > 1 LIMIT 10',
+      params: {},
+    });
+    expect(res).toEqual({
+      'x-host-header': 'client_ip',
+      __hdx_timestamp: 'time',
+      svc: 'ServiceName',
+    });
   });
 
-  it('should compute ratio for a valid result set without timestamp column', () => {
-    const mockResultSet: ResponseJSON<any> = {
-      meta: [
-        { name: 'requests', type: 'UInt64' },
-        { name: 'errors', type: 'UInt64' },
-      ],
-      data: [{ requests: '100', errors: '10' }],
-      rows: 1,
-      statistics: { elapsed: 0.1, rows_read: 1, bytes_read: 50 },
-    };
-
-    const result = computeResultSetRatio(mockResultSet);
-
-    expect(result.meta.length).toBe(1);
-    expect(result.meta[0].name).toBe('requests/errors');
-    expect(result.meta[0].type).toBe('Float64');
-
-    expect(result.data.length).toBe(1);
-    expect(result.data[0]['requests/errors']).toBe(10);
-    expect(result.data[0].timestamp).toBeUndefined();
+  it('keeps the quoting on a column whose name needs it', () => {
+    const res = chSqlToAliasMap({
+      sql: "SELECT `x-host-header` AS host,`M-1`['a'] AS mapped FROM otel.logs LIMIT 10",
+      params: {},
+    });
+    expect(res).toEqual({
+      host: '`x-host-header`',
+      mapped: "`M-1`['a']",
+    });
   });
 
-  it('should handle NaN values in ratio computation', () => {
-    const mockResultSet: ResponseJSON<any> = {
-      meta: [
-        { name: 'timestamp', type: 'DateTime' },
-        { name: 'requests', type: 'UInt64' },
-        { name: 'errors', type: 'UInt64' },
-      ],
-      data: [
-        { timestamp: '2025-04-15 10:00:00', requests: '100', errors: '0' },
-        { timestamp: '2025-04-15 11:00:00', requests: 'invalid', errors: '20' },
-      ],
-      rows: 2,
-      statistics: { elapsed: 0.1, rows_read: 2, bytes_read: 100 },
-    };
-
-    const result = computeResultSetRatio(mockResultSet);
-
-    expect(result.data.length).toBe(2);
-    expect(isNaN(result.data[0]['requests/errors'])).toBe(true);
-    expect(isNaN(result.data[1]['requests/errors'])).toBe(true);
+  it('records no entry for a quoted column selected without an alias', () => {
+    const res = chSqlToAliasMap({
+      sql: 'SELECT `x-host-header`,ServiceName AS svc FROM otel.logs LIMIT 10',
+      params: {},
+    });
+    expect(res).toEqual({ svc: 'ServiceName' });
   });
 
-  it('should throw error when result set has insufficient columns', () => {
-    const mockResultSet: ResponseJSON<any> = {
-      meta: [
-        { name: 'timestamp', type: 'DateTime' },
-        { name: 'requests', type: 'UInt64' },
-      ],
-      data: [{ timestamp: '2025-04-15 10:00:00', requests: '100' }],
-      rows: 1,
-      statistics: { elapsed: 0.1, rows_read: 1, bytes_read: 50 },
-    };
+  it('keeps aliases when the only quoted identifier is in the WHERE', () => {
+    const res = chSqlToAliasMap({
+      sql: "SELECT ServiceName AS svc FROM otel.logs WHERE `x-host-header`='v' LIMIT 10",
+      params: {},
+    });
+    expect(res).toEqual({ svc: 'ServiceName' });
+  });
 
-    expect(() => computeResultSetRatio(mockResultSet)).toThrow(
-      /Unable to compute ratio/,
+  it('preserves quoting inside an aliased expression', () => {
+    const res = chSqlToAliasMap({
+      sql: 'SELECT lower(`x-host-header`) AS host,multiIf(`a-b` > 1, `c-d`, 0) AS m FROM otel.logs LIMIT 10',
+      params: {},
+    });
+    expect(res).toEqual({
+      host: 'lower(`x-host-header`)',
+      m: 'multiIf(`a-b` > 1, `c-d`, 0)',
+    });
+  });
+
+  it('re-quotes a double-quoted column name', () => {
+    const res = chSqlToAliasMap({
+      sql: 'SELECT "x-host-header" AS host FROM otel.logs LIMIT 10',
+      params: {},
+    });
+    expect(res).toEqual({ host: '`x-host-header`' });
+  });
+
+  it('restores more than ten quoted identifiers', () => {
+    const select = Array.from(
+      { length: 12 },
+      (_, i) => `\`c-${i}\` AS a${i}`,
+    ).join(',');
+    const res = chSqlToAliasMap({
+      sql: `SELECT ${select} FROM otel.logs LIMIT 10`,
+      params: {},
+    });
+    expect(res).toEqual(
+      Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [`a${i}`, `\`c-${i}\``]),
+      ),
     );
+  });
+
+  it('restores quoted identifiers alongside a JSON path', () => {
+    const res = chSqlToAliasMap({
+      sql: 'SELECT concat(j.p0, `c-1`, `c-10`) AS m FROM otel.logs LIMIT 10',
+      params: {},
+    });
+    expect(res).toEqual({ m: 'concat(j.p0, `c-1`, `c-10`)' });
+  });
+
+  it('leaves backticks inside string literals alone', () => {
+    const res = chSqlToAliasMap({
+      sql: "SELECT Body AS body FROM otel.logs WHERE Body = 'a `b` c' LIMIT 10",
+      params: {},
+    });
+    expect(res).toEqual({ body: 'Body' });
   });
 });
 
 describe('processClickhouseSettings - optimization settings', () => {
   let client: ClickhouseClient;
   let mockQueryMethod: jest.Mock;
-  let metadataCache: MetadataCache;
 
   const createClient = () => {
     const newClient = new ClickhouseClient({
@@ -404,7 +472,6 @@ describe('processClickhouseSettings - optimization settings', () => {
     const setup = createClient();
     client = setup.client;
     mockQueryMethod = setup.mockQueryMethod;
-    metadataCache = setup.cache;
   });
 
   afterEach(() => {
@@ -467,11 +534,16 @@ describe('processClickhouseSettings - optimization settings', () => {
       // { name: 'use_top_k_dynamic_filtering', value: '1' },
       { name: 'use_skip_indexes_on_data_read', value: '1' },
       { name: 'use_skip_indexes_for_disjunctions', value: '1' },
+      {
+        name: 'allow_calculating_subcolumns_sizes_for_merge_tree_reading',
+        value: '1',
+      },
     ]);
 
     await client.query({
       query: 'SELECT 1',
       format: 'JSON',
+      connectionId: 'test-conn',
     });
 
     const actualQueryCall = mockQueryMethod.mock.calls.find(
@@ -492,9 +564,13 @@ describe('processClickhouseSettings - optimization settings', () => {
       // use_top_k_dynamic_filtering: '1',
       use_skip_indexes_on_data_read: '1',
       use_skip_indexes_for_disjunctions: '1',
+      allow_calculating_subcolumns_sizes_for_merge_tree_reading: '0',
     });
   });
 
+  // The exact-equality assertion below is what keeps unavailable settings off
+  // the wire — e.g. a pre-26.3 server that would reject
+  // allow_calculating_subcolumns_sizes_for_merge_tree_reading as unknown.
   it('should only apply available optimization settings', async () => {
     setupMockQuery([
       { name: 'use_skip_indexes_for_top_k', value: '1' },
@@ -504,6 +580,7 @@ describe('processClickhouseSettings - optimization settings', () => {
     await client.query({
       query: 'SELECT 1',
       format: 'JSON',
+      connectionId: 'test-conn',
     });
 
     const actualQueryCall = mockQueryMethod.mock.calls.find(
@@ -531,6 +608,7 @@ describe('processClickhouseSettings - optimization settings', () => {
     await client.query({
       query: 'SELECT 1',
       format: 'JSON',
+      connectionId: 'test-conn',
       clickhouse_settings: {
         max_rows_to_read: '1000000',
       },
@@ -582,6 +660,7 @@ describe('processClickhouseSettings - optimization settings', () => {
     await client.query({
       query: 'SELECT 1',
       format: 'JSON',
+      connectionId: 'test-conn',
     });
 
     const actualQueryCall = mockQueryMethod.mock.calls.find(
@@ -602,8 +681,16 @@ describe('processClickhouseSettings - optimization settings', () => {
     setupMockQuery([{ name: 'use_skip_indexes_for_top_k', value: '1' }]);
 
     // Run two queries
-    await client.query({ query: 'SELECT 1', format: 'JSON' });
-    await client.query({ query: 'SELECT 2', format: 'JSON' });
+    await client.query({
+      query: 'SELECT 1',
+      format: 'JSON',
+      connectionId: 'test-conn',
+    });
+    await client.query({
+      query: 'SELECT 2',
+      format: 'JSON',
+      connectionId: 'test-conn',
+    });
 
     // Should only fetch settings once
     const settingsCalls = mockQueryMethod.mock.calls.filter(
@@ -611,5 +698,179 @@ describe('processClickhouseSettings - optimization settings', () => {
         call[0].query === 'SELECT name, value FROM system.settings',
     );
     expect(settingsCalls.length).toEqual(1);
+  });
+});
+
+describe('chSqlToSelectColumns', () => {
+  const columns = (sql: string, params: Record<string, unknown> = {}) =>
+    chSqlToSelectColumns({ sql, params });
+
+  it('resolves aliases to their expressions and marks group-by items', () => {
+    expect(
+      columns(
+        "SELECT ServiceName AS svc, LogAttributes['k'] AS k, count() AS c FROM logs GROUP BY svc, k ORDER BY c LIMIT 10",
+      ),
+    ).toEqual([
+      { expression: 'ServiceName', isGroupBy: true },
+      { expression: "LogAttributes['k']", isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('keeps complex expressions verbatim', () => {
+    expect(
+      columns(
+        "SELECT toStartOfHour(Timestamp) AS hour, concat(ServiceName, '-', SeverityText), count() FROM logs GROUP BY hour, concat(ServiceName, '-', SeverityText)",
+      ),
+    ).toEqual([
+      { expression: 'toStartOfHour(Timestamp)', isGroupBy: true },
+      { expression: "concat(ServiceName, '-', SeverityText)", isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it.each([
+    ['aliased', 'AS k', 'k'],
+    ['followed by a comma', '', "ParentSpanId = ''"],
+  ])('trims binary expressions %s', (_case, alias, groupBy) => {
+    expect(
+      columns(
+        `SELECT ParentSpanId = ''  ${alias}, ServiceName || '-' || SpanName   AS name, count() FROM logs GROUP BY ${groupBy}, name`,
+      ),
+    ).toEqual([
+      { expression: "ParentSpanId = ''", isGroupBy: true },
+      { expression: "ServiceName || '-' || SpanName", isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('matches GROUP BY items by position', () => {
+    expect(columns('SELECT count(), ServiceName FROM logs GROUP BY 2')).toEqual(
+      [
+        { expression: 'count()', isGroupBy: false },
+        { expression: 'ServiceName', isGroupBy: true },
+      ],
+    );
+  });
+
+  it('matches GROUP BY expressions ignoring whitespace and case', () => {
+    expect(
+      columns(
+        'SELECT lower(ServiceName), count() FROM logs GROUP BY LOWER( ServiceName )',
+      ),
+    ).toEqual([
+      { expression: 'lower(ServiceName)', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it.each([
+    ['double-quoted', '"Svc Name"'],
+    ['backtick-quoted', '`Svc Name`'],
+    ['quoted bare', '"svc"'],
+  ])('matches %s GROUP BY aliases', (_case, alias) => {
+    expect(
+      columns(
+        `SELECT ServiceName AS ${alias}, count() FROM logs GROUP BY ${alias}`,
+      ),
+    ).toEqual([
+      { expression: 'ServiceName', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('matches quoted GROUP BY columns', () => {
+    expect(
+      columns(
+        'SELECT ServiceName, `x-host`, count() FROM logs GROUP BY "ServiceName", `x-host`',
+      ),
+    ).toEqual([
+      { expression: 'ServiceName', isGroupBy: true },
+      { expression: '`x-host`', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('matches parenthesized GROUP BY items', () => {
+    expect(
+      columns(
+        'SELECT ServiceName, lower(SeverityText), count() FROM logs GROUP BY (ServiceName), (lower(SeverityText))',
+      ),
+    ).toEqual([
+      { expression: 'ServiceName', isGroupBy: true },
+      { expression: 'lower(SeverityText)', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('matches GROUP BY expressions over backtick-quoted identifiers', () => {
+    expect(
+      columns(
+        'SELECT lower(`x-host`), count() FROM logs GROUP BY lower(`x-host`)',
+      ),
+    ).toEqual([
+      { expression: 'lower(`x-host`)', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('reads the outer query of a CTE', () => {
+    expect(
+      columns(
+        'WITH recent AS (SELECT ServiceName AS s FROM logs GROUP BY s) SELECT s AS service, count() FROM recent GROUP BY service',
+      ),
+    ).toEqual([
+      { expression: 's', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('restores JSON paths', () => {
+    expect(
+      columns(
+        'SELECT LogAttributes.user.id AS user, count() FROM logs GROUP BY user',
+      ),
+    ).toEqual([
+      { expression: 'LogAttributes.user.id', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it('reads queries with query params and a SETTINGS clause', () => {
+    expect(
+      columns(
+        'SELECT ServiceName, count() FROM logs WHERE Timestamp > fromUnixTimestamp64Milli({start:Int64}) GROUP BY ServiceName SETTINGS max_threads = 1',
+        { start: 1 },
+      ),
+    ).toEqual([
+      { expression: 'ServiceName', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
+  });
+
+  it.each([
+    ['there is no GROUP BY', 'SELECT ServiceName, Body FROM logs'],
+    ['it selects *', 'SELECT *, count() FROM logs GROUP BY ServiceName'],
+    ['it groups by ALL', 'SELECT ServiceName, count() FROM logs GROUP BY ALL'],
+    ['it does not parse', 'SELECT ServiceName, count( FROM logs GROUP BY 1'],
+  ])('returns undefined when %s', (_case, sql) => {
+    expect(columns(sql)).toBeUndefined();
+  });
+
+  it('parses a raw SQL template once its macros are replaced', () => {
+    const sql = replaceMacros(
+      {
+        sqlTemplate:
+          'SELECT ServiceName AS svc, count() FROM $__sourceTable WHERE $__timeFilter(Timestamp) AND $__filters GROUP BY svc',
+        from: { databaseName: 'default', tableName: 'otel_logs' },
+      },
+      "(toString(SeverityText) = 'error')",
+    );
+    expect(
+      columns(sql, { startDateMilliseconds: 1, endDateMilliseconds: 2 }),
+    ).toEqual([
+      { expression: 'ServiceName', isGroupBy: true },
+      { expression: 'count()', isGroupBy: false },
+    ]);
   });
 });

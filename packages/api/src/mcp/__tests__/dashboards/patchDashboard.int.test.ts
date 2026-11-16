@@ -1,0 +1,1403 @@
+import { MetricsDataType, SourceKind } from '@hyperdx/common-utils/dist/types';
+
+import { DEFAULT_DATABASE, DEFAULT_METRICS_TABLE } from '@/fixtures';
+import { callTool, getFirstText } from '@/mcp/__tests__/mcpTestUtils';
+import Dashboard from '@/models/dashboard';
+import { Source } from '@/models/source';
+import type { ExternalDashboardTileWithId } from '@/utils/zod';
+
+import { setupDashboardTests } from './setup';
+
+describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
+  const ctx = setupDashboardTests();
+
+  it('should patch a tile config without affecting other tiles', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Patch Test Dashboard',
+        tiles: [
+          {
+            name: 'Tile A',
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 4,
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Tile B',
+            x: 0,
+            y: 4,
+            w: 12,
+            h: 4,
+            config: {
+              displayType: 'number',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const dashboardId = created.id;
+    const tileAId = created.tiles[0].id;
+
+    // Patch only tile A: change its name and displayType
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId,
+        tileId: tileAId,
+        tile: {
+          name: 'Patched Tile A',
+          config: {
+            displayType: 'table',
+            sourceId,
+            select: [{ aggFn: 'count' }],
+          },
+        },
+      },
+    );
+
+    expect(patchResult.isError).toBeFalsy();
+    const patchOutput = JSON.parse(getFirstText(patchResult));
+    expect(patchOutput.patchedTile.name).toBe('Patched Tile A');
+    expect(patchOutput.patchedTile.config.displayType).toBe('table');
+
+    // Verify the full dashboard: tile B should be untouched
+    const getResult = await callTool(ctx.client!, 'clickstack_get_dashboard', {
+      id: dashboardId,
+    });
+    const dashboard = JSON.parse(getFirstText(getResult));
+    expect(dashboard.tiles).toHaveLength(2);
+
+    const tileA = dashboard.tiles.find(
+      (t: ExternalDashboardTileWithId) => t.id === tileAId,
+    );
+    expect(tileA.name).toBe('Patched Tile A');
+    expect(tileA.config.displayType).toBe('table');
+
+    const tileB = dashboard.tiles.find(
+      (t: ExternalDashboardTileWithId) => t.id !== tileAId,
+    );
+    expect(tileB.name).toBe('Tile B');
+    expect(tileB.config.displayType).toBe('number');
+  });
+
+  it('should preserve existing layout when not specified in patch', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Layout Test',
+        tiles: [
+          {
+            name: 'Positioned Tile',
+            x: 6,
+            y: 10,
+            w: 8,
+            h: 5,
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    // Patch without specifying layout; layout should be preserved
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId: created.id,
+        tileId,
+        tile: {
+          name: 'Renamed Tile',
+          config: {
+            displayType: 'line',
+            sourceId,
+            select: [{ aggFn: 'avg', valueExpression: 'Duration' }],
+          },
+        },
+      },
+    );
+
+    expect(patchResult.isError).toBeFalsy();
+    const patched = JSON.parse(getFirstText(patchResult));
+    expect(patched.patchedTile.x).toBe(6);
+    expect(patched.patchedTile.y).toBe(10);
+    expect(patched.patchedTile.w).toBe(8);
+    expect(patched.patchedTile.h).toBe(5);
+    expect(patched.patchedTile.name).toBe('Renamed Tile');
+  });
+
+  it('should update dashboard name only (no tile patch)', async () => {
+    const dashboard = await new Dashboard({
+      name: 'Original Name',
+      tiles: [],
+      team: ctx.team._id,
+      tags: ['tag1'],
+    }).save();
+
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: dashboard._id.toString(),
+      name: 'New Name',
+    });
+
+    expect(result.isError).toBeFalsy();
+    const output = JSON.parse(getFirstText(result));
+    expect(output.name).toBe('New Name');
+    expect(output.tags).toEqual(['tag1']);
+    expect(output.patchedTile).toBeUndefined();
+
+    // Verify in DB
+    const updated = await Dashboard.findById(dashboard._id);
+    expect(updated?.name).toBe('New Name');
+  });
+
+  it('should update tags only', async () => {
+    const dashboard = await new Dashboard({
+      name: 'Tag Test',
+      tiles: [],
+      team: ctx.team._id,
+      tags: ['old'],
+    }).save();
+
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: dashboard._id.toString(),
+      tags: ['new1', 'new2'],
+    });
+
+    expect(result.isError).toBeFalsy();
+    const output = JSON.parse(getFirstText(result));
+    expect(output.tags).toEqual(['new1', 'new2']);
+    expect(output.name).toBe('Tag Test');
+  });
+
+  it('should update name and patch tile in one call', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Combo Test',
+        tiles: [
+          {
+            name: 'A Tile',
+            config: {
+              displayType: 'number',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: created.id,
+      name: 'Combo Updated',
+      tileId: created.tiles[0].id,
+      tile: {
+        name: 'Updated Tile',
+        config: {
+          displayType: 'number',
+          sourceId,
+          select: [{ aggFn: 'avg', valueExpression: 'Duration' }],
+        },
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const output = JSON.parse(getFirstText(result));
+    expect(output.name).toBe('Combo Updated');
+    expect(output.patchedTile.name).toBe('Updated Tile');
+  });
+
+  it('should return error for non-existent tileId', async () => {
+    const dashboard = await new Dashboard({
+      name: 'Tile Not Found',
+      tiles: [],
+      team: ctx.team._id,
+    }).save();
+
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: dashboard._id.toString(),
+      tileId: 'nonexistent',
+      tile: {
+        name: 'Ghost',
+        config: { displayType: 'markdown', markdown: 'hello' },
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(getFirstText(result)).toContain('Tile not found');
+  });
+
+  it('should return error for non-existent dashboard', async () => {
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: '000000000000000000000000',
+      name: 'Ghost',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(getFirstText(result)).toContain('not found');
+  });
+
+  it('should return error for missing source ID on patched tile', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Source Validation Test',
+        tiles: [
+          {
+            name: 'Valid Tile',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: created.id,
+      tileId: created.tiles[0].id,
+      tile: {
+        name: 'Bad Source',
+        config: {
+          displayType: 'line',
+          sourceId: '000000000000000000000000',
+          select: [{ aggFn: 'count' }],
+        },
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(getFirstText(result)).toContain('source');
+  });
+
+  it('should reject patching a tile to raw SQL with $__filters but no sourceId', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const connectionId = ctx.connection._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'SQL Macro Patch Test',
+        tiles: [
+          {
+            name: 'Valid Tile',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: created.id,
+      tileId,
+      tile: {
+        name: 'Filtered SQL',
+        config: {
+          configType: 'sql',
+          displayType: 'table',
+          connectionId,
+          sqlTemplate:
+            'SELECT ServiceName, count() AS c FROM otel_traces WHERE $__timeFilter(Timestamp) AND $__filters GROUP BY ServiceName LIMIT 10',
+        },
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = getFirstText(result);
+    expect(text).toContain('sourceId');
+    expect(text).toContain('$__filters');
+    expect(text).toContain('Filtered SQL');
+
+    // The original tile must be untouched in the database.
+    const dashboard = await Dashboard.findById(created.id);
+    const persistedTile = dashboard?.tiles?.find(
+      (t: { id: string }) => t.id === tileId,
+    );
+    expect(persistedTile?.config?.name).toBe('Valid Tile');
+  });
+
+  it('should allow patching a tile to raw SQL with $__filters when a sourceId is set', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const connectionId = ctx.connection._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'SQL Macro Patch Test (valid)',
+        tiles: [
+          {
+            name: 'Valid Tile',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+
+    const result = await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: created.id,
+      tileId: created.tiles[0].id,
+      tile: {
+        name: 'Filtered SQL',
+        config: {
+          configType: 'sql',
+          displayType: 'table',
+          connectionId,
+          sourceId,
+          sqlTemplate:
+            'SELECT ServiceName, count() AS c FROM otel_traces WHERE $__timeFilter(Timestamp) AND $__filters GROUP BY ServiceName LIMIT 10',
+        },
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const output = JSON.parse(getFirstText(result));
+    expect(output.patchedTile.config.sourceId).toBe(sourceId);
+  });
+
+  it('should not modify other tiles in the database (positional update)', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Positional Update Test',
+        tiles: [
+          {
+            name: 'Tile A',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 3,
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Tile B',
+            x: 6,
+            y: 0,
+            w: 6,
+            h: 3,
+            config: {
+              displayType: 'number',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Tile C',
+            x: 0,
+            y: 3,
+            w: 12,
+            h: 4,
+            config: {
+              displayType: 'table',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const dashboardId = created.id;
+
+    // Snapshot the raw tiles from the DB before patching
+    const beforePatch = await Dashboard.findById(dashboardId).lean();
+    const tilesBeforePatch = (beforePatch as any).tiles;
+    const tileBBefore = tilesBeforePatch[1];
+    const tileCBefore = tilesBeforePatch[2];
+
+    // Patch only tile A (index 0)
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId,
+        tileId: created.tiles[0].id,
+        tile: {
+          name: 'Tile A Patched',
+          config: {
+            displayType: 'line',
+            sourceId,
+            select: [{ aggFn: 'avg', valueExpression: 'Duration' }],
+          },
+        },
+      },
+    );
+    expect(patchResult.isError).toBeFalsy();
+
+    // Read raw DB tiles again; tiles B and C should be byte-identical
+    const afterPatch = await Dashboard.findById(dashboardId).lean();
+    const tilesAfterPatch = (afterPatch as any).tiles;
+
+    expect(tilesAfterPatch).toHaveLength(3);
+    // Tile B (index 1) and Tile C (index 2) should be untouched
+    expect(tilesAfterPatch[1]).toEqual(tileBBefore);
+    expect(tilesAfterPatch[2]).toEqual(tileCBefore);
+    // Tile A (index 0) should have changed
+    expect(tilesAfterPatch[0].config.name).toBe('Tile A Patched');
+  });
+
+  it('should preserve tile name when omitted from patch (config-only patch)', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Name Preservation Test',
+        tiles: [
+          {
+            name: 'Original Title',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    // Patch config only; no name field at all
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId: created.id,
+        tileId,
+        tile: {
+          config: {
+            displayType: 'table',
+            sourceId,
+            select: [{ aggFn: 'avg', valueExpression: 'Duration' }],
+          },
+        },
+      },
+    );
+
+    expect(patchResult.isError).toBeFalsy();
+    const patched = JSON.parse(getFirstText(patchResult));
+    expect(patched.patchedTile.name).toBe('Original Title');
+    expect(patched.patchedTile.config.displayType).toBe('table');
+
+    // Verify via get
+    const getResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard_tile',
+      { dashboardId: created.id, tileId },
+    );
+    const tile = JSON.parse(getFirstText(getResult));
+    expect(tile.name).toBe('Original Title');
+  });
+
+  it('should return error when tile is removed between read and write', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Concurrent Delete Test',
+        tiles: [
+          {
+            name: 'Tile A',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Tile B',
+            config: {
+              displayType: 'number',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const tileAId = created.tiles[0].id;
+
+    // Simulate a concurrent save_dashboard that removes tile A by
+    // directly updating the DB to drop it from the array.
+    await Dashboard.findByIdAndUpdate(created.id, {
+      $pull: { tiles: { id: tileAId } },
+    });
+
+    // Now try to patch tile A; it no longer exists in the array.
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId: created.id,
+        tileId: tileAId,
+        tile: {
+          name: 'Patched A',
+          config: {
+            displayType: 'line',
+            sourceId,
+            select: [{ aggFn: 'count' }],
+          },
+        },
+      },
+    );
+
+    expect(patchResult.isError).toBe(true);
+    // Could be "Tile not found" (caught at read) or "was not found at
+    // write time" (caught by positional $ miss). Either is acceptable.
+    const text = getFirstText(patchResult);
+    expect(text).toMatch(/not found|was not found/i);
+  });
+
+  it('should round-trip: patch then get_dashboard_tile', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Round Trip Test',
+        tiles: [
+          {
+            name: 'Original',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    // Patch
+    await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: created.id,
+      tileId,
+      tile: {
+        name: 'Patched',
+        config: {
+          displayType: 'number',
+          sourceId,
+          select: [{ aggFn: 'avg', valueExpression: 'Duration' }],
+          color: 'chart-blue',
+          colorRules: [{ operator: 'gte', value: 500, color: 'chart-error' }],
+        },
+      },
+    });
+
+    // Get the tile back
+    const getResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard_tile',
+      {
+        dashboardId: created.id,
+        tileId,
+      },
+    );
+
+    expect(getResult.isError).toBeFalsy();
+    const tile = JSON.parse(getFirstText(getResult));
+    expect(tile.id).toBe(tileId);
+    expect(tile.name).toBe('Patched');
+    expect(tile.config.displayType).toBe('number');
+    expect(tile.config.select[0].aggFn).toBe('avg');
+    expect(tile.config.color).toBe('chart-blue');
+    expect(tile.config.colorRules).toEqual([
+      { operator: 'gte', value: 500, color: 'chart-error' },
+    ]);
+  });
+
+  it('should preserve raw SQL number tile colorRules across a get/patch round trip', async () => {
+    const connectionId = ctx.connection._id.toString();
+    const colorRules = [
+      { operator: 'lt', value: 0.95, color: 'chart-error', label: 'Down' },
+      { operator: 'between', value: [0.95, 0.99], color: 'chart-warning' },
+    ];
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'SQL ColorRules Patch Test',
+        tiles: [
+          {
+            name: 'SLO',
+            config: {
+              configType: 'sql',
+              displayType: 'number',
+              connectionId,
+              sqlTemplate: 'SELECT 0.99 AS value LIMIT 1',
+              color: 'chart-success',
+              colorRules,
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    const getDashboardResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard',
+      { id: created.id },
+    );
+    const fetched = JSON.parse(getFirstText(getDashboardResult));
+
+    // Feed the fetched tile straight back in, the way an agent editing an
+    // existing tile would; the config must survive the round trip intact.
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId: created.id,
+        tileId,
+        tile: { name: 'SLO (patched)', config: fetched.tiles[0].config },
+      },
+    );
+    expect(patchResult.isError).toBeFalsy();
+
+    const getResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard_tile',
+      { dashboardId: created.id, tileId },
+    );
+    const tile = JSON.parse(getFirstText(getResult));
+    expect(tile.config.color).toBe('chart-success');
+    expect(tile.config.colorRules).toEqual(colorRules);
+  });
+
+  it('should round-trip backgroundChart: patch then get_dashboard_tile', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Background Chart Patch Test',
+        tiles: [
+          {
+            name: 'Original',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: created.id,
+      tileId,
+      tile: {
+        name: 'Patched',
+        config: {
+          displayType: 'number',
+          sourceId,
+          select: [{ aggFn: 'avg', valueExpression: 'Duration' }],
+          backgroundChart: { type: 'line', color: 'chart-blue' },
+        },
+      },
+    });
+
+    const getResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard_tile',
+      {
+        dashboardId: created.id,
+        tileId,
+      },
+    );
+
+    expect(getResult.isError).toBeFalsy();
+    const tile = JSON.parse(getFirstText(getResult));
+    expect(tile.config.displayType).toBe('number');
+    expect(tile.config.backgroundChart).toEqual({
+      type: 'line',
+      color: 'chart-blue',
+    });
+  });
+
+  it('should round-trip seriesLimit: patch then get_dashboard_tile', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Series Limit Patch Test',
+        tiles: [
+          {
+            name: 'Original',
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+              groupBy: 'SpanName',
+              seriesLimit: 5,
+            },
+          },
+        ],
+      },
+    );
+    const created = JSON.parse(getFirstText(createResult));
+    expect(created.tiles[0].config.seriesLimit).toBe(5);
+    const tileId = created.tiles[0].id;
+
+    await callTool(ctx.client!, 'clickstack_patch_dashboard', {
+      dashboardId: created.id,
+      tileId,
+      tile: {
+        name: 'Patched',
+        config: {
+          displayType: 'stacked_bar',
+          sourceId,
+          select: [{ aggFn: 'count' }],
+          groupBy: 'SpanName',
+          seriesLimit: 3,
+        },
+      },
+    });
+
+    const getResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard_tile',
+      {
+        dashboardId: created.id,
+        tileId,
+      },
+    );
+
+    expect(getResult.isError).toBeFalsy();
+    const tile = JSON.parse(getFirstText(getResult));
+    expect(tile.config.displayType).toBe('stacked_bar');
+    expect(tile.config.seriesLimit).toBe(3);
+  });
+
+  it('should patch a series heatmap tile without losing its mode', async () => {
+    const logSource = await Source.create({
+      kind: SourceKind.Log,
+      team: ctx.team._id,
+      from: { databaseName: DEFAULT_DATABASE, tableName: 'otel_logs' },
+      timestampValueExpression: 'Timestamp',
+      connection: ctx.connection._id,
+      name: 'Logs',
+    });
+    const sourceId = logSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Series Heatmap Patch Test',
+        tiles: [
+          {
+            name: 'Original',
+            config: {
+              displayType: 'heatmap',
+              heatmapMode: 'series',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+              groupBy: 'ServiceName',
+            },
+          },
+        ],
+      },
+    );
+    expect(createResult.isError).toBeFalsy();
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    // A valueExpression also satisfies the distribution schema, so this
+    // guards the patch union order.
+    const patchedConfig = {
+      displayType: 'heatmap',
+      heatmapMode: 'series',
+      sourceId,
+      select: [
+        {
+          aggFn: 'avg',
+          valueExpression: 'Duration',
+          where: 'SeverityText:error',
+          whereLanguage: 'lucene',
+        },
+      ],
+      groupBy: 'SeverityText',
+    };
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId: created.id,
+        tileId,
+        tile: { name: 'Patched', config: patchedConfig },
+      },
+    );
+    expect(patchResult.isError).toBeFalsy();
+
+    const getResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard_tile',
+      { dashboardId: created.id, tileId },
+    );
+    expect(getResult.isError).toBeFalsy();
+    const tile = JSON.parse(getFirstText(getResult));
+    expect(tile.name).toBe('Patched');
+    expect(tile.config).toMatchObject(patchedConfig);
+  });
+
+  describe('raw SQL macro warnings', () => {
+    // Patching a tile to a macro-less raw SQL config succeeds (non-blocking)
+    // but surfaces an advisory `warnings` array on the response.
+    it('returns a non-blocking warning when a patched tile omits macros', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+      const connectionId = ctx.connection._id.toString();
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Patch to static SQL',
+          tiles: [
+            {
+              name: 'Builder Tile',
+              config: {
+                displayType: 'number',
+                sourceId,
+                select: [{ aggFn: 'count' }],
+              },
+            },
+          ],
+        },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+      const tileId = created.tiles[0].id;
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          tileId,
+          tile: {
+            name: 'Static SQL',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId,
+              sqlTemplate: 'SELECT 1 AS value LIMIT 1',
+            },
+          },
+        },
+      );
+
+      // Non-blocking: the patch applies and the tile is persisted.
+      expect(patchResult.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(patchResult));
+      expect(output.patchedTile.name).toBe('Static SQL');
+      const dashboard = await Dashboard.findById(created.id);
+      const persistedConfig = dashboard?.tiles?.[0]?.config as {
+        sqlTemplate?: string;
+      };
+      expect(persistedConfig?.sqlTemplate).toBe('SELECT 1 AS value LIMIT 1');
+
+      expect(Array.isArray(output.warnings)).toBe(true);
+      expect(output.warnings).toHaveLength(1);
+      expect(output.warnings[0]).toContain('Static SQL');
+      expect(output.warnings[0]).toContain('$__timeFilter');
+      expect(output.warnings[0]).toContain('strongly recommended');
+    });
+
+    it('omits warnings when a patched raw SQL tile uses all recommended macros', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+      const connectionId = ctx.connection._id.toString();
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Patch to macro SQL',
+          tiles: [
+            {
+              name: 'Builder Tile',
+              config: {
+                displayType: 'number',
+                sourceId,
+                select: [{ aggFn: 'count' }],
+              },
+            },
+          ],
+        },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+      const tileId = created.tiles[0].id;
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          tileId,
+          tile: {
+            name: 'Macro SQL',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId,
+              sourceId,
+              sqlTemplate:
+                'SELECT ServiceName, count() AS c FROM $__sourceTable ' +
+                'WHERE $__timeFilter(Timestamp) AND $__filters GROUP BY ServiceName LIMIT 10',
+            },
+          },
+        },
+      );
+
+      expect(patchResult.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(patchResult));
+      expect(output.warnings).toBeUndefined();
+    });
+  });
+
+  describe('dashboard variable warnings', () => {
+    // A patch cannot change the filters, so the patched tile's variable
+    // references are checked against the dashboard's persisted set. This is
+    // the tool clickstack_save_dashboard points agents at for single-tile
+    // edits, so it has to catch what a full save would.
+    const variableFilter = (sourceId: string) => ({
+      type: 'QUERY_EXPRESSION' as const,
+      name: 'Service',
+      expression: 'ServiceName',
+      sourceId,
+      whereLanguage: 'sql' as const,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'service',
+    });
+
+    const createVariableDashboard = async (name: string) => {
+      const sourceId = ctx.traceSource._id.toString();
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name,
+          tiles: [
+            {
+              name: 'Builder Tile',
+              config: {
+                displayType: 'number',
+                sourceId,
+                select: [{ aggFn: 'count' }],
+              },
+            },
+          ],
+          filters: [variableFilter(sourceId)],
+        },
+      );
+      expect(createResult.isError).toBeFalsy();
+      return JSON.parse(getFirstText(createResult));
+    };
+
+    const macroSql = (variable: string) =>
+      'SELECT ServiceName, count() AS c FROM $__sourceTable ' +
+      'WHERE $__timeFilter(Timestamp) AND $__filters ' +
+      `AND $__filter(ServiceName, $${variable}) GROUP BY ServiceName LIMIT 10`;
+
+    it('warns when a patched tile names a variable no filter declares', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+      const connectionId = ctx.connection._id.toString();
+      const created = await createVariableDashboard('Patch unknown variable');
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          tileId: created.tiles[0].id,
+          tile: {
+            name: 'Errors',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId,
+              sourceId,
+              sqlTemplate: macroSql('tenant'),
+            },
+          },
+        },
+      );
+
+      // Non-blocking, like the macro warnings above.
+      expect(patchResult.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(patchResult));
+      const warnings: string[] = output.warnings ?? [];
+      expect(warnings.join('\n')).toContain('Tile "Errors"');
+      expect(warnings.join('\n')).toContain("unknown variable 'tenant'");
+      expect(warnings.join('\n')).toContain('Available variables: service');
+    });
+
+    it('warns about an unguarded bare reference in a patched builder tile', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+      const created = await createVariableDashboard('Patch bare reference');
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          tileId: created.tiles[0].id,
+          tile: {
+            name: 'Requests',
+            config: {
+              displayType: 'number',
+              sourceId,
+              select: [
+                {
+                  aggFn: 'count',
+                  alias: 'Requests',
+                  where: 'ServiceName IN ($service)',
+                  whereLanguage: 'sql',
+                },
+              ],
+            },
+          },
+        },
+      );
+
+      expect(patchResult.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(patchResult));
+      const warnings: string[] = output.warnings ?? [];
+      expect(warnings.join('\n')).toContain('Tile "Requests"');
+      expect(warnings.join('\n')).toContain('renders as NULL');
+    });
+
+    it('omits warnings when the patched tile references a declared variable', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+      const connectionId = ctx.connection._id.toString();
+      const created = await createVariableDashboard('Patch declared variable');
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          tileId: created.tiles[0].id,
+          tile: {
+            name: 'Errors',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId,
+              sourceId,
+              sqlTemplate: macroSql('service'),
+            },
+          },
+        },
+      );
+
+      expect(patchResult.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(patchResult));
+      expect(output.warnings).toBeUndefined();
+    });
+
+    it('resolves variables declared by a static list filter', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+      const connectionId = ctx.connection._id.toString();
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Patch static variable',
+          tiles: [
+            {
+              name: 'Builder Tile',
+              config: {
+                displayType: 'number',
+                sourceId,
+                select: [{ aggFn: 'count' }],
+              },
+            },
+          ],
+          filters: [
+            {
+              type: 'STATIC_LIST',
+              name: 'Environment',
+              options: ['prod', 'staging'],
+              variableName: 'env',
+            },
+          ],
+        },
+      );
+      expect(createResult.isError).toBeFalsy();
+      const created = JSON.parse(getFirstText(createResult));
+
+      const declaredResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          tileId: created.tiles[0].id,
+          tile: {
+            name: 'Errors',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId,
+              sourceId,
+              sqlTemplate: macroSql('env'),
+            },
+          },
+        },
+      );
+      expect(declaredResult.isError).toBeFalsy();
+      const declared = JSON.parse(getFirstText(declaredResult));
+      expect(declared.warnings).toBeUndefined();
+
+      const unknownResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          tileId: created.tiles[0].id,
+          tile: {
+            name: 'Errors',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId,
+              sourceId,
+              sqlTemplate: macroSql('tenant'),
+            },
+          },
+        },
+      );
+      expect(unknownResult.isError).toBeFalsy();
+      const unknown = JSON.parse(getFirstText(unknownResult));
+      const warnings: string[] = unknown.warnings ?? [];
+      expect(warnings.join('\n')).toContain("unknown variable 'tenant'");
+      expect(warnings.join('\n')).toContain('Available variables: env');
+    });
+  });
+
+  // Patches replace a single tile without going through the save_dashboard
+  // body schemas, so the handler re-runs the external tile schema's
+  // cross-field refinements itself — otherwise a patch could persist a
+  // config that an equivalent create or full update rejects.
+  describe('metric formula validation', () => {
+    const metricSelect = () => [
+      {
+        aggFn: 'max',
+        metricType: 'gauge',
+        metricName: 'patch.errors',
+        alias: 'Errors',
+      },
+      {
+        aggFn: 'max',
+        metricType: 'gauge',
+        metricName: 'patch.requests',
+        alias: 'Requests',
+      },
+    ];
+
+    const createMetricSource = () =>
+      Source.create({
+        kind: SourceKind.Metric,
+        team: ctx.team._id,
+        from: { databaseName: DEFAULT_DATABASE, tableName: '' },
+        metricTables: {
+          [MetricsDataType.Gauge.toLowerCase()]: DEFAULT_METRICS_TABLE.GAUGE,
+        },
+        timestampValueExpression: 'TimeUnix',
+        connection: ctx.connection._id,
+        name: 'Gauge Metrics (patch)',
+      });
+
+    const createFormulaDashboard = async (sourceId: string) => {
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Patch Formula Dashboard',
+          tiles: [
+            {
+              name: 'Error rate',
+              config: {
+                displayType: 'line',
+                sourceId,
+                select: metricSelect(),
+                formulas: [{ expression: 'A / B * 100', alias: 'Rate %' }],
+              },
+            },
+          ],
+        },
+      );
+      if (createResult.isError) {
+        throw new Error(getFirstText(createResult));
+      }
+      return JSON.parse(getFirstText(createResult));
+    };
+
+    it('rejects a patch whose formula references an unknown series', async () => {
+      const metricSource = await createMetricSource();
+      const sourceId = metricSource._id.toString();
+      const dashboard = await createFormulaDashboard(sourceId);
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: dashboard.id,
+          tileId: dashboard.tiles[0].id,
+          tile: {
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: metricSelect(),
+              formulas: [{ expression: 'A / C' }],
+            },
+          },
+        },
+      );
+
+      expect(patchResult.isError).toBe(true);
+      expect(getFirstText(patchResult)).toContain('Unknown series');
+    });
+
+    it('rejects a patch combining formulas with asRatio', async () => {
+      const metricSource = await createMetricSource();
+      const sourceId = metricSource._id.toString();
+      const dashboard = await createFormulaDashboard(sourceId);
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: dashboard.id,
+          tileId: dashboard.tiles[0].id,
+          tile: {
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: metricSelect(),
+              formulas: [{ expression: 'A / B' }],
+              asRatio: true,
+            },
+          },
+        },
+      );
+
+      expect(patchResult.isError).toBe(true);
+      expect(getFirstText(patchResult)).toContain('asRatio');
+    });
+
+    it('rejects a patch making a number tile multi-select without formulas', async () => {
+      const metricSource = await createMetricSource();
+      const sourceId = metricSource._id.toString();
+      const dashboard = await createFormulaDashboard(sourceId);
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: dashboard.id,
+          tileId: dashboard.tiles[0].id,
+          tile: {
+            config: {
+              displayType: 'number',
+              sourceId,
+              select: metricSelect(),
+            },
+          },
+        },
+      );
+
+      expect(patchResult.isError).toBe(true);
+      expect(getFirstText(patchResult)).toContain(
+        'Number tiles support a single select item',
+      );
+    });
+
+    it('round-trips a valid formula patch', async () => {
+      const metricSource = await createMetricSource();
+      const sourceId = metricSource._id.toString();
+      const dashboard = await createFormulaDashboard(sourceId);
+
+      const formulas = [{ expression: 'B / A', alias: 'Inverse' }];
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: dashboard.id,
+          tileId: dashboard.tiles[0].id,
+          tile: {
+            config: {
+              displayType: 'line',
+              sourceId,
+              select: metricSelect(),
+              formulas,
+              showOperandSeries: false,
+            },
+          },
+        },
+      );
+
+      expect(patchResult.isError).toBeFalsy();
+
+      const getResult = await callTool(
+        ctx.client!,
+        'clickstack_get_dashboard_tile',
+        { dashboardId: dashboard.id, tileId: dashboard.tiles[0].id },
+      );
+      const tile = JSON.parse(getFirstText(getResult));
+      expect(tile.config.formulas).toEqual(formulas);
+      expect(tile.config.showOperandSeries).toBe(false);
+    });
+  });
+});

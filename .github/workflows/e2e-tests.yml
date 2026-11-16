@@ -5,8 +5,19 @@ on:
 jobs:
   e2e-tests:
     name: E2E Tests - Shard ${{ matrix.shard }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 8-core runner so the 4 Playwright workers (see playwright.config.ts) have
+    # CPU headroom alongside the app + ClickHouse + MongoDB — 4 workers
+    # over-subscribed the 4-vCPU ubuntu-24.04 runner and caused timeouts.
+    # RUNNER_E2E is a label or a JSON array of labels. On a smaller
+    # runner, set the E2E_WORKERS variable to 2 as well.
+    # Fork PRs can't use the custom runner group and would queue forever, so
+    # they fall back to the 4-vCPU ubuntu-24.04 runner with 2 workers and a
+    # longer timeout.
+    runs-on:
+      ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' ||
+      startsWith(vars.RUNNER_E2E, '[') && fromJSON(vars.RUNNER_E2E) ||
+      vars.RUNNER_E2E || '8-core-playwright' }}
+    timeout-minutes: ${{ github.event.pull_request.head.repo.fork && 25 || 15 }}
     permissions:
       contents: read
     strategy:
@@ -14,109 +25,25 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
 
-    # E2E port configuration (slot 0 defaults — must match scripts/test-e2e.sh)
-    env:
-      HDX_E2E_SLOT: '0'
-      HDX_E2E_OPAMP_PORT: '20320'
-      HDX_E2E_CH_PORT: '20500'
-      HDX_E2E_CH_NATIVE_PORT: '20600'
-      HDX_E2E_API_PORT: '21000'
-      HDX_E2E_MONGO_PORT: '21100'
-      HDX_E2E_APP_LOCAL_PORT: '21200'
-      HDX_E2E_APP_PORT: '21300'
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: '.nvmrc'
-          cache-dependency-path: 'yarn.lock'
-          cache: 'yarn'
-
-      - name: Install dependencies
-        run: yarn install
-
-      - name: Build dependencies
-        run: npx nx run-many -t ci:build
-
-      - name: Install Playwright browsers
-        run: cd packages/app && npx playwright install --with-deps chromium
-
-      - name: Start E2E Docker Compose
-        run: |
-          # Pre-pull images with retries to handle transient Docker Hub timeouts
-          for attempt in 1 2 3; do
-            if docker compose -p e2e-0 -f packages/app/tests/e2e/docker-compose.yml pull; then
-              echo "Docker images pulled successfully on attempt $attempt"
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "Failed to pull Docker images after 3 attempts"
-              exit 1
-            fi
-            echo "Docker pull failed (attempt $attempt/3), retrying in 10s..."
-            sleep 10
-          done
-          docker compose -p e2e-0 -f packages/app/tests/e2e/docker-compose.yml up -d
-          echo "Waiting for MongoDB..."
-          for i in $(seq 1 30); do
-            if docker compose -p e2e-0 -f packages/app/tests/e2e/docker-compose.yml exec -T db mongosh --quiet --eval "db.adminCommand({ping:1})" >/dev/null 2>&1; then
-              echo "MongoDB is ready"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "MongoDB failed to become ready after 30 seconds"
-              exit 1
-            fi
-            echo "Waiting for MongoDB... ($i/30)"
-            sleep 1
-          done
-          echo "Waiting for ClickHouse..."
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:${HDX_E2E_CH_PORT}/ping >/dev/null 2>&1; then
-              echo "ClickHouse is ready"
-              break
-            fi
-            if [ "$i" -eq 60 ]; then
-              echo "ClickHouse failed to become ready after 60 seconds"
-              exit 1
-            fi
-            echo "Waiting for ClickHouse... ($i/60)"
-            sleep 1
-          done
+      - name: E2E setup
+        uses: ./.github/actions/e2e-setup
 
       - name: Run Playwright tests (full-stack mode)
         env:
-          E2E_FULLSTACK: 'true'
-          E2E_UNIQUE_USER: 'true'
-          E2E_API_HEALTH_CHECK_MAX_RETRIES: '60'
-          MONGO_URI:
-            mongodb://localhost:${{ env.HDX_E2E_MONGO_PORT }}/hyperdx-e2e
+          # Unset falls back to the default in playwright.config.ts.
+          E2E_WORKERS:
+            ${{ github.event.pull_request.head.repo.fork && '2' ||
+            vars.E2E_WORKERS }}
         run: |
           cd packages/app
           yarn test:e2e --shard=${{ matrix.shard }}/4
 
-      - name: Upload Playwright report
-        uses: actions/upload-artifact@v7
+      - name: E2E teardown
         if: always()
+        uses: ./.github/actions/e2e-teardown
         with:
-          name: playwright-report-${{ matrix.shard }}
-          path: packages/app/playwright-report/
-          retention-days: 30
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: test-results-${{ matrix.shard }}
-          path: packages/app/test-results/
-          retention-days: 30
-
-      - name: Stop E2E containers
-        if: always()
-        run:
-          docker compose -p e2e-0 -f packages/app/tests/e2e/docker-compose.yml
-          down -v
+          artifact-suffix: ${{ matrix.shard }}

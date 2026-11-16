@@ -1,4 +1,4 @@
-import { Application, Express } from 'express';
+import { Application } from 'express';
 import fs from 'fs';
 import path from 'path';
 import swaggerJsdoc from 'swagger-jsdoc';
@@ -33,12 +33,21 @@ export const swaggerOptions = {
         description: 'Endpoints for querying chart data',
       },
       {
+        name: 'Connections',
+        description: 'Endpoints for managing ClickHouse connections',
+      },
+      {
         name: 'Sources',
         description: 'Endpoints for managing data sources',
       },
       {
         name: 'Webhooks',
         description: 'Endpoints for managing webhooks',
+      },
+      {
+        name: 'Search',
+        description:
+          'Endpoints for querying raw data from log and trace sources',
       },
     ],
     components: {

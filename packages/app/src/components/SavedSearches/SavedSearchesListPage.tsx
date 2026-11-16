@@ -24,6 +24,7 @@ import {
   IconTable,
 } from '@tabler/icons-react';
 
+import { usePageTitle } from '@/brand';
 import { AlertStatusIcon } from '@/components/AlertStatusIcon';
 import EmptyState from '@/components/EmptyState';
 import { FavoriteButton } from '@/components/FavoriteButton';
@@ -31,15 +32,13 @@ import { ListingCard } from '@/components/ListingCard';
 import { ListingRow } from '@/components/ListingListRow';
 import { PageHeader } from '@/components/PageHeader';
 import { useFavorites } from '@/favorites';
+import { withAppNav } from '@/layout';
 import { useDeleteSavedSearch, useSavedSearches } from '@/savedSearch';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 import { useConfirm } from '@/useConfirm';
 import { groupByTags } from '@/utils/groupByTags';
 
-import { withAppNav } from '../../layout';
-
 export default function SavedSearchesListPage() {
-  const brandName = useBrandDisplayName();
+  const title = usePageTitle('Saved Searches');
   const { data: savedSearches, isLoading, isError } = useSavedSearches();
   const confirm = useConfirm();
   const deleteSavedSearch = useDeleteSavedSearch();
@@ -127,9 +126,9 @@ export default function SavedSearchesListPage() {
       style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
     >
       <Head>
-        <title>Saved Searches - {brandName}</title>
+        <title>{title}</title>
       </Head>
-      <PageHeader>Saved Searches</PageHeader>
+      <PageHeader title="Saved Searches" />
       <Container
         maw={1200}
         py="lg"

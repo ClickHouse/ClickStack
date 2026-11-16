@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { timeBucketByGranularity, toStartOfInterval } from '@/ChartUtils';
 import { useConfigWithAdditionalSelect } from '@/components/DBRowTable';
+import { reconstructTemplate } from '@/components/Patterns/reconstructTemplate';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import { getFirstTimestampValueExpression } from '@/source';
 
@@ -14,7 +15,7 @@ function usePyodide(options: { enabled: boolean }) {
   return useQuery({
     queryKey: ['pyodide'],
     queryFn: async () => {
-      // @ts-ignore
+      // @ts-expect-error loadPyodide is injected by the pyodide script and not on the Window type
       const pyodide = await window.loadPyodide();
       await pyodide.loadPackage('micropip');
       const micropip = pyodide.pyimport('micropip');
@@ -42,6 +43,11 @@ function usePyodide(options: { enabled: boolean }) {
   });
 }
 
+// Python's string.punctuation. Shared with the denoise matcher, which must
+// split bodies into the same tokens the miner built its templates from.
+export const DRAIN_EXTRA_DELIMITERS =
+  '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'.split('');
+
 class Miner {
   private minerVariableName;
   private id;
@@ -57,7 +63,10 @@ import json
 from drain3 import TemplateMiner
 from drain3.template_miner_config import TemplateMinerConfig
 
-${this.minerVariableName} = TemplateMiner(None, TemplateMinerConfig())
+_config = TemplateMinerConfig()
+_config.drain_extra_delimiters = json.loads(${JSON.stringify(JSON.stringify(DRAIN_EXTRA_DELIMITERS))})
+
+${this.minerVariableName} = TemplateMiner(None, _config)
     `);
   }
 
@@ -75,18 +84,11 @@ ${this.minerVariableName} = TemplateMiner(None, TemplateMinerConfig())
     );
   }
 
-  async matchLogs(logs: string[]) {
-    const tempLogs = `temp_logs_${this.id}`;
-    const tempResults = `temp_results_${this.id}`;
-    this.pyodide.globals.set(tempLogs, logs);
-
+  /** Final template of every cluster, keyed by cluster id. */
+  async getTemplates(): Promise<Record<string, string>> {
     return JSON.parse(
       await this.pyodide.runPythonAsync(`
-      ${tempResults} = []
-      for log in ${tempLogs}:
-        match = ${this.minerVariableName}.match(log)
-        ${tempResults}.append(match.cluster_id if match else None)
-      json.dumps(${tempResults})
+      json.dumps({str(c.cluster_id): c.get_template() for c in ${this.minerVariableName}.drain.clusters})
     `),
     );
   }
@@ -95,18 +97,21 @@ ${this.minerVariableName} = TemplateMiner(None, TemplateMinerConfig())
 async function mineEventPatterns(logs: string[], pyodide: any) {
   const miner = new Miner(pyodide);
   await miner.init();
+  const patterns = await miner.minePatterns(logs);
   return {
     miner,
-    patterns: await miner.minePatterns(logs),
+    patterns,
+    templates: await miner.getTemplates(),
   };
 }
 
 export const PATTERN_COLUMN_ALIAS = '__hdx_pattern_field';
 export const TIMESTAMP_COLUMN_ALIAS = '__hdx_timestamp';
-export const SEVERITY_TEXT_COLUMN_ALIAS = '__hdx_severity_text';
-const STATUS_CODE_COLUMN_ALIAS = '__hdx_status_code';
+export const SERVICE_NAME_COLUMN_ALIAS = '__hdx_service_name';
+// The source's level column: severity text for logs, status code for traces.
+export const LEVEL_COLUMN_ALIAS = '__hdx_level';
 
-export type SampleLog = {
+type SampleLog = {
   [PATTERN_COLUMN_ALIAS]: string;
   [TIMESTAMP_COLUMN_ALIAS]: string;
   [key: string]: any;
@@ -123,15 +128,15 @@ function usePatterns({
   config,
   samples,
   bodyValueExpression,
-  severityTextExpression,
-  statusCodeExpression,
+  levelExpression,
+  serviceNameExpression,
   enabled = true,
 }: {
   config: BuilderChartConfigWithDateRange;
   samples: number;
   bodyValueExpression: string;
-  severityTextExpression?: string;
-  statusCodeExpression?: string;
+  levelExpression?: string;
+  serviceNameExpression?: string;
   enabled?: boolean;
 }) {
   const configWithPrimaryAndPartitionKey = useConfigWithAdditionalSelect({
@@ -140,11 +145,11 @@ function usePatterns({
     select: [
       `${bodyValueExpression} as ${PATTERN_COLUMN_ALIAS}`,
       `${getFirstTimestampValueExpression(config.timestampValueExpression)} as ${TIMESTAMP_COLUMN_ALIAS}`,
-      ...(severityTextExpression
-        ? [`${severityTextExpression} as ${SEVERITY_TEXT_COLUMN_ALIAS}`]
+      ...(levelExpression
+        ? [`${levelExpression} as ${LEVEL_COLUMN_ALIAS}`]
         : []),
-      ...(statusCodeExpression
-        ? [`${statusCodeExpression} as ${STATUS_CODE_COLUMN_ALIAS}`]
+      ...(serviceNameExpression
+        ? [`${serviceNameExpression} as ${SERVICE_NAME_COLUMN_ALIAS}`]
         : []),
     ].join(','),
     // TODO: Proper sampling
@@ -168,7 +173,7 @@ function usePatterns({
   } = usePyodide({ enabled });
 
   const query = useQuery({
-    queryKey: ['patterns', config],
+    queryKey: ['patterns', config, bodyValueExpression],
     queryFn: () => {
       if (configWithPrimaryAndPartitionKey == null) {
         throw new Error('Unexpected configWithPrimaryAndPartitionKey is null');
@@ -199,6 +204,7 @@ function usePatterns({
           additionalKeysLength:
             configWithPrimaryAndPartitionKey.additionalKeysLength,
           miner: response.miner,
+          clusterTemplates: response.templates,
         };
       });
     },
@@ -218,16 +224,16 @@ export function useGroupedPatterns({
   config,
   samples,
   bodyValueExpression,
-  severityTextExpression,
-  statusCodeExpression,
+  levelExpression,
+  serviceNameExpression,
   totalCount,
   enabled = true,
 }: {
   config: BuilderChartConfigWithDateRange;
   samples: number;
   bodyValueExpression: string;
-  severityTextExpression?: string;
-  statusCodeExpression?: string;
+  levelExpression?: string;
+  serviceNameExpression?: string;
   totalCount?: number;
   enabled?: boolean;
 }) {
@@ -240,8 +246,8 @@ export function useGroupedPatterns({
     config,
     samples,
     bodyValueExpression,
-    severityTextExpression,
-    statusCodeExpression,
+    levelExpression,
+    serviceNameExpression,
     enabled,
   });
 
@@ -290,14 +296,19 @@ export function useGroupedPatterns({
       // return at least 1
       const count = Math.max(Math.round(rows.length * sampleMultiplier), 1);
       const lastRow = rows.at(-1);
+      const reconstructedPattern = lastRow
+        ? reconstructTemplate(
+            stripAnsi((lastRow[PATTERN_COLUMN_ALIAS] ?? '') as string),
+            (lastRow.__hdx_pattern ?? '') as string,
+          )
+        : undefined;
 
       fullPatternGroups[patternId] = {
         id: patternId,
-        pattern: lastRow?.__hdx_pattern, // last pattern is usually the most up to date templated pattern
+        pattern: reconstructedPattern, // last pattern is usually the most up to date templated pattern
         count,
         countStr: `~${count}`,
-        severityText: lastRow?.[SEVERITY_TEXT_COLUMN_ALIAS], // last severitytext is usually representative of the entire pattern set
-        statusCode: lastRow?.[STATUS_CODE_COLUMN_ALIAS],
+        level: lastRow?.[LEVEL_COLUMN_ALIAS], // last level is usually representative of the entire pattern set
         samples: rows,
         __hdx_pattern_trend: {
           data: Object.entries(bucketCounts).map(([bucket, count]) => ({
@@ -324,6 +335,7 @@ export function useGroupedPatterns({
     isLoading,
     error,
     miner: results?.miner,
+    clusterTemplates: results?.clusterTemplates,
     sampledRowCount,
     patternQueryConfig,
   };

@@ -17,6 +17,7 @@ export default [
       'coverage/**',
       '**/*.config.js',
       '**/*.config.mjs',
+      '**/*.config.ts',
       'jest.config.js',
       'jest.setup.ts',
     ],
@@ -33,7 +34,7 @@ export default [
     rules: {
       ...nodePlugin.configs.recommended.rules,
       ...securityPlugin.configs['recommended-legacy'].rules,
-      '@typescript-eslint/ban-ts-comment': 'warn',
+      '@typescript-eslint/ban-ts-comment': 'error',
       '@typescript-eslint/no-empty-interface': 'off',
       '@typescript-eslint/no-empty-object-type': 'warn',
       '@typescript-eslint/no-explicit-any': 'off',
@@ -41,7 +42,7 @@ export default [
       '@typescript-eslint/no-unsafe-type-assertion': 'error',
       '@typescript-eslint/no-namespace': 'warn',
       '@typescript-eslint/no-unused-vars': [
-        'warn',
+        'error',
         {
           argsIgnorePattern: '^_',
           varsIgnorePattern: '^_',
@@ -59,6 +60,18 @@ export default [
       'prettier/prettier': 'error',
       'simple-import-sort/imports': 'error',
       'simple-import-sort/exports': 'error',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\.(/|$)',
+              message:
+                'Use the @/ path alias instead of parent-relative imports (../).',
+            },
+          ],
+        },
+      ],
     },
     languageOptions: {
       parser: tseslint.parser,

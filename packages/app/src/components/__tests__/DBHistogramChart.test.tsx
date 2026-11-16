@@ -1,12 +1,16 @@
 import React from 'react';
+import { screen } from '@testing-library/react';
 
+import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
+import DBHistogramChart, {
+  HISTOGRAM_BAR_COLOR,
+  HistogramChartTooltip,
+  resolvePinnedBarIndex,
+} from '@/components/DBHistogramChart';
+import MVOptimizationIndicator from '@/components/MaterializedViews/MVOptimizationIndicator';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useSource } from '@/source';
-
-import DateRangeIndicator from '../charts/DateRangeIndicator';
-import DBHistogramChart from '../DBHistogramChart';
-import MVOptimizationIndicator from '../MaterializedViews/MVOptimizationIndicator';
 
 // Mock dependencies
 jest.mock('@/hooks/useChartConfig', () => ({
@@ -151,5 +155,184 @@ describe('DBHistogramChart', () => {
 
     // Verify DateRangeIndicator was not called
     expect(jest.mocked(DateRangeIndicator)).not.toHaveBeenCalled();
+  });
+
+  describe('refresh', () => {
+    const buckets = { data: [{ data: [[0, 10, 5]] }], meta: [] };
+    const chart = () =>
+      document.querySelector('.recharts-responsive-container');
+
+    it('keeps the previous histogram on screen and pulses it while a refresh loads', () => {
+      // The new range is still loading behind the previous buckets.
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: buckets,
+        isLoading: true,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
+
+      expect(
+        screen.queryByText('Loading Chart Data...'),
+      ).not.toBeInTheDocument();
+      expect(chart()).toHaveClass('effect-pulse');
+    });
+
+    it('does not pulse once fresh buckets load', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: buckets,
+        isLoading: false,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
+
+      expect(chart()).not.toHaveClass('effect-pulse');
+    });
+
+    it('shows loading instead of the stale empty result during a refetch', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [], meta: [] },
+        isLoading: false,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
+
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
+    });
+
+    it('does not pulse a fresh empty result', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [], meta: [] },
+        isLoading: false,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
+
+      expect(
+        screen.getByText('No data found within time range.'),
+      ).not.toHaveClass('effect-pulse');
+    });
+
+    it('shows the loading state before the first buckets arrive', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
+
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('HISTOGRAM_BAR_COLOR', () => {
+  it('uses the first categorical series hue, not a hardcoded neon green', () => {
+    expect(HISTOGRAM_BAR_COLOR.toLowerCase()).toBe('#437eef');
+  });
+});
+
+describe('HistogramChartTooltip', () => {
+  const payload = [
+    {
+      name: 'height',
+      value: 1084431.375,
+      color: HISTOGRAM_BAR_COLOR,
+      payload: { lower: 0.01081, upper: 33669.79207, height: 1084431.375 },
+    },
+  ];
+
+  it('renders the shared chart tooltip with a categorical series color', () => {
+    renderWithMantine(<HistogramChartTooltip active payload={payload} />);
+
+    expect(screen.getByTestId('chart-tooltip')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Bucket: 0.01081 - 33669.79207/),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Number of events')).toHaveStyle({
+      color: HISTOGRAM_BAR_COLOR,
+    });
+    expect(screen.getByText(/1,084,431/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Click to pin tooltip • Approx value via SPDT algorithm/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('falls back to HISTOGRAM_BAR_COLOR when the payload item has no color', () => {
+    renderWithMantine(
+      <HistogramChartTooltip
+        active
+        payload={[
+          {
+            name: 'height',
+            value: 1084431.375,
+            payload: {
+              lower: 0.01081,
+              upper: 33669.79207,
+              height: 1084431.375,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('Number of events')).toHaveStyle({
+      color: HISTOGRAM_BAR_COLOR,
+    });
+  });
+
+  it('renders nothing when inactive', () => {
+    renderWithMantine(
+      <HistogramChartTooltip active={false} payload={payload} />,
+    );
+
+    expect(screen.queryByText(/Bucket:/)).toBeNull();
+  });
+
+  it('renders nothing when active with an empty payload', () => {
+    renderWithMantine(<HistogramChartTooltip active payload={[]} />);
+
+    expect(screen.queryByTestId('chart-tooltip')).toBeNull();
+  });
+
+  it('renders nothing when active with an undefined payload', () => {
+    renderWithMantine(<HistogramChartTooltip active />);
+
+    expect(screen.queryByTestId('chart-tooltip')).toBeNull();
+  });
+});
+
+describe('resolvePinnedBarIndex', () => {
+  it('accepts a non-negative integer number', () => {
+    expect(resolvePinnedBarIndex(0)).toBe(0);
+    expect(resolvePinnedBarIndex(3)).toBe(3);
+  });
+
+  it('accepts a numeric string', () => {
+    expect(resolvePinnedBarIndex('5')).toBe(5);
+    expect(resolvePinnedBarIndex('0')).toBe(0);
+  });
+
+  it('rejects values that resolve to no bar', () => {
+    expect(resolvePinnedBarIndex(null)).toBeUndefined();
+    expect(resolvePinnedBarIndex(undefined)).toBeUndefined();
+    expect(resolvePinnedBarIndex('')).toBeUndefined();
+    expect(resolvePinnedBarIndex('   ')).toBeUndefined();
+    expect(resolvePinnedBarIndex(-1)).toBeUndefined();
+    expect(resolvePinnedBarIndex(2.5)).toBeUndefined();
+    expect(resolvePinnedBarIndex('abc')).toBeUndefined();
+    expect(resolvePinnedBarIndex(NaN)).toBeUndefined();
   });
 });

@@ -1,10 +1,10 @@
 import * as React from 'react';
 import { parseAsString, useQueryState } from 'nuqs';
+import { Badge } from '@clickhouse/click-ui';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { convertDateRangeToGranularityString } from '@hyperdx/common-utils/dist/core/utils';
 import { TLogSource, TMetricSource } from '@hyperdx/common-utils/dist/types';
 import {
-  Badge,
   Card,
   Drawer,
   Flex,
@@ -13,6 +13,7 @@ import {
   Text,
 } from '@mantine/core';
 
+import { IsolatedChartSyncProvider } from '@/chartSync';
 import {
   convertV1ChartConfigToV2,
   K8S_CPU_PERCENTAGE_NUMBER_FORMAT,
@@ -22,7 +23,6 @@ import { DBTimeChart } from '@/components/DBTimeChart';
 import { DrawerBody, DrawerHeader } from '@/components/DrawerUtils';
 import { InfraPodsStatusTable } from '@/KubernetesDashboardPage';
 import { getEventBody } from '@/source';
-import { parseTimeQuery, useTimeQuery } from '@/timeQuery';
 import { formatUptime } from '@/utils';
 import { useZIndex, ZIndexContext } from '@/zIndex';
 
@@ -30,10 +30,9 @@ import DBSqlRowTableWithSideBar from './components/DBSqlRowTableWithSidebar';
 import { useQueriedChartConfig } from './hooks/useChartConfig';
 import { useGetKeyValues, useTableMetadata } from './hooks/useMetadata';
 
-import styles from '../styles/LogSidePanel.module.scss';
+import styles from '@styles/LogSidePanel.module.scss';
 
 const CHART_HEIGHT = 300;
-const defaultTimeRange = parseTimeQuery('Past 1h', false);
 
 const PodDetailsProperty = React.memo(
   ({ label, value }: { label: string; value?: React.ReactNode }) => {
@@ -111,25 +110,9 @@ const NodeDetails = ({
             label="Status"
             value={
               properties.ready === 1 ? (
-                <Badge
-                  variant="light"
-                  color="green"
-                  fw="normal"
-                  tt="none"
-                  size="md"
-                >
-                  Ready
-                </Badge>
+                <Badge text="Ready" state="success" />
               ) : (
-                <Badge
-                  variant="light"
-                  color="red"
-                  fw="normal"
-                  tt="none"
-                  size="md"
-                >
-                  Not Ready
-                </Badge>
+                <Badge text="Not Ready" state="danger" />
               )
             }
           />
@@ -177,7 +160,7 @@ function NodeLogs({
                 { label: 'Errors', value: 'error' },
               ]}
             />
-            {/* 
+            {/*
               <Link
                 href={`/search?q=${encodeURIComponent(_where)}`}
                 passHref
@@ -186,7 +169,7 @@ function NodeLogs({
                 <Anchor size="xs" c="dimmed">
                   Search <IconExternalLink size={12} style={{ display: 'inline' }} />
                 </Anchor>
-              </Link> 
+              </Link>
               */}
           </Flex>
         </Flex>
@@ -194,8 +177,6 @@ function NodeLogs({
       <Card.Section p="md" py="sm" h={CHART_HEIGHT}>
         <DBSqlRowTableWithSideBar
           sourceId={logSource.id}
-          isNestedPanel
-          breadcrumbPath={[{ label: 'Node Details' }]}
           config={{
             ...logSource,
             where: _where,
@@ -235,32 +216,25 @@ function NodeLogs({
   );
 }
 
-export default function NodeDetailsSidePanel({
+function NodeDetailsSidePanelInner({
   metricSource,
   logSource,
+  dateRange,
+  nodeName,
+  setNodeName,
 }: {
   metricSource: TMetricSource;
   logSource: TLogSource;
+  dateRange: [Date, Date];
+  nodeName: string;
+  setNodeName: (value: string | null) => void;
 }) {
-  const [nodeName, setNodeName] = useQueryState(
-    'nodeName',
-    parseAsString.withDefault(''),
-  );
-
   const contextZIndex = useZIndex();
   const drawerZIndex = contextZIndex + 10;
 
   const metricsWhere = React.useMemo(() => {
     return `${metricSource?.resourceAttributesExpression}.k8s.node.name:"${nodeName}"`;
   }, [nodeName, metricSource]);
-
-  const { searchedTimeRange: dateRange } = useTimeQuery({
-    defaultValue: 'Past 1h',
-    defaultTimeRange: [
-      defaultTimeRange?.[0]?.getTime() ?? -1,
-      defaultTimeRange?.[1]?.getTime() ?? -1,
-    ],
-  });
 
   const { data: logsTableMetadata } = useTableMetadata(tcFromSource(logSource));
 
@@ -351,103 +325,128 @@ export default function NodeDetailsSidePanel({
         },
       }}
     >
-      <ZIndexContext.Provider value={drawerZIndex}>
-        <div className={styles.panel} data-testid="k8s-node-details-panel">
-          <DrawerHeader
-            header={`Details for ${nodeName}`}
-            onClose={handleClose}
-          />
-          <DrawerBody>
-            <Grid>
-              <NodeDetails
-                name={nodeName}
-                dateRange={dateRange}
-                metricSource={metricSource}
-              />
-              <Grid.Col span={6}>
-                <Card p="md" data-testid="nodes-details-cpu-usage-chart">
-                  <Card.Section p="md" py="sm" h={CHART_HEIGHT}>
-                    <DBTimeChart
-                      title="CPU Usage by Pod"
-                      config={convertV1ChartConfigToV2(
-                        {
-                          dateRange,
-                          granularity:
-                            convertDateRangeToGranularityString(dateRange),
-                          seriesReturnType: 'column',
-                          series: [
-                            {
-                              type: 'time',
-                              groupBy: ['k8s.pod.name'],
-                              where: metricsWhere,
-                              table: 'metrics',
-                              aggFn: 'avg',
-                              field: 'k8s.pod.cpu.utilization - Gauge',
-                              numberFormat: K8S_CPU_PERCENTAGE_NUMBER_FORMAT,
-                            },
-                          ],
-                        },
-                        {
-                          metric: metricSource,
-                        },
-                      )}
+      <ZIndexContext value={drawerZIndex}>
+        <IsolatedChartSyncProvider>
+          <div className={styles.panel} data-testid="k8s-node-details-panel">
+            <DrawerHeader
+              header={`Details for ${nodeName}`}
+              onClose={handleClose}
+            />
+            <DrawerBody>
+              <Grid>
+                <NodeDetails
+                  name={nodeName}
+                  dateRange={dateRange}
+                  metricSource={metricSource}
+                />
+                <Grid.Col span={6}>
+                  <Card p="md" data-testid="nodes-details-cpu-usage-chart">
+                    <Card.Section p="md" py="sm" h={CHART_HEIGHT}>
+                      <DBTimeChart
+                        title="CPU Usage by Pod"
+                        config={convertV1ChartConfigToV2(
+                          {
+                            dateRange,
+                            granularity:
+                              convertDateRangeToGranularityString(dateRange),
+                            seriesReturnType: 'column',
+                            series: [
+                              {
+                                type: 'time',
+                                groupBy: ['k8s.pod.name'],
+                                where: metricsWhere,
+                                table: 'metrics',
+                                aggFn: 'avg',
+                                field: 'k8s.pod.cpu.utilization - Gauge',
+                                numberFormat: K8S_CPU_PERCENTAGE_NUMBER_FORMAT,
+                              },
+                            ],
+                          },
+                          {
+                            metric: metricSource,
+                          },
+                        )}
+                      />
+                    </Card.Section>
+                  </Card>
+                </Grid.Col>
+                <Grid.Col
+                  span={6}
+                  data-testid="nodes-details-memory-usage-chart"
+                >
+                  <Card p="md">
+                    <Card.Section p="md" py="sm" h={CHART_HEIGHT}>
+                      <DBTimeChart
+                        title="Memory Usage by Pod"
+                        config={convertV1ChartConfigToV2(
+                          {
+                            dateRange,
+                            granularity:
+                              convertDateRangeToGranularityString(dateRange),
+                            seriesReturnType: 'column',
+                            series: [
+                              {
+                                type: 'time',
+                                groupBy: ['k8s.pod.name'],
+                                where: metricsWhere,
+                                table: 'metrics',
+                                aggFn: 'avg',
+                                field: 'k8s.pod.memory.usage - Gauge',
+                                numberFormat: K8S_MEM_NUMBER_FORMAT,
+                              },
+                            ],
+                          },
+                          {
+                            metric: metricSource,
+                          },
+                        )}
+                      />
+                    </Card.Section>
+                  </Card>
+                </Grid.Col>
+                <Grid.Col span={12}>
+                  {metricSource && (
+                    <InfraPodsStatusTable
+                      metricSource={metricSource}
+                      dateRange={dateRange}
+                      where={metricsWhere}
                     />
-                  </Card.Section>
-                </Card>
-              </Grid.Col>
-              <Grid.Col span={6} data-testid="nodes-details-memory-usage-chart">
-                <Card p="md">
-                  <Card.Section p="md" py="sm" h={CHART_HEIGHT}>
-                    <DBTimeChart
-                      title="Memory Usage by Pod"
-                      config={convertV1ChartConfigToV2(
-                        {
-                          dateRange,
-                          granularity:
-                            convertDateRangeToGranularityString(dateRange),
-                          seriesReturnType: 'column',
-                          series: [
-                            {
-                              type: 'time',
-                              groupBy: ['k8s.pod.name'],
-                              where: metricsWhere,
-                              table: 'metrics',
-                              aggFn: 'avg',
-                              field: 'k8s.pod.memory.usage - Gauge',
-                              numberFormat: K8S_MEM_NUMBER_FORMAT,
-                            },
-                          ],
-                        },
-                        {
-                          metric: metricSource,
-                        },
-                      )}
+                  )}
+                </Grid.Col>
+                <Grid.Col span={12}>
+                  {logSource && (
+                    <NodeLogs
+                      where={logsWhere}
+                      dateRange={dateRange}
+                      logSource={logSource}
                     />
-                  </Card.Section>
-                </Card>
-              </Grid.Col>
-              <Grid.Col span={12}>
-                {metricSource && (
-                  <InfraPodsStatusTable
-                    metricSource={metricSource}
-                    dateRange={dateRange}
-                    where={metricsWhere}
-                  />
-                )}
-              </Grid.Col>
-              <Grid.Col span={12}>
-                {logSource && (
-                  <NodeLogs
-                    where={logsWhere}
-                    dateRange={dateRange}
-                    logSource={logSource}
-                  />
-                )}
-              </Grid.Col>
-            </Grid>
-          </DrawerBody>
-        </div>
-      </ZIndexContext.Provider>
+                  )}
+                </Grid.Col>
+              </Grid>
+            </DrawerBody>
+          </div>
+        </IsolatedChartSyncProvider>
+      </ZIndexContext>
     </Drawer>
+  );
+}
+
+export default function NodeDetailsSidePanel(props: {
+  metricSource: TMetricSource;
+  logSource: TLogSource;
+  dateRange: [Date, Date];
+}) {
+  const [nodeName, setNodeName] = useQueryState(
+    'nodeName',
+    parseAsString.withDefault(''),
+  );
+
+  return (
+    <NodeDetailsSidePanelInner
+      {...props}
+      key={nodeName || 'empty'}
+      nodeName={nodeName}
+      setNodeName={setNodeName}
+    />
   );
 }

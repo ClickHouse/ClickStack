@@ -1,7 +1,18 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import Link from 'next/link';
 import cx from 'classnames';
-import { UnstyledButton } from '@mantine/core';
-import { IconDownload, IconTextWrap } from '@tabler/icons-react';
+import { MAX_TABLE_ROWS } from '@hyperdx/common-utils/dist/core/utils';
+import {
+  ChartPaletteToken,
+  ColorCondition,
+  isChartPaletteToken,
+} from '@hyperdx/common-utils/dist/types';
+import { Tooltip, UnstyledButton } from '@mantine/core';
+import {
+  IconArrowUpRight,
+  IconDownload,
+  IconTextWrap,
+} from '@tabler/icons-react';
 import {
   flexRender,
   getCoreRowModel,
@@ -18,28 +29,40 @@ import { ColumnDef } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { CsvExportButton } from './components/CsvExportButton';
+import DBRowTableFieldWithPopover, {
+  type CellFilterHandler,
+} from './components/DBTable/DBRowTableFieldWithPopover';
 import TableHeader from './components/DBTable/TableHeader';
 import { useCsvExport } from './hooks/useCsvExport';
-import { useBrandDisplayName } from './theme/ThemeProvider';
+import type { RowAction } from './hooks/useOnClickLinkBuilder';
+import { useBrandDisplayName } from './brand';
 import { UNDEFINED_WIDTH } from './tableUtils';
 import type { NumberFormat } from './types';
-import { formatNumber } from './utils';
+import {
+  formatNumber,
+  getColorFromCSSToken,
+  resolveConditionalColor,
+} from './utils';
+
+import styles from './HDXMultiSeriesTableChart.module.scss';
+import focusStyles from '@styles/focus.module.scss';
 
 export type TableVariant = 'default' | 'muted';
-
-// Arbitrary limit to prevent OOM crashes for very large result sets. Most result sets should be paginated anyway.
-export const MAX_TABLE_ROWS = 10_000;
 
 export const Table = ({
   data,
   groupColumnName,
   columns,
-  onRowClick,
+  getRowAction,
+  getRowSearchLink,
   tableBottom,
   enableClientSideSorting = false,
   sorting,
   onSortingChange,
   variant = 'default',
+  alternateRowBackground = false,
+  className,
+  onCellFilter,
 }: {
   data: any[];
   columns: {
@@ -51,19 +74,50 @@ export const Table = ({
     columnWidthPercent?: number;
     visible?: boolean;
     sortingFn?: SortingFnOption<any>;
+    // Per-column static palette-token color (table tiles). Applied to the
+    // cell text; falls back through `colorRules` then the default color.
+    color?: ChartPaletteToken;
+    // Ordered conditional color rules evaluated against each cell's value
+    // (last match wins). Resolves to `color` when no rule matches.
+    colorRules?: ColorCondition[];
+    // Expression (or PromQL label) the column's values filter on. Cells of a
+    // column with a key offer filter / exclude actions via `onCellFilter`.
+    filterKey?: string;
   }[];
   groupColumnName?: string;
-  onRowClick?: (row: any, e?: React.MouseEvent) => void;
+  // Returns the row click destination + a hover-hint description. When
+  // set, the cell becomes an <a> wrapped in a HoverCard. The resolved
+  // URL goes straight in the href so the browser handles cmd-click,
+  // middle-click, right-click, status bar preview, and keyboard
+  // activation natively. Rows whose templates fail (`url: null`) fall
+  // back to a click handler that fires a notification, preserving the
+  // pre-existing #2140 / #2141 / #2146 / #2148 behavior.
+  getRowAction?: (row: any) => RowAction;
+  // Legacy single-tile drilldown: bare URL, no hint, no HoverCard.
+  // Used outside the dashboard onClick path (event side panel, services
+  // dashboard, etc.). Only consulted when getRowAction is not provided.
+  getRowSearchLink?: (row: any) => string | null;
   tableBottom?: React.ReactNode;
   enableClientSideSorting?: boolean;
   sorting: SortingState;
   onSortingChange: (sorting: SortingState) => void;
   variant?: TableVariant;
+  // Zebra striping for dashboard table tiles. When true, odd-indexed rows
+  // get a subtle `--color-bg-table-stripe` background. Off by default. A
+  // dedicated `.stripedRow` hover rule keeps row hover visible over a stripe
+  // (see the CSS module).
+  alternateRowBackground?: boolean;
+  // Extra classes for the scroll container, e.g. `effect-pulse` while the
+  // tile is refreshing.
+  className?: string;
+  onCellFilter?: CellFilterHandler;
 }) => {
   const brandName = useBrandDisplayName();
   const MIN_COLUMN_WIDTH_PX = 100;
   //we need a reference to the scrolling element for logic down below
-  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const [tableContainer, setTableContainer] = useState<HTMLDivElement | null>(
+    null,
+  );
 
   const truncatedData = useMemo(() => {
     if (data.length > MAX_TABLE_ROWS) {
@@ -73,7 +127,7 @@ export const Table = ({
   }, [data]);
   const isTruncated = truncatedData.length === MAX_TABLE_ROWS;
 
-  const tableWidth = tableContainerRef.current?.clientWidth;
+  const tableWidth = tableContainer?.clientWidth;
   const numColumns = columns.filter(c => c.visible !== false).length + 1;
   const dataColumnsWidthPerc = columns
     .filter(c => c.visible !== false)
@@ -115,6 +169,9 @@ export const Table = ({
             numberFormat,
             columnWidthPercent,
             sortingFn,
+            color,
+            colorRules,
+            filterKey,
           },
           i,
         ) =>
@@ -141,46 +198,163 @@ export const Table = ({
                 formattedValue = formatNumber(value, numberFormat);
               }
 
+              // Map / Array values render as JSON, which their `toString()`
+              // in a filter condition wouldn't match.
+              const isAdhocFilterable =
+                filterKey &&
+                onCellFilter &&
+                value != null &&
+                typeof value !== 'object';
+
+              const content: React.ReactNode = isAdhocFilterable ? (
+                <DBRowTableFieldWithPopover
+                  cellValue={value}
+                  columnName={filterKey}
+                  onPropertyAddClick={onCellFilter}
+                  wrapLinesEnabled={wrapLinesEnabled}
+                  tableContainerRef={tableContainer}
+                  inline
+                >
+                  {formattedValue}
+                </DBRowTableFieldWithPopover>
+              ) : (
+                formattedValue
+              );
+
+              // Resolve this cell's color from the column config: ordered
+              // rules first (last match wins), then the column's static
+              // color, else no override. ClickHouse serializes numeric
+              // aggregates (count is UInt64, sums, etc.) as strings, so coerce
+              // a numeric-looking value to a number first; otherwise the
+              // numeric operators (gt / lt / between) never match. Genuine
+              // strings (group-by labels, status values) stay as-is so the
+              // equality / string-match rules still work. Mirrors the value
+              // coercion in DBNumberChart.
+              //
+              // react-table types the getter as `number`, but the runtime
+              // value can be a string (see above), so read it through
+              // `unknown` to narrow honestly without an unsafe cast.
+              const cellValue: unknown = value;
+              const primitiveValue =
+                typeof cellValue === 'number' || typeof cellValue === 'string'
+                  ? cellValue
+                  : null;
+              const colorValue =
+                typeof primitiveValue === 'string' &&
+                primitiveValue.trim() !== '' &&
+                Number.isFinite(Number(primitiveValue))
+                  ? Number(primitiveValue)
+                  : primitiveValue;
+              const resolvedColorToken = resolveConditionalColor(
+                colorValue,
+                colorRules,
+                color,
+              );
+              // Guard the CSS resolver: it throws on an unrecognized token,
+              // so an unknown / legacy token (e.g. a hand-edited config)
+              // renders with the default color instead of crashing the cell.
+              const colorStyle =
+                resolvedColorToken && isChartPaletteToken(resolvedColorToken)
+                  ? { color: getColorFromCSSToken(resolvedColorToken) }
+                  : undefined;
+
               const className = cx('align-top overflow-hidden py-1 pe-3', {
                 'text-break': wrapLinesEnabled,
                 'text-truncate': !wrapLinesEnabled,
               });
 
-              if (onRowClick) {
+              // Native <a href> covers cmd-click (new tab), middle-click
+              // (new tab), right-click ("Open in New Tab" / "Copy Link
+              // Address"), Enter key activation, and the browser status
+              // bar URL preview. No manual handlers required.
+              const interactiveClassName = cx(
+                className,
+                'd-block text-reset text-decoration-none w-100 text-start',
+                focusStyles.focusRing,
+              );
+
+              if (getRowAction) {
+                // The hook memoizes per-row results internally, so calling
+                // this once per cell is cheap and the row-level HoverCard
+                // in the <tbody> loop below sees the same identity.
+                const action = getRowAction(row.original);
+                if (action.url) {
+                  if (action.external) {
+                    return (
+                      <a
+                        href={action.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={interactiveClassName}
+                        data-testid="dashboard-table-row-action"
+                        data-shape="external-link"
+                      >
+                        {content}
+                      </a>
+                    );
+                  }
+                  // Use prefetch={false} so virtualization scroll doesn't
+                  // trigger an N-row prefetch storm against /search? and
+                  // /dashboards/ routes the user usually never opens.
+                  return (
+                    <Link
+                      href={action.url}
+                      prefetch={false}
+                      className={interactiveClassName}
+                      style={colorStyle}
+                      data-testid="dashboard-table-row-action"
+                      data-shape="link"
+                    >
+                      {content}
+                    </Link>
+                  );
+                }
+                // Row's templates failed to resolve. Use a real <button> so
+                // cmd-click, middle-click, and right-click "Open Link in
+                // New Tab" stay disabled (a # anchor would silently open
+                // a meaningless new tab on auxclick before our onClick
+                // handler runs). The button still surfaces the existing
+                // notification toast on left-click. focusStyles.cellButton
+                // resets the user-agent button defaults (padding, font,
+                // color, text-align, line-height) so the wrapper renders
+                // identically to the success-row <Link>.
                 return (
-                  <div
-                    role="link"
-                    tabIndex={0}
-                    className={className}
-                    style={{ cursor: 'pointer' }}
-                    // Left-click: fires onClick with button === 0. The parent
-                    // handler detects meta/ctrl for cmd/ctrl-click → new tab.
-                    onClick={e => onRowClick(row.original, e)}
-                    // Middle-click (button === 1) fires onAuxClick but NOT
-                    // onClick on non-anchor elements.
-                    onAuxClick={e => {
-                      if (e.button === 1) {
-                        e.preventDefault();
-                        onRowClick(row.original, e);
-                      }
-                    }}
-                    // Suppress the browser's middle-click autoscroll cursor on non-anchor elements.
-                    onMouseDown={e => {
-                      if (e.button === 1) e.preventDefault();
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        onRowClick(row.original);
-                      }
-                    }}
+                  <button
+                    type="button"
+                    className={cx(interactiveClassName, focusStyles.cellButton)}
+                    style={colorStyle}
+                    onClick={action.onClickError}
+                    data-testid="dashboard-table-row-action"
+                    data-shape="button"
                   >
-                    {formattedValue}
-                  </div>
+                    {content}
+                  </button>
                 );
               }
 
-              return <div className={className}>{formattedValue}</div>;
+              if (getRowSearchLink) {
+                const url = getRowSearchLink(row.original);
+                if (url) {
+                  return (
+                    <Link
+                      href={url}
+                      prefetch={false}
+                      className={interactiveClassName}
+                      style={colorStyle}
+                      data-testid="dashboard-table-row-action"
+                      data-shape="link"
+                    >
+                      {content}
+                    </Link>
+                  );
+                }
+              }
+
+              return (
+                <div className={className} style={colorStyle}>
+                  {content}
+                </div>
+              );
             },
             size:
               i === numColumns - 2
@@ -234,7 +408,7 @@ export const Table = ({
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
-    getScrollElement: () => tableContainerRef.current,
+    getScrollElement: () => tableContainer,
     estimateSize: useCallback(() => 58, []),
     overscan: 10,
     paddingEnd: 20,
@@ -265,7 +439,10 @@ export const Table = ({
   );
 
   return (
-    <div className="overflow-auto h-100 fs-8" ref={tableContainerRef}>
+    <div
+      className={cx('overflow-auto h-100', styles.tableWrapper, className)}
+      ref={setTableContainer}
+    >
       <table
         className="w-100"
         style={{
@@ -275,9 +452,16 @@ export const Table = ({
         }}
       >
         <thead
+          className={styles.tableHeader}
           style={{
             position: 'sticky',
             top: 0,
+            // Body cells include positioned elements (e.g. the
+            // position: relative `.lastCell`), which otherwise paint on
+            // top of the sticky header as rows scroll underneath it.
+            // A stacking context above those cells keeps the header on
+            // top. Mirrors the log table's sticky head (LogTable.module.scss).
+            zIndex: 2,
             background:
               variant === 'muted'
                 ? 'var(--color-bg-muted)'
@@ -327,19 +511,103 @@ export const Table = ({
           )}
           {items.map(virtualRow => {
             const row = rows[virtualRow.index] as TableRow<any>;
+            // Compute the action once per row so the trailing-icon hint
+            // shares the memoized result from useOnClickLinkBuilder with
+            // the per-cell renders. The hook keys its cache off the row
+            // reference via WeakMap (see useOnClickLinkBuilder), so this
+            // extra call is an O(1) lookup when the per-cell renders
+            // populate the entry first, and one extra compute per row
+            // only when the WeakMap entry is cold (e.g. fresh data).
+            const rowAction = getRowAction ? getRowAction(row.original) : null;
+            // Narrow `rowAction.url` to a non-null `string` once per row so
+            // the trailing-icon guard below (and the `<Link href={...}>`
+            // sink inside it) doesn't need an `as string` cast and stays
+            // type-safe under future changes to the `RowAction` shape.
+            const actionUrl = rowAction?.url ?? null;
+            const isActionable = actionUrl !== null;
+            const visibleCells = row.getVisibleCells();
+            const lastCellIndex = visibleCells.length - 1;
             return (
               <tr
                 key={virtualRow.key}
-                className="bg-muted-hover"
+                className={cx(styles.tableRow, {
+                  // Actionable rows get the stronger `--color-bg-highlighted`
+                  // hover via `.actionableRow`; everything else falls back
+                  // to the global `bg-muted-hover` utility.
+                  [styles.actionableRow]: isActionable,
+                  'bg-muted-hover': !isActionable,
+                  // Zebra striping (opt-in): tint odd rows. The CSS module
+                  // gives `.stripedRow` its own hover rule so the hover stays
+                  // visible over a stripe.
+                  [styles.stripedRow]:
+                    alternateRowBackground && virtualRow.index % 2 === 1,
+                })}
                 data-index={virtualRow.index}
                 ref={rowVirtualizer.measureElement}
               >
-                {row.getVisibleCells().map(cell => {
+                {visibleCells.map((cell, cellIndex) => {
+                  const isLastCell = cellIndex === lastCellIndex;
                   return (
-                    <td key={cell.id} title={`${cell.getValue()}`}>
+                    <td
+                      key={cell.id}
+                      title={`${cell.getValue()}`}
+                      className={cx({
+                        [styles.lastCell]: isLastCell,
+                      })}
+                    >
                       {flexRender(
                         cell.column.columnDef.cell,
                         cell.getContext(),
+                      )}
+                      {/* Trailing arrow hint: anchored Mantine Tooltip
+                          wrapping a Next.js Link in the last cell of
+                          rows that resolve to a URL. The icon is hidden
+                          (opacity: 0) by default and revealed on row
+                          hover via the .tableRow:hover .rowActionHint
+                          rule. The Link inherits the same native
+                          cmd-click / middle-click / right-click
+                          semantics as the per-cell Link in the row body.
+                          Suppressed when the row's templates failed
+                          (rowAction.url === null) so the icon never
+                          promises a destination the click won't open.
+                          The arrow-up-right shape signals "navigate
+                          elsewhere" without colliding with the
+                          chevron-right used by sidebar group collapse
+                          / expand affordances. See HDX-4405. */}
+                      {isLastCell && actionUrl !== null && rowAction && (
+                        <Tooltip
+                          label={rowAction.description}
+                          position="left"
+                          withArrow
+                          openDelay={300}
+                          closeDelay={100}
+                          fz="xs"
+                        >
+                          {rowAction.external ? (
+                            <a
+                              href={actionUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              tabIndex={-1}
+                              aria-hidden="true"
+                              className={styles.rowActionHint}
+                              data-testid="row-action-hint"
+                            >
+                              <IconArrowUpRight size={14} />
+                            </a>
+                          ) : (
+                            <Link
+                              href={actionUrl}
+                              prefetch={false}
+                              tabIndex={-1}
+                              aria-hidden="true"
+                              className={styles.rowActionHint}
+                              data-testid="row-action-hint"
+                            >
+                              <IconArrowUpRight size={14} />
+                            </Link>
+                          )}
+                        </Tooltip>
                       )}
                     </td>
                   );

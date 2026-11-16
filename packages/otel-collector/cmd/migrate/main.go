@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,8 +32,15 @@ type Config struct {
 	Password string
 	Database string
 
-	// Table TTL (Go duration string, e.g. "720h")
-	TablesTTL string
+	// TTL as a Go duration (e.g. "720h"); per-signal values fall back to TablesTTL.
+	TablesTTL   string
+	LogsTTL     string
+	TracesTTL   string
+	MetricsTTL  string
+	SessionsTTL string
+
+	// Reconcile TTL on already-existing tables, not just newly created ones.
+	ReconcileTableTTL bool
 
 	// TLS settings
 	TLSCAFile             string
@@ -48,12 +56,18 @@ type Config struct {
 
 // loadConfig reads configuration from environment variables and CLI arguments
 func loadConfig() (*Config, error) {
+	tablesTTL := getEnv("HYPERDX_OTEL_EXPORTER_TABLES_TTL", "720h")
 	cfg := &Config{
 		Endpoint:              getEnv("CLICKHOUSE_ENDPOINT", "tcp://localhost:9000"),
 		User:                  getEnv("CLICKHOUSE_USER", "default"),
 		Password:              getEnv("CLICKHOUSE_PASSWORD", ""),
 		Database:              getEnv("HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE", "default"),
-		TablesTTL:             getEnv("HYPERDX_OTEL_EXPORTER_TABLES_TTL", "720h"),
+		TablesTTL:             tablesTTL,
+		LogsTTL:               getEnv("HYPERDX_OTEL_EXPORTER_LOGS_TTL", tablesTTL),
+		TracesTTL:             getEnv("HYPERDX_OTEL_EXPORTER_TRACES_TTL", tablesTTL),
+		MetricsTTL:            getEnv("HYPERDX_OTEL_EXPORTER_METRICS_TTL", tablesTTL),
+		SessionsTTL:           getEnv("HYPERDX_OTEL_EXPORTER_SESSIONS_TTL", tablesTTL),
+		ReconcileTableTTL:     getEnv("HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL", "false") == "true",
 		TLSCAFile:             getEnv("CLICKHOUSE_TLS_CA_FILE", ""),
 		TLSCertFile:           getEnv("CLICKHOUSE_TLS_CERT_FILE", ""),
 		TLSKeyFile:            getEnv("CLICKHOUSE_TLS_KEY_FILE", ""),
@@ -265,9 +279,258 @@ func ttlToClickHouseInterval(ttl string) (string, error) {
 	}
 }
 
-// processSchemaDir creates a temporary directory with SQL files that have
-// the ${DATABASE} and ${TABLES_TTL} macros replaced with actual values
-func processSchemaDir(schemaDir, database, tablesTTLExpr string) (string, error) {
+// Tables this tool seeds, mapped to the TTL macro governing each. metrics_ts is
+// absent deliberately: the PromQL TimeSeries table carries no TTL.
+var managedTables = map[string]string{
+	"otel_logs":                          "LOGS_TTL",
+	"otel_logs_kv_rollup_15m":            "LOGS_TTL",
+	"otel_traces":                        "TRACES_TTL",
+	"otel_traces_kv_rollup_15m":          "TRACES_TTL",
+	"otel_metrics_gauge":                 "METRICS_TTL",
+	"otel_metrics_sum":                   "METRICS_TTL",
+	"otel_metrics_summary":               "METRICS_TTL",
+	"otel_metrics_histogram":             "METRICS_TTL",
+	"otel_metrics_exponential_histogram": "METRICS_TTL",
+	"hyperdx_sessions":                   "SESSIONS_TTL",
+}
+
+// Rollup tables are named per aggregation window and have been renamed between
+// releases, so they are matched by shape to also cover deployments seeded by an
+// earlier schema. Unrelated tables such as otel_logs_backup_2026 do not match.
+var rollupTableRe = regexp.MustCompile(`^otel_(logs|traces)_[a-z_]*rollup_\d+[smhd]$`)
+
+func classifySignal(table string) (string, bool) {
+	if macro, ok := managedTables[table]; ok {
+		return macro, true
+	}
+	if m := rollupTableRe.FindStringSubmatch(table); m != nil {
+		if m[1] == "logs" {
+			return "LOGS_TTL", true
+		}
+		return "TRACES_TTL", true
+	}
+	return "", false
+}
+
+var (
+	ttlKeywordRe = regexp.MustCompile(`(?i)\bTTL\b`)
+	settingsRe   = regexp.MustCompile(`(?is)\s+SETTINGS\b`)
+)
+
+// extractTTLExpr returns the table-level TTL expression from a create_table_query.
+// It anchors on the LAST TTL keyword: any column-level TTLs appear earlier (inside
+// the column list), so the table-level clause is always last. SETTINGS names
+// containing "ttl" (e.g. ttl_only_drop_parts) are not word-bounded matches.
+func extractTTLExpr(createTableQuery string) (string, bool) {
+	locs := ttlKeywordRe.FindAllStringIndex(createTableQuery, -1)
+	if len(locs) == 0 {
+		return "", false
+	}
+	tail := createTableQuery[locs[len(locs)-1][1]:]
+	if idx := settingsRe.FindStringIndex(tail); idx != nil {
+		tail = tail[:idx[0]]
+	}
+	return strings.TrimSpace(tail), true
+}
+
+// Matches a CH interval as toIntervalX(N) (what we emit) or INTERVAL N UNIT (what CH may echo back).
+var intervalRe = regexp.MustCompile(`(?i)toInterval(Day|Hour|Minute|Second|Week|Month|Quarter|Year)\((\d+)\)|\bINTERVAL\s+(\d+)\s+(DAY|HOUR|MINUTE|SECOND|WEEK|MONTH|QUARTER|YEAR)S?\b`)
+
+// Calendar units (month/quarter/year) are matched by intervalRe so they still count
+// as terms, but are deliberately absent here: their length varies, so a retention in
+// them cannot be compared or rewritten safely and the table is left alone.
+var intervalUnitSeconds = map[string]int64{"DAY": 86400, "HOUR": 3600, "MINUTE": 60, "SECOND": 1, "WEEK": 604800}
+
+// Keywords that make a TTL more than a single retention rule.
+var ttlModifierRe = regexp.MustCompile(`(?i)\b(TO\s+VOLUME|TO\s+DISK|RECOMPRESS|GROUP\s+BY|WHERE)\b`)
+
+// hasTopLevelComma reports whether s separates several TTL rules, ignoring commas
+// nested inside function calls such as toDateTime(x, 'UTC').
+func hasTopLevelComma(s string) bool {
+	depth := 0
+	for _, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// intervalSeconds converts a single interval term (toIntervalX(N) or INTERVAL N UNIT)
+// to seconds, so the diff-guard can compare retention regardless of rendered syntax.
+func intervalSeconds(term string) (int64, bool) {
+	m := intervalRe.FindStringSubmatch(term)
+	if m == nil {
+		return 0, false
+	}
+	var unit, num string
+	if m[1] != "" { // toIntervalX(N)
+		unit, num = strings.ToUpper(m[1]), m[2]
+	} else { // INTERVAL N UNIT
+		unit, num = strings.ToUpper(m[4]), m[3]
+	}
+	secs, ok := intervalUnitSeconds[unit]
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n * secs, true
+}
+
+type ttlAction int
+
+const (
+	ttlSkip  ttlAction = iota // not managed, or already at the desired retention
+	ttlAlter                  // retention differs; newTTL should be applied
+	ttlWarn                   // managed but cannot be reconciled safely; needs an operator
+)
+
+type ttlPlan struct {
+	action  ttlAction
+	managed bool
+	newTTL  string // set when action == ttlAlter
+	extend  bool   // set when action == ttlAlter; true if the new retention is longer
+	reason  string
+}
+
+// planTTLReconcile decides, for one table, what reconcile should do — pure so the
+// decision (especially the cross-syntax diff-guard) is testable without a database.
+func planTTLReconcile(table, createQuery string, ttlExprs map[string]string) ttlPlan {
+	macro, ok := classifySignal(table)
+	if !ok {
+		return ttlPlan{action: ttlSkip, reason: "not a managed table"}
+	}
+	desired, ok := ttlExprs[macro]
+	if !ok {
+		return ttlPlan{action: ttlWarn, managed: true, reason: fmt.Sprintf("no configured TTL for signal %s", macro)}
+	}
+	live, ok := extractTTLExpr(createQuery)
+	if !ok {
+		return ttlPlan{action: ttlWarn, managed: true, reason: "managed table has no TTL clause"}
+	}
+	// Only a plain "<anchor> + <one interval>" retention is safe to rewrite. Anything
+	// else — tiering, recompression, rollup, several rules — is an operator-authored
+	// policy that a partial rewrite would corrupt, so refuse it rather than guess.
+	if ttlModifierRe.MatchString(live) || hasTopLevelComma(live) {
+		return ttlPlan{action: ttlWarn, managed: true, reason: fmt.Sprintf("compound TTL policy %q; skipping to avoid corrupting it", live)}
+	}
+	terms := intervalRe.FindAllStringIndex(live, -1)
+	switch {
+	case len(terms) == 0:
+		return ttlPlan{action: ttlWarn, managed: true, reason: fmt.Sprintf("unrecognized TTL %q", live)}
+	case len(terms) > 1:
+		return ttlPlan{action: ttlWarn, managed: true, reason: fmt.Sprintf("multi-interval TTL %q; skipping to avoid corrupting it", live)}
+	}
+	liveSecs, ok := intervalSeconds(live[terms[0][0]:terms[0][1]])
+	if !ok {
+		return ttlPlan{action: ttlWarn, managed: true, reason: fmt.Sprintf("unparseable interval in TTL %q", live)}
+	}
+	desiredSecs, ok := intervalSeconds(desired)
+	if !ok {
+		return ttlPlan{action: ttlWarn, managed: true, reason: fmt.Sprintf("unparseable desired interval %q", desired)}
+	}
+	if liveSecs == desiredSecs {
+		return ttlPlan{action: ttlSkip, managed: true, reason: "already at desired retention"}
+	}
+	newTTL := live[:terms[0][0]] + desired + live[terms[0][1]:]
+	return ttlPlan{action: ttlAlter, managed: true, newTTL: newTTL, extend: desiredSecs > liveSecs}
+}
+
+// reconcileTableTTLs brings the TTL of existing managed tables in line with config.
+// It only alters tables whose retention differs, preserves each table's timestamp
+// anchor, and reports a summary. Extending uses materialize_ttl_after_modify=1 so
+// the new (longer) retention actually applies to data already on disk without
+// deleting anything; shrinking uses =0 so a startup reconcile never triggers a bulk
+// delete (existing parts age out under their old TTL; run MATERIALIZE TTL to reclaim now).
+func reconcileTableTTLs(ctx context.Context, db *sql.DB, database string, ttlExprs map[string]string) error {
+	rows, err := db.QueryContext(ctx,
+		"SELECT name, create_table_query FROM system.tables WHERE database = ? AND engine LIKE '%MergeTree%'",
+		database)
+	if err != nil {
+		return fmt.Errorf("could not list tables; no tables reconciled: %w", err)
+	}
+	defer rows.Close()
+
+	// Collect first, then ALTER: avoid writing while the result cursor is open.
+	type pending struct {
+		table, newTTL string
+		extend        bool
+	}
+	var todo []pending
+	var examined, matched, skipped, warned int
+	for rows.Next() {
+		var name, createQuery string
+		if err := rows.Scan(&name, &createQuery); err != nil {
+			return fmt.Errorf("could not read table list; no tables reconciled: %w", err)
+		}
+		examined++
+		plan := planTTLReconcile(name, createQuery, ttlExprs)
+		if plan.managed {
+			matched++
+		}
+		switch plan.action {
+		case ttlSkip:
+			if plan.managed {
+				skipped++
+			}
+		case ttlWarn:
+			warned++
+			log.Printf("WARNING: reconcile: %s: %s", name, plan.reason)
+		case ttlAlter:
+			log.Printf("reconcile: %s -> TTL %s", name, plan.newTTL)
+			todo = append(todo, pending{name, plan.newTTL, plan.extend})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error reading table list: %w", err)
+	}
+
+	var altered, failed int
+	var firstErr error
+	for _, p := range todo {
+		materialize := 0
+		if p.extend {
+			materialize = 1
+		}
+		stmt := fmt.Sprintf(
+			"ALTER TABLE `%s`.`%s` MODIFY TTL %s SETTINGS materialize_ttl_after_modify = %d",
+			database, p.table, p.newTTL, materialize)
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			failed++
+			log.Printf("WARNING: reconcile: ALTER failed for %s: %v", p.table, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		altered++
+	}
+	if altered > 0 || warned > 0 || failed > 0 {
+		log.Printf("reconcile: examined=%d matched=%d altered=%d skipped=%d warned=%d failed=%d",
+			examined, matched, altered, skipped, warned, failed)
+	}
+	if firstErr != nil {
+		return fmt.Errorf("%d of %d table(s) failed to reconcile (first error: %w)", failed, len(todo), firstErr)
+	}
+	return nil
+}
+
+// processSchemaDir creates a temporary directory with SQL files that have the
+// ${DATABASE} and per-signal ${*_TTL} macros replaced with actual values.
+// ttlExprs maps a macro name (e.g. "LOGS_TTL") to its ClickHouse interval expr.
+func processSchemaDir(schemaDir, database string, ttlExprs map[string]string) (string, error) {
 	tempDir, err := os.MkdirTemp("", "schema-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
@@ -299,7 +562,9 @@ func processSchemaDir(schemaDir, database, tablesTTLExpr string) (string, error)
 
 		// Replace macros with actual values
 		processedContent := strings.ReplaceAll(string(content), "${DATABASE}", database)
-		processedContent = strings.ReplaceAll(processedContent, "${TABLES_TTL}", tablesTTLExpr)
+		for macro, expr := range ttlExprs {
+			processedContent = strings.ReplaceAll(processedContent, "${"+macro+"}", expr)
+		}
 
 		// Write processed content to temp directory
 		if err := os.WriteFile(destPath, []byte(processedContent), 0644); err != nil {
@@ -410,6 +675,80 @@ func removeCompatLogsSchema(tempDir string) error {
 	return nil
 }
 
+// removePromqlSchema removes the experimental TimeSeries-engine schema from
+// the temp directory so it is only created when PromQL support is opted into
+// via ENABLE_PROMQL=true. Keeps the experimental engine and metrics_ts
+// table out of deployments that have not enabled the feature.
+func removePromqlSchema(tempDir string) error {
+	promqlPath := filepath.Join(tempDir, "00008_otel_metrics_timeseries.sql")
+	if err := os.Remove(promqlPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove promql schema: %w", err)
+	}
+	return nil
+}
+
+// swapTracesSchemaForCompat replaces the full-text-search traces schema with
+// the compatibility variant (bloom_filter indexes, no items columns) in the
+// processed temp directory. It removes 00005_otel_traces.sql and renames
+// 00005_otel_traces_compat.sql to take its place, so goose runs the compat
+// schema instead.
+func swapTracesSchemaForCompat(tempDir string) error {
+	fullTextPath := filepath.Join(tempDir, "00005_otel_traces.sql")
+	compatPath := filepath.Join(tempDir, "00005_otel_traces_compat.sql")
+
+	if err := os.Remove(fullTextPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove full text traces schema: %w", err)
+	}
+
+	if err := os.Rename(compatPath, fullTextPath); err != nil {
+		return fmt.Errorf("failed to rename compat traces schema: %w", err)
+	}
+
+	return nil
+}
+
+// removeCompatTracesSchema removes the compat traces schema file from the temp
+// directory when full text search is supported, so goose doesn't run both
+// schemas.
+func removeCompatTracesSchema(tempDir string) error {
+	compatPath := filepath.Join(tempDir, "00005_otel_traces_compat.sql")
+	if err := os.Remove(compatPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove compat traces schema: %w", err)
+	}
+	return nil
+}
+
+// swapSessionsSchemaForCompat replaces the full-text-search sessions schema
+// with the compatibility variant (bloom_filter session id indexes) in the
+// processed temp directory. It removes 00004_hyperdx_sessions.sql and renames
+// 00004_hyperdx_sessions_compat.sql to take its place, so goose runs the
+// compat schema instead.
+func swapSessionsSchemaForCompat(tempDir string) error {
+	fullTextPath := filepath.Join(tempDir, "00004_hyperdx_sessions.sql")
+	compatPath := filepath.Join(tempDir, "00004_hyperdx_sessions_compat.sql")
+
+	if err := os.Remove(fullTextPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove full text sessions schema: %w", err)
+	}
+
+	if err := os.Rename(compatPath, fullTextPath); err != nil {
+		return fmt.Errorf("failed to rename compat sessions schema: %w", err)
+	}
+
+	return nil
+}
+
+// removeCompatSessionsSchema removes the compat sessions schema file from the
+// temp directory when full text search is supported, so goose doesn't run both
+// schemas.
+func removeCompatSessionsSchema(tempDir string) error {
+	compatPath := filepath.Join(tempDir, "00004_hyperdx_sessions_compat.sql")
+	if err := os.Remove(compatPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove compat sessions schema: %w", err)
+	}
+	return nil
+}
+
 // listSQLFiles lists all SQL files in a directory for logging purposes
 func listSQLFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
@@ -463,30 +802,59 @@ func main() {
 		log.Fatalf("Failed to determine ClickHouse version: %v", err)
 	}
 
-	// Parse tables TTL
-	tablesTTLExpr, err := ttlToClickHouseInterval(cfg.TablesTTL)
-	if err != nil {
-		log.Fatalf("Invalid HYPERDX_OTEL_EXPORTER_TABLES_TTL: %v", err)
+	ttlExprs := make(map[string]string)
+	for _, s := range []struct{ macro, env, value string }{
+		{"TABLES_TTL", "HYPERDX_OTEL_EXPORTER_TABLES_TTL", cfg.TablesTTL},
+		{"LOGS_TTL", "HYPERDX_OTEL_EXPORTER_LOGS_TTL", cfg.LogsTTL},
+		{"TRACES_TTL", "HYPERDX_OTEL_EXPORTER_TRACES_TTL", cfg.TracesTTL},
+		{"METRICS_TTL", "HYPERDX_OTEL_EXPORTER_METRICS_TTL", cfg.MetricsTTL},
+		{"SESSIONS_TTL", "HYPERDX_OTEL_EXPORTER_SESSIONS_TTL", cfg.SessionsTTL},
+	} {
+		expr, err := ttlToClickHouseInterval(s.value)
+		if err != nil {
+			log.Fatalf("Invalid %s: %v", s.env, err)
+		}
+		ttlExprs[s.macro] = expr
 	}
-	log.Printf("Tables TTL: %s (%s)", cfg.TablesTTL, tablesTTLExpr)
+	log.Printf("Table TTLs: logs=%s traces=%s metrics=%s sessions=%s (default %s)",
+		cfg.LogsTTL, cfg.TracesTTL, cfg.MetricsTTL, cfg.SessionsTTL, cfg.TablesTTL)
 
-	// Process schema directory (replace ${DATABASE} and ${TABLES_TTL} macros)
+	// Process schema directory (replace ${DATABASE} and ${*_TTL} macros)
 	log.Printf("Preparing SQL files with database: %s", cfg.Database)
-	tempDir, err := processSchemaDir(cfg.SchemaDir, cfg.Database, tablesTTLExpr)
+	tempDir, err := processSchemaDir(cfg.SchemaDir, cfg.Database, ttlExprs)
 	if err != nil {
 		log.Fatalf("Failed to process schema directory: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Select the appropriate logs schema based on ClickHouse version
+	// Select the appropriate logs, traces and sessions schemas based on ClickHouse version
 	if supportsFullTextSearch(chMajor, chMinor) {
 		if err := removeCompatLogsSchema(tempDir); err != nil {
-			log.Fatalf("Failed to remove compat schema: %v", err)
+			log.Fatalf("Failed to remove compat logs schema: %v", err)
+		}
+		if err := removeCompatTracesSchema(tempDir); err != nil {
+			log.Fatalf("Failed to remove compat traces schema: %v", err)
+		}
+		if err := removeCompatSessionsSchema(tempDir); err != nil {
+			log.Fatalf("Failed to remove compat sessions schema: %v", err)
 		}
 	} else {
-		log.Printf("ClickHouse %d.%d < 26.2, falling back to compatibility logs schema", chMajor, chMinor)
+		log.Printf("ClickHouse %d.%d < 26.2, falling back to compatibility logs, traces and sessions schemas", chMajor, chMinor)
 		if err := swapLogsSchemaForCompat(tempDir); err != nil {
 			log.Fatalf("Failed to swap logs schema: %v", err)
+		}
+		if err := swapTracesSchemaForCompat(tempDir); err != nil {
+			log.Fatalf("Failed to swap traces schema: %v", err)
+		}
+		if err := swapSessionsSchemaForCompat(tempDir); err != nil {
+			log.Fatalf("Failed to swap sessions schema: %v", err)
+		}
+	}
+
+	if os.Getenv("ENABLE_PROMQL") != "true" {
+		log.Printf("ENABLE_PROMQL not set, skipping PromQL TimeSeries schema")
+		if err := removePromqlSchema(tempDir); err != nil {
+			log.Fatalf("Failed to remove promql schema: %v", err)
 		}
 	}
 
@@ -505,6 +873,14 @@ func main() {
 		log.Printf("ERROR: Schema seed failed after %d attempts: %v", cfg.MaxRetries, err)
 		log.Println("========================================")
 		os.Exit(1)
+	}
+
+	// CREATE TABLE IF NOT EXISTS won't update TTL on existing tables; reconcile
+	// (opt-in) applies it to them too. Non-fatal so it can't block startup.
+	if cfg.ReconcileTableTTL {
+		if err := reconcileTableTTLs(ctx, db, cfg.Database, ttlExprs); err != nil {
+			log.Printf("WARNING: reconcile: %v", err)
+		}
 	}
 
 	log.Println("========================================")

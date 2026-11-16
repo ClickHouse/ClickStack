@@ -1,5 +1,352 @@
 # @hyperdx/otel-collector
 
+## 2.45.0
+
+## 2.44.0
+
+### Patch Changes
+
+- 5b0d07441: fix: let browsers cache the collector's CORS preflights for 10 minutes
+
+  The OTLP receiver now answers preflights with `Access-Control-Max-Age: 600`.
+  Without it, browsers cached a preflight for only 5 seconds, which is how often
+  the browser SDK exports, so about half of its requests were preflights.
+
+- 8384fe675: perf: compress the seed schemas with `ZSTD(3)` instead of `ZSTD(1)`
+
+  The seed schemas pinned `ZSTD(1)` on almost every column. Level 3 gives a better
+  compression ratio at a small insert-time CPU cost, without affecting reads, and
+  it is the default codec of ClickHouse since 26.9. It is pinned explicitly so
+  that older ClickHouse versions, whose default is `LZ4`, get it too. `Delta`
+  codecs drop their byte-size argument, which ClickHouse infers from the column
+  type. Only newly created tables are affected; existing tables keep their codecs.
+
+- 702181002: feat: session ID columns, `session.id` from `rum.sessionId`, severity text
+
+  The `hyperdx_sessions` seed adds materialized `rum.sessionId` and `session.id`
+  columns with skip indexes, and the `otel_logs` seed adds a materialized
+  `session.id` column with a skip index, so session queries no longer read the
+  attribute maps. Only newly created tables get them; existing tables need an
+  `ALTER TABLE ... ADD COLUMN` to benefit.
+
+  Spans, logs and session replay events from older `@hyperdx/browser` SDKs, which
+  carry the session id only in the `rum.sessionId` resource attribute, now also
+  get the OpenTelemetry `session.id` attribute. An existing `session.id` is never
+  overwritten and `rum.sessionId` is kept. If you override pipeline `processors:`
+  lists in `CUSTOM_OTELCOL_CONFIG_FILE`, add `transform/session_id` to keep this.
+
+  Logs that carry a severity number but no severity text, such as those from the
+  new browser SDK, now get the matching level text (`info`, `error`, ...) instead
+  of an empty level. Severity text set by the producer is never overwritten.
+
+## 2.43.1
+
+### Patch Changes
+
+- 7a9fe57d3: Disable Multipath TCP in the collector image by setting `GODEBUG=multipathtcp=0`
+  at startup, mitigating CVE-2026-98432. Go 1.24+ opens MPTCP listeners by
+  default. Any other `GODEBUG` settings you pass are kept, and an explicit
+  `multipathtcp=` value is left as is. This also applies to the all-in-one image.
+  Patching the host kernel is still the actual fix.
+
+## 2.43.0
+
+## 2.42.0
+
+### Patch Changes
+
+- ab563d28: Stop the collector logging a `ParseJSON` syntax error for every log body that
+  contains braces but isn't JSON (e.g. Go struct or Python dict dumps). JSON
+  extraction now only matches objects that start with a quoted key, and remaining
+  parse failures in that statement group are silenced.
+- ca8e3fda: fix: support https for the PromQL remote-write endpoint and ClickHouse scraping
+
+  `CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT` now accepts an `http://` or `https://` URL as well as a bare `host:port`. With `https://`, the collector's `prometheusremotewrite` exporter sends metrics over TLS and verifies the server certificate against the system CAs. Previously the exporter always used plain HTTP, so an HTTPS-only endpoint could not receive metrics. This applies to both standalone and OpAMP-managed collectors.
+
+  A bare `host:port` keeps plain HTTP, so existing setups are unchanged. The value must not include a path (`/write` is still appended automatically); the collector now exits at startup with a clear error if it does, or if the scheme is anything other than `http` or `https`.
+
+  The OpAMP-managed collector scraped the endpoint over plain HTTP regardless of its scheme. ClickHouse is now scraped in its own `clickhouse` job (previously the `otelcol` job) using the endpoint's scheme, with TLS verification on. The collector's own metrics endpoint stays on plain HTTP. A bare `host:port` or `http://` endpoint behaves as before. Scraped ClickHouse metrics now carry `job="clickhouse"` instead of `job="otelcol"`.
+
+## 2.41.0
+
+## 2.40.0
+
+### Minor Changes
+
+- 3ab758e4: feat(otel-collector): compile in statsdreceiver
+
+  Available for a user's own pipeline config (e.g. via
+  `CUSTOM_OTELCOL_CONFIG_FILE`) to ingest StatsD/DogStatsD metrics
+  directly, without a separate StatsD-to-OTLP bridge. Purely additive:
+  being compiled in changes no default pipeline or behavior on its own.
+
+## 2.39.1
+
+## 2.39.0
+
+### Minor Changes
+
+- 7651bc34: feat: add text indexes for seeding the trace schema
+- fc4d5878: feat(otel-collector): compile in spanmetricsconnector
+
+  Available for a user's own pipeline config (e.g. via
+  `CUSTOM_OTELCOL_CONFIG_FILE`) to compute call-count and duration
+  metrics from spans - most useful alongside the existing
+  `datadogreceiver` support for ingesting Datadog Agent traces, where
+  there was previously no way to derive RED metrics from that trace data
+  once ingested. Purely additive: being compiled in changes no default
+  pipeline or behavior on its own.
+
+## 2.38.0
+
+### Patch Changes
+
+- 808b3453: Accept `Bearer `-prefixed Authorization header values on the OTLP receiver in standalone mode (`OTLP_AUTH_TOKEN`). Previously only the bare-token form of the header was accepted, rejecting RFC 6750 clients that send `Authorization: Bearer <token>`. The `Bearer`, `bearer`, and `BEARER` prefixed forms are now accepted alongside the bare token.
+
+## 2.37.0
+
+## 2.36.0
+
+### Minor Changes
+
+- 395ae8d6: feat: support per-signal ClickHouse table TTLs and reconcile TTL on existing tables
+
+  Adds `HYPERDX_OTEL_EXPORTER_LOGS_TTL`, `HYPERDX_OTEL_EXPORTER_TRACES_TTL`, `HYPERDX_OTEL_EXPORTER_METRICS_TTL` and `HYPERDX_OTEL_EXPORTER_SESSIONS_TTL`, each falling back to the existing `HYPERDX_OTEL_EXPORTER_TABLES_TTL`, so retention can be configured independently per signal (e.g. keep logs and traces for 6 months while metrics stay at 30 days).
+
+  When `HYPERDX_OTEL_EXPORTER_RECONCILE_TABLE_TTL=true`, the migrate tool also applies the configured TTL to tables that already exist (`ALTER TABLE ... MODIFY TTL`), diff-guarded so only tables whose retention actually differs are changed. Previously a changed TTL only affected newly-created tables. Extending a retention uses `materialize_ttl_after_modify=1` so data already on disk is kept for the new (longer) period; shrinking uses `=0` so a startup reconcile never triggers a bulk delete (existing parts age out under their old TTL). Only a plain `<anchor> + <one fixed-length interval>` retention is rewritten: compound policies (`TO VOLUME`/`TO DISK` tiering, `RECOMPRESS`, `GROUP BY` rollups, several rules) and calendar-unit retentions (month/quarter/year) are reported and left untouched. Off by default. Implements hyperdxio/hyperdx#1311.
+
+### Patch Changes
+
+- d205a776: Allow the ClickHouse exporter request timeout to be configured with
+  `HYPERDX_OTEL_EXPORTER_TIMEOUT` in both OpAMP-managed and standalone collector
+  modes. The default remains 5 seconds.
+
+## 2.35.0
+
+### Minor Changes
+
+- 8351d632: Add OIDC-based bearer token authentication for the OTLP receiver in standalone mode, as an alternative to the existing static `OTLP_AUTH_TOKEN`. Set `OIDC_ISSUER_URL` and `OIDC_AUDIENCE` to validate incoming OTLP requests against an OIDC provider's published JWKS instead of a single long-lived shared secret.
+
+### Patch Changes
+
+- 58a467ae: Use the OpAMP supervisor's native `passthrough_logs` for collector log
+  forwarding instead of a background `tail` process. The old approach had
+  the supervisor and the tailer writing to the same stdout fd with no
+  synchronization, so log lines were getting mangled by the two streams
+  interleaving mid-line. The native approach has the supervisor re-emitting
+  the collector's output through its own logger to avoid this.
+
+## 2.34.0
+
+## 2.33.0
+
+## 2.32.0
+
+## 2.31.0
+
+## 2.30.1
+
+## 2.30.0
+
+### Minor Changes
+
+- 727d3274: Add an opt-in Datadog receiver (gated behind `ENABLE_DATADOG_RECEIVER`) so a
+  Datadog Agent can ship traces, metrics, and logs to HyperDX. The contrib
+  `datadogreceiver` is compiled into the collector binary and, when enabled, the
+  OpAMP controller attaches it (listening on `0.0.0.0:8126`) to the traces,
+  metrics, and logs pipelines. When collector authentication is enforced, the
+  receiver validates the `DD-API-KEY` header against team API keys.
+- 3f1e1fe4: feat: update metrics schema for more efficient PK and time pruning
+
+## 2.29.0
+
+### Minor Changes
+
+- 34a855969: chore(otel-collector): bump base collector to v0.154.0
+
+  Upgrade the custom OTel Collector base from contrib v0.149.0 (core 1.55.0) to
+  v0.154.0 (core 1.60.0). Updates `OTEL_COLLECTOR_VERSION` /
+  `OTEL_COLLECTOR_CORE_VERSION` in `.env`, both Dockerfile ARG defaults, and the
+  smoke-test compose fallbacks.
+
+  Compatibility: no config changes required. Reviewed contrib and core breaking
+  changes across v0.150–v0.154 against every component HyperDX uses. All affected
+  upstream changes are either backward-compatible deprecation aliases
+  (`prometheusremotewrite`, `resourcedetection`), explicit-config no-ops for
+  HyperDX (clickhouse exporter already sets `json:` directly; transform/routing
+  connectors set `error_mode: ignore` explicitly), or internal core feature-gate
+  stabilizations.
+
+- 6b6c340fc: chore(otel-collector): bump base collector to v0.155.0
+
+  Upgrade the custom OTel Collector base from contrib v0.154.0 (core 1.60.0) to
+  v0.155.0 (core 1.61.0). Updates `OTEL_COLLECTOR_VERSION` /
+  `OTEL_COLLECTOR_CORE_VERSION` in `.env`, both Dockerfile ARG defaults, and the
+  smoke-test compose fallbacks.
+
+  Compatibility: no config changes required. Reviewed contrib and core breaking
+  changes for v0.155.0 against every component HyperDX uses. The removed
+  `telemetry.UseLocalHostAsDefaultMetricsAddress` core gate has no impact because
+  the telemetry metrics endpoint is set explicitly (`host: 0.0.0.0`, `port:
+8888`), and the `memory_limiter` metric rename does not affect the smoke tests
+  (which assert on the startup log line and the `batch/lowlatency` metric label,
+  not memory_limiter metrics). All other breaking changes are in unused components
+  or internal feature-gate removals.
+
+### Patch Changes
+
+- 973d1201b: fix: polish promql experience across the app
+- a5dfce4b: fix(otel-collector): only enable the prometheus remote-write exporter in
+  standalone mode when `CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT` is set
+
+  The standalone collector config used to unconditionally declare a
+  `prometheusremotewrite` exporter and a `metrics/promql` pipeline. When
+  `CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT` was unset the exporter rendered
+  with an empty endpoint and every metrics batch failed to export.
+
+  The exporter and pipeline have been moved to
+  `docker/otel-collector/config.standalone.promql.yaml`, which is now only
+  loaded by `entrypoint.sh` when `CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT` is
+  non-empty. This mirrors the OpAMP-managed gating in
+  `packages/api/src/opamp/controllers/opampController.ts` (which already
+  only adds the exporter when `IS_PROMQL_ENABLED` is true).
+
+  No action required if `CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT` is set; the
+  behavior is unchanged. If it was unset, the collector now stops emitting
+  the failing prometheus-remote-write attempts.
+
+## 2.28.0
+
+### Minor Changes
+
+- 3123db53: feat: experimental promql support
+- cb6a74ce: fix(otel-collector): allow `CUSTOM_OTELCOL_CONFIG_FILE` to override the
+  default `memory_limiter`, `batch` (and other pipeline processors)
+
+  Pipeline `processors:` lists used to be defined in the OpAMP remote config
+  sent by the API (`packages/api/src/opamp/controllers/opampController.ts`).
+  That meant the remote config overwrote any pipeline `processors:` list a
+  user supplied via `CUSTOM_OTELCOL_CONFIG_FILE`, making it impossible to
+  substitute the default `memory_limiter` with one configured for
+  `limit_percentage`/`spike_limit_percentage` mode (#2145).
+
+  The pipeline `processors:` lists now live in the bootstrap config
+  (`docker/otel-collector/config.yaml` for supervisor mode, and
+  `docker/otel-collector/config.standalone.yaml` for standalone mode). The
+  OpAMP remote config no longer sets `processors:` on these pipelines, so the
+  bootstrap+custom merge wins. Receivers and exporters are still configured
+  dynamically by the OpAMP controller.
+
+  To override `memory_limiter`, define a new processor with a different name
+  in `CUSTOM_OTELCOL_CONFIG_FILE` and swap the pipeline `processors:` lists:
+
+  ```yaml
+  processors:
+    memory_limiter/custom:
+      check_interval: 5s
+      limit_percentage: 75
+      spike_limit_percentage: 25
+
+  service:
+    pipelines:
+      traces:
+        processors: [memory_limiter/custom, batch]
+      metrics:
+        processors: [memory_limiter/custom, batch]
+      logs/out-default:
+        processors: [memory_limiter/custom, transform, batch]
+      logs/out-rrweb:
+        processors: [memory_limiter/custom, batch]
+  ```
+
+  The default `memory_limiter` block defined in the base config is left in
+  the merged config but is no longer referenced by any pipeline; the
+  collector only instantiates `memory_limiter/custom` at runtime.
+
+  The same swap pattern works for the `batch` processor (and any other base
+  processor). For example, to lower the export timeout on a specific
+  pipeline:
+
+  ```yaml
+  processors:
+    batch/lowlatency:
+      send_batch_size: 1000
+      send_batch_max_size: 2000
+      timeout: 500ms
+
+  service:
+    pipelines:
+      traces:
+        processors: [memory_limiter, batch/lowlatency]
+      logs/out-default:
+        processors: [memory_limiter, transform, batch/lowlatency]
+  ```
+
+  Lighter-weight env-var tuning is also available for the default `batch`
+  processor without writing a custom config file:
+  `HYPERDX_OTEL_BATCH_SEND_BATCH_SIZE`,
+  `HYPERDX_OTEL_BATCH_SEND_BATCH_MAX_SIZE`, and `HYPERDX_OTEL_BATCH_TIMEOUT`.
+  See the README for details.
+
+### Patch Changes
+
+- ad3f1c9e: fix(otel-collector): skip string severity inference when JSON body has a
+  `level`/`severity` field
+
+  When the log body parsed as JSON and contained a level-like field, the
+  pipeline still ran its `\b(alert|crit|emerg|fatal|error|err|warn|notice|debug|dbug|trace)`
+  keyword scan over the raw body string. The leading-only `\b` boundary
+  matched any word starting with a severity keyword, so bodies containing
+  words like `alertmanager`, `alerting`, `errors`, `warning`, etc. produced
+  the wrong severity. A Grafana sidecar log with body
+  `{"level":"INFO", "msg":"... mimir-alertmanager-dashboard ..."}` was being
+  tagged `SeverityText="fatal"`, `SeverityNumber=21` because `alert` matched
+  inside `alertmanager`, even though the JSON `level` said `INFO`.
+
+  A new OTTL `log_statements` block in
+  `docker/otel-collector/config.yaml` runs between the existing JSON-parse
+  block and the string-inference block. It promotes a JSON-derived level
+  field (now in `log.attributes`) to `log.severity_text`, which causes the
+  string-inference block to be skipped via its existing
+  `severity_number == 0 and severity_text == ""` guard. The block is
+  case-insensitive across keys by enumerating common casings of common field
+  names used by mainstream logging frameworks: `level` / `Level` / `LEVEL`
+  (pino, winston, zerolog, zap, logrus, slog, Serilog, NLog),
+  `severity` / `Severity` / `SEVERITY` (Datadog, GCP Cloud Logging), and
+  `log.level` (Elastic ECS, flattened from nested JSON). Each `set`
+  self-guards on `severity_text == ""` so the first match wins (priority:
+  `level` > `severity` > `log.level`). The block as a whole is gated on no
+  producer-set severity, so explicit producer values are always preserved.
+
+  `severity_number` is mapped via case-insensitive `(?i)` regex over
+  `severity_text`, mirroring the existing string-inference keyword set.
+  Unrecognized values (e.g. `"verbose"`) fall back to `INFO`, matching
+  block 2's else-branch. The existing `ConvertCase(severity_text, "lower")`
+  normalization is unchanged.
+
+  Behavior preserved for: non-JSON bodies, JSON bodies without a level
+  field, and any log record where the producer already set
+  `severity_text` or `severity_number`.
+
+  Fixes HDX-4383.
+
+## 2.27.0
+
+## 2.26.0
+
+## 2.25.0
+
+### Minor Changes
+
+- aaba3e95: feat: new optimized otel schema based on weeks of benchmarks.
+
+  The Primary Key is now grouped by `toStartOfFiveMinutes`. At extremely large
+  data sizes, it may be helpful to reduce granularity to 1 minute instead of 5.
+  Bloom Filter indexes can be used instead, but full text search performs better
+  across the board. Additionally, tests show that TimestampTime is effectively
+  not necessary, which is especially true with data grouped by 5 minute
+  boundaries by default.
+
 ## 2.24.1
 
 ### Patch Changes

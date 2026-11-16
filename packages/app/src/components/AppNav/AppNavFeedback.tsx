@@ -1,15 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { useRouter } from 'next/router';
-import HyperDX from '@hyperdx/browser';
-import {
-  ActionIcon,
-  Box,
-  Button,
-  Group,
-  Text,
-  Textarea,
-  Tooltip,
-} from '@mantine/core';
+import { ActionIcon, Box, Button, Group, Text, Textarea } from '@mantine/core';
 import { useLocalStorage } from '@mantine/hooks';
 import {
   IconThumbDown,
@@ -19,6 +10,7 @@ import {
 } from '@tabler/icons-react';
 
 import { IS_LOCAL_MODE } from '@/config';
+import { recordAction } from '@/utils/browserTelemetry';
 
 import { AppNavContext } from './AppNav.components';
 
@@ -53,7 +45,7 @@ export const AppNavFeedback = () => (
 );
 
 const AppNavFeedbackInner = () => {
-  const { isCollapsed } = React.useContext(AppNavContext);
+  const { isCollapsed } = React.use(AppNavContext);
   const [forceEnabled] = useLocalStorage<boolean>({
     key: FORCE_ENABLE_KEY,
     defaultValue: false,
@@ -90,7 +82,7 @@ const AppNavFeedbackInner = () => {
     (newVote: FeedbackVote) => {
       setVote(newVote);
       setState('voted');
-      HyperDX.addAction('user feedback vote', {
+      recordAction('user feedback vote', {
         vote: newVote ?? '',
         ...pageContext(),
       });
@@ -101,7 +93,7 @@ const AppNavFeedbackInner = () => {
   const [dismissed, setDismissed] = useState(false);
 
   const handleSubmit = useCallback(() => {
-    HyperDX.addAction('user feedback comment', {
+    recordAction('user feedback comment', {
       vote: vote ?? '',
       comment,
       ...pageContext(),
@@ -114,40 +106,9 @@ const AppNavFeedbackInner = () => {
     }, 1500);
   }, [vote, comment, pageContext, reset]);
 
-  if (!sdkEnabled || hidden || dismissed) return null;
-
-  if (isCollapsed) {
-    return (
-      <Tooltip label="Feedback" position="right">
-        <Group
-          data-testid="feedback-inline"
-          gap={0}
-          justify="center"
-          py={4}
-          wrap="nowrap"
-        >
-          <ActionIcon
-            data-testid="feedback-thumbs-up"
-            variant="subtle"
-            size="sm"
-            onClick={() => handleVote('up')}
-            title="Thumbs up"
-          >
-            <IconThumbUp size={14} />
-          </ActionIcon>
-          <ActionIcon
-            data-testid="feedback-thumbs-down"
-            variant="subtle"
-            size="sm"
-            onClick={() => handleVote('down')}
-            title="Thumbs down"
-          >
-            <IconThumbDown size={14} />
-          </ActionIcon>
-        </Group>
-      </Tooltip>
-    );
-  }
+  // Hide the feedback control entirely when the nav is collapsed, since it is
+  // not usable in that state.
+  if (!sdkEnabled || hidden || dismissed || isCollapsed) return null;
 
   return (
     <Box data-testid="feedback-inline">

@@ -5,6 +5,8 @@
 // so this can't be done with inline statements.
 import { _origError } from '@/utils/silenceLogs';
 
+import fs from 'node:fs';
+
 import React, { useState, useCallback } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
@@ -16,22 +18,29 @@ import {
   TemplateMinerConfig,
 } from '@hyperdx/common-utils/dist/drain';
 
+import { DashboardWithoutIdSchema } from '@hyperdx/common-utils/dist/types';
+import type { SavedChartConfig } from '@hyperdx/common-utils/dist/types';
+
 import App from '@/App';
-import { ApiClient, type MeTeam } from '@/api/client';
+import { ApiClient, type SourceResponse, type MeTeam } from '@/api/client';
+import { AdhocChartError, buildAdhocChartConfig } from '@/shared/adhocChart';
+import { stripAnsi } from '@/termchart';
+import { parseGranularityFlag, sortTilesForDisplay } from '@/shared/tileConfig';
+import { fetchTileData } from '@/shared/tileQuery';
+import { renderTileContent } from '@/shared/tileRender';
 import { clearSession, loadSession, setActiveTeam } from '@/utils/config';
+import { parseTimeValue } from '@/utils/editor';
+import { isValidUrl } from '@/utils/url';
 import { uploadSourcemaps } from '@/sourcemaps';
+import {
+  DEFAULT_MCP_SERVER_NAME,
+  type InstallResult,
+  isValidServerName,
+  mcpClients,
+} from '@/mcp/install';
+import McpInstallPrompt from '@/mcp/McpInstallPrompt';
 
 // ---- Standalone interactive login for `hdx auth login` -------------
-
-/** Returns true if the string is a valid HTTP(S) URL. */
-function isValidUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
 
 // Add new login methods here to extend the login flow.
 const LOGIN_METHODS = [
@@ -102,9 +111,9 @@ function LoginPrompt({
     if (!password || !client) return;
     setLoading(true);
     setError(null);
-    const ok = await client.login(email, password);
+    const loginError = await client.login(email, password);
     setLoading(false);
-    if (ok) {
+    if (!loginError) {
       exit();
       // Small delay to let Ink unmount before writing to stdout
       setTimeout(() => {
@@ -113,7 +122,7 @@ function LoginPrompt({
         );
       }, 50);
     } else {
-      setError('Login failed. Check your credentials and server URL.');
+      setError(loginError);
       setField('email');
       setEmail('');
       setPassword('');
@@ -295,9 +304,9 @@ function ReLoginPrompt({
     if (!password || !client) return;
     setLoading(true);
     setError(null);
-    const ok = await client.login(email, password);
+    const loginError = await client.login(email, password);
     setLoading(false);
-    if (ok) {
+    if (!loginError) {
       exit();
       setTimeout(() => {
         process.stdout.write(
@@ -306,7 +315,7 @@ function ReLoginPrompt({
         onAuthenticated(client);
       }, 50);
     } else {
-      setError('Login failed. Check your credentials and server URL.');
+      setError(loginError);
       setField('email');
       setEmail('');
       setPassword('');
@@ -444,13 +453,13 @@ auth
         process.exit(1);
       }
       const client = new ApiClient({ appUrl: opts.appUrl });
-      const ok = await client.login(opts.email, opts.password);
-      if (ok) {
+      const loginError = await client.login(opts.email, opts.password);
+      if (!loginError) {
         process.stdout.write(
           chalk.green(`Logged in as ${opts.email} (${opts.appUrl})\n`),
         );
       } else {
-        _origError(chalk.red('Login failed. Check your email and password.\n'));
+        _origError(chalk.red(`${loginError}\n`));
         process.exit(1);
       }
     } else {
@@ -535,6 +544,82 @@ function resolveActiveTeam(
   }
   return me.team ?? null;
 }
+
+// ---- MCP -----------------------------------------------------------
+
+const mcp = program
+  .command('mcp')
+  .description('Connect AI agents to ClickStack over MCP')
+  .enablePositionalOptions()
+  .passThroughOptions();
+
+mcp
+  .command('install')
+  .description(
+    'Add the ClickStack MCP server to Claude Code, Codex, Cursor, and VS Code',
+  )
+  .option('-a, --app-url <url>', 'ClickStack app URL')
+  .option(
+    '-n, --name <name>',
+    'Server name in the agent configs. Use a different name per ClickStack instance to keep several side by side',
+    DEFAULT_MCP_SERVER_NAME,
+  )
+  .action(async opts => {
+    if (!isValidServerName(opts.name)) {
+      _origError(
+        chalk.red(
+          '--name must start with a letter or number and contain only letters, numbers, hyphens, and underscores.\n',
+        ),
+      );
+      process.exit(1);
+    }
+    if (!process.stdin.isTTY) {
+      _origError(
+        chalk.red(
+          'hdx mcp install needs an interactive terminal so the key stays out of logs and agent chats. Run it yourself in a terminal.\n',
+        ),
+      );
+      process.exit(1);
+    }
+    const clients = mcpClients().filter(c => c.detect());
+    if (clients.length === 0) {
+      _origError(
+        chalk.red(
+          'No supported agent found (Claude Code, Codex, Cursor, VS Code).\n',
+        ),
+      );
+      process.exit(1);
+    }
+
+    let results: InstallResult[] | null = null;
+    const { waitUntilExit } = render(
+      <McpInstallPrompt
+        initialAppUrl={resolveServer(opts.appUrl)}
+        name={opts.name}
+        clients={clients}
+        onDone={r => {
+          results = r;
+        }}
+      />,
+    );
+    await waitUntilExit();
+
+    const done = results as InstallResult[] | null;
+    if (done == null) {
+      process.stdout.write('Cancelled. No configs were changed.\n');
+      return;
+    }
+    for (const { client, name, error } of done) {
+      process.stdout.write(
+        error
+          ? chalk.red(`✗ ${client.label}: ${name}: ${error}\n`)
+          : chalk.green(`✓ ${client.label}: ${name}`) +
+              chalk.dim(` (key stored in ${client.location})\n`),
+      );
+    }
+    process.stdout.write('Restart your agents to pick up the new server.\n');
+    if (done.some(r => r.error)) process.exit(1);
+  });
 
 // ---- Teams ---------------------------------------------------------
 
@@ -945,11 +1030,250 @@ Examples:
 
 // ---- Dashboards ----------------------------------------------------
 
-program
+/**
+ * Random id for dashboard tiles, matching the web frontend's `makeId()`
+ * (packages/app/src/utils/tilePositioning.ts).
+ */
+const makeTileId = () =>
+  Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+
+/** Quote a value for CSV output (RFC 4180 style). */
+function csvField(value: string): string {
+  return /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+}
+
+/** Read a file path (or stdin for "-") and parse it as JSON. Exits on error. */
+function readJsonFileOrExit(path: string): unknown {
+  let raw: string;
+  try {
+    raw =
+      path === '-'
+        ? fs.readFileSync(0, 'utf-8')
+        : fs.readFileSync(path, 'utf-8');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    _origError(chalk.red(`Failed to read ${path}: ${msg}\n`));
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    _origError(chalk.red(`Invalid JSON in ${path}: ${msg}\n`));
+    process.exit(1);
+  }
+}
+
+/**
+ * Fill missing tile ids and validate a dashboard definition against the
+ * shared DashboardWithoutId schema. Exits with readable per-issue errors
+ * on validation failure.
+ */
+function validateDashboardOrExit(
+  parsedJson: unknown,
+): ReturnType<typeof DashboardWithoutIdSchema.parse> {
+  // Fill in missing tile ids before validation (id is required by the
+  // schema but is meaningless to hand-author).
+  if (
+    typeof parsedJson === 'object' &&
+    parsedJson !== null &&
+    Array.isArray((parsedJson as { tiles?: unknown }).tiles)
+  ) {
+    for (const tile of (parsedJson as { tiles: Array<{ id?: unknown }> })
+      .tiles) {
+      if (typeof tile === 'object' && tile !== null && tile.id == null) {
+        tile.id = makeTileId();
+      }
+    }
+  }
+
+  const parsed = DashboardWithoutIdSchema.safeParse(parsedJson);
+  if (!parsed.success) {
+    _origError(chalk.red('Dashboard definition is invalid:\n'));
+    for (const issue of parsed.error.issues) {
+      _origError(
+        chalk.red(`  - ${issue.path.join('.') || '(root)'}: ${issue.message}`),
+      );
+    }
+    process.exit(1);
+  }
+  return parsed.data;
+}
+
+/**
+ * If a dashboard with the same name already exists, print it and return
+ * true (used by --if-not-exists on create/import).
+ */
+async function skipIfDashboardExists(
+  client: ApiClient,
+  name: string,
+  asJson: boolean,
+): Promise<boolean> {
+  const existing = (await client.getDashboards()).find(d => d.name === name);
+  if (!existing) return false;
+  const id = existing.id ?? existing._id;
+  if (asJson) {
+    process.stdout.write(
+      JSON.stringify({ skipped: true, id, name: existing.name }, null, 2) +
+        '\n',
+    );
+  } else {
+    process.stdout.write(
+      `${chalk.yellow('Skipped')} — dashboard ${chalk.bold.cyan(name)} already exists ${chalk.dim(`[${id}]`)}\n${client.getAppUrl()}/dashboards/${id}\n`,
+    );
+  }
+  return true;
+}
+
+/** POST a validated dashboard and print the result. Exits on failure. */
+async function createDashboardAndPrint(
+  client: ApiClient,
+  dashboard: ReturnType<typeof DashboardWithoutIdSchema.parse>,
+  asJson: boolean,
+): Promise<void> {
+  let created;
+  try {
+    created = await client.createDashboard(dashboard);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    _origError(chalk.red(`Failed to create dashboard: ${msg}\n`));
+    process.exit(1);
+  }
+
+  const id = created.id ?? created._id;
+  if (asJson) {
+    process.stdout.write(JSON.stringify(created, null, 2) + '\n');
+    return;
+  }
+  process.stdout.write(
+    `${chalk.green('Created dashboard')} ${chalk.bold.cyan(created.name)} ${chalk.dim(`[${id}]`)}\n${client.getAppUrl()}/dashboards/${id}\n`,
+  );
+}
+
+async function runDashboardsList(opts: {
+  appUrl?: string;
+  json?: boolean;
+  format?: string;
+  query?: string;
+}): Promise<void> {
+  const format = opts.json ? 'json' : (opts.format ?? 'table');
+  if (!['table', 'json', 'csv'].includes(format)) {
+    _origError(
+      chalk.red(
+        `Invalid --format "${opts.format}". Use table, json, or csv.\n`,
+      ),
+    );
+    process.exit(1);
+  }
+
+  const client = await ensureSession(opts.appUrl);
+
+  let dashboards = await client.getDashboards();
+  if (opts.query) {
+    const needle = String(opts.query).toLowerCase();
+    dashboards = dashboards.filter(d => d.name.toLowerCase().includes(needle));
+  }
+
+  if (format === 'json') {
+    const output = dashboards.map(d => ({
+      id: d.id,
+      name: d.name,
+      tags: d.tags ?? [],
+      filters: d.filters ?? [],
+      savedQuery: d.savedQuery ?? null,
+      createdAt: d.createdAt ?? null,
+      updatedAt: d.updatedAt ?? null,
+      tiles: d.tiles.map(t => ({
+        id: t.id,
+        name: t.config.name ?? null,
+        type: t.config.displayType ?? null,
+        source: ('source' in t.config ? t.config.source : null) ?? null,
+        sql: ('sqlTemplate' in t.config ? t.config.sqlTemplate : null) ?? null,
+      })),
+    }));
+    process.stdout.write(JSON.stringify(output, null, 2) + '\n');
+    return;
+  }
+
+  if (format === 'csv') {
+    process.stdout.write('id,name,tags,createdAt,updatedAt,tileCount\n');
+    for (const d of dashboards) {
+      process.stdout.write(
+        [
+          csvField(d.id ?? d._id),
+          csvField(d.name),
+          csvField((d.tags ?? []).join(';')),
+          csvField(d.createdAt ?? ''),
+          csvField(d.updatedAt ?? ''),
+          String(d.tiles.length),
+        ].join(',') + '\n',
+      );
+    }
+    return;
+  }
+
+  if (dashboards.length === 0) {
+    process.stdout.write(
+      opts.query
+        ? `No dashboards matching "${opts.query}".\n`
+        : 'No dashboards found.\n',
+    );
+    return;
+  }
+
+  // Fetch sources to resolve source names for display
+  let sourceNames: Record<string, string> = {};
+  try {
+    const sources = await client.getSources();
+    sourceNames = Object.fromEntries(
+      sources.flatMap(s => [
+        [s.id, s.name],
+        [s._id, s.name],
+      ]),
+    );
+  } catch {
+    // Non-fatal — just won't show source names
+  }
+
+  // Human-readable output
+  for (const d of dashboards) {
+    const tags =
+      d.tags.length > 0 ? `  ${chalk.dim(`[${d.tags.join(', ')}]`)}` : '';
+    process.stdout.write(
+      `${chalk.bold.cyan(d.name)}${tags}  ${chalk.dim(`${d.tiles.length} tile${d.tiles.length !== 1 ? 's' : ''}`)}\n`,
+    );
+
+    for (let i = 0; i < d.tiles.length; i++) {
+      const t = d.tiles[i];
+      const isLast = i === d.tiles.length - 1;
+      const prefix = isLast ? '  └─ ' : '  ├─ ';
+      const name = t.config.name || '(untitled)';
+      const chartType = t.config.displayType ?? 'chart';
+      const tileSource = 'source' in t.config ? t.config.source : undefined;
+      let sourceLabel = '';
+      if ('sqlTemplate' in t.config) {
+        sourceLabel = 'raw SQL';
+      } else if (tileSource) {
+        sourceLabel = `source: ${sourceNames[tileSource] ?? tileSource}`;
+      }
+      const meta = [chartType, sourceLabel].filter(Boolean).join(', ');
+      process.stdout.write(
+        `${chalk.dim(prefix)}${name} ${chalk.dim(`(${meta})`)}\n`,
+      );
+    }
+
+    process.stdout.write('\n');
+  }
+}
+
+const dashboardsCmd = program
   .command('dashboards')
-  .description('List dashboards with tile summaries')
+  .alias('dashboard')
+  .description('List, export, create, or import dashboards')
   .option('-a, --app-url <url>', 'HyperDX app URL')
-  .option('--json', 'Output as JSON (for programmatic consumption)')
+  .option('--json', 'Output as JSON (shorthand for --format json)')
+  .option('--format <fmt>', 'Output format: table, json, or csv', 'table')
+  .option('--query <substr>', 'Filter dashboards by name (substring match)')
   .addHelpText(
     'after',
     `
@@ -957,9 +1281,13 @@ About:
   Lists all dashboards for the authenticated team. Each dashboard
   contains tiles (charts/visualizations) that query ClickHouse sources.
 
-  Use --json for structured output suitable for LLM / agent consumption.
+  Subcommands:
+    list     List dashboards (default; same as bare 'hdx dashboards')
+    export   Print a dashboard definition as JSON (round-trips via import)
+    create   Create a dashboard from a JSON file or inline chart JSON
+    import   Create a dashboard from an exported definition
 
-JSON output schema (--json):
+JSON output schema (--json / --format json):
   Array of objects, each with:
     id                  - Dashboard ID
     name                - Dashboard name
@@ -975,47 +1303,380 @@ JSON output schema (--json):
         source          - Source ID referenced by this tile (null for raw SQL)
         sql             - Raw SQL query (null for builder-mode charts)
 
+CSV output columns (--format csv):
+  id,name,tags,createdAt,updatedAt,tileCount (tags joined with ';')
+
 Examples:
-  $ hdx dashboards                     # Human-readable list with tiles
-  $ hdx dashboards --json              # JSON for agents / scripts
-  $ hdx dashboards --json | jq '.[0].tiles'  # List tiles of first dashboard
+  $ hdx dashboards                          # Human-readable list with tiles
+  $ hdx dashboards --json                   # JSON for agents / scripts
+  $ hdx dashboards list --query health      # Filter by name
+  $ hdx dashboards list --format csv        # CSV summary
+  $ hdx dashboards export --id "API Health" > dashboard.json
+  $ hdx dashboards import --file dashboard.json --if-not-exists
+  $ hdx dashboards create --file my-dashboard.json
+`,
+  )
+  .action(async opts => {
+    await runDashboardsList(opts);
+  });
+
+dashboardsCmd
+  .command('list')
+  .description('List dashboards with tile summaries')
+  .option('-a, --app-url <url>', 'HyperDX app URL')
+  .option('--json', 'Output as JSON (shorthand for --format json)')
+  .option('--format <fmt>', 'Output format: table, json, or csv', 'table')
+  .option('--query <substr>', 'Filter dashboards by name (substring match)')
+  .action(async opts => {
+    await runDashboardsList(opts);
+  });
+
+dashboardsCmd
+  .command('export')
+  .description('Export a dashboard definition as JSON (importable)')
+  .requiredOption('--id <id-or-name>', 'Dashboard ID or name')
+  .option('-a, --app-url <url>', 'HyperDX app URL')
+  .addHelpText(
+    'after',
+    `
+About:
+  Prints the full dashboard definition (name, tags, tiles with chart
+  configs and layout, filters) as JSON on stdout. Server-managed fields
+  (id, timestamps) are stripped so the output is a valid input for
+  'hdx dashboards import' / 'hdx dashboards create --file'.
+
+Examples:
+  $ hdx dashboards export --id "API Health" > dashboard-backup.json
+  $ hdx dashboards export --id 6537a1d2c8b7f4e2a1d2c8b7 | jq '.tiles | length'
 `,
   )
   .action(async opts => {
     const client = await ensureSession(opts.appUrl);
 
     const dashboards = await client.getDashboards();
-    if (dashboards.length === 0) {
-      if (opts.json) {
-        process.stdout.write('[]\n');
-      } else {
-        process.stdout.write('No dashboards found.\n');
+    const needle = String(opts.id).toLowerCase();
+    const dashboard = dashboards.find(
+      d =>
+        d.id === opts.id ||
+        d._id === opts.id ||
+        d.name.toLowerCase() === needle,
+    );
+    if (!dashboard) {
+      _origError(chalk.red(`Dashboard "${opts.id}" not found.\n`));
+      _origError('Available dashboards:');
+      for (const d of dashboards) {
+        _origError(`  - ${d.name} [${d.id ?? d._id}]`);
       }
-      return;
+      process.exit(1);
     }
 
+    // Strip server-managed fields; keep everything import accepts.
+    const doc: Record<string, unknown> = {
+      name: dashboard.name,
+      tags: dashboard.tags ?? [],
+      tiles: dashboard.tiles,
+    };
+    for (const key of [
+      'filters',
+      'savedQuery',
+      'savedQueryLanguage',
+      'savedFilterValues',
+      'savedSourceFilterValues',
+      'containers',
+    ] as const) {
+      const value = (dashboard as unknown as Record<string, unknown>)[key];
+      if (value != null) doc[key] = value;
+    }
+
+    // Round-trip guarantee: re-parse through the shared schema so the
+    // output is exactly what import will accept (unknown keys stripped).
+    const parsed = DashboardWithoutIdSchema.safeParse(doc);
+    if (parsed.success) {
+      process.stdout.write(JSON.stringify(parsed.data, null, 2) + '\n');
+      return;
+    }
+    // Legacy dashboards may not validate against the current schema —
+    // still emit the raw doc, but warn that import may reject it.
+    _origError(
+      chalk.yellow(
+        'Warning: exported definition does not fully validate against the current dashboard schema; import may reject it.\n',
+      ),
+    );
+    process.stdout.write(JSON.stringify(doc, null, 2) + '\n');
+  });
+
+dashboardsCmd
+  .command('create')
+  .description('Create a dashboard from a JSON file or inline chart JSON')
+  .option(
+    '-f, --file <path>',
+    'Path to a JSON file with the full dashboard definition (use "-" for stdin)',
+  )
+  .option('--name <name>', 'Dashboard name (chart mode; use with --chart)')
+  .option(
+    '--chart <json>',
+    'Inline chart JSON: a tile ({x,y,w,h,config}) or a bare chart config (repeatable)',
+    (value: string, prev: string[]) => [...prev, value],
+    [] as string[],
+  )
+  .option(
+    '--chart-file <path>',
+    'Path to a JSON file with an array of chart definitions',
+  )
+  .option('--tags <tags>', 'Comma-separated tags (chart mode)')
+  .option(
+    '--if-not-exists',
+    'Skip creation if a dashboard with the same name exists',
+  )
+  .option('-a, --app-url <url>', 'HyperDX app URL')
+  .option('--json', 'Output the created dashboard as JSON')
+  .addHelpText(
+    'after',
+    `
+About:
+  Two modes:
+
+  1. Full definition:  --file <json>
+     The file must match the DashboardWithoutId schema from
+     @hyperdx/common-utils (the shape 'hdx dashboards export' emits):
+
+       {
+         "name": "My Dashboard",
+         "tags": ["team-a"],
+         "tiles": [
+           {
+             "x": 0, "y": 0, "w": 12, "h": 4,
+             "config": {
+               "name": "Requests",
+               "displayType": "line",
+               "source": "<source id>",
+               "select": [{ "aggFn": "count", "valueExpression": "", "alias": "Requests" }],
+               "where": "", "whereLanguage": "lucene",
+               "granularity": "auto"
+             }
+           }
+         ]
+       }
+
+  2. Inline charts:  --name <name> --chart '<json>' [--chart '<json>' ...]
+     Each --chart (or entry in --chart-file's array) is either a full
+     tile ({x,y,w,h,config}) or a bare chart config. Charts without
+     layout are auto-placed on the 24-column grid (12x4, two per row).
+
+  Tile "id" fields are optional — missing ids are generated automatically.
+  The definition is validated locally before being sent to the server.
+
+Examples:
+  $ hdx dashboards create --file my-dashboard.json
+  $ cat my-dashboard.json | hdx dashboards create --file -
+  $ hdx dashboards create --name "API Health" \\
+      --chart '{"name":"Requests","displayType":"line","source":"<id>","select":[{"aggFn":"count","valueExpression":"","alias":"Requests"}],"where":"","whereLanguage":"lucene","granularity":"auto"}'
+  $ hdx dashboards create --name "API Health" --chart-file charts.json --if-not-exists
+`,
+  )
+  .action(async opts => {
+    const chartInputs: string[] = opts.chart ?? [];
+    const isFileMode = opts.file != null;
+    const isChartMode = opts.name != null;
+    if (isFileMode === isChartMode) {
+      _origError(
+        chalk.red(
+          'Pick one mode: --file <json> (full definition) or --name <name> with --chart/--chart-file (inline charts).\n',
+        ),
+      );
+      process.exit(1);
+    }
+
+    let parsedJson: unknown;
+    if (isFileMode) {
+      if (chartInputs.length > 0 || opts.chartFile || opts.tags) {
+        _origError(
+          chalk.red(
+            '--chart/--chart-file/--tags cannot be combined with --file (the file is the full definition).\n',
+          ),
+        );
+        process.exit(1);
+      }
+      parsedJson = readJsonFileOrExit(opts.file);
+    } else {
+      // Chart mode: assemble a dashboard from inline / file chart JSON.
+      const charts: unknown[] = [];
+      for (const [i, chartJson] of chartInputs.entries()) {
+        try {
+          charts.push(JSON.parse(chartJson));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          _origError(chalk.red(`Invalid JSON in --chart #${i + 1}: ${msg}\n`));
+          process.exit(1);
+        }
+      }
+      if (opts.chartFile) {
+        const fromFile = readJsonFileOrExit(opts.chartFile);
+        if (!Array.isArray(fromFile)) {
+          _origError(
+            chalk.red(
+              `--chart-file must contain a JSON array of chart definitions.\n`,
+            ),
+          );
+          process.exit(1);
+        }
+        charts.push(...fromFile);
+      }
+      if (charts.length === 0) {
+        _origError(
+          chalk.red(
+            'No charts given. Pass at least one --chart or a --chart-file.\n',
+          ),
+        );
+        process.exit(1);
+      }
+
+      // A chart is either a full tile ({config: ...}) or a bare config.
+      // Auto-flow tiles missing layout onto the 24-column grid.
+      const tiles = charts.map((chart, i) => {
+        const isTile =
+          typeof chart === 'object' &&
+          chart !== null &&
+          'config' in (chart as Record<string, unknown>);
+        const tile: Record<string, unknown> = isTile
+          ? { ...(chart as Record<string, unknown>) }
+          : { config: chart };
+        tile.x = tile.x ?? (i % 2) * 12;
+        tile.y = tile.y ?? Math.floor(i / 2) * 4;
+        tile.w = tile.w ?? 12;
+        tile.h = tile.h ?? 4;
+        return tile;
+      });
+
+      parsedJson = {
+        name: String(opts.name),
+        tags:
+          typeof opts.tags === 'string' && opts.tags.length > 0
+            ? opts.tags
+                .split(',')
+                .map((t: string) => t.trim())
+                .filter(Boolean)
+            : [],
+        tiles,
+      };
+    }
+
+    const dashboard = validateDashboardOrExit(parsedJson);
+
+    const client = await ensureSession(opts.appUrl);
+    if (
+      opts.ifNotExists &&
+      (await skipIfDashboardExists(client, dashboard.name, !!opts.json))
+    ) {
+      return;
+    }
+    await createDashboardAndPrint(client, dashboard, !!opts.json);
+  });
+
+dashboardsCmd
+  .command('import')
+  .description('Create a dashboard from an exported JSON definition')
+  .requiredOption(
+    '-f, --file <path>',
+    'Path to a dashboard JSON file (output of \'hdx dashboards export\'; use "-" for stdin)',
+  )
+  .option('--name-override <name>', 'Rename the dashboard on import')
+  .option(
+    '--if-not-exists',
+    'Skip import if a dashboard with the same name exists',
+  )
+  .option('-a, --app-url <url>', 'HyperDX app URL')
+  .option('--json', 'Output the created dashboard as JSON')
+  .addHelpText(
+    'after',
+    `
+About:
+  Recreates a full dashboard (all charts, layout, and settings) from a
+  JSON definition, typically the output of 'hdx dashboards export'.
+  Round-trip compatible: export | import recreates the dashboard.
+
+Examples:
+  $ hdx dashboards import --file dashboard.json
+  $ hdx dashboards export --id "API Health" | hdx dashboards import --file - \\
+      --name-override "API Health (copy)"
+  $ hdx dashboards import --file dashboard.json --if-not-exists
+`,
+  )
+  .action(async opts => {
+    const parsedJson = readJsonFileOrExit(opts.file);
+    if (
+      opts.nameOverride &&
+      typeof parsedJson === 'object' &&
+      parsedJson !== null
+    ) {
+      (parsedJson as Record<string, unknown>).name = String(opts.nameOverride);
+    }
+
+    const dashboard = validateDashboardOrExit(parsedJson);
+
+    const client = await ensureSession(opts.appUrl);
+    if (
+      opts.ifNotExists &&
+      (await skipIfDashboardExists(client, dashboard.name, !!opts.json))
+    ) {
+      return;
+    }
+    await createDashboardAndPrint(client, dashboard, !!opts.json);
+  });
+
+// ---- Saved searches --------------------------------------------------
+
+const savedSearchesCmd = program
+  .command('saved-searches')
+  .description('List or create saved searches');
+
+savedSearchesCmd
+  .command('list', { isDefault: true })
+  .description('List saved searches')
+  .option('-a, --app-url <url>', 'HyperDX app URL')
+  .option('--json', 'Output as JSON (for programmatic consumption)')
+  .addHelpText(
+    'after',
+    `
+JSON output schema (--json):
+  Array of objects, each with:
+    id            - Saved search ID
+    name          - Saved search name
+    source        - Source ID the search runs against
+    select        - SELECT clause ('' = source default columns)
+    where         - Filter condition
+    whereLanguage - "lucene" | "sql"
+    tags          - Array of tag strings
+
+Examples:
+  $ hdx saved-searches
+  $ hdx saved-searches list --json | jq '.[].name'
+`,
+  )
+  .action(async opts => {
+    const client = await ensureSession(opts.appUrl);
+    const searches = await client.getSavedSearches();
+
     if (opts.json) {
-      const output = dashboards.map(d => ({
-        id: d.id,
-        name: d.name,
-        tags: d.tags ?? [],
-        filters: d.filters ?? [],
-        savedQuery: d.savedQuery ?? null,
-        createdAt: d.createdAt ?? null,
-        updatedAt: d.updatedAt ?? null,
-        tiles: d.tiles.map(t => ({
-          id: t.id,
-          name: t.config.name ?? null,
-          type: t.config.type ?? t.config.displayType ?? null,
-          source: t.config.source ?? null,
-          sql: t.config.sql ?? null,
-        })),
+      const output = searches.map(s => ({
+        id: s.id ?? s._id,
+        name: s.name,
+        source: s.source,
+        select: s.select,
+        where: s.where,
+        whereLanguage: s.whereLanguage,
+        tags: s.tags ?? [],
       }));
       process.stdout.write(JSON.stringify(output, null, 2) + '\n');
       return;
     }
 
-    // Fetch sources to resolve source names for display
+    if (searches.length === 0) {
+      process.stdout.write('No saved searches found.\n');
+      return;
+    }
+
+    // Resolve source names for display (non-fatal on failure)
     let sourceNames: Record<string, string> = {};
     try {
       const sources = await client.getSources();
@@ -1026,36 +1687,550 @@ Examples:
         ]),
       );
     } catch {
-      // Non-fatal — just won't show source names
+      // ignore
     }
 
-    // Human-readable output
-    for (const d of dashboards) {
+    for (const s of searches) {
       const tags =
-        d.tags.length > 0 ? `  ${chalk.dim(`[${d.tags.join(', ')}]`)}` : '';
+        (s.tags ?? []).length > 0
+          ? `  ${chalk.dim(`[${s.tags.join(', ')}]`)}`
+          : '';
+      const sourceLabel = sourceNames[s.source] ?? s.source;
       process.stdout.write(
-        `${chalk.bold.cyan(d.name)}${tags}  ${chalk.dim(`${d.tiles.length} tile${d.tiles.length !== 1 ? 's' : ''}`)}\n`,
+        `${chalk.bold.cyan(s.name)}${tags}  ${chalk.dim(sourceLabel)}\n` +
+          `  ${chalk.dim(`${s.whereLanguage}:`)} ${s.where || chalk.dim('(no filter)')}\n`,
       );
+    }
+  });
 
-      for (let i = 0; i < d.tiles.length; i++) {
-        const t = d.tiles[i];
-        const isLast = i === d.tiles.length - 1;
-        const prefix = isLast ? '  └─ ' : '  ├─ ';
-        const name = t.config.name || '(untitled)';
-        const chartType = t.config.type ?? t.config.displayType ?? 'chart';
-        let sourceLabel = '';
-        if (t.config.sql) {
-          sourceLabel = 'raw SQL';
-        } else if (t.config.source) {
-          sourceLabel = `source: ${sourceNames[t.config.source] ?? t.config.source}`;
-        }
-        const meta = [chartType, sourceLabel].filter(Boolean).join(', ');
-        process.stdout.write(
-          `${chalk.dim(prefix)}${name} ${chalk.dim(`(${meta})`)}\n`,
+savedSearchesCmd
+  .command('create')
+  .description('Create a saved search')
+  .requiredOption('--name <name>', 'Saved search name')
+  .requiredOption(
+    '--source <name-or-id>',
+    "Source name or ID (from 'hdx sources --json')",
+  )
+  .option('--where <condition>', 'Filter condition', '')
+  .option('--where-language <lang>', 'Filter language: lucene or sql', 'lucene')
+  .option(
+    '--select <clause>',
+    'SELECT clause (default: source default columns)',
+    '',
+  )
+  .option('--order-by <clause>', 'ORDER BY clause')
+  .option('--tags <tags>', 'Comma-separated tags')
+  .option('-a, --app-url <url>', 'HyperDX app URL')
+  .option('--json', 'Output the created saved search as JSON')
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ hdx saved-searches create --name "Error Logs" --source Logs \\
+      --where 'SeverityText:error'
+  $ hdx saved-searches create --name "Slow Spans" --source Traces \\
+      --where "Duration > 1e9" --where-language sql --tags perf,traces
+`,
+  )
+  .action(async opts => {
+    const client = await ensureSession(opts.appUrl);
+
+    const whereLanguage = String(opts.whereLanguage);
+    if (whereLanguage !== 'lucene' && whereLanguage !== 'sql') {
+      _origError(
+        chalk.red(
+          `Invalid --where-language "${opts.whereLanguage}". Use lucene or sql.\n`,
+        ),
+      );
+      process.exit(1);
+    }
+
+    // Resolve the source by ID or (case-insensitive) name
+    const sources = await client.getSources();
+    const needle = String(opts.source).toLowerCase();
+    const source = sources.find(
+      s =>
+        s.id === opts.source ||
+        s._id === opts.source ||
+        s.name.toLowerCase() === needle,
+    );
+    if (!source) {
+      _origError(chalk.red(`Source "${opts.source}" not found.\n`));
+      _origError('Available sources:');
+      for (const s of sources) {
+        _origError(`  - ${s.name} [${s.id ?? s._id}]`);
+      }
+      process.exit(1);
+    }
+
+    const tags =
+      typeof opts.tags === 'string' && opts.tags.length > 0
+        ? opts.tags
+            .split(',')
+            .map((t: string) => t.trim())
+            .filter(Boolean)
+        : [];
+
+    let created;
+    try {
+      created = await client.createSavedSearch({
+        name: String(opts.name),
+        source: source.id ?? source._id,
+        select: String(opts.select ?? ''),
+        where: String(opts.where ?? ''),
+        whereLanguage,
+        orderBy: opts.orderBy ? String(opts.orderBy) : undefined,
+        tags,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      _origError(chalk.red(`Failed to create saved search: ${msg}\n`));
+      process.exit(1);
+    }
+
+    const id = created.id ?? created._id;
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(created, null, 2) + '\n');
+      return;
+    }
+    process.stdout.write(
+      `${chalk.green('Created saved search')} ${chalk.bold.cyan(created.name)} ${chalk.dim(`[${id}]`)}\n${client.getAppUrl()}/search/${id}\n`,
+    );
+  });
+
+// ---- Chart ---------------------------------------------------------
+
+/** Parse a relative duration like "15m", "1h", "7d" into milliseconds. */
+function parseDuration(input: string): number | null {
+  const match = input.trim().match(/^(\d+)\s*(s|m|h|d|w)$/i);
+  if (!match) return null;
+  const n = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const ms =
+    unit === 's'
+      ? 1000
+      : unit === 'm'
+        ? 60_000
+        : unit === 'h'
+          ? 3_600_000
+          : unit === 'd'
+            ? 86_400_000
+            : 7 * 86_400_000;
+  return n * ms;
+}
+
+program
+  .command('chart')
+  .description(
+    'Render charts in the terminal — dashboard tiles or ad-hoc queries',
+  )
+  .option('-d, --dashboard <name-or-id>', 'Dashboard name or ID (tile mode)')
+  .option(
+    '-t, --tile <name-or-id>',
+    'Render only the tile matching this name or ID (default: all tiles)',
+  )
+  .option('-s, --source <name-or-id>', 'Source name or ID (ad-hoc mode)')
+  .option(
+    '--display <type>',
+    'Chart type: line, stacked_bar, number, table, bar, pie (ad-hoc mode)',
+    'line',
+  )
+  .option(
+    '--agg <fn>',
+    'Aggregation: count, sum, avg, min, max, count_distinct, quantile',
+    'count',
+  )
+  .option('--value <expression>', 'Column/SQL expression to aggregate')
+  .option('--level <fraction>', 'Quantile level for --agg quantile (0.95)')
+  .option('--where <condition>', 'Filter condition (Lucene by default)')
+  .option('--language <lang>', 'Filter language: lucene or sql', 'lucene')
+  .option('--group-by <expression>', 'Group-by column/expression')
+  .option(
+    '--metric-type <type>',
+    'Metric kind for metric sources: gauge, sum, histogram',
+  )
+  .option('--metric-name <name>', 'OTel metric name for metric sources')
+  .option(
+    '--series <json>',
+    'Full select item as JSON (repeatable, overrides --agg/--value)',
+    (value: string, prev: string[]) => [...prev, value],
+    [] as string[],
+  )
+  .option('--sql <query>', 'Raw ClickHouse SQL to chart (raw SQL mode)')
+  .option(
+    '--connection-id <id>',
+    'ClickHouse connection for --sql (alternative to --source)',
+  )
+  .option('--since <duration>', 'Relative time range (e.g. 15m, 1h, 7d)', '1h')
+  .option(
+    '--from <time>',
+    'Range start: ISO 8601, date (2026-07-01), or relative (now-24h). Overrides --since',
+  )
+  .option(
+    '--to <time>',
+    'Range end: ISO 8601, date, or relative (now-1h). Default: now',
+  )
+  .option(
+    '--granularity <interval>',
+    'Time bucket size (e.g. "5 minute") or "auto"',
+    'auto',
+  )
+  .option('--width <n>', 'Chart width in columns (default: terminal width)')
+  .option('--height <n>', 'Chart height in rows', '16')
+  .option(
+    '--color <mode>',
+    'ANSI colors: auto (TTY only), always, never',
+    'auto',
+  )
+  .option('--json', 'Output the queried rows + metadata as JSON instead')
+  .option('-a, --app-url <url>', 'HyperDX app URL')
+  .addHelpText(
+    'after',
+    `
+About:
+  Renders charts as terminal output. Designed for troubleshooting from
+  the CLI (including by AI agents): visualize a metric, spot the spike,
+  then narrow down with --where or 'hdx query'.
+
+  All modes query through the exact same renderChartConfig pipeline the
+  web dashboards use, so SQL and results match the web UI.
+
+Modes (pick one):
+  1. Dashboard tiles:  -d <dashboard> [-t <tile>]
+     Renders saved dashboard tiles. Use 'hdx dashboards' to discover
+     dashboards and tile names/IDs.
+  2. Ad-hoc builder:   -s <source> [--agg ... --value ... --where ...]
+     Charts an aggregation over a source. Use 'hdx sources --json' to
+     discover sources (log, trace, and metric kinds all work).
+  3. Ad-hoc raw SQL:   --sql <query> with -s <source> or --connection-id
+     Charts arbitrary SQL. Time-series SQL should produce a time bucket
+     column and numeric value column(s); macros are supported:
+       $__timeFilter(col)    — expands to the --since/--from/--to range
+       $__timeInterval(col)  — buckets by the chart granularity
+
+Display types (--display):
+  line (default), stacked_bar, number, table, bar, pie.
+  For line/stacked_bar the result is bucketed over time. number shows a
+  single value. table prints rows. bar/pie aggregate per --group-by.
+
+Time range:
+  --since takes a relative duration ending now (15m, 1h, 7d).
+  --from / --to take absolute or relative times and override --since:
+    ISO 8601:   2026-07-01T00:00:00Z
+    Date only:  2026-07-01 (start of day UTC)
+    Relative:   now, now-30m, now-24h, now-7d
+
+Output:
+  ANSI colors are stripped automatically when stdout is not a TTY
+  (override with --color always|never). Use --json for raw rows + column
+  metadata instead of a rendered chart.
+
+Exit codes:
+  0  Success.
+  1  Failure (unknown dashboard/tile/source, invalid flags, query error).
+
+Examples:
+  # Dashboard tiles
+  $ hdx chart -d "Service Health"                # All tiles, past 1h
+  $ hdx chart -d "Service Health" -t "P95 Latency" --since 24h
+
+  # Ad-hoc: error log volume by service, past 3h
+  $ hdx chart -s Logs --where 'SeverityText:error' --group-by ServiceName --since 3h
+
+  # Ad-hoc: p95 span duration for one service
+  $ hdx chart -s Traces --agg quantile --level 0.95 --value Duration \\
+      --where 'ServiceName:api' --since 6h
+
+  # Ad-hoc: top services by error count (bar chart)
+  $ hdx chart -s Logs --display bar --where 'SeverityText:error' --group-by ServiceName
+
+  # Ad-hoc: metric source
+  $ hdx chart -s Metrics --metric-type sum --metric-name otelcol_exporter_sent_spans
+
+  # Ad-hoc: raw SQL over a time range
+  $ hdx chart -s Logs --sql "SELECT \\$__timeInterval(TimestampTime) AS ts, count()
+      FROM default.otel_logs WHERE \\$__timeFilter(TimestampTime) GROUP BY ts ORDER BY ts"
+
+  # Agent-friendly structured output
+  $ hdx chart -s Logs --group-by ServiceName --json | jq '.[0].data'
+`,
+  )
+  .action(async opts => {
+    const client = await ensureSession(opts.appUrl);
+    const chClient = client.createClickHouseClient();
+    const metadata = client.createMetadata();
+
+    // ---- Resolve time range
+    // --from/--to accept ISO 8601, date-only, or relative (now-1h) via
+    // the same parser as the TUI's $EDITOR time-range editor.
+    const timeFormatHint =
+      'Supported formats: ISO 8601 (2026-07-01T00:00:00Z), date (2026-07-01), relative (now, now-30m, now-24h, now-7d).';
+    let to: Date;
+    if (opts.to) {
+      const parsed = parseTimeValue(opts.to);
+      if (!parsed) {
+        _origError(
+          chalk.red(`Invalid --to value "${opts.to}". ${timeFormatHint}\n`),
         );
+        process.exit(1);
+      }
+      to = parsed;
+    } else {
+      to = new Date();
+    }
+    let from: Date;
+    if (opts.from) {
+      const parsed = parseTimeValue(opts.from);
+      if (!parsed) {
+        _origError(
+          chalk.red(`Invalid --from value "${opts.from}". ${timeFormatHint}\n`),
+        );
+        process.exit(1);
+      }
+      from = parsed;
+    } else {
+      const durationMs = parseDuration(opts.since);
+      if (durationMs == null) {
+        _origError(
+          chalk.red(
+            `Invalid --since value "${opts.since}". Use formats like 15m, 1h, 7d.\n`,
+          ),
+        );
+        process.exit(1);
+      }
+      from = new Date(to.getTime() - durationMs);
+    }
+    if (from >= to) {
+      _origError(
+        chalk.red(
+          `Invalid time range: start (${from.toISOString()}) must be before end (${to.toISOString()}).\n`,
+        ),
+      );
+      process.exit(1);
+    }
+
+    // ---- Mode validation
+    const isAdhoc = !!(opts.source || opts.sql);
+    if (opts.dashboard && isAdhoc) {
+      _origError(
+        chalk.red(
+          'Pick one mode: -d/--dashboard (tile mode) or -s/--source / --sql (ad-hoc mode).\n',
+        ),
+      );
+      process.exit(1);
+    }
+    if (!opts.dashboard && !isAdhoc) {
+      _origError(
+        chalk.red(
+          'Nothing to chart. Use -d <dashboard> for saved tiles, or -s <source> / --sql for ad-hoc charts. See: hdx chart --help\n',
+        ),
+      );
+      process.exit(1);
+    }
+
+    // ---- Output settings
+    const width = opts.width
+      ? Number(opts.width)
+      : Math.min(process.stdout.columns || 100, 140);
+    const height = Number(opts.height);
+    const dateRange: [Date, Date] = [from, to];
+    const parsedGranularity = parseGranularityFlag(String(opts.granularity));
+    if (!parsedGranularity) {
+      _origError(
+        chalk.red(
+          `Invalid --granularity "${opts.granularity}". Use "auto" or "<n> second|minute|hour|day" (e.g. "5 minute").\n`,
+        ),
+      );
+      process.exit(1);
+    }
+    const granularity = parsedGranularity.granularity;
+    const maxTimeBuckets = Math.max(20, Math.min(80, width - 14));
+
+    // Colors: strip ANSI when stdout is not a TTY (agents/pipes) unless
+    // forced. chalk auto-detects TTY on its own; forcing "always" bumps
+    // its level so headers stay colored when piped too.
+    const colorMode = String(opts.color);
+    if (!['auto', 'always', 'never'].includes(colorMode)) {
+      _origError(
+        chalk.red(
+          `Invalid --color value "${opts.color}". Use auto, always, or never.\n`,
+        ),
+      );
+      process.exit(1);
+    }
+    const useColors =
+      colorMode === 'always' ||
+      (colorMode === 'auto' && !!process.stdout.isTTY);
+    if (colorMode === 'always' && chalk.level === 0) {
+      chalk.level = 3;
+    }
+    const finalize = (s: string): string => (useColors ? s : stripAnsi(s));
+
+    const jsonOutput: Array<Record<string, unknown>> = [];
+    let hadError = false;
+
+    /** Query + render one chart config; shared by both modes. */
+    const renderOne = async ({
+      id,
+      name,
+      config,
+      source,
+    }: {
+      id: string | null;
+      name: string;
+      config: SavedChartConfig;
+      source: SourceResponse | undefined;
+    }) => {
+      try {
+        const result = await fetchTileData({
+          clickhouseClient: chClient,
+          metadata,
+          config,
+          source,
+          dateRange,
+          granularity,
+          maxTimeBuckets,
+        });
+
+        if (opts.json) {
+          jsonOutput.push({
+            id,
+            name,
+            displayType: config.displayType ?? null,
+            status: result.status,
+            ...(result.status === 'ok'
+              ? { data: result.data.data, meta: result.data.meta }
+              : {}),
+            ...(result.status === 'unsupported'
+              ? { message: result.message }
+              : {}),
+            ...(result.status === 'unresolved'
+              ? { message: result.resolution.message }
+              : {}),
+          });
+          return;
+        }
+
+        process.stdout.write(
+          finalize(
+            `${chalk.bold.cyan(name)} ${chalk.dim(`(${config.displayType ?? 'chart'})`)}\n`,
+          ),
+        );
+        const content = renderTileContent({ result, source, width, height });
+        process.stdout.write(finalize(content) + '\n\n');
+      } catch (err) {
+        hadError = true;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (opts.json) {
+          jsonOutput.push({ id, name, status: 'error', error: msg });
+        } else {
+          process.stdout.write(finalize(`${chalk.bold.cyan(name)}\n`));
+          process.stdout.write(finalize(chalk.red(`Query failed: ${msg}\n\n`)));
+        }
+      }
+    };
+
+    if (isAdhoc) {
+      // ---- Ad-hoc mode (builder or raw SQL)
+      const sources = await client.getSources();
+      let adhoc;
+      try {
+        adhoc = buildAdhocChartConfig(
+          {
+            source: opts.source,
+            sql: opts.sql,
+            connectionId: opts.connectionId,
+            display: opts.display,
+            agg: opts.agg,
+            value: opts.value,
+            level: opts.level,
+            metricType: opts.metricType,
+            metricName: opts.metricName,
+            where: opts.where,
+            language: opts.language,
+            groupBy: opts.groupBy,
+            series: opts.series,
+          },
+          sources,
+        );
+      } catch (err) {
+        if (err instanceof AdhocChartError) {
+          _origError(chalk.red(`${err.message}\n`));
+          process.exit(1);
+        }
+        throw err;
       }
 
-      process.stdout.write('\n');
+      await renderOne({
+        id: null,
+        name: adhoc.label,
+        config: adhoc.config,
+        source: adhoc.source,
+      });
+    } else {
+      // ---- Dashboard tile mode
+      const [dashboards, sources] = await Promise.all([
+        client.getDashboards(),
+        client.getSources(),
+      ]);
+      const needle = String(opts.dashboard).toLowerCase();
+      const dashboard = dashboards.find(
+        d =>
+          d.id === opts.dashboard ||
+          d._id === opts.dashboard ||
+          d.name.toLowerCase() === needle,
+      );
+      if (!dashboard) {
+        _origError(chalk.red(`Dashboard "${opts.dashboard}" not found.\n`));
+        _origError('Available dashboards:');
+        for (const d of dashboards) {
+          _origError(`  - ${d.name} [${d.id ?? d._id}]`);
+        }
+        process.exit(1);
+      }
+
+      let tiles = sortTilesForDisplay(dashboard.tiles);
+      if (opts.tile) {
+        const tileNeedle = String(opts.tile).toLowerCase();
+        tiles = tiles.filter(
+          t =>
+            t.id === opts.tile ||
+            (t.config.name ?? '').toLowerCase() === tileNeedle,
+        );
+        if (tiles.length === 0) {
+          _origError(
+            chalk.red(
+              `Tile "${opts.tile}" not found in dashboard "${dashboard.name}".\n`,
+            ),
+          );
+          _origError('Available tiles:');
+          for (const t of sortTilesForDisplay(dashboard.tiles)) {
+            _origError(`  - ${t.config.name || '(untitled)'} [${t.id}]`);
+          }
+          process.exit(1);
+        }
+      }
+
+      for (const tile of tiles) {
+        const sourceId =
+          'source' in tile.config ? tile.config.source : undefined;
+        const source = sources.find(
+          s => s.id === sourceId || s._id === sourceId,
+        );
+        await renderOne({
+          id: tile.id,
+          name: tile.config.name || '(untitled)',
+          config: tile.config,
+          source,
+        });
+      }
+    }
+
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(jsonOutput, null, 2) + '\n');
+    }
+    if (hadError) {
+      process.exit(1);
     }
   });
 
@@ -1300,6 +2475,16 @@ program
     'The API version to use (v1 for HyperDX V1 Cloud, v2 for latest)',
     'v1',
   )
-  .action(uploadSourcemaps);
+  .action(async opts => {
+    try {
+      await uploadSourcemaps(opts);
+    } catch (err) {
+      // uploadSourcemaps already prints user-facing messages via logError().
+      // Append a short reason line for machine-readable CI logs and exit non-zero.
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`${chalk.red(`Upload failed: ${msg}`)}\n`);
+      process.exit(1);
+    }
+  });
 
 program.parse();

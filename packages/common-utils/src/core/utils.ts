@@ -1,12 +1,30 @@
 // Port from ChartUtils + source.ts
 import { add as fnsAdd, format as fnsFormat } from 'date-fns';
-import { formatInTimeZone } from 'date-fns-tz';
+import { formatInTimeZone, zonedTimeToUtc } from 'date-fns-tz';
+import { omit } from 'lodash';
 import { z } from 'zod';
 
 export { default as objectHash } from 'object-hash';
 
-import { isBuilderSavedChartConfig, isRawSqlSavedChartConfig } from '@/guards';
-import { replaceMacros } from '@/macros';
+import {
+  isAdhocFilter,
+  isQueryExpressionFilter,
+  isStaticListFilter,
+} from '@/filters';
+import {
+  isBuilderSavedChartConfig,
+  isPromqlSavedChartConfig,
+  isRawSqlSavedChartConfig,
+} from '@/guards';
+import { MacroExpansionError, MalformedMacroArgsError } from '@/macroErrors';
+import {
+  getSourceDependentMacrosUsed,
+  getSourceTableMacroArgCounts,
+  hasMacro,
+  isMissingFiltersMacro,
+  MacroName,
+  replaceMacros,
+} from '@/macros';
 import { QUERY_PARAMS, RawSqlQueryParam } from '@/rawSqlParams';
 import {
   BuilderChartConfig,
@@ -19,17 +37,96 @@ import {
   DashboardTemplateSchema,
   DashboardWithoutId,
   DisplayType,
+  PERCENTILE_AGG_FN_LEVELS,
+  PercentileAggregateFunctionSchema,
   QuerySettings,
   RawSqlChartConfig,
+  SavedChartConfig,
+  SortSpecificationList,
+  SourceKind,
   SQLInterval,
   TileTemplateSchema,
   TSource,
 } from '@/types';
+import { validateVariableReferencesInTemplate } from '@/variables';
 
 import { SkipIndexMetadata, TableMetadata } from './metadata';
 
 /** The default maximum number of buckets setting when determining a bucket duration for 'auto' granularity */
 export const DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS = 60;
+
+/** The bucket count a time chart sizes an 'auto' granularity for. */
+export const TIME_CHART_AUTO_GRANULARITY_BUCKETS = 80;
+
+/** The bucket count a heatmap sizes an 'auto' granularity for. */
+export const HEATMAP_AUTO_GRANULARITY_BUCKETS = 245;
+
+/**
+ * The most rows a table tile shows. Arbitrary limit to prevent OOM crashes for
+ * very large result sets. Most result sets should be paginated anyway.
+ */
+export const MAX_TABLE_ROWS = 10_000;
+
+/** Code-point limit for row-lookup string hashes (matches ClickHouse leftUTF8). */
+export const LEFT_UTF8_HASH_CODE_POINTS = 1000;
+
+/** First `limit` Unicode code points, matching ClickHouse leftUTF8(s, limit). */
+export function leftUtf8Prefix(value: string, limit: number): string {
+  let prefix = '';
+  let n = 0;
+  for (const ch of value) {
+    if (n++ === limit) break;
+    prefix += ch;
+  }
+  return prefix;
+}
+
+/**
+ * Returns the quantile level of a percentile shorthand aggFn (`p95` -> 0.95),
+ * or undefined for any other aggFn.
+ */
+export function getPercentileAggFnLevel(
+  aggFn: string | undefined,
+): number | undefined {
+  const parsed = PercentileAggregateFunctionSchema.safeParse(aggFn);
+  return parsed.success ? PERCENTILE_AGG_FN_LEVELS[parsed.data] : undefined;
+}
+
+/** A select item rewritten by `resolvePercentileAggFn` as `quantile` at a level. */
+export type QuantileResolvedSelect<T> = Omit<T, 'aggFn' | 'level'> & {
+  aggFn: 'quantile';
+  level: number;
+};
+
+/**
+ * Rewrites a select item with a percentile shorthand aggFn (`p50`, `p90`,
+ * `p95`, `p99`) as `quantile` with the matching level. Any other select item
+ * is returned unchanged.
+ */
+export function resolvePercentileAggFn<T extends { aggFn?: string }>(
+  select: T,
+): T | QuantileResolvedSelect<T> {
+  const level = getPercentileAggFnLevel(select.aggFn);
+  return level == null ? select : { ...select, aggFn: 'quantile', level };
+}
+
+/**
+ * Whether a tile's `seriesLimit` should apply an actual limit. Per the schema
+ * (SharedChartSettingsSchema.seriesLimit): a positive integer caps the series;
+ * `0` means unlimited and `null`/`undefined` means unset — both of which apply
+ * no limit. Gates the SQL `__hdx_series_limit` CTE, the pie/bar `LIMIT`, and the
+ * chunked-ranking window. Requires an INTEGER (matching the client-side
+ * resolveRenderedSeriesCap): a non-integer or non-finite value from the `Mixed`
+ * tiles field would otherwise pass this guard and bind as `{ Int32: 0.5 }`,
+ * failing the query, while the client half silently falls back to the default.
+ */
+export function hasPositiveSeriesLimit(
+  seriesLimit: number | null | undefined,
+): seriesLimit is number {
+  return (
+    seriesLimit != null && Number.isInteger(seriesLimit) && seriesLimit > 0
+  );
+}
 
 export const isBrowser: boolean =
   typeof window !== 'undefined' && typeof window.document !== 'undefined';
@@ -46,23 +143,57 @@ export function splitAndTrimCSV(input: string): string[] {
     .filter(column => column.length > 0);
 }
 
+/** Escape a value for embedding in a single-quoted ClickHouse string literal. */
+export const escapeSqlString = (value: string) =>
+  value.replace(/\\/g, '\\\\').replace(/'/g, "''");
+
+export function isQuoteEscapedByBackslash(
+  input: string,
+  index: number,
+): boolean {
+  let backslashes = 0;
+  for (let i = index - 1; i >= 0 && input[i] === '\\'; i--) {
+    backslashes++;
+  }
+  return backslashes % 2 === 1;
+}
+
 // Replace splitAndTrimCSV, should remove splitAndTrimCSV later
 export function splitAndTrimWithBracket(input: string): string[] {
   let parenCount: number = 0;
   let squareCount: number = 0;
   let inSingleQuote: boolean = false;
   let inDoubleQuote: boolean = false;
+  let inBacktick: boolean = false;
 
   const res: string[] = [];
   let cur: string = '';
-  for (const c of input + ',') {
-    if (c === '"' && !inSingleQuote) {
+  for (let i = 0; i <= input.length; i++) {
+    const c = i === input.length ? ',' : input[i];
+
+    if (
+      c === '`' &&
+      !inSingleQuote &&
+      !inDoubleQuote &&
+      !isQuoteEscapedByBackslash(input, i)
+    ) {
+      inBacktick = !inBacktick;
+      cur += c;
+      continue;
+    }
+
+    if (inBacktick) {
+      cur += c;
+      continue;
+    }
+
+    if (c === '"' && !inSingleQuote && !isQuoteEscapedByBackslash(input, i)) {
       inDoubleQuote = !inDoubleQuote;
       cur += c;
       continue;
     }
 
-    if (c === "'" && !inDoubleQuote) {
+    if (c === "'" && !inDoubleQuote && !isQuoteEscapedByBackslash(input, i)) {
       inSingleQuote = !inSingleQuote;
       cur += c;
       continue;
@@ -94,6 +225,12 @@ export function splitAndTrimWithBracket(input: string): string[] {
       cur += c;
     }
   }
+  // An unclosed quote swallows the closing ','; keep its text so a half-typed
+  // name survives. Unclosed brackets still drop it, as parseToStartOfFunction expects.
+  if (inBacktick || inSingleQuote || inDoubleQuote) {
+    const rest = cur.slice(0, -1).trim();
+    if (rest) res.push(rest);
+  }
   return res;
 }
 
@@ -101,6 +238,128 @@ export function splitAndTrimWithBracket(input: string): string[] {
 // this will return the first one. We'll want to refine this over time
 export function getFirstTimestampValueExpression(valueExpression: string) {
   return splitAndTrimWithBracket(valueExpression)[0];
+}
+
+export type TimestampTypeKind = 'date' | 'datetime' | 'datetime64';
+
+/**
+ * Classify a ClickHouse timestamp type into its kind and sub-second precision.
+ *
+ * `kind: 'date'` means day precision — a value read from such a column lands at
+ * midnight and can't locate an event within its day. Callers that need an
+ * instant use this to skip those columns rather than silently anchor to midnight.
+ *
+ * Returns null for anything that isn't a Date/DateTime/DateTime64.
+ */
+export function classifyTimestampType(type: string | undefined): {
+  kind: TimestampTypeKind;
+  precision: number;
+} | null {
+  if (!type) return null;
+  // Strip a single Nullable() wrapper if present.
+  const inner = type.replace(/^Nullable\((.*)\)$/i, '$1').trim();
+
+  if (/^Date(?:32)?$/i.test(inner)) {
+    return { kind: 'date', precision: -1 };
+  }
+  // DateTime[('<timezone>')]
+  if (/^DateTime$/i.test(inner) || /^DateTime\('[^']*'\)$/i.test(inner)) {
+    return { kind: 'datetime', precision: 0 };
+  }
+  // DateTime64(<precision>[, '<timezone>'])
+  const dt64 = inner.match(/^DateTime64\(\s*(\d+)\s*(?:,[^)]*)?\)$/i);
+  if (dt64) {
+    return { kind: 'datetime64', precision: parseInt(dt64[1], 10) };
+  }
+  return null;
+}
+
+/**
+ * Resolve a (possibly multi-column) `timestampValueExpression` to the
+ * single column best suited for time-bucketing.
+ *
+ * When a source's `Timestamp Column` lists multiple columns (e.g.
+ * `"EventDate, EventTime"` for partition-pruning), the histogram bucket
+ * should be built from the highest-precision DateTime/DateTime64 token,
+ * not from the first one. Picking a `Date` for the bucket collapses an
+ * entire day into a single bar at midnight UTC.
+ *
+ * Falls back to the first token with a `console.warn` when no
+ * DateTime-typed token is found (e.g. all `Date`, CTE alias with no
+ * reachable metadata).
+ *
+ * Single-column inputs short-circuit without touching metadata.
+ */
+export async function pickBucketTimestampColumn({
+  timestampValueExpression,
+  metadata,
+  databaseName,
+  tableName,
+  connectionId,
+}: {
+  timestampValueExpression: string;
+  metadata: {
+    getColumn: (args: {
+      databaseName: string;
+      tableName: string;
+      column: string;
+      connectionId: string;
+    }) => Promise<{ type?: string } | undefined>;
+  };
+  databaseName: string;
+  tableName: string;
+  connectionId: string;
+}): Promise<string> {
+  const tokens = splitAndTrimWithBracket(timestampValueExpression);
+  if (tokens.length <= 1) {
+    return tokens[0] ?? timestampValueExpression;
+  }
+
+  if (!databaseName || !tableName) {
+    return tokens[0];
+  }
+
+  type Candidate = {
+    token: string;
+    kind: TimestampTypeKind;
+    precision: number;
+  };
+  const candidates: Candidate[] = [];
+
+  for (const token of tokens) {
+    let column: { type?: string } | undefined;
+    try {
+      column = await metadata.getColumn({
+        databaseName,
+        tableName,
+        column: token,
+        connectionId,
+      });
+    } catch {
+      // Column lookup failures shouldn't block rendering; treat the token
+      // as unresolvable and keep going.
+      continue;
+    }
+    const classified = classifyTimestampType(column?.type);
+    if (classified && classified.kind !== 'date') {
+      candidates.push({ token, ...classified });
+    }
+  }
+
+  if (candidates.length === 0) {
+    console.warn(
+      `pickBucketTimestampColumn: no DateTime/DateTime64 column found in ` +
+        `"${timestampValueExpression}"; falling back to the first token. ` +
+        `Buckets may collapse if the column is Date-typed.`,
+    );
+    return tokens[0];
+  }
+
+  // Highest precision wins. DateTime64 with higher precision beats
+  // DateTime64 with lower; DateTime64 beats DateTime; on a tie, earlier
+  // token in the expression wins to preserve the existing default.
+  candidates.sort((a, b) => b.precision - a.precision);
+  return candidates[0].token;
 }
 
 /** Returns true if the given expression is a JSON expression, eg. `col.key.nestedKey` or "json_col"."key" */
@@ -231,6 +490,108 @@ export function replaceJsonExpressions(sql: string) {
   return { sqlWithReplacements, replacements };
 }
 
+const QUOTED_IDENTIFIER_REPLACEMENT_PREFIX = '__hdx_quoted_identifier_';
+
+export type QuotedIdentifierReplacements = {
+  /** Map from sentinel token -> the original quoted SQL text, e.g. `` `x-host-header` `` */
+  quotedText: Map<string, string>;
+  /** Map from sentinel token -> the bare identifier, e.g. `x-host-header` */
+  names: Map<string, string>;
+};
+
+/**
+ * Replaces backtick-quoted identifiers with bare placeholder tokens.
+ *
+ * node-sql-parser's Postgresql dialect accepts a backtick-quoted identifier
+ * wherever a column is referenced, but rejects one used as an alias, so one
+ * backtick-quoted alias broke any other aliases.
+ *
+ * Pairs with `replaceJsonExpressions`: run this first, then tokenize JSON
+ * expressions, and restore in the opposite order (JSON, then identifiers).
+ * A JSON replacement's stored text is sliced from the already-tokenized SQL,
+ * so it can hold identifier tokens; restoring identifiers first would strand
+ * the ones that JSON restoration puts back afterwards.
+ */
+export function replaceBacktickedIdentifiers(sql: string): {
+  sqlWithReplacements: string;
+  replacements: QuotedIdentifierReplacements;
+} {
+  const quotedText = new Map<string, string>();
+  const names = new Map<string, string>();
+  let out = '';
+  let i = 0;
+
+  while (i < sql.length) {
+    const c = sql.charAt(i);
+
+    // Copy string literals and double-quoted identifiers verbatim so
+    // backticks inside them survive.
+    if (c === "'" || c === '"') {
+      out += c;
+      i++;
+      while (i < sql.length) {
+        const char = sql.charAt(i);
+        out += char;
+        i++;
+        if (c === "'" && char === '\\' && i < sql.length) {
+          out += sql.charAt(i);
+          i++;
+          continue;
+        }
+        if (char === c) break;
+      }
+      continue;
+    }
+
+    if (c === '`') {
+      const quotedStart = i;
+      i++;
+      let name = '';
+      while (i < sql.length) {
+        if (sql.charAt(i) === '`') {
+          // A doubled backtick is an escaped literal backtick.
+          if (sql.charAt(i + 1) === '`') {
+            name += '`';
+            i += 2;
+            continue;
+          }
+          i++;
+          break;
+        }
+        name += sql.charAt(i);
+        i++;
+      }
+      const token = `${QUOTED_IDENTIFIER_REPLACEMENT_PREFIX}${quotedText.size}`;
+      quotedText.set(token, sql.slice(quotedStart, i));
+      names.set(token, name);
+      out += token;
+      continue;
+    }
+
+    out += c;
+    i++;
+  }
+
+  return { sqlWithReplacements: out, replacements: { quotedText, names } };
+}
+
+/**
+ * Substitutes placeholder tokens from `replaceBacktickedIdentifiers` or
+ * `replaceJsonExpressions` back into an expression.
+ */
+export function restoreReplacements(
+  expression: string,
+  replacements: Map<string, string>,
+): string {
+  let restored = expression;
+  for (const [token, original] of [...replacements].sort(
+    ([a], [b]) => b.length - a.length,
+  )) {
+    restored = restored.replaceAll(token, original);
+  }
+  return restored;
+}
+
 /**
  * To best support Pre-aggregation in Materialized Views, any new
  * granularities should be multiples of all smaller granularities.
@@ -266,14 +627,43 @@ export function hashCode(str: string) {
   return hash;
 }
 
+/** A chart's granularity, with 'auto' (or none) resolved for its date range. */
+export function getTimeChartGranularity<T extends string>(
+  granularity: T | 'auto' | undefined,
+  dateRange: [Date, Date],
+  minGranularitySeconds?: number,
+  maxBuckets = TIME_CHART_AUTO_GRANULARITY_BUCKETS,
+) {
+  return granularity === 'auto' || granularity == null
+    ? convertDateRangeToGranularityString(
+        dateRange,
+        maxBuckets,
+        minGranularitySeconds,
+      )
+    : granularity;
+}
+
 export function convertDateRangeToGranularityString(
   dateRange: [Date, Date],
   maxNumBuckets: number = DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS,
+  /**
+   * Floor for the auto-inferred bucket size, in seconds. Useful when the
+   * underlying data is reported on a fixed interval (e.g. a metrics scrape
+   * interval): without this, a short selected date range can auto-infer a
+   * bucket smaller than that interval, producing sparse/steppy-looking
+   * series (buckets alternating between a real sample and an empty one).
+   * Sourced from `MetricSource.minAutoGranularity` where applicable -
+   * undefined/0 preserves the previous unfloored behavior.
+   */
+  minGranularitySeconds?: number,
 ): Granularity {
   const start = dateRange[0].getTime();
   const end = dateRange[1].getTime();
   const diffSeconds = Math.floor((end - start) / 1000);
-  const granularitySizeSeconds = Math.ceil(diffSeconds / maxNumBuckets);
+  const granularitySizeSeconds = Math.max(
+    Math.ceil(diffSeconds / maxNumBuckets),
+    minGranularitySeconds ?? 0,
+  );
 
   if (granularitySizeSeconds <= 15) {
     return Granularity.FifteenSecond;
@@ -411,7 +801,7 @@ export const _useTry = <T>(fn: () => T): [null | Error | unknown, null | T] => {
 };
 
 export const parseJSON = <T = any>(json: string) => {
-  const [error, result] = _useTry<T>(() => JSON.parse(json));
+  const [_error, result] = _useTry<T>(() => JSON.parse(json));
   return result;
 };
 
@@ -439,24 +829,49 @@ const TIME_TOKENS = {
   },
 };
 
+export const UTC_TIME_ZONE = 'Etc/UTC';
+
+/** Formats `date` in `timeZone` (an IANA name), or the local zone if unset. */
 export const formatDate = (
   date: Date,
   {
-    isUTC = false,
+    timeZone,
     format = 'normal',
     clock = '12h',
   }: {
-    isUTC?: boolean;
+    timeZone?: string;
     format?: 'normal' | 'short' | 'withMs' | 'time' | 'withYear';
     clock?: '12h' | '24h';
   },
 ) => {
   const formatStr = TIME_TOKENS[format][clock];
 
-  return isUTC
-    ? formatInTimeZone(date, 'Etc/UTC', formatStr)
+  return timeZone
+    ? formatInTimeZone(date, timeZone, formatStr)
     : fnsFormat(date, formatStr);
 };
+
+/**
+ * The clock reading of `date` in `timeZone`, as a Date whose UTC fields hold
+ * that reading. Lets date maths and parsing run in a zone other than the
+ * runtime's own, using the UTC getters and setters.
+ */
+export function toWallClock(date: Date, timeZone: string): Date {
+  // Not getTimezoneOffset: it takes a clock reading, so for instants near a
+  // DST change it returns the offset from the other side of the change.
+  return new Date(
+    formatInTimeZone(date, timeZone, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
+  );
+}
+
+/**
+ * Inverse of `toWallClock`, using the zone's offset on that date. A reading in
+ * the hour repeated when clocks go back maps to its first occurrence.
+ */
+export function fromWallClock(wallClock: Date, timeZone: string): Date {
+  // An ISO string without an offset is read as a clock reading in `timeZone`.
+  return zonedTimeToUtc(wallClock.toISOString().slice(0, 23), timeZone);
+}
 
 type Dashboard = z.infer<typeof DashboardSchema>;
 type DashboardTemplate = z.infer<typeof DashboardTemplateSchema>;
@@ -466,12 +881,37 @@ export function convertToDashboardTemplate(
   input: Dashboard,
   sources: TSource[],
   connections: Connection[] = [],
+  dashboards: Pick<Dashboard, 'id' | 'name'>[] = [],
 ): DashboardTemplate {
   const output: DashboardTemplate = {
     version: '0.1.0',
     name: input.name,
     tags: input.tags.length > 0 ? input.tags : undefined,
     tiles: [],
+  };
+
+  // Replace onClick.target.id (a raw source or dashboard ID) with the
+  // corresponding name so the exported template is portable across instances.
+  // Template-mode targets are already name-based and left untouched. If the
+  // referenced source/dashboard no longer exists, drop the onClick entirely —
+  // OnClickTargetSchema requires id.min(1), so we can't emit an empty string.
+  const convertOnClickTargetIdToName = (config: SavedChartConfig) => {
+    const onClick = config.onClick;
+    if (!onClick || onClick.type === 'external' || onClick.target.mode !== 'id')
+      return;
+    const targetId = onClick.target.id;
+    const name =
+      onClick.type === 'search'
+        ? sources.find(source => source.id === targetId)?.name
+        : dashboards.find(dashboard => dashboard.id === targetId)?.name;
+    if (name == null || name === '') {
+      delete config.onClick;
+      return;
+    }
+    config.onClick = {
+      ...onClick,
+      target: { mode: 'id' as const, id: name },
+    };
   };
 
   const convertToTileTemplate = (
@@ -497,6 +937,7 @@ export function convertToDashboardTemplate(
           sources.find(source => source.id === tileConfig.source)?.name ?? '';
       }
     }
+    convertOnClickTargetIdToName(tileConfig);
     return tile;
   };
 
@@ -504,10 +945,26 @@ export function convertToDashboardTemplate(
     input: DashboardFilter,
     sources: TSource[],
   ): DashboardFilter => {
-    const filter = DashboardFilterSchema.strip().parse(structuredClone(input));
-    // Extract name from source or default to '' if not found
-    filter.source =
-      sources.find(source => source.id === input.source)?.name ?? '';
+    const filter = DashboardFilterSchema.parse(structuredClone(input));
+
+    // A static filter references nothing in the workspace
+    if (isStaticListFilter(filter)) return filter;
+
+    const getSourceName = (id: string) =>
+      sources.find(source => source.id === id)?.name ?? '';
+
+    if (isAdhocFilter(filter)) {
+      filter.sources = filter.sources.map(getSourceName);
+    } else {
+      filter.source = getSourceName(filter.source);
+    }
+
+    if (isQueryExpressionFilter(filter) || isAdhocFilter(filter)) {
+      const remapped = (filter.appliesToSourceIds ?? [])
+        .map(getSourceName)
+        .filter(name => name.length > 0);
+      filter.appliesToSourceIds = remapped.length > 0 ? remapped : undefined;
+    }
     return filter;
   };
 
@@ -524,6 +981,15 @@ export function convertToDashboardTemplate(
 
   if (input.containers) {
     output.containers = structuredClone(input.containers);
+  }
+
+  if (input.savedQuery != null) {
+    output.savedQuery = input.savedQuery;
+    output.savedQueryLanguage = input.savedQueryLanguage ?? null;
+  }
+
+  if (input.savedFilterValues && input.savedFilterValues.length > 0) {
+    output.savedFilterValues = structuredClone(input.savedFilterValues);
   }
 
   return output;
@@ -565,7 +1031,149 @@ export function convertToDashboardDocument(
     output.containers = structuredClone(input.containers);
   }
 
+  if (input.savedQuery != null) {
+    output.savedQuery = input.savedQuery;
+    output.savedQueryLanguage = input.savedQueryLanguage ?? null;
+  }
+
+  if (input.savedFilterValues && input.savedFilterValues.length > 0) {
+    output.savedFilterValues = structuredClone(input.savedFilterValues);
+  }
+
   return output;
+}
+
+export function hasNonEmptyOrderBy(
+  orderBy: SortSpecificationList | undefined | null,
+): boolean {
+  if (orderBy == null) {
+    return false;
+  }
+  return typeof orderBy === 'string'
+    ? orderBy.trim().length > 0
+    : orderBy.length > 0;
+}
+
+/**
+ * Normalize a builder chart config for categorical (pie/bar) rendering.
+ *
+ * Categorical charts have no time dimension, so `granularity` is dropped and
+ * the per-tile `seriesLimit` is reinterpreted as a plain SQL `LIMIT` on the
+ * number of slices/bars (the `__hdx_series_limit` ranking CTE it drives on time
+ * charts is gated on granularity, which categorical charts never set — see
+ * `renderSeriesLimitCte`).
+ *
+ * Ordering precedence:
+ *  - A user-supplied `orderBy` (from the chart editor's ORDER BY input) always
+ *    wins and is pushed down to SQL as-is. When combined with a limit, the
+ *    limit keeps the top rows according to that ordering.
+ *  - Otherwise, when a limit is present we inject a value-descending ordering
+ *    so the kept slices/bars are the largest ones by default.
+ *
+ * Shared by the in-app renderers (DBPieChart/DBBarChart) and the server-side
+ * MCP tile-query path so every surface applies the limit identically.
+ */
+export function convertToCategoricalChartConfig(
+  config: BuilderChartConfigWithOptTimestamp,
+): BuilderChartConfigWithOptTimestamp {
+  const convertedConfig = structuredClone(omit(config, ['granularity']));
+
+  // Pie/bar charts interpret `seriesLimit` as a plain SQL LIMIT on the number
+  // of slices/bars. A positive value applies; 0 means unlimited and
+  // null/undefined means unset — both skip the LIMIT. The field is always
+  // dropped (it has no meaning past this conversion).
+  if (
+    hasPositiveSeriesLimit(convertedConfig.seriesLimit) &&
+    convertedConfig.limit?.limit == null
+  ) {
+    convertedConfig.limit = { limit: convertedConfig.seriesLimit };
+  }
+  delete convertedConfig.seriesLimit;
+
+  // A user-supplied ORDER BY takes precedence over the default value-descending
+  // ordering, so only inject the default when the user has not set one.
+  // When a series limit is set and the user has not supplied an ordering, order
+  // by the first aggregated value descending (with the group as a stable
+  // tiebreak) so the limit deterministically keeps the largest slices/bars.
+  if (
+    !hasNonEmptyOrderBy(convertedConfig.orderBy) &&
+    convertedConfig.limit?.limit != null &&
+    Array.isArray(convertedConfig.select) &&
+    convertedConfig.select.length > 0 &&
+    typeof convertedConfig.groupBy === 'string'
+  ) {
+    const firstSelect = convertedConfig.select[0];
+    if (!firstSelect.alias?.trim()) {
+      firstSelect.alias = 'Value';
+    }
+    // Quote the alias as a ClickHouse identifier, doubling any embedded
+    // double quotes so aliases like `Request "Count"` are escaped correctly.
+    const quotedAlias = `"${firstSelect.alias.trim().replace(/"/g, '""')}"`;
+    convertedConfig.orderBy = [
+      {
+        valueExpression: quotedAlias,
+        ordering: 'DESC',
+      },
+      ...(convertedConfig.groupBy?.trim()
+        ? [
+            {
+              valueExpression: convertedConfig.groupBy,
+              ordering: 'ASC' as const,
+            },
+          ]
+        : []),
+    ];
+  }
+
+  return convertedConfig;
+}
+
+/**
+ * Number charts collapse to a single aggregate value, so drop the time bucket
+ * (granularity) and any group-by.
+ *
+ * Metric formula configs (HDX-5080) additionally always hide their operand
+ * series: the number chart displays the first value column of the result, so
+ * the formula column must be the only one projected — never a raw operand.
+ * Enforced here (the choke point every number render passes through) so it
+ * holds for stale saved configs and display-type switches alike, regardless
+ * of the tile's "Show input series" setting on other display types.
+ */
+export function convertToNumberChartConfig(
+  config: BuilderChartConfigWithOptTimestamp,
+): BuilderChartConfigWithOptTimestamp {
+  const converted = omit(config, ['granularity', 'groupBy']);
+  return config.formulas?.length
+    ? { ...converted, showOperandSeries: false }
+    : converted;
+}
+
+/**
+ * Table charts drop the time bucket (granularity) and, so the set of rows kept
+ * within the limit is stable, default to a row limit and a group-by ordering
+ * when the user hasn't set them.
+ */
+export function convertToTableChartConfig(
+  config: BuilderChartConfigWithOptTimestamp,
+): BuilderChartConfigWithOptTimestamp {
+  const convertedConfig = structuredClone(omit(config, ['granularity']));
+
+  // Set a default limit if not already set
+  if (!convertedConfig.limit) {
+    convertedConfig.limit = { limit: 200 };
+  }
+
+  // Set a default orderBy if groupBy is set but orderBy is not,
+  // so that the set of rows within the limit is stable.
+  if (
+    convertedConfig.groupBy &&
+    typeof convertedConfig.groupBy === 'string' &&
+    !convertedConfig.orderBy
+  ) {
+    convertedConfig.orderBy = convertedConfig.groupBy;
+  }
+
+  return convertedConfig;
 }
 
 export const getFirstOrderingItem = (
@@ -731,6 +1339,44 @@ export function isDateRangeEqual(range1: [Date, Date], range2: [Date, Date]) {
   );
 }
 
+/**
+ * Index of the first standalone SETTINGS keyword, or -1. Occurrences inside
+ * quoted strings, comments or identifiers (e.g. `'app.settings.reloads'`,
+ * `AppSettings`, `LogAttributes.settings`) are not the clause and must not
+ * split the query.
+ */
+function findSettingsKeyword(sql: string): number {
+  const isWordChar = (c: string) => /\w/.test(c);
+  const nextNonSpace = (from: number) => sql.slice(from).trimStart().charAt(0);
+  let quote: string | undefined;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql.charAt(i);
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = undefined;
+    } else if (c === "'" || c === '"' || c === '`') {
+      quote = c;
+    } else if (c === '-' && sql.charAt(i + 1) === '-') {
+      const lineEnd = sql.indexOf('\n', i + 2);
+      if (lineEnd === -1) break;
+      i = lineEnd;
+    } else if (c === '/' && sql.charAt(i + 1) === '*') {
+      const blockEnd = sql.indexOf('*/', i + 2);
+      if (blockEnd === -1) break;
+      i = blockEnd + 1;
+    } else if (
+      sql.substring(i, i + 8).toUpperCase() === 'SETTINGS' &&
+      !isWordChar(sql.charAt(i - 1)) &&
+      !isWordChar(sql.charAt(i + 8)) &&
+      sql.slice(0, i).trimEnd().slice(-1) !== '.' &&
+      !['.', '['].includes(nextNonSpace(i + 8))
+    ) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 /*
   This function extracts the SETTINGS clause from the end(!) of the sql string.
 */
@@ -741,7 +1387,7 @@ export function extractSettingsClauseFromEnd(
     ? sqlInput.trim().slice(0, -1)
     : sqlInput.trim();
 
-  const settingsIndex = sql.toUpperCase().indexOf('SETTINGS');
+  const settingsIndex = findSettingsKeyword(sql);
 
   if (settingsIndex === -1) {
     return [sql, undefined] as const;
@@ -1021,9 +1667,7 @@ export function displayTypeSupportsRawSqlAlerts(
   displayType: DisplayType | undefined,
 ): boolean {
   return (
-    displayType === DisplayType.Line ||
-    displayType === DisplayType.StackedBar ||
-    displayType === DisplayType.Number
+    isTimeSeriesDisplayType(displayType) || displayType === DisplayType.Number
   );
 }
 
@@ -1031,10 +1675,99 @@ export function displayTypeSupportsBuilderAlerts(
   displayType: DisplayType | undefined,
 ): boolean {
   return (
-    displayType === DisplayType.Line ||
-    displayType === DisplayType.StackedBar ||
-    displayType === DisplayType.Number
+    isTimeSeriesDisplayType(displayType) || displayType === DisplayType.Number
   );
+}
+
+/**
+ * Display types that can carry formulas — the shapes the formula query
+ * paths render (composed multi-series for metrics, inline single-scan for
+ * events). Shared by the chart editor's "Add Formula" gating and the
+ * external API / MCP tile validation, so the surfaces cannot drift.
+ */
+export const isFormulaDisplayType = (
+  displayType: DisplayType | undefined,
+): displayType is
+  | DisplayType.Line
+  | DisplayType.StackedBar
+  | DisplayType.StackedLine
+  | DisplayType.Table
+  | DisplayType.Number =>
+  displayType === DisplayType.Line ||
+  displayType === DisplayType.StackedBar ||
+  displayType === DisplayType.StackedLine ||
+  displayType === DisplayType.Table ||
+  displayType === DisplayType.Number;
+
+/**
+ * Source kinds that can carry formulas: metric sources (rendered via the
+ * composed multi-series metric query) and log/trace event sources (compiled
+ * inline in the single-scan SELECT). Shared by the chart editor's
+ * "Add Formula" gating and the external API / MCP tile validation, so the
+ * surfaces cannot drift. Session (and other) sources stay gated off.
+ */
+export const isFormulaSourceKind = (
+  kind: SourceKind | undefined,
+): kind is SourceKind.Metric | SourceKind.Log | SourceKind.Trace =>
+  kind === SourceKind.Metric ||
+  kind === SourceKind.Log ||
+  kind === SourceKind.Trace;
+
+export function displayTypeSupportsPromQLAlerts(
+  displayType: DisplayType | undefined,
+): boolean {
+  // TODO: Support alerts for PromQL (HDX-4636)
+  // This looks funky, just doing it to satisfy knip
+  return displayType ? false : false;
+}
+
+/**
+ * Whether the alert checker can evaluate an alert on a tile with this config.
+ * Shared by every save path so alerts are never stored where they cannot run.
+ */
+export function savedChartConfigSupportsAlerts(
+  config: SavedChartConfig,
+): boolean {
+  if (isPromqlSavedChartConfig(config)) {
+    return displayTypeSupportsPromQLAlerts(config.displayType);
+  }
+  if (isRawSqlSavedChartConfig(config)) {
+    return displayTypeSupportsRawSqlAlerts(config.displayType);
+  }
+  return displayTypeSupportsBuilderAlerts(config.displayType);
+}
+
+/** Expand the chart's macros, returning failures instead of throwing. */
+function resolveRawSqlMacros(
+  chartConfig: RawSqlChartConfig,
+): { sql: string; error?: undefined } | { sql?: undefined; error: Error } {
+  try {
+    return { sql: replaceMacros(chartConfig) };
+  } catch (e) {
+    return { error: e instanceof Error ? e : new Error(String(e)) };
+  }
+}
+
+/**
+ * Reports which time-range/interval query params are present in the given SQL.
+ */
+function getRawSqlTimeRangeStatus(
+  chartConfig: RawSqlChartConfig,
+  sql: string,
+): {
+  isTimeSeries: boolean;
+  hasInterval: boolean;
+  hasTimeFilter: boolean;
+} {
+  return {
+    isTimeSeries: isTimeSeriesDisplayType(chartConfig.displayType),
+    hasInterval:
+      sql.includes(QUERY_PARAMS[RawSqlQueryParam.intervalMilliseconds].name) ||
+      sql.includes(QUERY_PARAMS[RawSqlQueryParam.intervalSeconds].name),
+    hasTimeFilter:
+      sql.includes(QUERY_PARAMS[RawSqlQueryParam.startDateMilliseconds].name) &&
+      sql.includes(QUERY_PARAMS[RawSqlQueryParam.endDateMilliseconds].name),
+  };
 }
 
 export function validateRawSqlForAlert(chartConfig: RawSqlChartConfig): {
@@ -1044,53 +1777,213 @@ export function validateRawSqlForAlert(chartConfig: RawSqlChartConfig): {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  try {
-    if (!isRawSqlSavedChartConfig(chartConfig)) {
-      return { errors, warnings };
-    }
+  if (!isRawSqlSavedChartConfig(chartConfig)) {
+    return { errors, warnings };
+  }
 
-    if (!displayTypeSupportsRawSqlAlerts(chartConfig.displayType)) {
+  if (!displayTypeSupportsRawSqlAlerts(chartConfig.displayType)) {
+    errors.push(
+      `Display type ${chartConfig.displayType} does not support raw SQL alerts.`,
+    );
+  }
+
+  const { sql } = resolveRawSqlMacros(chartConfig);
+  if (sql != null) {
+    const status = getRawSqlTimeRangeStatus(chartConfig, sql);
+    // Interval params are only required for time-series display types (Line, StackedBar).
+    // Number charts don't use interval bucketing.
+    if (status.isTimeSeries && !status.hasInterval) {
       errors.push(
-        `Display type ${chartConfig.displayType} does not support raw SQL alerts.`,
+        `SQL used for alerts must include an interval parameter or macro.`,
       );
     }
 
-    const sql = replaceMacros(chartConfig);
-
-    // Interval params are only required for time-series display types (Line, StackedBar).
-    // Number charts don't use interval bucketing.
-    if (isTimeSeriesDisplayType(chartConfig.displayType)) {
-      const hasInterval =
-        sql.includes(
-          QUERY_PARAMS[RawSqlQueryParam.intervalMilliseconds].name,
-        ) || sql.includes(QUERY_PARAMS[RawSqlQueryParam.intervalSeconds].name);
-      if (!hasInterval) {
-        errors.push(
-          `SQL used for alerts must include an interval parameter or macro.`,
-        );
-      }
-    }
-
-    const hasTimeFilter =
-      sql.includes(QUERY_PARAMS[RawSqlQueryParam.startDateMilliseconds].name) &&
-      sql.includes(QUERY_PARAMS[RawSqlQueryParam.endDateMilliseconds].name);
-    if (!hasTimeFilter) {
+    if (!status.hasTimeFilter) {
       warnings.push(
         `SQL used for alerts should include start and end date parameters or macros.`,
       );
     }
+  }
 
-    return { errors, warnings };
-  } catch {
-    // replaceMacros will often fail as users type in the SQL template
+  return { errors, warnings };
+}
+
+/**
+ * General-purpose raw SQL chart validation, surfaced in the chart editor
+ * regardless of whether an alert is configured.
+ */
+export function validateRawSqlChartConfig(
+  chartConfig: RawSqlChartConfig,
+  { isDashboardTile = false }: { isDashboardTile?: boolean } = {},
+): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!isRawSqlSavedChartConfig(chartConfig)) {
     return { errors, warnings };
   }
+
+  // An empty editor has nothing wrong with it yet.
+  if (!chartConfig.sqlTemplate.trim()) {
+    return { errors, warnings };
+  }
+
+  // Track macros this function has already described with an error, to avoid repetition.
+  const reportedMacros = new Set<MacroExpansionError['macro']>();
+  const pushError = (message: string, macro?: MacroName) => {
+    errors.push(message);
+    if (macro != null) reportedMacros.add(macro);
+  };
+
+  try {
+    const resolved = resolveRawSqlMacros(chartConfig);
+
+    if (resolved.sql != null) {
+      const status = getRawSqlTimeRangeStatus(chartConfig, resolved.sql);
+      if (status.isTimeSeries && !status.hasInterval) {
+        errors.push(
+          'SQL must include an interval parameter or macro (e.g. $__interval_s) for this display type.',
+        );
+      }
+
+      if (!status.hasTimeFilter) {
+        warnings.push(
+          'SQL should include start and end date parameters or macros (e.g. $__timeFilter) so this chart respects the selected time range.',
+        );
+      }
+    }
+
+    const variableIssues = validateVariableReferencesInTemplate(
+      chartConfig.sqlTemplate,
+      chartConfig.variables,
+      { subject: 'SQL', language: 'sql' },
+    );
+    errors.push(...variableIssues.errors);
+    warnings.push(...variableIssues.warnings);
+
+    if (isDashboardTile) {
+      if (!hasMacro(chartConfig.sqlTemplate, 'sourceTable')) {
+        warnings.push(
+          'SQL should include the $__sourceTable macro so this tile queries its configured source.',
+        );
+      }
+      if (isMissingFiltersMacro(chartConfig.sqlTemplate)) {
+        warnings.push(
+          'SQL should include the $__filters macro so dashboard filters apply to this tile.',
+        );
+      }
+    }
+
+    // $__filters/$__sourceTable only resolve correctly once a source is
+    // selected, regardless of dashboard-tile vs. chart-explorer context.
+    if (!chartConfig.from) {
+      const usedMacros = getSourceDependentMacrosUsed(chartConfig.sqlTemplate);
+      if (usedMacros.length > 0) {
+        errors.push(
+          `SQL uses ${usedMacros.map(m => `$__${m}`).join(' and ')} but no source is selected — select a source so ${usedMacros.length > 1 ? 'these macros' : 'this macro'} can resolve correctly.`,
+        );
+        usedMacros.forEach(macro => reportedMacros.add(macro));
+      }
+    } else {
+      // A metric type argument is required for a metrics source and
+      // disallowed otherwise — a mismatch here fails at query time.
+      const argCounts = getSourceTableMacroArgCounts(chartConfig.sqlTemplate);
+      const isMetricsSource = !!chartConfig.metricTables;
+
+      if (argCounts.some(count => count > 0) && !isMetricsSource) {
+        pushError(
+          'SQL uses $__sourceTable(<metricType>) but the selected source is not a metrics source — use a bare $__sourceTable instead.',
+          'sourceTable',
+        );
+      }
+
+      if (argCounts.some(count => count === 0) && isMetricsSource) {
+        pushError(
+          'SQL uses a bare $__sourceTable but the selected source is a metrics source — specify a metric type, e.g. $__sourceTable(gauge).',
+          'sourceTable',
+        );
+      }
+    }
+
+    // Report anything else macro expansion refused to do
+    const { error } = resolved;
+    if (error != null) {
+      // An unterminated argument list is what a half-typed macro looks like, so it stays silent.
+      const isStillTyping = error instanceof MalformedMacroArgsError;
+      const isAlreadyReported =
+        error instanceof MacroExpansionError && reportedMacros.has(error.macro);
+
+      // Everything else — an unknown variable, a bad argument count, an
+      // unrecognized `${v:format}`, an unconfigured metric type — is invisible
+      // to the user until the query fails, so it is reported verbatim. A
+      // variable macro's message can already have come from the variable checks
+      // above, which expand the same template.
+      if (
+        !isStillTyping &&
+        !isAlreadyReported &&
+        !errors.includes(error.message)
+      ) {
+        errors.push(error.message);
+      }
+    }
+  } catch (e) {
+    // hasMacro/getSourceDependentMacrosUsed throw on malformed macro args
+    // (e.g. an unmatched paren) while the user is still typing; fall back to
+    // whatever errors/warnings were already accumulated rather than crash.
+    // That is the expected path here — the editor revalidates on every
+    // keystroke, so logging it would put a stack trace in the console on each
+    // debounce tick and drown out the case below.
+    if (e instanceof MalformedMacroArgsError) {
+      return { errors, warnings };
+    }
+
+    // Anything else is a bug in the checks above, so surface it for investigation:
+    console.error('Unexpected error validating raw SQL chart config', e);
+  }
+
+  return { errors, warnings };
 }
+
+/** Maps the time-series display type names used by the external API and v1 chart configs. */
+export const TIME_SERIES_DISPLAY_TYPE_BY_NAME = {
+  line: DisplayType.Line,
+  stacked_bar: DisplayType.StackedBar,
+  stacked_line: DisplayType.StackedLine,
+} as const satisfies Record<string, DisplayType>;
 
 export const isTimeSeriesDisplayType = (
   displayType: DisplayType | undefined,
 ): boolean => {
   return (
-    displayType === DisplayType.Line || displayType === DisplayType.StackedBar
+    displayType === DisplayType.Line ||
+    displayType === DisplayType.StackedBar ||
+    displayType === DisplayType.StackedLine
   );
 };
+
+// This type serves as options to fetch values from normal text indices.
+// This is a record of Column Name to required query parameters.
+export type TextIndexColumnQueryOptions = Map<
+  string,
+  {
+    indexName: string;
+    limit: number;
+  }
+>;
+
+// This type serves as options to fetch values from map text indices.
+// This is a record of Map Column Name to required query parameters.
+export type TextIndexMapColumnQueryOptions = Map<
+  string,
+  {
+    indexName: string;
+    limit: number;
+    separator: string;
+    keys: string[];
+  }
+>;
+
+export type MetadataMVQueryOptions = Map<
+  string,
+  Map<'NativeColumn' | string, string[]> // map from column name to keys
+>;

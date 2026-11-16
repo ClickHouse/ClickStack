@@ -6,17 +6,20 @@ import type {
   TeamTagsApiResponse,
   UpdateClickHouseSettingsApiResponse,
 } from '@hyperdx/common-utils/dist/types';
-import { TeamClickHouseSettingsSchema } from '@hyperdx/common-utils/dist/types';
+import {
+  TagResourceTypeSchema,
+  TeamClickHouseSettingsUpdateSchema,
+} from '@hyperdx/common-utils/dist/types';
 import crypto from 'crypto';
 import express from 'express';
 import pick from 'lodash/pick';
 import { z } from 'zod';
 import { processRequest, validateRequest } from 'zod-express-middleware';
 
-import * as config from '@/config';
 import {
   getTags,
   getTeam,
+  getTeamInviteUrl,
   rotateTeamApiKey,
   setTeamName,
   updateTeamClickhouseSettings,
@@ -26,7 +29,9 @@ import {
   findUserByEmail,
   findUsersByTeam,
 } from '@/controllers/user';
+import { getNonNullUserWithTeam } from '@/middleware/auth';
 import TeamInvite from '@/models/teamInvite';
+import orgApiKeysRouter from '@/routers/api/orgApiKeys';
 import { sendJson } from '@/utils/serialization';
 import { objectIdSchema } from '@/utils/zod';
 
@@ -51,6 +56,7 @@ router.get('/', async (req, res: TeamApiExpRes, next) => {
       'apiKey',
       'name',
       'createdAt',
+      'isMetricsSeriesTableEnabled',
     ] as const;
     const team = await getTeam(teamId, fields);
     if (team == null) {
@@ -105,7 +111,7 @@ router.patch(
 router.patch(
   '/clickhouse-settings',
   processRequest({
-    body: TeamClickHouseSettingsSchema,
+    body: TeamClickHouseSettingsUpdateSchema,
   }),
   async (
     req,
@@ -180,7 +186,7 @@ router.post(
       }
 
       res.json({
-        url: `${config.FRONTEND_URL}/join-team?token=${teamInvite.token}`,
+        url: getTeamInviteUrl(teamInvite.token),
       });
     } catch (e) {
       next(e);
@@ -210,7 +216,7 @@ router.get('/invitations', async (req, res: TeamInviteExpressRes, next) => {
         createdAt: ti.createdAt.toISOString(),
         email: ti.email,
         name: ti.name,
-        url: `${config.FRONTEND_URL}/join-team?token=${ti.token}`,
+        url: getTeamInviteUrl(ti.token),
       })),
     });
   } catch (e) {
@@ -228,8 +234,17 @@ router.delete(
   async (req, res, next) => {
     try {
       const id = req.params.id;
+      // Throws rather than reading `req.user?.team` directly. BSON drops an
+      // undefined value from the filter entirely, so a teamless caller would
+      // turn the scoped delete below back into the unscoped one this guard
+      // exists to prevent — any authenticated user revoking any team's
+      // pending invitation given its id.
+      const { teamId } = getNonNullUserWithTeam(req);
 
-      await TeamInvite.findByIdAndDelete(id);
+      const deleted = await TeamInvite.findOneAndDelete({ _id: id, teamId });
+      if (deleted == null) {
+        return res.sendStatus(404);
+      }
 
       return res.json({ message: 'TeamInvite deleted' });
     } catch (e) {
@@ -286,7 +301,16 @@ router.delete(
         throw new Error(`Requesting user has no id`);
       }
 
-      await deleteTeamMember(teamId, userIdToDelete, userIdRequestingDelete);
+      const result = await deleteTeamMember(
+        teamId,
+        userIdToDelete,
+        userIdRequestingDelete,
+      );
+      if (result === 'last_member') {
+        return res
+          .status(400)
+          .json({ message: 'Cannot remove the last team member' });
+      }
 
       res.json({ message: 'User deleted' });
     } catch (e) {
@@ -296,17 +320,28 @@ router.delete(
 );
 
 type TeamTagsExpRes = express.Response<TeamTagsApiResponse>;
-router.get('/tags', async (req, res: TeamTagsExpRes, next) => {
-  try {
-    const teamId = req.user?.team;
-    if (teamId == null) {
-      throw new Error(`User ${req.user?._id} not associated with a team`);
+router.get(
+  '/tags',
+  processRequest({
+    query: z.object({
+      /** Limits the response to tags applied to this kind of entity */
+      resourceType: TagResourceTypeSchema.optional(),
+    }),
+  }),
+  async (req, res: TeamTagsExpRes, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        throw new Error(`User ${req.user?._id} not associated with a team`);
+      }
+      const tags = await getTags(teamId, req.query.resourceType);
+      return res.json({ data: tags });
+    } catch (e) {
+      next(e);
     }
-    const tags = await getTags(teamId);
-    return res.json({ data: tags });
-  } catch (e) {
-    next(e);
-  }
-});
+  },
+);
+
+router.use('/api-keys', orgApiKeysRouter);
 
 export default router;

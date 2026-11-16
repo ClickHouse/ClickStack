@@ -9,6 +9,32 @@
  * to tune the future buffer.
  */
 
+import {
+  E2E_ALT_METRICS_DATABASE,
+  E2E_ALT_METRICS_GAUGE_TABLE,
+  E2E_ALT_METRICS_SUM_TABLE,
+  E2E_CLICKHOUSE_DATABASE,
+  E2E_CUSTOM_SERVICE_LOGS_TABLE,
+  E2E_INTERESTING_FILTER_KEYS_TABLE,
+  E2E_LOGS_TABLE,
+  E2E_METADATA_MV_KEY_ROLLUP_TABLE,
+  E2E_METADATA_MV_KV_ROLLUP_TABLE,
+  E2E_METADATA_MV_LOGS_TABLE,
+  E2E_METRICS_GAUGE_TABLE,
+  E2E_METRICS_SUM_TABLE,
+  E2E_PROMQL_HISTOGRAM_METRIC_NAME,
+  E2E_PROMQL_METRIC_NAME,
+  E2E_PROMQL_TABLE,
+  E2E_SESSIONS_TABLE,
+  E2E_TRACES_MV_TABLE,
+  E2E_TRACES_TABLE,
+} from './utils/constants';
+import {
+  generateOtelSessionLogEvents,
+  generateOtelSessionReplayRows,
+  generateOtelSessionSpans,
+} from './seed-otel-sessions';
+
 interface ClickHouseConfig {
   host: string;
   user: string;
@@ -64,6 +90,111 @@ export const SERVICES = [
   'notification-service',
   'inventory-service',
 ] as const;
+// Rows seeded into `otel_logs_interesting_filter_keys`. Each column has a
+// distinct value per row so a single filter value matches exactly one row.
+// Exported so the filter-key edge case E2E test asserts against the same data.
+export const INTERESTING_FILTER_KEYS_ROWS = [
+  {
+    serviceName: 'service1',
+    resourceAttrValue: 'value1',
+    jsonValue: 'value1',
+    // Top-level JSON key that is NOT a bare identifier (`@` prefix). Selecting
+    // it (`ResourceAttributesJSON.`@request_id``) and opening the row must keep
+    // the key backtick-quoted in the detail WHERE clause (HDX-5867).
+    jsonAtKeyValue: 'request-A',
+    clusterName: 'cluster1',
+    serviceNameHyphen: 'svc-one',
+    mapHyphenValue: 'mapval1',
+    jsonHyphenValue: 'jsonval1',
+    body: 'log body 1',
+  },
+  {
+    serviceName: 'service2',
+    resourceAttrValue: 'value2',
+    jsonValue: 'value2',
+    jsonAtKeyValue: 'request-B',
+    clusterName: 'cluster2',
+    serviceNameHyphen: 'svc-two',
+    mapHyphenValue: 'mapval2',
+    jsonHyphenValue: 'jsonval2',
+    body: 'log body 2',
+  },
+  {
+    serviceName: 'service3',
+    resourceAttrValue: 'value3',
+    jsonValue: 'value3',
+    jsonAtKeyValue: 'request-C',
+    clusterName: 'cluster3',
+    serviceNameHyphen: 'svc-three',
+    mapHyphenValue: 'mapval3',
+    jsonHyphenValue: 'jsonval3',
+    body: 'log body 3',
+  },
+] as const;
+
+// The at-prefixed JSON key seeded into `ResourceAttributesJSON`. Exported so the
+// row-details spec selects and asserts against the same key/values.
+export const INTERESTING_FILTER_KEYS_JSON_AT_KEY = '@request_id';
+
+// A single log whose Body is a JSON string with a flat, dotted key. It lives in
+// the default E2E Logs table (so it shares the E2E Logs source); the unique
+// ServiceName isolates it from other default-logs tests, which all scope by
+// their own markers. The parsed-JSON "Add to Filters" test expands this Body
+// and filters on the nested value, exercising the JSONExtractString(...) filter
+// key path (HDX-4427).
+export const JSON_BODY_LOG = {
+  // Underscores, not hyphens: Lucene matches an underscore token exactly inside
+  // quotes, so `ServiceName:"json_body_filter_svc"` isolates this one row. A
+  // hyphenated name tokenizes and matches broadly.
+  serviceName: 'json_body_filter_svc',
+  jsonKey: 'app.user.currency',
+  jsonValue: 'USD',
+} as const;
+const JSON_BODY_LOG_BODY =
+  '{"app.user.currency":"USD","app.checkout.flow":"guest"}';
+
+// LogAttributes map key seeded into the metadata-MV source rows. Exported so
+// the filter-key edge case test references the same key when building filters.
+export const METADATA_MV_LOG_ATTR_KEY = 'requestId';
+// Rows seeded into `e2e_otel_logs_metadata_mv` (the metadata-MV-backed source).
+// Each row has a distinct ServiceName and LogAttributes['requestId'] value so a
+// single filter value matches exactly one row, mirroring the
+// INTERESTING_FILTER_KEYS_ROWS shape. Facet keys/values for this source come
+// from the rollup MVs rather than the base table.
+export const METADATA_MV_ROWS = [
+  {
+    serviceName: 'mv-service-1',
+    logAttrValue: 'mv-req-1',
+    body: 'mv log body 1',
+  },
+  {
+    serviceName: 'mv-service-2',
+    logAttrValue: 'mv-req-2',
+    body: 'mv log body 2',
+  },
+  {
+    serviceName: 'mv-service-3',
+    logAttrValue: 'mv-req-3',
+    body: 'mv log body 3',
+  },
+] as const;
+
+// Service (`AppName`) values seeded into `e2e_custom_service_name`.
+export const CUSTOM_SERVICE_LOGS_APP_NAMES = [
+  'checkout-app',
+  'payments-app',
+  'inventory-app',
+  'auth-app',
+] as const;
+
+// Body templates for `e2e_custom_service_name`.
+const CUSTOM_SERVICE_LOG_MESSAGES = [
+  'Started request handler for endpoint',
+  'Completed background reconciliation loop for object',
+  'Cache lookup finished for entry',
+  'Connection pool statistics reported for shard',
+] as const;
+
 const LOG_MESSAGES = [
   'Request processed successfully',
   'Database connection established',
@@ -163,6 +294,52 @@ function generateLogData(
   return rows.join(',\n');
 }
 
+/**
+ * Build the VALUES tuples for `e2e_custom_service_name`. Rows cycle through
+ * CUSTOM_SERVICE_LOGS_APP_NAMES and CUSTOM_SERVICE_LOG_MESSAGES so every Drain pattern's
+ * samples span multiple services. Spread across the seed window like the other
+ * log data so relative time ranges find them.
+ */
+function generateCustomServiceLogData(
+  count: number,
+  startMs: number,
+  endMs: number,
+): string {
+  const rows: string[] = [];
+  const span = endMs - startMs;
+
+  for (let i = 0; i < count; i++) {
+    const t = count > 1 ? startMs + (i / (count - 1)) * span : startMs;
+    const timestampNs = Math.round(t) * 1000000;
+    const appName =
+      CUSTOM_SERVICE_LOGS_APP_NAMES[i % CUSTOM_SERVICE_LOGS_APP_NAMES.length];
+    const severity = SEVERITIES[i % SEVERITIES.length];
+    const message = `${CUSTOM_SERVICE_LOG_MESSAGES[i % CUSTOM_SERVICE_LOG_MESSAGES.length]} ${i}`;
+    rows.push(
+      `('${timestampNs}', '${appName}', '${severity}', '${message}', {'level':'${severity}'})`,
+    );
+  }
+
+  return rows.join(',\n');
+}
+
+/**
+ * Build the VALUES tuple for the parsed-JSON Body log in the default logs table.
+ * Placed a couple seconds before `seedRef` so it falls inside recent relative
+ * time ranges. Body is a JSON string with a flat dotted key; the side panel
+ * parses it, and "Add to Filters" on the nested value builds
+ * JSONExtractString(Body, 'app.user.currency') (HDX-4427).
+ */
+function generateJsonBodyLogData(seedRef: number): string {
+  const timestampNs = (seedRef - 2000) * 1000000;
+  return (
+    `('${timestampNs}', '', '', 0, 'info', 0, ` +
+    `'${JSON_BODY_LOG.serviceName}', '${JSON_BODY_LOG_BODY}', '', ` +
+    `{'service.name':'${JSON_BODY_LOG.serviceName}','environment':'test'}, ` +
+    `'', '', '', {}, {})`
+  );
+}
+
 function generateK8sLogData(
   count: number,
   startMs: number,
@@ -247,8 +424,11 @@ function generateTraceData(
         Math.floor(Math.random() * 500000000) +
         (spansPerTrace - spanIdx) * 100000000;
 
+      // Two pods per service so the service map can be split by pod.
+      const podName = `${service}-pod-${traceIdx % 2}`;
+
       rows.push(
-        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
+        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test','k8s.pod.name':'${podName}'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
       );
 
       // Stop if we've generated enough spans
@@ -259,6 +439,39 @@ function generateTraceData(
   }
 
   return rows.join(',\n');
+}
+
+// Cross-trace span-link pair: a consumer span in its own trace whose Links
+// reference a producer span in another trace. Exercises both directions of
+// span-link resolution in the span detail panel (resolved "Span Links"
+// details and the reverse "Linked from" section). Exported so specs can
+// search for these spans by name.
+export const SPAN_LINK_SEED = {
+  producer: {
+    traceId: 'e2e-link-producer-trace',
+    spanId: 'e2e-link-producer-span',
+    spanName: 'E2E Link Producer Publish',
+    serviceName: 'link-producer-svc',
+  },
+  consumer: {
+    traceId: 'e2e-link-consumer-trace',
+    spanId: 'e2e-link-consumer-span',
+    spanName: 'E2E Link Consumer Process',
+    serviceName: 'link-consumer-svc',
+  },
+} as const;
+
+function generateSpanLinkTraces(seedRef: number): string {
+  const { producer, consumer } = SPAN_LINK_SEED;
+  // Producer runs first; the consumer picks the message up 30s later and
+  // links back — inside both lookup windows (reverse −1h/+24h from the
+  // producer, forward −24h/+1h from the consumer).
+  const producerNs = (seedRef - 60_000) * 1_000_000;
+  const consumerNs = (seedRef - 30_000) * 1_000_000;
+  return [
+    `('${producerNs}', '${producer.traceId}', '${producer.spanId}', '', '', '${producer.spanName}', 'SPAN_KIND_PRODUCER', '${producer.serviceName}', {'service.name':'${producer.serviceName}','environment':'test'}, '', '', {}, 12000000, 'STATUS_CODE_OK', '', [], [], [], [], [], [], [])`,
+    `('${consumerNs}', '${consumer.traceId}', '${consumer.spanId}', '', '', '${consumer.spanName}', 'SPAN_KIND_CONSUMER', '${consumer.serviceName}', {'service.name':'${consumer.serviceName}','environment':'test'}, '', '', {}, 34000000, 'STATUS_CODE_OK', '', [], [], [], ['${producer.traceId}'], ['${producer.spanId}'], [''], [{'link.kind':'follows_from'}])`,
+  ].join(',\n');
 }
 
 function generateSessionData(
@@ -383,7 +596,7 @@ function generateK8sGaugeMetrics(
         : startMs;
     for (let sample = 0; sample < samplesPerPod; sample++) {
       const timestampMs = podSlotStart + sample * stepMs;
-      const timestampNs = timestampMs * 1000000;
+      const timestampNs = Math.round(timestampMs * 1000000);
       const _timeUnix = timestampMs / 1000;
 
       // CPU metrics (percentage, 0-100)
@@ -400,39 +613,39 @@ function generateK8sGaugeMetrics(
 
       // k8s.pod.phase
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.phase', 'Pod phase', '', {}, ${timestampNs}, ${timestampNs}, ${phase}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.phase', 'Pod phase', '', {}, '${timestampNs}', '${timestampNs}', ${phase}, 0, [], [], [], [], [])`,
       );
 
       // k8s.container.restarts
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.container.restarts', 'Container restarts', '', {}, ${timestampNs}, ${timestampNs}, ${restarts}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.container.restarts', 'Container restarts', '', {}, '${timestampNs}', '${timestampNs}', ${restarts}, 0, [], [], [], [], [])`,
       );
 
       // container.cpu.utilization (0-100%)
       const containerCpuUtilization =
         5 + (podIdx % 30) + Math.sin(sample / 3) * 3;
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'container.cpu.utilization', 'Container CPU utilization', '%', {}, ${timestampNs}, ${timestampNs}, ${containerCpuUtilization}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'container.cpu.utilization', 'Container CPU utilization', '%', {}, '${timestampNs}', '${timestampNs}', ${containerCpuUtilization}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.cpu.utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu.utilization', 'Pod CPU utilization', '', {}, ${timestampNs}, ${timestampNs}, ${cpuUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu.utilization', 'Pod CPU utilization', '', {}, '${timestampNs}', '${timestampNs}', ${cpuUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.cpu_limit_utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu_limit_utilization', 'Pod CPU limit utilization', '%', {}, ${timestampNs}, ${timestampNs}, ${cpuLimitUtilization}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu_limit_utilization', 'Pod CPU limit utilization', '%', {}, '${timestampNs}', '${timestampNs}', ${cpuLimitUtilization}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.memory.usage
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory.usage', 'Pod memory usage', 'bytes', {}, ${timestampNs}, ${timestampNs}, ${memoryUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory.usage', 'Pod memory usage', 'bytes', {}, '${timestampNs}', '${timestampNs}', ${memoryUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.memory_limit_utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory_limit_utilization', 'Pod memory limit utilization', '%', {}, ${timestampNs}, ${timestampNs}, ${memoryLimitUtilization}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory_limit_utilization', 'Pod memory limit utilization', '%', {}, '${timestampNs}', '${timestampNs}', ${memoryLimitUtilization}, 0, [], [], [], [], [])`,
       );
     }
   }
@@ -449,7 +662,7 @@ function generateK8sGaugeMetrics(
 
     for (let sample = 0; sample < samplesPerPod; sample++) {
       const timestampMs = nodeSlotStart + sample * stepMs;
-      const timestampNs = timestampMs * 1000000;
+      const timestampNs = Math.round(timestampMs * 1000000);
 
       const nodeCpuUsage = 30 + (nodeIdx % 30) + Math.sin(sample / 2) * 10;
       const nodeMemoryUsage = (2 + nodeIdx) * 1024 * 1024 * 1024; // 2-4 GB
@@ -459,17 +672,17 @@ function generateK8sGaugeMetrics(
 
       // k8s.node.cpu.utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.cpu.utilization', 'Node CPU utilization', '', {}, ${timestampNs}, ${timestampNs}, ${nodeCpuUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.cpu.utilization', 'Node CPU utilization', '', {}, '${timestampNs}', '${timestampNs}', ${nodeCpuUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.node.memory.usage
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.memory.usage', 'Node memory usage', 'bytes', {}, ${timestampNs}, ${timestampNs}, ${nodeMemoryUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.memory.usage', 'Node memory usage', 'bytes', {}, '${timestampNs}', '${timestampNs}', ${nodeMemoryUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.node.condition_ready
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.condition_ready', 'Node condition ready', '', {}, ${timestampNs}, ${timestampNs}, ${nodeConditionReady}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.condition_ready', 'Node condition ready', '', {}, '${timestampNs}', '${timestampNs}', ${nodeConditionReady}, 0, [], [], [], [], [])`,
       );
     }
   }
@@ -487,13 +700,13 @@ function generateK8sGaugeMetrics(
 
     for (let sample = 0; sample < samplesPerPod; sample++) {
       const timestampMs = nsSlotStart + sample * stepMs;
-      const timestampNs = timestampMs * 1000000;
+      const timestampNs = Math.round(timestampMs * 1000000);
 
       const resourceAttrs = `{'k8s.cluster.name':'${cluster}','k8s.namespace.name':'${namespace}'}`;
 
       // k8s.namespace.phase
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.namespace.phase', 'Namespace phase', '', {}, ${timestampNs}, ${timestampNs}, ${namespacePhase}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.namespace.phase', 'Namespace phase', '', {}, '${timestampNs}', '${timestampNs}', ${namespacePhase}, 0, [], [], [], [], [])`,
       );
     }
   }
@@ -518,7 +731,7 @@ function generateK8sSumMetrics(
 
     const timestampMs =
       podCount > 1 ? startMs + (podIdx / (podCount - 1)) * span : startMs;
-    const timestampNs = timestampMs * 1000000;
+    const timestampNs = Math.round(timestampMs * 1000000);
 
     // Pod uptime in seconds (1-10 hours)
     const uptimeSeconds = (1 + (podIdx % 10)) * 3600;
@@ -528,7 +741,7 @@ function generateK8sSumMetrics(
     // k8s.pod.uptime (Sum metric)
     // AggregationTemporality: 1 = Delta, 2 = Cumulative
     rows.push(
-      `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.uptime', 'Pod uptime', 's', {}, ${timestampNs}, ${timestampNs}, ${uptimeSeconds}, 0, 2, true, [], [], [], [], [])`,
+      `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.uptime', 'Pod uptime', 's', {}, '${timestampNs}', '${timestampNs}', ${uptimeSeconds}, 0, 2, true, [], [], [], [], [])`,
     );
   }
 
@@ -583,6 +796,45 @@ function generateK8sEventLogs(
   return rows.join(',\n');
 }
 
+/**
+ * Build the VALUES tuples for `otel_logs_interesting_filter_keys`. Rows are
+ * placed a few seconds before `seedRef` so they fall inside recent relative
+ * time ranges. The map key and JSON path intentionally use a dotted key
+ * ("key.subKey.subSubKey") and the table has dotted/hyphenated column names so
+ * the test exercises identifier escaping in generated filter queries.
+ */
+function generateInterestingFilterKeyLogData(seedRef: number): string {
+  return INTERESTING_FILTER_KEYS_ROWS.map((row, i) => {
+    const timestampNs = (seedRef - (i + 1) * 1000) * 1000000;
+    const json = `{"key": {"subKey": {"subSubKey": "${row.jsonValue}"}}, "${INTERESTING_FILTER_KEYS_JSON_AT_KEY}": "${row.jsonAtKeyValue}"}`;
+    // JSON column with a hyphenated name AND hyphenated nested keys.
+    const jsonHyphen = `{"key-1": {"key-2": "${row.jsonHyphenValue}"}}`;
+    return (
+      `('${timestampNs}', 'trace${i + 1}', 'span${i + 1}', 'INFO', ` +
+      `'${row.serviceName}', '${row.body}', ` +
+      `{'key.subKey.subSubKey':'${row.resourceAttrValue}'}, ` +
+      `'${json}', '${row.clusterName}', '${row.serviceNameHyphen}', ` +
+      `{'pod-name':'${row.mapHyphenValue}'}, '${jsonHyphen}')`
+    );
+  }).join(',\n');
+}
+
+/**
+ * Build the VALUES tuples for `e2e_otel_logs_metadata_mv`. Rows are placed a few
+ * seconds before `seedRef` so they fall inside recent relative time ranges (and
+ * inside the 15-minute rollup bucket the metadata MVs aggregate into). Inserting
+ * here also triggers the key/value rollup MVs that back the source's facets.
+ */
+function generateMetadataMvLogData(seedRef: number): string {
+  return METADATA_MV_ROWS.map((row, i) => {
+    const timestampNs = (seedRef - (i + 1) * 1000) * 1000000;
+    return (
+      `('${timestampNs}', '${row.serviceName}', '${row.body}', ` +
+      `{'${METADATA_MV_LOG_ATTR_KEY}':'${row.logAttrValue}'})`
+    );
+  }).join(',\n');
+}
+
 // CI can be slower, so use a longer timeout
 const CLICKHOUSE_READY_TIMEOUT_SECONDS = parseInt(
   process.env.E2E_CLICKHOUSE_READY_TIMEOUT || '60',
@@ -628,12 +880,66 @@ async function clearTestData(
   client: ReturnType<typeof createClickHouseClient>,
 ): Promise<void> {
   console.log('  Clearing existing test data...');
-  await client.query('TRUNCATE TABLE IF EXISTS default.e2e_otel_logs');
-  await client.query('TRUNCATE TABLE IF EXISTS default.e2e_otel_traces');
-  await client.query('TRUNCATE TABLE IF EXISTS default.e2e_hyperdx_sessions');
-  await client.query('TRUNCATE TABLE IF EXISTS default.e2e_otel_metrics_gauge');
-  await client.query('TRUNCATE TABLE IF EXISTS default.e2e_otel_metrics_sum');
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_LOGS_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_TRACES_TABLE}`,
+  );
+  // The materialized view target is not cleared by truncating the source
+  // table, so clear it explicitly to avoid accumulating duplicate
+  // pre-aggregated rows across re-seeds.
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_TRACES_MV_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_SESSIONS_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_METRICS_GAUGE_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_METRICS_SUM_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_INTERESTING_FILTER_KEYS_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_METADATA_MV_LOGS_TABLE}`,
+  );
+  // The rollup MV targets are not cleared by truncating the base table, so
+  // clear them explicitly to avoid accumulating stale facet rows across re-seeds.
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_METADATA_MV_KV_ROLLUP_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_METADATA_MV_KEY_ROLLUP_TABLE}`,
+  );
+  await client.query(
+    `TRUNCATE TABLE IF EXISTS ${E2E_CLICKHOUSE_DATABASE}.${E2E_CUSTOM_SERVICE_LOGS_TABLE}`,
+  );
   console.log('  Existing data cleared');
+}
+
+// A second database with OTEL-shaped metric tables, used by the metric table
+// autofill tests to exercise changing the source form's database. Only the
+// schema matters (autofill validates a candidate table by its columns), so the
+// tables are structure-only copies and stay empty. Created here rather than in
+// `init-db-e2e.sh` because that script only runs on a fresh ClickHouse volume.
+async function createAltMetricsDatabase(
+  client: ReturnType<typeof createClickHouseClient>,
+): Promise<void> {
+  console.log('  Ensuring alternate metrics database...');
+  await client.query(
+    `CREATE DATABASE IF NOT EXISTS ${E2E_ALT_METRICS_DATABASE}`,
+  );
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS ${E2E_ALT_METRICS_DATABASE}.${E2E_ALT_METRICS_GAUGE_TABLE} AS ${E2E_CLICKHOUSE_DATABASE}.${E2E_METRICS_GAUGE_TABLE}`,
+  );
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS ${E2E_ALT_METRICS_DATABASE}.${E2E_ALT_METRICS_SUM_TABLE} AS ${E2E_CLICKHOUSE_DATABASE}.${E2E_METRICS_SUM_TABLE}`,
+  );
+  console.log(`  ${E2E_ALT_METRICS_DATABASE} ready`);
 }
 
 export async function seedClickHouse(): Promise<void> {
@@ -641,6 +947,7 @@ export async function seedClickHouse(): Promise<void> {
   const client = createClickHouseClient();
 
   await waitForClickHouse(client);
+  await createAltMetricsDatabase(client);
   await clearTestData(client);
 
   const seedRef = Date.now();
@@ -651,7 +958,7 @@ export async function seedClickHouse(): Promise<void> {
   // Insert log data
   console.log('  Inserting log data...');
   await client.query(`
-    INSERT INTO default.e2e_otel_logs (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_LOGS_TABLE} (
       Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
       ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
       ScopeName, ScopeVersion, ScopeAttributes, LogAttributes
@@ -659,10 +966,20 @@ export async function seedClickHouse(): Promise<void> {
   `);
   console.log(`  Inserted ${numDataPoints} log entries`);
 
+  // A log whose Body is a JSON string, for the parsed-JSON "Add to Filters" test.
+  console.log('  Inserting parsed-JSON Body log...');
+  await client.query(`
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_LOGS_TABLE} (
+      Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
+      ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
+      ScopeName, ScopeVersion, ScopeAttributes, LogAttributes
+    ) VALUES ${generateJsonBodyLogData(seedRef)}
+  `);
+
   // Insert K8s-aware log data (logs with k8s resource attributes for infrastructure correlation)
   console.log('  Inserting K8s log data...');
   await client.query(`
-    INSERT INTO default.e2e_otel_logs (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_LOGS_TABLE} (
       Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
       ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
       ScopeName, ScopeVersion, ScopeAttributes, LogAttributes
@@ -673,7 +990,7 @@ export async function seedClickHouse(): Promise<void> {
   // Insert trace data
   console.log('  Inserting trace data...');
   await client.query(`
-    INSERT INTO default.e2e_otel_traces (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_TRACES_TABLE} (
       Timestamp, TraceId, SpanId, ParentSpanId, TraceState, SpanName, SpanKind,
       ServiceName, ResourceAttributes, ScopeName, ScopeVersion, SpanAttributes,
       Duration, StatusCode, StatusMessage, \`Events.Timestamp\`, \`Events.Name\`,
@@ -683,34 +1000,58 @@ export async function seedClickHouse(): Promise<void> {
   `);
   console.log(`  Inserted ${numDataPoints} trace spans`);
 
-  // Insert session trace data (spans with rum.sessionId for session tracking)
-  console.log('  Inserting session trace data...');
+  // Insert the cross-trace span-link pair (producer + consumer)
+  console.log('  Inserting span-link trace pair...');
   await client.query(`
-    INSERT INTO default.e2e_otel_traces (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_TRACES_TABLE} (
       Timestamp, TraceId, SpanId, ParentSpanId, TraceState, SpanName, SpanKind,
       ServiceName, ResourceAttributes, ScopeName, ScopeVersion, SpanAttributes,
       Duration, StatusCode, StatusMessage, \`Events.Timestamp\`, \`Events.Name\`,
       \`Events.Attributes\`, \`Links.TraceId\`, \`Links.SpanId\`, \`Links.TraceState\`,
       \`Links.Attributes\`
-    ) VALUES ${generateSessionTraces(numDataPoints, startMs, endMs)}
+    ) VALUES ${generateSpanLinkTraces(seedRef)}
+  `);
+  console.log('  Inserted span-link trace pair');
+
+  // Insert session trace data (spans with rum.sessionId for session tracking)
+  console.log('  Inserting session trace data...');
+  await client.query(`
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_TRACES_TABLE} (
+      Timestamp, TraceId, SpanId, ParentSpanId, TraceState, SpanName, SpanKind,
+      ServiceName, ResourceAttributes, ScopeName, ScopeVersion, SpanAttributes,
+      Duration, StatusCode, StatusMessage, \`Events.Timestamp\`, \`Events.Name\`,
+      \`Events.Attributes\`, \`Links.TraceId\`, \`Links.SpanId\`, \`Links.TraceState\`,
+      \`Links.Attributes\`
+    ) VALUES ${generateSessionTraces(numDataPoints, startMs, endMs)},
+    ${generateOtelSessionSpans(seedRef)}
   `);
   console.log(`  Inserted ${numDataPoints} session trace data`);
+
+  console.log('  Inserting OTel browser log events...');
+  await client.query(`
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_LOGS_TABLE} (
+      Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
+      ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
+      ScopeName, ScopeVersion, ScopeAttributes, LogAttributes, EventName
+    ) VALUES ${generateOtelSessionLogEvents(seedRef)}
+  `);
 
   // Insert session data
   console.log('  Inserting session data...');
   await client.query(`
-    INSERT INTO default.e2e_hyperdx_sessions (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_SESSIONS_TABLE} (
       Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
       ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
       ScopeName, ScopeVersion, ScopeAttributes, LogAttributes
-    ) VALUES ${generateSessionData(numDataPoints, startMs, endMs)}
+    ) VALUES ${generateSessionData(numDataPoints, startMs, endMs)},
+    ${generateOtelSessionReplayRows(seedRef)}
   `);
   console.log(`  Inserted ${numDataPoints} session entries`);
 
   // Insert Kubernetes gauge metrics (pods and nodes)
   console.log('  Inserting Kubernetes gauge metrics...');
   await client.query(`
-    INSERT INTO default.e2e_otel_metrics_gauge (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_METRICS_GAUGE_TABLE} (
       ResourceAttributes, ResourceSchemaUrl, ScopeName, ScopeVersion, ScopeAttributes,
       ScopeDroppedAttrCount, ScopeSchemaUrl, ServiceName, MetricName, MetricDescription,
       MetricUnit, Attributes, StartTimeUnix, TimeUnix, Value, Flags,
@@ -725,7 +1066,7 @@ export async function seedClickHouse(): Promise<void> {
   // Insert Kubernetes sum metrics (uptime)
   console.log('  Inserting Kubernetes sum metrics...');
   await client.query(`
-    INSERT INTO default.e2e_otel_metrics_sum (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_METRICS_SUM_TABLE} (
       ResourceAttributes, ResourceSchemaUrl, ScopeName, ScopeVersion, ScopeAttributes,
       ScopeDroppedAttrCount, ScopeSchemaUrl, ServiceName, MetricName, MetricDescription,
       MetricUnit, Attributes, StartTimeUnix, TimeUnix, Value, Flags,
@@ -739,7 +1080,7 @@ export async function seedClickHouse(): Promise<void> {
   // Insert Kubernetes event logs
   console.log('  Inserting Kubernetes event logs...');
   await client.query(`
-    INSERT INTO default.e2e_otel_logs (
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_LOGS_TABLE} (
       Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
       ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
       ScopeName, ScopeVersion, ScopeAttributes, LogAttributes
@@ -747,7 +1088,165 @@ export async function seedClickHouse(): Promise<void> {
   `);
   console.log(`  Inserted ${numDataPoints} Kubernetes event logs`);
 
+  // Insert "interesting filter key" rows (dotted/hyphenated column names, Map
+  // key access, and JSON path access) for the filter-key edge case tests.
+  console.log('  Inserting interesting filter key data...');
+  await client.query(`
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_INTERESTING_FILTER_KEYS_TABLE} (
+      Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
+      ResourceAttributes, ResourceAttributesJSON,
+      \`__hdx_materialized_k8s.cluster.name\`, \`service-name\`,
+      \`Map-Attributes\`, \`JSON-Attributes\`
+    ) VALUES ${generateInterestingFilterKeyLogData(seedRef)}
+  `);
+  console.log(
+    `  Inserted ${INTERESTING_FILTER_KEYS_ROWS.length} interesting filter key entries`,
+  );
+
+  // Insert metadata-MV source rows. The insert triggers the key/value rollup
+  // MVs that back this source's facets (ServiceName native column +
+  // LogAttributes['requestId'] map key).
+  console.log('  Inserting metadata-MV source data...');
+  await client.query(`
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_METADATA_MV_LOGS_TABLE} (
+      Timestamp, ServiceName, Body, LogAttributes
+    ) VALUES ${generateMetadataMvLogData(seedRef)}
+  `);
+  console.log(
+    `  Inserted ${METADATA_MV_ROWS.length} metadata-MV source entries`,
+  );
+
+  console.log('  Inserting custom service name logs data...');
+  await client.query(`
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_CUSTOM_SERVICE_LOGS_TABLE} (
+      Timestamp, AppName, SeverityText, Body, LogAttributes
+    ) VALUES ${generateCustomServiceLogData(numDataPoints, startMs, endMs)}
+  `);
+  console.log(`  Inserted ${numDataPoints} generic log entries`);
+
+  // PromQL series: one per service, labelled with the same `ServiceName` values
+  // the logs carry, so a dashboard filter on ServiceName selects values that
+  // actually match a `service` label here.
+  console.log('  Inserting PromQL series...');
+  await seedPromqlSeries(client, startMs, endMs);
+  console.log(`  Inserted ${SERVICES.length} PromQL series`);
+
+  await seedPromqlHistogram(client, startMs, endMs);
+  console.log(`  Inserted ${SERVICES.length} PromQL histograms`);
+
   console.log('ClickHouse seeding complete');
+}
+
+/**
+ * Insert a metric family and its series into the PromQL table, one sample a
+ * minute across the window. `valueSql` computes the nth sample's value. Written
+ * through the TimeSeries table itself, not its inner tables: the engine derives
+ * each series' `id` and splits samples across inner tables in ways that change
+ * between ClickHouse versions, and rows written around it are invisible to the
+ * PromQL engine.
+ */
+async function insertPromqlMetric(
+  client: ReturnType<typeof createClickHouseClient>,
+  startMs: number,
+  endMs: number,
+  family: { name: string; type: string; unit: string; help: string },
+  series: {
+    metricName: string;
+    tags: Record<string, string>;
+    valueSql: string;
+  }[],
+) {
+  const table = `${E2E_CLICKHOUSE_DATABASE}.${E2E_PROMQL_TABLE}`;
+
+  await client.query(`
+    INSERT INTO ${table} (metric_family, type, unit, help)
+    VALUES ('${family.name}', '${family.type}', '${family.unit}', '${family.help}')
+  `);
+
+  const stepMs = 60000;
+  const sampleCount = Math.max(1, Math.floor((endMs - startMs) / stepMs));
+  const rows = series
+    .map(({ metricName, tags, valueSql }) => {
+      const tagArgs = Object.entries(tags)
+        .flatMap(([key, value]) => [`'${key}'`, `'${value}'`])
+        .join(', ');
+      return (
+        `SELECT '${metricName}', map(${tagArgs}), ` +
+        `arrayMap(n -> (fromUnixTimestamp64Milli(toInt64(${startMs} + n * ${stepMs})), ${valueSql}), range(${sampleCount}))`
+      );
+    })
+    .join('\n    UNION ALL\n    ');
+
+  await client.query(`
+    INSERT INTO ${table} (metric_name, tags, samples)
+    ${rows}
+  `);
+}
+
+/** Seed one `E2E_PROMQL_METRIC_NAME` series per service, always 1. */
+async function seedPromqlSeries(
+  client: ReturnType<typeof createClickHouseClient>,
+  startMs: number,
+  endMs: number,
+) {
+  await insertPromqlMetric(
+    client,
+    startMs,
+    endMs,
+    {
+      name: E2E_PROMQL_METRIC_NAME,
+      type: 'gauge',
+      unit: '',
+      help: 'E2E service liveness',
+    },
+    SERVICES.map(service => ({
+      metricName: E2E_PROMQL_METRIC_NAME,
+      tags: { service },
+      valueSql: '1.0',
+    })),
+  );
+}
+
+/**
+ * Each bucket's per-minute increase, keyed by its `le` label. Cumulative, so a
+ * minute adds 1 observation <= 0.1, 2 in (0.1, 0.5], 1 in (0.5, 1] and 1 above.
+ */
+const PROMQL_HISTOGRAM_BUCKET_INCREASES: Record<string, number> = {
+  '0.1': 1,
+  '0.5': 3,
+  '1': 4,
+  '+Inf': 5,
+};
+
+/**
+ * Seed a classic histogram, `E2E_PROMQL_HISTOGRAM_METRIC_NAME`, per service:
+ * one cumulative counter series per `le` bucket, growing at a fixed rate.
+ */
+async function seedPromqlHistogram(
+  client: ReturnType<typeof createClickHouseClient>,
+  startMs: number,
+  endMs: number,
+) {
+  await insertPromqlMetric(
+    client,
+    startMs,
+    endMs,
+    {
+      name: E2E_PROMQL_HISTOGRAM_METRIC_NAME,
+      type: 'histogram',
+      unit: 'seconds',
+      help: 'E2E request duration',
+    },
+    SERVICES.flatMap(service =>
+      Object.entries(PROMQL_HISTOGRAM_BUCKET_INCREASES).map(
+        ([le, increase]) => ({
+          metricName: `${E2E_PROMQL_HISTOGRAM_METRIC_NAME}_bucket`,
+          tags: { service, le },
+          valueSql: `toFloat64(n * ${increase})`,
+        }),
+      ),
+    ),
+  );
 }
 
 // Allow running directly for testing
