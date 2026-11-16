@@ -3,12 +3,7 @@ import {
   validateDashboardFilterOptionUniqueness,
   validateDashboardFilterVariableNames,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
-import {
-  getAdhocFilterSourceKinds,
-  isAdhocFilter,
-  isPrometheusLabelFilter,
-  isSqlQueryFilter,
-} from '@hyperdx/common-utils/dist/filters';
+import { isSqlQueryFilter } from '@hyperdx/common-utils/dist/filters';
 import {
   DashboardFilter,
   DashboardSchema,
@@ -16,7 +11,6 @@ import {
   PresetDashboard,
   PresetDashboardFilterSchema,
   resolveChartPaletteToken,
-  SourceKind,
   walkRawDashboardTileColors,
 } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
@@ -41,6 +35,10 @@ import {
 import { getSources } from '@/controllers/sources';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
 import type { ObjectId } from '@/models';
+import {
+  getChangedFilterSourceRefs,
+  getFilterSourceRefError,
+} from '@/utils/filterSources';
 import { objectIdSchema } from '@/utils/zod';
 
 // create routes that will get and update dashboards
@@ -66,22 +64,6 @@ const addFilterIssues = (
   validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx);
 };
 
-/** The sources a filter reads from, each with the kinds it must be. */
-function getFilterSourceRefs(
-  filter: DashboardFilter,
-): { id: string; kinds: SourceKind[] }[] {
-  if (isPrometheusLabelFilter(filter)) {
-    return [{ id: filter.source, kinds: [SourceKind.Promql] }];
-  }
-  if (isAdhocFilter(filter)) {
-    const kinds = getAdhocFilterSourceKinds(filter.sourceType);
-    return [...filter.sources, ...(filter.appliesToSourceIds ?? [])].map(
-      id => ({ id, kinds }),
-    );
-  }
-  return [];
-}
-
 /**
  * Rejects PROMETHEUS_LABEL and ADHOC filters that reference a source that is
  * missing or of the wrong kind. Resolving these filters needs a live source of
@@ -95,33 +77,9 @@ async function validateFilterSources(
   filters: DashboardFilter[] = [],
   existingFilters: DashboardFilter[] = [],
 ): Promise<string | null> {
-  const refKey = ({ id, kinds }: { id: string; kinds: SourceKind[] }) =>
-    `${id}:${kinds.join(',')}`;
-  const existingRefsById = new Map(
-    existingFilters.map(filter => [
-      filter.id,
-      new Set(getFilterSourceRefs(filter).map(refKey)),
-    ]),
-  );
-  const newRefs = filters.flatMap(filter =>
-    getFilterSourceRefs(filter).filter(
-      ref => !existingRefsById.get(filter.id)?.has(refKey(ref)),
-    ),
-  );
-  if (newRefs.length === 0) return null;
-
-  const sources = await getSources(teamId.toString());
-  const kindById = new Map(sources.map(s => [s._id.toString(), s.kind]));
-  const invalid = new Set(
-    newRefs
-      .filter(({ id, kinds }) => {
-        const kind = kindById.get(id);
-        return kind === undefined || !kinds.includes(kind);
-      })
-      .map(({ id }) => id),
-  );
-  if (invalid.size === 0) return null;
-  return `The following filter source IDs do not exist or are not a kind of source the filter supports: ${[...invalid].join(', ')}`;
+  const refs = getChangedFilterSourceRefs(filters, existingFilters);
+  if (refs.length === 0) return null;
+  return getFilterSourceRefError(refs, await getSources(teamId.toString()));
 }
 
 /**

@@ -14,7 +14,6 @@ import {
   validateDashboardTileContainerRefs,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import {
-  getAdhocFilterSourceKinds,
   isAdhocFilter,
   isPrometheusLabelFilter,
 } from '@hyperdx/common-utils/dist/filters';
@@ -31,6 +30,7 @@ import {
   DASHBOARD_MAX_CONTAINERS,
   DashboardContainer,
   DashboardContainerSchema,
+  DashboardFilter,
   DisplayType,
   HeatmapMode,
   isLogSource,
@@ -62,6 +62,10 @@ import {
   translateExternalFilterToFilter,
   translateFilterToExternalFilter,
 } from '@/utils/externalApi';
+import {
+  getChangedFilterSourceRefs,
+  getFilterSourceRefError,
+} from '@/utils/filterSources';
 import logger from '@/utils/logger';
 import {
   ExternalDashboardBuilderTileConfig,
@@ -1286,38 +1290,6 @@ function getTileOnClick(tile: ExternalDashboardTileWithId) {
   return tile.config.onClick;
 }
 
-/** Source IDs a filter reads from or applies to. */
-function getFilterSourceIds(
-  filter: ExternalDashboardFilter | ExternalDashboardFilterWithId,
-): string[] {
-  if (isAdhocFilter(filter)) {
-    return [...filter.sources, ...(filter.appliesToSourceIds ?? [])];
-  }
-  return 'sourceId' in filter ? [filter.sourceId] : [];
-}
-
-/**
- * Returns an error message if an ad hoc filter reads from or applies to a
- * source of a kind its `sourceType` can't query, or null if none does.
- */
-function getAdhocFilterSourceKindError(
-  sources: SourceForValidation[],
-  filters: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[],
-): string | null {
-  const kindById = new Map(sources.map(s => [s._id.toString(), s.kind]));
-  const invalid = new Set(
-    filters.filter(isAdhocFilter).flatMap(filter => {
-      const kinds = getAdhocFilterSourceKinds(filter.sourceType);
-      return getFilterSourceIds(filter).filter(id => {
-        const kind = kindById.get(id);
-        return kind !== undefined && !kinds.includes(kind);
-      });
-    }),
-  );
-  if (invalid.size === 0) return null;
-  return `ADHOC filters with sourceType "sql" require Log, Trace, or Session sources, and with sourceType "promql" require PromQL sources. The following source IDs are not a supported kind: ${[...invalid].join(', ')}`;
-}
-
 /** Returns source IDs referenced in tiles/filters that do not exist for the team */
 function getMissingSources(
   sources: SourceForValidation[],
@@ -1347,7 +1319,9 @@ function getMissingSources(
   }
 
   for (const filter of filters ?? []) {
-    for (const sourceId of getFilterSourceIds(filter)) sourceIds.add(sourceId);
+    // Ad hoc filters' sources are checked with the stored filter's references
+    // skipped; see `validateDashboardTiles`.
+    if ('sourceId' in filter) sourceIds.add(filter.sourceId);
   }
 
   const existingSourceIds = new Set(
@@ -1771,6 +1745,8 @@ export type TileValidationContext = {
   filters?: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[];
   /** Existing internal tiles for scoping heatmap change detection (update paths). */
   existingTiles?: DashboardDocument['tiles'];
+  /** Existing filters, whose source references aren't re-checked (update paths). */
+  existingFilters?: DashboardFilter[];
   /** Container set to validate tile containerId/tabId refs against. */
   containers: DashboardContainer[];
 };
@@ -1787,7 +1763,8 @@ export type TileValidationContext = {
 export async function validateDashboardTiles(
   ctx: TileValidationContext,
 ): Promise<string | null> {
-  const { teamId, tiles, filters, existingTiles, containers } = ctx;
+  const { teamId, tiles, filters, existingTiles, existingFilters, containers } =
+    ctx;
 
   // Container/tab ref resolution.
   const tileRefIssues = collectTileContainerRefIssues(containers, tiles);
@@ -1872,9 +1849,14 @@ export async function validateDashboardTiles(
   );
   if (promqlLabelFilterError != null) return promqlLabelFilterError;
 
-  const adhocFilterError = getAdhocFilterSourceKindError(
+  // As in the internal API, references the stored filter already made are not
+  // re-checked, so a since-deleted source doesn't block unrelated saves.
+  const adhocFilterError = getFilterSourceRefError(
+    getChangedFilterSourceRefs(
+      (filters ?? []).filter(isAdhocFilter),
+      existingFilters,
+    ),
     sources,
-    filters ?? [],
   );
   if (adhocFilterError != null) return adhocFilterError;
 

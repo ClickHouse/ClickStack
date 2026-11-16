@@ -8605,6 +8605,58 @@ describe('External API v2 Dashboards - new format', () => {
       );
     });
 
+    describe('with a source deleted since the filter was saved', () => {
+      const deleted = new ObjectId().toString();
+      const createWithDeletedSource = () =>
+        createTestDashboard({
+          filters: [
+            {
+              ...adhocFilter(),
+              sources: [traceSource._id.toString(), deleted],
+            },
+          ],
+        });
+
+      it('accepts a GET response PUT back unchanged', async () => {
+        const dashboard = await createWithDeletedSource();
+        const { data } = (
+          await authRequest('get', `${BASE_URL}/${dashboard._id}`).expect(200)
+        ).body;
+
+        await authRequest('put', `${BASE_URL}/${dashboard._id}`)
+          .send({ ...omit(data, 'id'), name: 'Renamed' })
+          .expect(200);
+      });
+
+      it('rejects the source on a filter that did not reference it', async () => {
+        const dashboard = await createWithDeletedSource();
+        const { data } = (
+          await authRequest('get', `${BASE_URL}/${dashboard._id}`).expect(200)
+        ).body;
+
+        const response = await authRequest(
+          'put',
+          `${BASE_URL}/${dashboard._id}`,
+        )
+          .send({
+            ...omit(data, 'id'),
+            filters: [
+              ...data.filters,
+              // A new filter, with a fresh ID, referencing the deleted source.
+              {
+                ...adhocFilter(),
+                name: 'New',
+                variableName: 'new',
+                appliesToSourceIds: [deleted],
+              },
+            ],
+          })
+          .expect(400);
+
+        expect(response.body.message).toContain(deleted);
+      });
+    });
+
     it.each([
       ['broadcast disabled', { isBroadcastEnabled: false }],
       ['variables disabled', { isVariableEnabled: false }],
