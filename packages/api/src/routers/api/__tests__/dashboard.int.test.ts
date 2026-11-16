@@ -1944,6 +1944,28 @@ describe('dashboard router', () => {
         })
         .expect(400);
     });
+
+    it('accepts a PATCH that moves the filter to another team connection', async () => {
+      const filter = makeSqlFilter();
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+      const moved = { ...filter, connection: otherConnection._id.toString() };
+
+      const updated = await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ filters: [moved] })
+        .expect(200);
+
+      expect(updated.body.filters).toEqual([moved]);
+    });
   });
 
   describe('ad hoc filters', () => {

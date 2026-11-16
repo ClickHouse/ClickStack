@@ -5,13 +5,13 @@ import {
   getDashboardVariableDeclarations,
   getFilterVariableName,
   isFilterVariableEnabled,
+  validateSqlQueryFilterTemplate,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
-import { MalformedMacroArgsError } from '@hyperdx/common-utils/dist/macroErrors';
 import {
   getSourceDependentMacrosUsed,
   hasMacro,
@@ -164,22 +164,6 @@ export type FilterForVariableValidation = FilterForVariableDeclaration &
   Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>> &
   Partial<Pick<SqlQueryDashboardFilter, 'sqlTemplate'>>;
 
-function getSqlQueryFilterSourceMacroIssues(sqlTemplate: string): string[] {
-  try {
-    const macros = getSourceDependentMacrosUsed(sqlTemplate);
-    if (macros.length === 0) return [];
-    return [
-      `The SQL query uses ${macros.map(m => `$__${m}`).join(' and ')}, which ` +
-        'needs a source this filter does not have. Name the table explicitly.',
-    ];
-  } catch (e) {
-    if (e instanceof MalformedMacroArgsError) {
-      return ['The SQL query has a macro with an unclosed argument list.'];
-    }
-    throw e;
-  }
-}
-
 /**
  * Non-blocking checks on the dashboard variables references in a filter's `where`.
  *
@@ -236,7 +220,9 @@ export function getFilterVariableWarnings(
     const issues = [...result.errors, ...result.warnings];
 
     if (sqlTemplate) {
-      issues.push(...getSqlQueryFilterSourceMacroIssues(sqlTemplate));
+      // Also reports variable macro errors, which `result` already holds.
+      const detail = validateSqlQueryFilterTemplate(sqlTemplate, variables);
+      if (detail && !issues.includes(detail)) issues.push(detail);
     }
 
     const referencedNames = new Set(

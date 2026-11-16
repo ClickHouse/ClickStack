@@ -959,7 +959,8 @@ describe('getFilterVariableWarnings', () => {
         serviceFilter,
         sqlFilter('SELECT env FROM envs WHERE $__filter(service, $tenant)'),
       ]);
-      expect(warnings.join('\n')).toContain("unknown variable 'tenant'");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("unknown variable 'tenant'");
     });
 
     it('warns about a macro that needs a source', () => {
@@ -967,15 +968,17 @@ describe('getFilterVariableWarnings', () => {
         sqlFilter('SELECT env FROM $__sourceTable'),
       ]);
       expect(warnings).toEqual([
-        'Filter "Environment": The SQL query uses $__sourceTable, which needs a source this filter does not have. Name the table explicitly.',
+        'Filter "Environment": SQL query filters have no source, so $__sourceTable cannot be used',
       ]);
     });
 
-    it('warns about an unclosed macro instead of throwing', () => {
-      const warnings = getFilterVariableWarnings([
-        sqlFilter('SELECT env FROM $__sourceTable(gauge'),
+    it.each([
+      ['a source macro', 'SELECT env FROM $__sourceTable(gauge'],
+      ['a time macro', 'SELECT env FROM envs WHERE $__timeFilter(ts'],
+    ])('warns about an unclosed %s instead of throwing', (_label, sql) => {
+      expect(getFilterVariableWarnings([sqlFilter(sql)])).toEqual([
+        'Filter "Environment": Failed to parse macro arguments',
       ]);
-      expect(warnings.join('\n')).toContain('unclosed argument list');
     });
   });
 });
