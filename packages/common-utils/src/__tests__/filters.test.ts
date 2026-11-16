@@ -1933,15 +1933,6 @@ describe('filters', () => {
       ]);
     });
 
-    it('skips =| rather than throwing', () => {
-      expect(
-        adhocConditionsToFilters([
-          { key: 'ServiceName', operator: '=|', value: 'api' },
-          { key: 'Env', operator: '=', value: 'prod' },
-        ]),
-      ).toEqual([{ type: 'sql', condition: "toString(Env) = 'prod'" }]);
-    });
-
     it('passes LIKE patterns through as written', () => {
       expect(conditionFor('LIKE', '%err_r%')).toEqual([
         { type: 'sql', condition: "toString(ServiceName) LIKE '%err_r%'" },
@@ -2117,22 +2108,22 @@ describe('filters', () => {
       ['!=', 'service!="api"'],
       ['=~', 'service=~"api"'],
       ['!~', 'service!~"api"'],
-      ['=|', 'service=~"api"'],
+      ['IN', 'service=~"api"'],
     ])('renders %s', (operator, matcher) => {
       expect(matcherFor(operator)).toEqual([matcher]);
     });
 
-    it('ORs =| conditions sharing a label into one escaped regex', () => {
+    it('ORs IN conditions sharing a label into one escaped regex', () => {
       expect(
         adhocConditionsToPromqlFilters([
-          { key: 'service', operator: '=|', value: 'api' },
-          { key: 'job', operator: '=|', value: 'node' },
-          { key: 'service', operator: '=|', value: 'a.b\\c' },
+          { key: 'service', operator: 'IN', value: 'api' },
+          { key: 'job', operator: 'IN', value: 'node' },
+          { key: 'service', operator: 'IN', value: 'a.b\\c' },
         ]).map(filter => filter.condition),
       ).toEqual(['service=~"(api|a\\\\.b\\\\\\\\c)"', 'job=~"node"']);
     });
 
-    it.each<AdhocFilterOperator>(['LIKE', 'NOT LIKE', 'IN'])(
+    it.each<AdhocFilterOperator>(['LIKE', 'NOT LIKE'])(
       'skips %s rather than throwing',
       operator => {
         expect(
@@ -2184,9 +2175,7 @@ describe('filters', () => {
       ['promql', '=~', true],
       ['promql', '!=', true],
       ['sql', 'IN', true],
-      ['sql', '=|', false],
-      ['promql', '=|', true],
-      ['promql', 'IN', false],
+      ['promql', 'IN', true],
     ])('%s supports %s: %s', (sourceType, operator, expected) => {
       expect(
         isAdhocConditionSupported(sourceType, {

@@ -106,15 +106,6 @@ describe('AdhocDashboardFilter', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('marks conditions a SQL filter cannot apply as invalid', () => {
-    renderFilter([{ key: 'job', operator: '=|', value: 'api' }]);
-
-    expect(screen.getByTestId('adhoc-condition-pill')).toHaveAttribute(
-      'data-invalid',
-      'true',
-    );
-  });
-
   it('marks conditions a PromQL filter cannot apply as invalid', () => {
     renderFilter(
       [

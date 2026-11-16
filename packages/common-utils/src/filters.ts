@@ -1033,38 +1033,27 @@ type GroupedAdhocCondition = {
 };
 
 /**
- * Merge the conditions using `operator` that share a key into the first of
- * them, so their values can be OR'd. Other conditions keep one value each.
+ * Merge the `IN` conditions that share a key into the first of them, so their
+ * values can be OR'd. Other conditions keep one value each.
  */
 const groupAdhocConditionsByKey = (
   conditions: AdhocFilterCondition[],
-  operator: AdhocFilterOperator,
 ): GroupedAdhocCondition[] => {
   const valuesByKey = new Map<string, string[]>();
   const grouped: GroupedAdhocCondition[] = [];
   for (const condition of conditions) {
-    const existing =
-      condition.operator === operator
-        ? valuesByKey.get(condition.key)
-        : undefined;
+    const isIn = condition.operator === 'IN';
+    const existing = isIn ? valuesByKey.get(condition.key) : undefined;
     if (existing) {
       existing.push(condition.value);
       continue;
     }
     const values = [condition.value];
-    if (condition.operator === operator) valuesByKey.set(condition.key, values);
+    if (isIn) valuesByKey.set(condition.key, values);
     grouped.push({ condition, values });
   }
   return grouped;
 };
-
-const unsupportedOperatorError = (
-  operator: AdhocFilterOperator,
-  sourceType: AdhocFilterSourceType,
-) =>
-  new Error(
-    `Ad hoc filter operator '${operator}' is not supported for ${sourceType === 'sql' ? 'SQL' : 'PromQL'}`,
-  );
 
 const renderAdhocConditionSql = ({
   condition: { key, operator, value },
@@ -1086,8 +1075,6 @@ const renderAdhocConditionSql = ({
       return `NOT match(${target}, ${literal})`;
     case 'IN':
       return `${target} IN (${formatVariableValues({ values }, 'sqlstring')})`;
-    case '=|':
-      throw unsupportedOperatorError(operator, 'sql');
     default:
       operator satisfies never;
       throw new Error(`Unknown ad hoc filter operator '${operator}'`);
@@ -1097,16 +1084,12 @@ const renderAdhocConditionSql = ({
 /**
  * Render the conditions of a SQL ad hoc filter as filters, one per condition,
  * except that `IN` conditions sharing a key become one. Keys are SQL
- * expressions and are used verbatim. Conditions SQL can't express are skipped;
- * callers report them using `isAdhocConditionSupported`.
+ * expressions and are used verbatim.
  */
 export function adhocConditionsToFilters(
   conditions: AdhocFilterCondition[],
 ): ConditionFilter[] {
-  const supported = conditions.filter(condition =>
-    isAdhocConditionSupported('sql', condition),
-  );
-  return groupAdhocConditionsByKey(supported, 'IN').map(
+  return groupAdhocConditionsByKey(conditions).map(
     (grouped): ConditionFilter => ({
       type: 'sql',
       condition: renderAdhocConditionSql(grouped),
@@ -1183,14 +1166,15 @@ const renderAdhocMatcherPromql = ({
     case '=~':
     case '!~':
       return `${label}${operator}"${escapePromqlStringValue(value)}"`;
-    case '=|': {
+    case 'IN': {
       const pattern = formatVariableValues({ values }, 'regex');
       return `${label}=~"${escapePromqlStringValue(pattern)}"`;
     }
     case 'LIKE':
     case 'NOT LIKE':
-    case 'IN':
-      throw unsupportedOperatorError(operator, 'promql');
+      throw new Error(
+        `Ad hoc filter operator '${operator}' is not supported for PromQL`,
+      );
     default:
       operator satisfies never;
       throw new Error(`Unknown ad hoc filter operator '${operator}'`);
@@ -1199,8 +1183,7 @@ const renderAdhocMatcherPromql = ({
 
 /**
  * Whether an ad hoc filter of `sourceType` can apply `condition`. A filter
- * switched between SQL and PromQL keeps its conditions, and PromQL has no LIKE
- * or IN, nor SQL a `=|`.
+ * switched from SQL to PromQL keeps its conditions, and PromQL has no LIKE.
  */
 export function isAdhocConditionSupported(
   sourceType: AdhocFilterSourceType,
@@ -1219,7 +1202,7 @@ export function isAdhocConditionSupported(
 
 /**
  * Render the conditions of a PromQL ad hoc filter as label matchers, one per
- * condition, except that `=|` conditions sharing a label become one regex
+ * condition, except that `IN` conditions sharing a label become one regex
  * matcher. Conditions PromQL can't express are skipped; callers report them
  * using `isAdhocConditionSupported`.
  */
@@ -1229,7 +1212,7 @@ export function adhocConditionsToPromqlFilters(
   const supported = conditions.filter(condition =>
     isAdhocConditionSupported('promql', condition),
   );
-  return groupAdhocConditionsByKey(supported, '=|').map(
+  return groupAdhocConditionsByKey(supported).map(
     (grouped): PromqlConditionFilter => ({
       type: 'promql',
       condition: renderAdhocMatcherPromql(grouped),

@@ -1,7 +1,6 @@
 import {
   AdhocFilterOperator,
   PROMQL_ADHOC_FILTER_OPERATORS,
-  SQL_ADHOC_FILTER_OPERATORS,
 } from '@hyperdx/common-utils/dist/types';
 
 import type { FilterOperatorOption } from './FilterConditionEditor';
@@ -17,32 +16,28 @@ const REGEX_VALUE = {
 };
 const LIKE_VALUE = { valuePlaceholder: 'Pattern, e.g. %error%' };
 
-// One value per condition; the renderer ORs conditions sharing a key.
-const ONE_OF = {
-  label: 'in',
-  valuePlaceholder: "OR'd with this key's other values",
-};
-
-const FILTER_OPERATORS: FilterOperatorOption<FilterOperator>[] = [
+export const SQL_FILTER_OPERATORS: FilterOperatorOption<FilterOperator>[] = [
   { value: '=', label: '=' },
   { value: '!=', label: '!=', negated: true },
   { value: '=~', label: 'regex', ...REGEX_VALUE },
   { value: '!~', label: 'not regex', negated: true, ...REGEX_VALUE },
   { value: 'LIKE', label: 'like', ...LIKE_VALUE },
   { value: 'NOT LIKE', label: 'not like', negated: true, ...LIKE_VALUE },
-  { value: 'IN', ...ONE_OF },
-  { value: '=|', ...ONE_OF },
+  // One value per condition; the renderer ORs conditions sharing a key.
+  {
+    value: 'IN',
+    label: 'in',
+    valuePlaceholder: "OR'd with this key's other values",
+  },
 ];
 
-export const SQL_FILTER_OPERATORS: FilterOperatorOption<FilterOperator>[] =
-  FILTER_OPERATORS.filter(op => SQL_ADHOC_FILTER_OPERATORS.includes(op.value));
-
 // Derived so the editor never offers an operator the PromQL broadcast skips.
-// PromQL users know the operator syntax, so it doubles as the label.
+// PromQL users know the operator syntax, so it doubles as the label. PromQL has
+// no `IN`, so it borrows Grafana's `=|`.
 export const PROMQL_FILTER_OPERATORS: FilterOperatorOption<FilterOperator>[] =
-  FILTER_OPERATORS.filter(op =>
+  SQL_FILTER_OPERATORS.filter(op =>
     PROMQL_ADHOC_FILTER_OPERATORS.includes(op.value),
-  ).map(op => ({ ...op, label: op.value }));
+  ).map(op => ({ ...op, label: op.value === 'IN' ? '=|' : op.value }));
 
 export function getFilterOperators(
   language: FilterLanguage,

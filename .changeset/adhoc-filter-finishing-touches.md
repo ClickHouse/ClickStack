@@ -6,8 +6,8 @@
 
 feat: Ad hoc dashboard filter finishing touches
 
-- Add an `IN` operator for SQL and a `=|` operator for PromQL. Conditions on the
-  same key are OR'd into one `IN (...)` or `=~"a|b"` condition.
+- Add an `IN` operator. `IN` conditions on the same key are OR'd into one
+  `IN (...)` condition for SQL, or one `=~"a|b"` matcher for PromQL.
 - Ad hoc filters always broadcast (`isBroadcastEnabled: true`), and their
   variable name is only a unique identifier. It is no longer declared as a
   `$variable`.

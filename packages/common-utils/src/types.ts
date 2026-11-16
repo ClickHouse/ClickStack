@@ -1344,31 +1344,23 @@ export const AdhocFilterOperatorSchema = z.enum([
   'LIKE',
   'NOT LIKE',
   'IN',
-  '=|',
 ]);
 
 export type AdhocFilterOperator = z.infer<typeof AdhocFilterOperatorSchema>;
 
 /**
- * `IN` (SQL) and `=|` (PromQL) conditions sharing a key are OR'd together when
- * rendered; every other condition is AND'd.
+ * `IN` conditions sharing a key are OR'd together when rendered; every other
+ * condition is AND'd.
  */
-export const SQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] = [
-  '=',
-  '!=',
-  '=~',
-  '!~',
-  'LIKE',
-  'NOT LIKE',
-  'IN',
-];
+export const SQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] =
+  AdhocFilterOperatorSchema.options;
 
 export const PROMQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] = [
   '=',
   '!=',
   '=~',
   '!~',
-  '=|',
+  'IN',
 ];
 
 /** One `key operator value` condition picked in an ad hoc filter. */
