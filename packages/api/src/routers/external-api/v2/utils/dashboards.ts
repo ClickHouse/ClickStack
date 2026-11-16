@@ -13,10 +13,7 @@ import {
   validateDashboardFilterVariableNames,
   validateDashboardTileContainerRefs,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
-import {
-  isPrometheusLabelFilter,
-  isStaticListFilter,
-} from '@hyperdx/common-utils/dist/filters';
+import { isPrometheusLabelFilter } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
   isHeatmapCompatibleSource,
@@ -1309,8 +1306,7 @@ function getMissingSources(
 
   if (filters?.length) {
     for (const filter of filters) {
-      // Every variant but the static one names a source.
-      if (!isStaticListFilter(filter)) {
+      if ('sourceId' in filter) {
         sourceIds.add(filter.sourceId);
       }
     }
@@ -1589,16 +1585,22 @@ async function getMissingOnClickDashboards(
   return [...dashboardIds].filter(id => !existingDashboardIds.has(id));
 }
 
-/** Returns connection IDs referenced in tiles that do not belong to the team */
+/** Returns connection IDs referenced in tiles or filters that do not belong to the team */
 async function getMissingConnections(
   team: string | mongoose.Types.ObjectId,
   tiles: ExternalDashboardTileWithId[],
+  filters: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[] = [],
 ): Promise<string[]> {
   const connectionIds = new Set<string>();
 
   for (const tile of tiles) {
     if (isConfigTile(tile) && isRawSqlExternalTileConfig(tile.config)) {
       connectionIds.add(tile.config.connectionId);
+    }
+  }
+  for (const filter of filters) {
+    if ('connectionId' in filter) {
+      connectionIds.add(filter.connectionId);
     }
   }
 
@@ -1763,7 +1765,7 @@ export async function validateDashboardTiles(
     invalidOnClickSearchSources,
   ] = await Promise.all([
     fetchSourcesForValidation(teamId),
-    getMissingConnections(teamId, tiles),
+    getMissingConnections(teamId, tiles, filters),
     getMissingOnClickDashboards(teamId, tiles),
     getInvalidOnClickSearchSources(teamId, tiles),
   ]);

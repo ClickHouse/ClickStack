@@ -11,6 +11,7 @@ import {
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import { MalformedMacroArgsError } from '@hyperdx/common-utils/dist/macroErrors';
 import {
   getSourceDependentMacrosUsed,
   hasMacro,
@@ -21,6 +22,7 @@ import {
   DisplayType,
   QueryExpressionDashboardFilter,
   SavedChartConfig,
+  SqlQueryDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import {
   getVariableReferences,
@@ -154,11 +156,29 @@ export function getRawSqlTileMacroWarnings(
 }
 
 /**
- * Minimal projection needed to check a filter's dropdown-values query. Static
- * list filters have no dropdown query, so `where` / `whereLanguage` are optional.
+ * Minimal projection needed to check a filter's dropdown-values query: a
+ * queried filter's `where`, or a SQL query filter's `sqlTemplate`. Static list
+ * filters have no dropdown query, so all of these are optional.
  */
 export type FilterForVariableValidation = FilterForVariableDeclaration &
-  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>>;
+  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>> &
+  Partial<Pick<SqlQueryDashboardFilter, 'sqlTemplate'>>;
+
+function getSqlQueryFilterSourceMacroIssues(sqlTemplate: string): string[] {
+  try {
+    const macros = getSourceDependentMacrosUsed(sqlTemplate);
+    if (macros.length === 0) return [];
+    return [
+      `The SQL query uses ${macros.map(m => `$__${m}`).join(' and ')}, which ` +
+        'needs a source this filter does not have. Name the table explicitly.',
+    ];
+  } catch (e) {
+    if (e instanceof MalformedMacroArgsError) {
+      return ['The SQL query has a macro with an unclosed argument list.'];
+    }
+    throw e;
+  }
+}
 
 /**
  * Non-blocking checks on the dashboard variables references in a filter's `where`.
@@ -202,17 +222,22 @@ export function getFilterVariableWarnings(
 
   const warnings: string[] = [];
   filters.forEach((filter, index) => {
-    const where = filter.where?.trim();
+    const sqlTemplate = filter.sqlTemplate?.trim();
+    const where = sqlTemplate || filter.where?.trim();
     if (!where) return;
 
     const label = filter.name?.trim() || `filter #${index + 1}`;
-    const language = filter.whereLanguage ?? 'sql';
+    const language = sqlTemplate ? 'sql' : (filter.whereLanguage ?? 'sql');
 
     const result = validateVariableReferencesInTemplate(where, variables, {
       subject: 'The dropdown values query',
       language,
     });
     const issues = [...result.errors, ...result.warnings];
+
+    if (sqlTemplate) {
+      issues.push(...getSqlQueryFilterSourceMacroIssues(sqlTemplate));
+    }
 
     const referencedNames = new Set(
       getVariableReferences(where).map(reference => reference.name),

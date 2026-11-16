@@ -594,9 +594,22 @@ describe('mcpFiltersParam variable fields', () => {
       options: ['prod', 'staging'],
       variableName,
     }),
+    SQL_QUERY: (variableName: string) => ({
+      type: 'SQL_QUERY',
+      name: 'Environment',
+      connectionId: sourceId,
+      sqlTemplate: 'SELECT DISTINCT env FROM envs',
+      variableName,
+    }),
   };
 
-  describe.each(['QUERY_EXPRESSION', 'STATIC_LIST'] as const)('%s', type => {
+  const variableFilterTypes = [
+    'QUERY_EXPRESSION',
+    'STATIC_LIST',
+    'SQL_QUERY',
+  ] as const;
+
+  describe.each(variableFilterTypes)('%s', type => {
     it.each([
       ['a space', 'has space'],
       ['a leading digit', '1service'],
@@ -920,5 +933,49 @@ describe('getFilterVariableWarnings', () => {
     expect(joined).toContain('Filter "Endpoint"');
     expect(joined).toContain("unknown variable 'tenant'");
     expect(joined).toContain('Available variables: service');
+  });
+
+  describe('SQL query filters', () => {
+    const sqlFilter = (sqlTemplate: string) => ({
+      name: 'Environment',
+      sqlTemplate,
+      isVariableEnabled: true,
+      variableName: 'env',
+    });
+
+    it('accepts a query guarded by $__filter', () => {
+      expect(
+        getFilterVariableWarnings([
+          serviceFilter,
+          sqlFilter(
+            'SELECT env FROM envs WHERE $__filter(service, $service) AND $__timeFilter(ts)',
+          ),
+        ]),
+      ).toEqual([]);
+    });
+
+    it('checks the query as SQL', () => {
+      const warnings = getFilterVariableWarnings([
+        serviceFilter,
+        sqlFilter('SELECT env FROM envs WHERE $__filter(service, $tenant)'),
+      ]);
+      expect(warnings.join('\n')).toContain("unknown variable 'tenant'");
+    });
+
+    it('warns about a macro that needs a source', () => {
+      const warnings = getFilterVariableWarnings([
+        sqlFilter('SELECT env FROM $__sourceTable'),
+      ]);
+      expect(warnings).toEqual([
+        'Filter "Environment": The SQL query uses $__sourceTable, which needs a source this filter does not have. Name the table explicitly.',
+      ]);
+    });
+
+    it('warns about an unclosed macro instead of throwing', () => {
+      const warnings = getFilterVariableWarnings([
+        sqlFilter('SELECT env FROM $__sourceTable(gauge'),
+      ]);
+      expect(warnings.join('\n')).toContain('unclosed argument list');
+    });
   });
 });
