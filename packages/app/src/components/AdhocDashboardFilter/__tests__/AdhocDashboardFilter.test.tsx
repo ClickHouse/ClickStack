@@ -151,6 +151,25 @@ describe('AdhocDashboardFilter', () => {
     );
   });
 
+  it('waits for an unselected data source variable its sources reference', async () => {
+    const onChange = renderFilter([existing], filter, {
+      unresolvedVariables: ['ds'],
+    });
+
+    expect(
+      screen.getByTestId('dashboard-filter-pending-variable-Conditions'),
+    ).toBeInTheDocument();
+    expect(addButton()).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.click(addButton());
+    await userEvent.click(screen.getByTestId('adhoc-condition-pill'));
+    expect(screen.queryByTestId(`${editorId}-key`)).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Remove filter' }),
+    );
+    expect(onChange).toHaveBeenCalledWith([]);
+  });
+
   it('edits a condition from its pill', async () => {
     const onChange = renderFilter([
       existing,

@@ -3,6 +3,7 @@ import { useForm, useWatch } from 'react-hook-form';
 import {
   deriveVariableName,
   getFilterVariableName,
+  isReferenceVariableFilterType,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   ChartVariable,
@@ -33,6 +34,7 @@ import { useZIndex } from '@/zIndex';
 import { AdhocFilterEditForm } from './AdhocFilterEditForm';
 import { MODAL_SIZE } from './constants';
 import { CustomInputWrapper } from './CustomInputWrapper';
+import { DataSourceFilterEditForm } from './DataSourceFilterEditForm';
 import {
   FilterFormValues,
   toFormValues,
@@ -64,6 +66,7 @@ const FILTER_TYPE_OPTIONS = [
         },
       ]
     : []),
+  { value: DashboardFilterType.enum.DATA_SOURCE, label: 'Data source' },
 ];
 
 interface DashboardFilterEditFormProps {
@@ -184,8 +187,29 @@ export const DashboardFilterEditForm = ({
     return variables?.filter(variable => variable.name !== ownName);
   }, [variables, filter]);
 
+  // Ad hoc conditions and reference variables have fixed selection rules.
+  // Reference variables are always required, so only the global choice is left.
+  const isReferenceVariable = isReferenceVariableFilterType(formFilterType);
+  const showSelectionOptions =
+    showRequiredFilterOptions &&
+    formFilterType !== 'ADHOC' &&
+    !isReferenceVariable;
+  const showGlobalRequirementOption =
+    showRequiredFilterOptions && (isReferenceVariable || !!isRequired);
+
   const isNew = !filter;
   const showTypeInput = !!showVariableOptions;
+
+  const globalRequirementCheckbox = (
+    <CheckBoxControlled
+      control={control}
+      name="isGlobalRequirement"
+      size="xs"
+      label="Block every tile"
+      description="Block every tile until the filter has a selection, instead of just the tiles that use this filter's value."
+      data-testid="filter-global-requirement-checkbox"
+    />
+  );
 
   return (
     <Modal
@@ -236,7 +260,12 @@ export const DashboardFilterEditForm = ({
             message="Failed to load filter"
             showErrorMessage
           >
-            {formFilterType === 'STATIC_LIST' ? (
+            {formFilterType === 'DATA_SOURCE' ? (
+              <DataSourceFilterEditForm
+                control={control}
+                otherFilters={otherFilters}
+              />
+            ) : formFilterType === 'STATIC_LIST' ? (
               <StaticListFilterEditForm
                 control={control}
                 otherFilters={otherFilters}
@@ -269,7 +298,7 @@ export const DashboardFilterEditForm = ({
             )}
           </ErrorBoundary>
 
-          {showRequiredFilterOptions && formFilterType !== 'ADHOC' && (
+          {showSelectionOptions && (
             <Stack gap="xs">
               <Divider my="xs" />
               <CheckBoxControlled
@@ -288,18 +317,15 @@ export const DashboardFilterEditForm = ({
                 description="Tiles will not load until this filter has a selection."
                 data-testid="filter-required-checkbox"
               />
-              {!!isRequired && (
-                <Box ml={27}>
-                  <CheckBoxControlled
-                    control={control}
-                    name="isGlobalRequirement"
-                    size="xs"
-                    label="Block every tile"
-                    description="Block every tile until the filter has a selection, instead of just the tiles that use this filter's value."
-                    data-testid="filter-global-requirement-checkbox"
-                  />
-                </Box>
+              {showGlobalRequirementOption && (
+                <Box ml={27}>{globalRequirementCheckbox}</Box>
               )}
+            </Stack>
+          )}
+          {isReferenceVariable && showGlobalRequirementOption && (
+            <Stack gap="xs">
+              <Divider my="xs" />
+              {globalRequirementCheckbox}
             </Stack>
           )}
 

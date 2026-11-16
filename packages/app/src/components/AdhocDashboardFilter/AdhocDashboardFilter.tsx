@@ -53,7 +53,14 @@ type AdhocDashboardFilterProps = {
   variables?: ChartVariable[];
   /** Required filters with nothing selected. */
   unsatisfiedRequiredFilters?: DashboardFilter[];
+  /**
+   * Unselected data source variables the filter's sources reference. Until
+   * they have a selection the filter has no sources to suggest keys from.
+   */
+  unresolvedVariables?: string[];
 };
+
+const NO_VARIABLES: string[] = [];
 
 /** A dashboard filter bar control holding one ad hoc filter's conditions. */
 export function AdhocDashboardFilter({
@@ -64,6 +71,7 @@ export function AdhocDashboardFilter({
   effect,
   variables,
   unsatisfiedRequiredFilters,
+  unresolvedVariables = NO_VARIABLES,
 }: AdhocDashboardFilterProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -103,7 +111,8 @@ export function AdhocDashboardFilter({
     ? `This filter depends on: ${blockingFilterNames.join(', ')}`
     : undefined;
   const disabledReason = dependsOn ?? suggestionsWhere.error;
-  const isDisabled = !!disabledReason;
+  const isDisabled = !!disabledReason || unresolvedVariables.length > 0;
+  const allPendingVariables = [...unresolvedVariables, ...pendingVariables];
 
   const toggleAdding = () => {
     if (isDisabled) return;
@@ -136,9 +145,9 @@ export function AdhocDashboardFilter({
             testId={`dashboard-filter-blocked-${filter.name}`}
           />
         )}
-        {!isDisabled && pendingVariables.length > 0 && (
+        {!disabledReason && allPendingVariables.length > 0 && (
           <FilterCaution
-            label={getPendingVariablesTooltip(pendingVariables)}
+            label={getPendingVariablesTooltip(allPendingVariables)}
             testId={`dashboard-filter-pending-variable-${filter.name}`}
           />
         )}

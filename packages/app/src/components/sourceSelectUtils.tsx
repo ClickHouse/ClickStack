@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
 import { ComboboxItem, OptionsFilter } from '@mantine/core';
 import {
@@ -6,6 +7,7 @@ import {
   IconConnection,
   IconDeviceLaptop,
   IconLogs,
+  IconVariable,
 } from '@tabler/icons-react';
 
 export const SOURCE_KIND_ICONS: Record<string, React.ReactNode> = {
@@ -15,6 +17,16 @@ export const SOURCE_KIND_ICONS: Record<string, React.ReactNode> = {
   [SourceKind.Metric]: <IconChartLine size={16} />,
   [SourceKind.Promql]: <IconChartLine size={16} />,
 };
+
+const VARIABLE_ICON = <IconVariable size={16} />;
+
+export function getSourceOptionIcon(
+  value: string | undefined,
+  sourceKindMap: ReadonlyMap<string, SourceKind>,
+): React.ReactNode {
+  if (parseVariableReference(value) != null) return VARIABLE_ICON;
+  return SOURCE_KIND_ICONS[(value && sourceKindMap.get(value)) ?? ''];
+}
 
 /** Header for sources that have no section assigned. Internal to this module. */
 const UNSECTIONED_SOURCE_GROUP = 'Other';
