@@ -3,9 +3,12 @@ import { Box, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 
+import Choice from '@/mcp/Choice';
 import {
   type KeyIdentity,
+  listTeams,
   type McpClient,
+  type McpTeam,
   mcpUrl,
   verifyKey,
 } from '@/mcp/install';
@@ -16,19 +19,21 @@ export interface InstallResult {
   error?: string;
 }
 
-type Step = 'appUrl' | 'key' | 'checking' | 'confirm';
+type Step = 'appUrl' | 'key' | 'checking' | 'team' | 'agents' | 'confirm';
 
 /**
- * Collects the app URL and API key, checks the key, then asks before writing
- * any client config. Calls `onDone` with the results, or with null if the
- * user cancels.
+ * Collects the app URL and API key, checks the key, offers a team and agent
+ * choice when there is more than one, then asks before writing any config.
+ * Calls `onDone` with the results, or with null if the user cancels.
  */
 export default function McpInstallPrompt({
   initialAppUrl,
+  name,
   clients,
   onDone,
 }: {
   initialAppUrl?: string;
+  name: string;
   clients: McpClient[];
   onDone: (results: InstallResult[] | null) => void;
 }) {
@@ -37,6 +42,10 @@ export default function McpInstallPrompt({
   const [appUrl, setAppUrl] = useState(initialAppUrl ?? '');
   const [key, setKey] = useState('');
   const [identity, setIdentity] = useState<KeyIdentity | null>(null);
+  const [teams, setTeams] = useState<McpTeam[]>([]);
+  const [team, setTeam] = useState<McpTeam | null>(null);
+  const [teamsFailed, setTeamsFailed] = useState(false);
+  const [chosen, setChosen] = useState(clients);
   const [error, setError] = useState<string | null>(null);
 
   const finish = (results: InstallResult[] | null) => {
@@ -47,9 +56,9 @@ export default function McpInstallPrompt({
   useInput(
     (input, inkKey) => {
       if (inkKey.return || input.toLowerCase() === 'y') {
-        const server = { url: mcpUrl(appUrl), key };
+        const server = { name, url: mcpUrl(appUrl), key, teamId: team?.id };
         finish(
-          clients.map(client => {
+          chosen.map(client => {
             try {
               client.install(server);
               return { client };
@@ -67,6 +76,8 @@ export default function McpInstallPrompt({
     },
     { isActive: step === 'confirm' },
   );
+
+  const afterTeam: Step = clients.length > 1 ? 'agents' : 'confirm';
 
   const submitAppUrl = () => {
     const trimmed = appUrl.trim().replace(/\/+$/, '');
@@ -88,7 +99,11 @@ export default function McpInstallPrompt({
     setStep('checking');
     try {
       setIdentity(await verifyKey(appUrl, cleaned));
-      setStep('confirm');
+      // A failed listing must not block the install or look like one team.
+      const found = await listTeams(appUrl, cleaned).catch(() => null);
+      setTeamsFailed(found == null);
+      setTeams(found ?? []);
+      setStep(found && found.length > 1 ? 'team' : afterTeam);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setKey('');
@@ -141,6 +156,43 @@ export default function McpInstallPrompt({
         </Text>
       )}
 
+      {teamsFailed && step !== 'key' && (
+        <Text color="yellow">
+          Could not list teams. The server will use the key&apos;s default team.
+        </Text>
+      )}
+
+      {step === 'team' && (
+        <Choice
+          title="Team this server queries:"
+          items={teams}
+          label={t => (t.isCurrent ? `${t.name} (default)` : t.name)}
+          initial={Math.max(
+            0,
+            teams.findIndex(t => t.isCurrent),
+          )}
+          onSubmit={([picked]) => {
+            setTeam(picked);
+            setStep(afterTeam);
+          }}
+          onCancel={() => finish(null)}
+        />
+      )}
+
+      {step === 'agents' && (
+        <Choice
+          multi
+          title="Agents to set up:"
+          items={clients}
+          label={c => c.label}
+          onSubmit={picked => {
+            setChosen(picked);
+            setStep('confirm');
+          }}
+          onCancel={() => finish(null)}
+        />
+      )}
+
       {step === 'confirm' && identity && (
         <Box flexDirection="column">
           <Text color="green">
@@ -151,8 +203,11 @@ export default function McpInstallPrompt({
             .
           </Text>
           <Text> </Text>
-          <Text>Add the ClickStack MCP server to:</Text>
-          {clients.map(c => (
+          <Text>
+            Add the ClickStack MCP server as "{name}"
+            {team && ` for team ${team.name}`} to:
+          </Text>
+          {chosen.map(c => (
             <Text key={c.id}> - {c.label}</Text>
           ))}
           <Text> </Text>

@@ -5,11 +5,26 @@ import * as path from 'node:path';
 
 // Same server name the Team Settings snippets use, so a reinstall replaces
 // an entry added by hand instead of adding a second one.
-const MCP_SERVER_NAME = 'clickstack';
+export const DEFAULT_MCP_SERVER_NAME = 'clickstack';
+
+// The name is a TOML bare key in Codex's config and a `claude mcp add`
+// argument, where a leading hyphen would read as a flag.
+export function isValidServerName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name);
+}
 
 export interface McpServer {
+  name: string;
   url: string;
   key: string;
+  /** Sent as `x-hdx-team`. Unset means the key's default team. */
+  teamId?: string;
+}
+
+export interface McpTeam {
+  id: string;
+  name: string;
+  isCurrent: boolean;
 }
 
 export interface McpClient {
@@ -66,18 +81,64 @@ export async function verifyKey(
   };
 }
 
+/**
+ * Teams the key can act on, read from the MCP server's own
+ * `clickstack_list_teams` tool. Empty when the server has no such tool
+ * (single-team deployments), so the caller skips the team choice. Throws when
+ * the listing itself failed, so that is not mistaken for a single team.
+ */
+export async function listTeams(
+  appUrl: string,
+  key: string,
+): Promise<McpTeam[]> {
+  const res = await fetch(mcpUrl(appUrl), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'clickstack_list_teams', arguments: {} },
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  // The endpoint answers with a one-message SSE stream.
+  const message =
+    text
+      .split('\n')
+      .find(line => line.startsWith('data:'))
+      ?.slice(5) ?? text;
+  const { result } = JSON.parse(message);
+  // An unknown tool comes back as an error result, not an HTTP error.
+  if (!result || result.isError) return [];
+  const { teams } = JSON.parse(result.content[0].text);
+  return (teams as McpTeam[]).filter(
+    t => typeof t.id === 'string' && typeof t.name === 'string',
+  );
+}
+
 function onPath(command: string): boolean {
   return !spawnSync(command, ['--version'], { stdio: 'ignore' }).error;
 }
 
-function authHeaders(key: string) {
-  return { Authorization: `Bearer ${key}` };
+function serverHeaders({ key, teamId }: McpServer): Record<string, string> {
+  return {
+    Authorization: `Bearer ${key}`,
+    ...(teamId ? { 'x-hdx-team': teamId } : {}),
+  };
 }
 
-/** Sets `<topKey>.<MCP_SERVER_NAME>` in a JSON config, keeping everything else. */
+/** Sets `<topKey>.<name>` in a JSON config, keeping everything else. */
 export function upsertJsonServer(
   file: string,
   topKey: string,
+  name: string,
   entry: Record<string, unknown>,
 ): void {
   let config: Record<string, unknown> = {};
@@ -94,7 +155,7 @@ export function upsertJsonServer(
     config = parsed as Record<string, unknown>;
   }
   const servers = (config[topKey] ?? {}) as Record<string, unknown>;
-  config[topKey] = { ...servers, [MCP_SERVER_NAME]: entry };
+  config[topKey] = { ...servers, [name]: entry };
   writePrivate(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 
@@ -109,10 +170,10 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-/** Replaces the `[mcp_servers.clickstack]` table (and its subtables) in Codex's config.toml. */
+/** Replaces the `[mcp_servers.<name>]` table (and its subtables) in Codex's config.toml. */
 export function upsertCodexServer(file: string, server: McpServer): void {
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
-  const header = new RegExp(`^\\[mcp_servers\\.${MCP_SERVER_NAME}(\\.|\\])`);
+  const header = new RegExp(`^\\[mcp_servers\\.${server.name}(\\.|\\])`);
   const kept: string[] = [];
   let skipping = false;
   // shortcut: line-based table removal, no TOML parser. Fine for tables we
@@ -125,9 +186,11 @@ export function upsertCodexServer(file: string, server: McpServer): void {
   }
   const body = kept.join('\n').trimEnd();
   const table = [
-    `[mcp_servers.${MCP_SERVER_NAME}]`,
+    `[mcp_servers.${server.name}]`,
     `url = ${tomlString(server.url)}`,
-    `http_headers = { Authorization = ${tomlString(`Bearer ${server.key}`)} }`,
+    `http_headers = { ${Object.entries(serverHeaders(server))
+      .map(([k, v]) => `${k} = ${tomlString(v)}`)
+      .join(', ')} }`,
   ].join('\n');
   writePrivate(file, `${body ? `${body}\n\n` : ''}${table}\n`);
 }
@@ -170,17 +233,14 @@ export function mcpClients(
       label: 'Claude Code',
       location: 'Claude Code user config (~/.claude.json)',
       detect: () => onPath('claude'),
-      install: ({ url, key }) => {
+      install: server => {
+        const { name, url } = server;
         // `mcp add` refuses to overwrite, so drop any earlier entry first. A
         // local-scope entry for this directory would also shadow the new one.
         for (const scope of ['local', 'user']) {
-          spawnSync(
-            'claude',
-            ['mcp', 'remove', '--scope', scope, MCP_SERVER_NAME],
-            {
-              stdio: 'ignore',
-            },
-          );
+          spawnSync('claude', ['mcp', 'remove', '--scope', scope, name], {
+            stdio: 'ignore',
+          });
         }
         runClaude([
           'mcp',
@@ -189,10 +249,12 @@ export function mcpClients(
           'user',
           '--transport',
           'http',
-          MCP_SERVER_NAME,
+          name,
           url,
-          '--header',
-          `Authorization: Bearer ${key}`,
+          ...Object.entries(serverHeaders(server)).flatMap(([k, v]) => [
+            '--header',
+            `${k}: ${v}`,
+          ]),
         ]);
       },
     },
@@ -208,10 +270,10 @@ export function mcpClients(
       label: 'Cursor',
       location: cursorConfig,
       detect: () => fs.existsSync(path.dirname(cursorConfig)),
-      install: ({ url, key }) =>
-        upsertJsonServer(cursorConfig, 'mcpServers', {
-          url,
-          headers: authHeaders(key),
+      install: server =>
+        upsertJsonServer(cursorConfig, 'mcpServers', server.name, {
+          url: server.url,
+          headers: serverHeaders(server),
         }),
     },
     {
@@ -219,11 +281,11 @@ export function mcpClients(
       label: 'VS Code',
       location: vscodeConfig,
       detect: () => fs.existsSync(vscodeDir),
-      install: ({ url, key }) =>
-        upsertJsonServer(vscodeConfig, 'servers', {
+      install: server =>
+        upsertJsonServer(vscodeConfig, 'servers', server.name, {
           type: 'http',
-          url,
-          headers: authHeaders(key),
+          url: server.url,
+          headers: serverHeaders(server),
         }),
     },
   ];
