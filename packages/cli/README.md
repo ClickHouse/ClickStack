@@ -222,12 +222,24 @@ Codex, Cursor, and VS Code. It asks for a personal access key or an
 organization API key with hidden input and checks it before changing any
 config, so the key stays out of shell history and agent chats.
 
+If the key belongs to more than one team, it asks which teams to add a server
+for (Enter keeps the default team). Picking several adds one entry per team,
+named `<name>-<team>`. If it finds more than one agent, it asks which
+to set up (Enter keeps all of them).
+
 ```bash
 npx @hyperdx/cli mcp install -a https://your-hyperdx.example
 ```
 
 The key is stored in plain text in each agent's user config, which the
 command lists when it finishes. Running it again replaces the existing entry.
+
+The entry is named `clickstack`. To keep more than one ClickStack instance side
+by side, give each its own name:
+
+```bash
+npx @hyperdx/cli mcp install -a https://staging.example --name clickstack-staging
+```
 
 ### `hdx upload-sourcemaps` — Source maps
 

@@ -48,6 +48,9 @@ The key stays out of your shell history and agent chats.
 npx @hyperdx/cli mcp install --app-url <your-hyperdx-url>
 ```
 
+The entry is named `clickstack`, and running the command again replaces it. Pass
+`--name <server-name>` to add a second instance under its own name instead.
+
 ### Claude Code
 
 `read -rs` waits for you to paste the key and press Enter, without echoing it,
