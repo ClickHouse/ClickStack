@@ -1,4 +1,4 @@
-import { castArray, difference, isString, uniq } from 'lodash';
+import { castArray, isString, uniq } from 'lodash';
 
 import {
   getAdhocFilterSourceKinds,
@@ -66,25 +66,15 @@ export type SourceVariableDeclaration = {
 };
 
 /**
- * The kinds a data source variable can resolve to that a field accepting
- * `acceptedKinds` cannot use.
- */
-export function getUnacceptedSourceKinds(
-  variable: Pick<SourceVariableDeclaration, 'allowedSourceKinds'>,
-  acceptedKinds: readonly SourceKind[],
-): SourceKind[] {
-  return difference(variable.allowedSourceKinds, acceptedKinds);
-}
-
-/**
- * Whether a field accepting `acceptedKinds` can use a data source variable,
- * whatever source it selects.
+ * Whether a field accepting `acceptedKinds` can use a data source variable: at
+ * least one kind it can resolve to fits. A selection of another kind is
+ * handled where the reference is resolved.
  */
 export function isSourceVariableAccepted(
   variable: Pick<SourceVariableDeclaration, 'allowedSourceKinds'>,
   acceptedKinds: readonly SourceKind[],
 ): boolean {
-  return getUnacceptedSourceKinds(variable, acceptedKinds).length === 0;
+  return variable.allowedSourceKinds.some(kind => acceptedKinds.includes(kind));
 }
 
 /** `isSourceVariableAccepted` for the variable that `source` references. */
@@ -237,6 +227,7 @@ export function getFilterReferenceFields(
     case 'DATA_SOURCE':
       return [{ key: 'connection', target: 'connection' }];
     case 'STATIC_LIST':
+    case 'SQL_QUERY':
     case 'CONNECTION':
       return [];
     default:

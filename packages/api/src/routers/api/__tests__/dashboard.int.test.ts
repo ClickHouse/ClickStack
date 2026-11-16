@@ -1566,8 +1566,23 @@ describe('dashboard router', () => {
       );
     });
 
-    it('rejects a variable offering kinds the reference cannot use', async () => {
+    it('rejects a variable offering no kind the reference can use', async () => {
       const res = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [
+            { ...dataSourceFilter, allowedSourceKinds: [SourceKind.Promql] },
+          ],
+        })
+        .expect(400);
+
+      expect(res.body.message).toMatch(/offers no kind of source/);
+    });
+
+    it('accepts a variable offering some kinds the reference cannot use', async () => {
+      await agent
         .post('/dashboards')
         .send({
           ...MOCK_DASHBOARD,
@@ -1579,9 +1594,7 @@ describe('dashboard router', () => {
             },
           ],
         })
-        .expect(400);
-
-      expect(JSON.stringify(res.body)).toMatch(/promql/);
+        .expect(200);
     });
 
     it('validates a PATCH of tiles against the stored filters', async () => {
@@ -1594,10 +1607,51 @@ describe('dashboard router', () => {
         .patch(`/dashboards/${created.body.id}`)
         .send({ tiles: [makeTile({ sourceId: '$logs' })] })
         .expect(200);
+      const res = await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          tiles: [
+            makeTile({ sourceId: '$logs' }),
+            makeTile({ sourceId: '$nope' }),
+          ],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a data source variable/);
+    });
+
+    // Only references an update adds are checked, so editing a variable
+    // doesn't fail on the tiles and filters that already use it.
+    it('saves a filter edit that leaves stored references unsatisfied', async () => {
+      const adhocFilter = {
+        id: new Types.ObjectId().toString(),
+        type: 'ADHOC' as const,
+        name: 'Conditions',
+        sourceType: 'sql' as const,
+        sources: ['$logs'],
+        isVariableEnabled: true,
+      };
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [dataSourceFilter, adhocFilter],
+        })
+        .expect(200);
+
       await agent
         .patch(`/dashboards/${created.body.id}`)
-        .send({ filters: [] })
-        .expect(400);
+        .send({
+          filters: [
+            { ...dataSourceFilter, allowedSourceKinds: [SourceKind.Promql] },
+            adhocFilter,
+          ],
+        })
+        .expect(200);
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ filters: [adhocFilter] })
+        .expect(200);
     });
 
     it('drops an alert on a tile that uses the variable', async () => {

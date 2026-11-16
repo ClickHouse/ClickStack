@@ -14,7 +14,7 @@ import {
   getReferenceFieldValues,
   getSourceVariableFilters,
   getStringField,
-  getUnacceptedSourceKinds,
+  isSourceVariableAccepted,
   parseVariableReference,
   ReferenceField,
 } from './referenceVariables';
@@ -422,28 +422,99 @@ export function collectRefinementIssues(
   return result.success ? [] : result.error.issues;
 }
 
+type ReferenceTile = { id?: string; config: object };
+
+type ReferenceOccurrence = {
+  value: string;
+  field: ReferenceField<string>;
+  path: (string | number)[];
+  /** Same for the same reference in the same field of the same tile or filter. */
+  key: string;
+};
+
+function getReferenceOccurrences(
+  tiles: ReferenceTile[],
+  filters: DashboardFilter[],
+  tilesPath: (string | number)[],
+  filtersPath: (string | number)[],
+): ReferenceOccurrence[] {
+  const occurrences: ReferenceOccurrence[] = [];
+  const add = (
+    owner: string,
+    object: object,
+    fields: ReferenceField<string>[],
+    path: (string | number)[],
+  ) => {
+    for (const field of fields) {
+      // A field that now accepts other kinds counts as a new reference
+      const fieldKey =
+        field.target === 'source'
+          ? `${field.key}:${field.acceptedKinds.join(',')}`
+          : field.key;
+      const value = getStringField(object, field.key);
+      const entries =
+        value != null
+          ? [{ value, path: [...path, field.key] }]
+          : getReferenceFieldValues(object, field.key).map((entry, i) => ({
+              value: entry,
+              path: [...path, field.key, i],
+            }));
+      for (const entry of entries) {
+        if (parseVariableReference(entry.value) == null) continue;
+        occurrences.push({
+          ...entry,
+          field,
+          key: JSON.stringify([owner, fieldKey, entry.value]),
+        });
+      }
+    }
+  };
+
+  tiles.forEach((tile, tileIdx) =>
+    add(
+      `tile:${tile.id ?? tileIdx}`,
+      tile.config,
+      getConfigReferenceFields(tile.config),
+      [...tilesPath, tileIdx, 'config'],
+    ),
+  );
+  filters.forEach((filter, filterIdx) =>
+    add(`filter:${filter.id}`, filter, getFilterReferenceFields(filter), [
+      ...filtersPath,
+      filterIdx,
+    ]),
+  );
+  return occurrences;
+}
+
 /**
  * Every reference variable reference must name a variable of the right type
  * on the dashboard: `$name` in a source field names a data source variable
- * offering only kinds the field accepts; `$name` in a connection field names a
- * connection variable. The fields are those of `getConfigReferenceFields` and
- * `getFilterReferenceFields`.
+ * offering at least one kind the field accepts; `$name` in a connection field
+ * names a connection variable. The fields are those of
+ * `getConfigReferenceFields` and `getFilterReferenceFields`.
+ *
+ * With `existing`, the stored dashboard an update applies to, only references
+ * the update adds are checked. A filter edit can then leave stored tiles and
+ * filters with references it no longer satisfies, which the dashboard shows
+ * as errors when it's viewed.
  *
  * Issues raised:
  * - An unknown variable, or one of the wrong type (path `<tilesPath>[i].config.<field>` or `<filtersPath>[i].<field>[j]`).
- * - A data source variable offering kinds the field does not accept (same paths).
+ * - A data source variable offering no kind the field accepts (same paths).
  */
 export function validateDashboardVariableReferences(
-  tiles: { config: object }[],
+  tiles: ReferenceTile[],
   filters: DashboardFilter[],
   ctx: z.RefinementCtx,
-  paths?: {
+  options?: {
     tilesPath?: (string | number)[];
     filtersPath?: (string | number)[];
+    existing?: { tiles: ReferenceTile[]; filters: DashboardFilter[] };
   },
 ): void {
-  const tilesPath = paths?.tilesPath ?? ['tiles'];
-  const filtersPath = paths?.filtersPath ?? ['filters'];
+  const tilesPath = options?.tilesPath ?? ['tiles'];
+  const filtersPath = options?.filtersPath ?? ['filters'];
   const kindsByName = new Map(
     getSourceVariableFilters(filters).map(({ filter, name }) => [
       name,
@@ -451,22 +522,35 @@ export function validateDashboardVariableReferences(
     ]),
   );
   const connectionVariableNames = new Set(getConnectionVariableNames(filters));
+  const existingKeys = new Set(
+    options?.existing
+      ? getReferenceOccurrences(
+          options.existing.tiles,
+          options.existing.filters,
+          tilesPath,
+          filtersPath,
+        ).map(({ key }) => key)
+      : [],
+  );
 
-  const check = (
-    value: string,
-    field: ReferenceField<string>,
-    path: (string | number)[],
-  ) => {
+  const occurrences = getReferenceOccurrences(
+    tiles,
+    filters,
+    tilesPath,
+    filtersPath,
+  );
+  for (const { value, field, path, key } of occurrences) {
+    if (existingKeys.has(key)) continue;
     const name = parseVariableReference(value);
-    if (name == null) return;
+    if (name == null) continue;
     if (field.target === 'connection') {
-      if (connectionVariableNames.has(name)) return;
+      if (connectionVariableNames.has(name)) continue;
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `"${value}" does not name a connection variable on this dashboard`,
         path,
       });
-      return;
+      continue;
     }
     const kinds = kindsByName.get(name);
     if (kinds == null) {
@@ -475,64 +559,40 @@ export function validateDashboardVariableReferences(
         message: `"${value}" does not name a data source variable on this dashboard`,
         path,
       });
-      return;
+      continue;
     }
-    const unaccepted = getUnacceptedSourceKinds(
-      { allowedSourceKinds: kinds },
-      field.acceptedKinds,
-    );
-    if (unaccepted.length > 0) {
+    if (
+      !isSourceVariableAccepted(
+        { allowedSourceKinds: kinds },
+        field.acceptedKinds,
+      )
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Data source variable "${value}" offers ${unaccepted.join(', ')} sources, which cannot be used here`,
+        message: `Data source variable "${value}" offers no kind of source that can be used here`,
         path,
       });
     }
-  };
-
-  const checkFields = (
-    object: object,
-    fields: ReferenceField<string>[],
-    path: (string | number)[],
-  ) => {
-    for (const field of fields) {
-      const value = getStringField(object, field.key);
-      if (value != null) {
-        check(value, field, [...path, field.key]);
-      } else {
-        getReferenceFieldValues(object, field.key).forEach((entry, i) =>
-          check(entry, field, [...path, field.key, i]),
-        );
-      }
-    }
-  };
-
-  tiles.forEach((tile, tileIdx) =>
-    checkFields(tile.config, getConfigReferenceFields(tile.config), [
-      ...tilesPath,
-      tileIdx,
-      'config',
-    ]),
-  );
-  filters.forEach((filter, filterIdx) =>
-    checkFields(filter, getFilterReferenceFields(filter), [
-      ...filtersPath,
-      filterIdx,
-    ]),
-  );
+  }
 }
 
 /**
  * `validateDashboardVariableReferences` outside a schema, for handlers that
- * check a merged update against the stored remainder. Returns the issues as
- * `path: message` joined by `; `, or null.
+ * check a merged update against the stored dashboard, passed as `existing`.
+ * Returns the issues as `path: message` joined by `; `, or null.
  */
 export function getVariableReferenceError(
-  tiles: { config: object }[] = [],
+  tiles: ReferenceTile[] = [],
   filters: DashboardFilter[] = [],
+  existing?: { tiles?: ReferenceTile[]; filters?: DashboardFilter[] },
 ): string | null {
   const issues = collectRefinementIssues(ctx =>
-    validateDashboardVariableReferences(tiles, filters, ctx),
+    validateDashboardVariableReferences(tiles, filters, ctx, {
+      existing: existing && {
+        tiles: existing.tiles ?? [],
+        filters: existing.filters ?? [],
+      },
+    }),
   );
   if (issues.length === 0) return null;
   return issues

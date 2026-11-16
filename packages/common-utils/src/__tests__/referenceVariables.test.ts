@@ -222,6 +222,7 @@ describe('isSourceVariableReferenceAccepted', () => {
   const declarations = [
     { name: 'logs', allowedSourceKinds: [SourceKind.Log] },
     { name: 'any', allowedSourceKinds: [SourceKind.Log, SourceKind.Promql] },
+    { name: 'prom', allowedSourceKinds: [SourceKind.Promql] },
   ];
 
   it('accepts a variable whose every kind the field accepts', () => {
@@ -233,9 +234,17 @@ describe('isSourceVariableReferenceAccepted', () => {
     ).toBe(true);
   });
 
-  it('rejects a variable offering a kind the field does not accept', () => {
+  it('accepts a variable offering some kinds the field does not accept', () => {
     expect(
       isSourceVariableReferenceAccepted('$any', declarations, [SourceKind.Log]),
+    ).toBe(true);
+  });
+
+  it('rejects a variable offering no kind the field accepts', () => {
+    expect(
+      isSourceVariableReferenceAccepted('$prom', declarations, [
+        SourceKind.Log,
+      ]),
     ).toBe(false);
   });
 
@@ -452,9 +461,12 @@ describe('validateDashboardVariableReferences', () => {
     expect(issues[0].path).toEqual(['tiles', 0, 'config', 'source']);
   });
 
-  it.each<[string, { config: SavedChartConfig }[], DashboardFilter[]]>([
+  it.each<
+    [string, SourceKind[], { config: SavedChartConfig }[], DashboardFilter[]]
+  >([
     [
       'a PromQL tile',
+      [SourceKind.Log, SourceKind.Trace],
       [
         {
           config: {
@@ -469,6 +481,7 @@ describe('validateDashboardVariableReferences', () => {
     ],
     [
       'a PromQL label filter',
+      [SourceKind.Log, SourceKind.Trace],
       [],
       [
         {
@@ -484,6 +497,7 @@ describe('validateDashboardVariableReferences', () => {
     ],
     [
       'an ad hoc filter of another source type',
+      [SourceKind.Log, SourceKind.Trace],
       [],
       [
         {
@@ -498,6 +512,7 @@ describe('validateDashboardVariableReferences', () => {
     ],
     [
       "a queried filter's applies-to list",
+      [SourceKind.Promql],
       [],
       [
         queriedFilter({
@@ -507,31 +522,87 @@ describe('validateDashboardVariableReferences', () => {
       ],
     ],
   ])(
-    'rejects a logs-or-PromQL variable used by %s',
-    (_label, tiles, filters) => {
+    'rejects a variable offering no kind usable by %s',
+    (_label, allowedSourceKinds, tiles, filters) => {
       const issues = collectIssues(tiles, [
-        dataSourceFilter({
-          allowedSourceKinds: [SourceKind.Log, SourceKind.Promql],
-        }),
+        dataSourceFilter({ allowedSourceKinds }),
         ...filters,
       ]);
       expect(issues.length).toBeGreaterThan(0);
     },
   );
 
-  it('rejects a variable offering kinds the field does not accept', () => {
-    const issues = collectIssues(
-      [],
-      [
-        dataSourceFilter({
-          allowedSourceKinds: [SourceKind.Log, SourceKind.Promql],
+  it('accepts a variable offering some kinds the field does not accept', () => {
+    expect(
+      collectIssues(
+        [],
+        [
+          dataSourceFilter({
+            allowedSourceKinds: [SourceKind.Log, SourceKind.Promql],
+          }),
+          queriedFilter(),
+        ],
+      ),
+    ).toEqual([]);
+  });
+
+  describe('with the stored dashboard', () => {
+    const storedTiles = [{ id: 't1', config: lineConfig('$logs') }];
+    const storedFilters = [dataSourceFilter(), queriedFilter()];
+    const promqlVariable = dataSourceFilter({
+      allowedSourceKinds: [SourceKind.Promql],
+    });
+
+    it('skips references the update leaves as they were', () => {
+      expect(
+        getVariableReferenceError(
+          storedTiles,
+          [promqlVariable, queriedFilter()],
+          {
+            tiles: storedTiles,
+            filters: storedFilters,
+          },
+        ),
+      ).toBeNull();
+      expect(
+        getVariableReferenceError(storedTiles, [queriedFilter()], {
+          tiles: storedTiles,
+          filters: storedFilters,
         }),
-        queriedFilter(),
-      ],
-    );
-    expect(issues).toHaveLength(1);
-    expect(issues[0].path).toEqual(['filters', 1, 'source']);
-    expect(issues[0].message).toMatch(/promql/);
+      ).toBeNull();
+    });
+
+    it('checks references the update adds', () => {
+      const issues = collectRefinementIssues(ctx =>
+        validateDashboardVariableReferences(
+          [...storedTiles, { id: 't2', config: lineConfig('$logs') }],
+          [promqlVariable, queriedFilter()],
+          ctx,
+          { existing: { tiles: storedTiles, filters: storedFilters } },
+        ),
+      );
+      expect(issues.map(issue => issue.path)).toEqual([
+        ['tiles', 1, 'config', 'source'],
+      ]);
+    });
+
+    it('checks a reference again when its field accepts other kinds', () => {
+      const promqlTile = {
+        id: 't1',
+        config: {
+          configType: 'promql',
+          source: '$logs',
+          displayType: DisplayType.Line,
+          promqlExpression: [{ expression: 'up' }],
+        } satisfies SavedChartConfig,
+      };
+      expect(
+        getVariableReferenceError([promqlTile], storedFilters, {
+          tiles: storedTiles,
+          filters: storedFilters,
+        }),
+      ).toMatch(/tiles\.0\.config\.source/);
+    });
   });
 });
 

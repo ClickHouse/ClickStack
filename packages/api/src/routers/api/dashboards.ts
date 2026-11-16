@@ -234,9 +234,12 @@ router.patch(
       const updates = DashboardWithoutIdSchema.partial().parse(req.body);
 
       const filterError =
+        // Only references this update adds are checked, so a filter edit
+        // can't fail on tiles and filters it didn't touch
         getVariableReferenceError(
           req.body.tiles ?? dashboard.tiles,
           req.body.filters ?? dashboard.filters,
+          dashboard,
         ) ??
         (await validateFilterReferences(
           teamId,
