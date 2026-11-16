@@ -327,7 +327,10 @@ describe('toSavedFilter', () => {
 
 /** The minimum a form needs to save, per filter type the form supports. */
 const byType: Record<
-  Exclude<DashboardFilter['type'], 'ADHOC' | 'SQL_QUERY'>,
+  Exclude<
+    DashboardFilter['type'],
+    'ADHOC' | 'SQL_QUERY' | 'DATA_SOURCE' | 'CONNECTION'
+  >,
   Partial<FilterFormValues>
 > = {
   QUERY_EXPRESSION: {

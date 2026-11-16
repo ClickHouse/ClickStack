@@ -3,6 +3,7 @@ import {
   isFilterBroadcastEnabled,
   isFilterRequired,
   isFilterVariableEnabled,
+  isReferenceVariableFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AlertErrorType,
@@ -238,8 +239,24 @@ export function translateExternalChartToTileConfig(
   };
 }
 
+/** Filter types the external API and MCP don't expose yet. */
+export type ExternalCompatibleDashboardFilter = Exclude<
+  DashboardFilter,
+  { type: 'DATA_SOURCE' | 'CONNECTION' }
+>;
+
+/** The filters the external API and MCP may read. */
+export function getExternalCompatibleFilters(
+  filters: DashboardFilter[] | undefined,
+): ExternalCompatibleDashboardFilter[] {
+  return (filters ?? []).filter(
+    (filter): filter is ExternalCompatibleDashboardFilter =>
+      !isReferenceVariableFilter(filter),
+  );
+}
+
 export function translateFilterToExternalFilter(
-  filter: DashboardFilter,
+  filter: ExternalCompatibleDashboardFilter,
 ): ExternalDashboardFilterWithId {
   // Omitted from responses unless the filter is required, so a GET response
   // can be PUT back verbatim.

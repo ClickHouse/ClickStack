@@ -31,6 +31,7 @@ import {
   isMetricSource,
   isRangeThresholdType,
   isTraceSource,
+  NON_PROMQL_SOURCE_KINDS,
   PromqlChartConfig,
   PromqlHeatmapMode,
   PromqlSavedChartConfig,
@@ -208,10 +209,6 @@ export const isPromqlDisplayType = (
   displayType === DisplayType.Number ||
   displayType === DisplayType.Heatmap;
 
-const NON_PROMQL_SOURCE_KINDS = Object.values(SourceKind).filter(
-  kind => kind !== SourceKind.Promql,
-);
-
 /**
  * Search and event patterns list raw rows out of the source's `from` table. A
  * metric source keeps its rows in `metricTables` and leaves `from.tableName`
@@ -240,7 +237,7 @@ export function getAllowedSourceKinds({
   if (isStringSelectDisplayType(displayType)) {
     return ROW_LISTING_SOURCE_KINDS;
   }
-  return NON_PROMQL_SOURCE_KINDS;
+  return [...NON_PROMQL_SOURCE_KINDS];
 }
 
 const isCustomOrderByDisplayType = (

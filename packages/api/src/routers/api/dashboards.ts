@@ -1,9 +1,11 @@
 import {
+  getVariableReferenceError,
   validateDashboardFilterModes,
   validateDashboardFilterOptionUniqueness,
   validateDashboardFilterVariableNames,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import { isSqlQueryFilter } from '@hyperdx/common-utils/dist/filters';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   DashboardFilter,
   DashboardSchema,
@@ -77,7 +79,10 @@ async function validateFilterSources(
   filters: DashboardFilter[] = [],
   existingFilters: DashboardFilter[] = [],
 ): Promise<string | null> {
-  const refs = getChangedFilterSourceRefs(filters, existingFilters);
+  const refs = getChangedFilterSourceRefs(filters, existingFilters).filter(
+    // Variable references are checked by validateDashboardVariableReferences
+    ref => parseVariableReference(ref.id) == null,
+  );
   if (refs.length === 0) return null;
   return getFilterSourceRefError(refs, await getSources(teamId.toString()));
 }
@@ -181,10 +186,9 @@ router.post(
       // dashboard to the provisioner.
       const dashboard = _.omit(req.body, 'provisioned');
 
-      const filterError = await validateFilterReferences(
-        teamId,
-        req.body.filters,
-      );
+      const filterError =
+        getVariableReferenceError(req.body.tiles, req.body.filters) ??
+        (await validateFilterReferences(teamId, req.body.filters));
       if (filterError != null) {
         return res.status(400).json({ message: filterError });
       }
@@ -229,11 +233,16 @@ router.patch(
       // null still signals field removal downstream.
       const updates = DashboardWithoutIdSchema.partial().parse(req.body);
 
-      const filterError = await validateFilterReferences(
-        teamId,
-        req.body.filters,
-        dashboard.filters,
-      );
+      const filterError =
+        getVariableReferenceError(
+          req.body.tiles ?? dashboard.tiles,
+          req.body.filters ?? dashboard.filters,
+        ) ??
+        (await validateFilterReferences(
+          teamId,
+          req.body.filters,
+          dashboard.filters,
+        ));
       if (filterError != null) {
         return res.status(400).json({ message: filterError });
       }

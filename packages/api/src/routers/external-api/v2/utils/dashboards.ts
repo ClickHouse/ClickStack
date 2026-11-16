@@ -6,6 +6,7 @@ import {
   TIME_SERIES_DISPLAY_TYPE_BY_NAME,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
+  collectRefinementIssues,
   validateDashboardContainersStructure,
   validateDashboardFilterFieldGating,
   validateDashboardFilterModes,
@@ -59,6 +60,7 @@ import Dashboard, { DashboardDocument } from '@/models/dashboard';
 import {
   translateExternalChartToTileConfig,
   translateExternalFilterToFilter,
+  getExternalCompatibleFilters,
   translateFilterToExternalFilter,
 } from '@/utils/externalApi';
 import {
@@ -811,7 +813,7 @@ export function convertToExternalDashboard(
         convertTileToExternalChart(tile, containerById, dashboardId),
       ),
     tags: dashboard.tags || [],
-    filters: (dashboard.filters ?? [])
+    filters: getExternalCompatibleFilters(dashboard.filters)
       .filter(filter => !(hidePromql && isPromqlFilter(filter)))
       .map(translateFilterToExternalFilter),
     savedQuery: dashboard.savedQuery ?? null,
@@ -1951,15 +1953,13 @@ export function collectTileContainerRefIssues(
   containers: DashboardContainer[],
   tiles: ExternalDashboardTileWithId[],
 ): string[] {
-  const schema = z.object({}).superRefine((_, ctx) => {
-    const containerById = new Map<string, DashboardContainer>(
-      containers.map(c => [c.id, c]),
-    );
-    validateDashboardTileContainerRefs(containerById, tiles, ctx);
-  });
-  const result = schema.safeParse({});
-  if (result.success) return [];
-  return result.error.issues.map(issue => {
+  const containerById = new Map<string, DashboardContainer>(
+    containers.map(c => [c.id, c]),
+  );
+  const issues = collectRefinementIssues(ctx =>
+    validateDashboardTileContainerRefs(containerById, tiles, ctx),
+  );
+  return issues.map(issue => {
     const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
     return `${path}${issue.message}`;
   });
