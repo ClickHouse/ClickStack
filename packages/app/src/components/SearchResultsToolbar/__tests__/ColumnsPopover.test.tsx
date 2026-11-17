@@ -277,6 +277,33 @@ describe('ColumnsPopover', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it('does not ask when the stored clause already equals the default', async () => {
+    const clause = 'Timestamp, Body';
+    renderPopover({ value: clause, defaultValue: clause });
+    openPopover();
+    expect(await screen.findByLabelText('Remove Body')).toBeInTheDocument();
+    closePopover();
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('search-columns-button-popover'),
+      ).not.toBeInTheDocument(),
+    );
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('asks after editing a clause that already equals the default', async () => {
+    const clause = 'Timestamp, Body';
+    renderPopover({ value: clause, defaultValue: clause });
+    openPopover();
+    fireEvent.click(await screen.findByLabelText('Remove Body'));
+    confirm.mockResolvedValueOnce(false);
+    closePopover();
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(
+      screen.getByTestId('search-columns-button-popover'),
+    ).toBeInTheDocument();
+  });
+
   it('closes an unchanged list without asking', async () => {
     renderPopover();
     openPopover();

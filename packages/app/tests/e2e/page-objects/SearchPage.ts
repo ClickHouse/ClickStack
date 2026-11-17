@@ -515,6 +515,9 @@ export class SearchPage {
   private async openClauseSqlTab(testId: string, editor: Locator) {
     const popover = this.page.getByTestId(`${testId}-popover`);
     if (!(await popover.isVisible())) {
+      // The other clause popover may hold an unapplied draft. Cancel discards
+      // it; clicking this button instead would ask to discard and block.
+      await this.dismissOpenClausePopover();
       await this.page.getByTestId(testId).click();
     }
     await popover
@@ -523,6 +526,16 @@ export class SearchPage {
       .click();
     await editor.waitFor({ state: 'visible' });
     return editor;
+  }
+
+  private async dismissOpenClausePopover() {
+    for (const testId of ['search-columns-button', 'search-sort-button']) {
+      const popover = this.page.getByTestId(`${testId}-popover`);
+      if (await popover.isVisible()) {
+        await popover.getByRole('button', { name: 'Cancel' }).click();
+        await expect(popover).toBeHidden();
+      }
+    }
   }
 
   async getSelectBorderColor(): Promise<string> {

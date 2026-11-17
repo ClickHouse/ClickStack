@@ -29,12 +29,16 @@ export const clauseResetDisabled = matchesDefault;
 
 export const clauseApplyDisabled = (draft: string) => draft.trim() === '';
 
-/** Apply would write a different clause than the one currently stored. */
+/**
+ * The draft differs from the clause the editor opened with. Apply stores a
+ * matching default as "", so comparing against that form treats an untouched
+ * saved search, whose stored clause already equals the default, as dirty.
+ */
 export const clauseDirty = (
   draft: string,
   value: string,
   defaultValue: string,
-) => storedClause(draft, value, defaultValue) !== value;
+) => draft.trim() !== (value || defaultValue).trim();
 
 const MODE_OPTIONS = [
   { label: 'Fields', value: 'pick' },
@@ -43,8 +47,8 @@ const MODE_OPTIONS = [
 
 /**
  * A toolbar button that edits one query clause in a popover. Edits stay in a
- * draft owned by the caller until Apply. Closing a draft that would change the
- * stored clause asks first. Cancel discards it without asking.
+ * draft owned by the caller until Apply. Closing with unsaved edits asks
+ * first. Cancel discards them without asking.
  */
 export function ClausePopover({
   name,

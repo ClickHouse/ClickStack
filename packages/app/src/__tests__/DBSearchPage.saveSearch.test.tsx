@@ -232,6 +232,16 @@ jest.mock('@tanstack/react-query', () => ({
   useIsFetching: () => 0,
 }));
 
+// The page loads column options for the Columns popover. This suite is about
+// saving a search, and its React Query mock does not cover that lookup.
+jest.mock('@/components/SearchResultsToolbar/useClauseFieldOptions', () => ({
+  useClauseFieldOptions: () => [],
+}));
+
+jest.mock('@/useConfirm', () => ({
+  useConfirm: () => jest.fn(),
+}));
+
 describe('DBSearchPage save search flow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
