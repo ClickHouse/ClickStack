@@ -29,6 +29,11 @@ export const clauseResetDisabled = matchesDefault;
 
 export const clauseApplyDisabled = (draft: string) => draft.trim() === '';
 
+// Wide enough for the column list on a desktop, narrow enough to stay on a
+// phone. The button sits to the right of the nav rail, so a fixed width runs
+// off the right edge and clips Apply.
+const POPOVER_MAX_WIDTH = 440;
+
 /**
  * The draft differs from the clause the editor opened with. Apply stores a
  * matching default as "", so comparing against that form treats an untouched
@@ -134,9 +139,29 @@ export function ClausePopover({
         if (!next) requestClose();
       }}
       position="bottom-start"
-      width={440}
       shadow="md"
       withinPortal
+      // Let shift move the dropdown past the button's edge, so a dropdown
+      // wider than the space to the right slides left instead of overflowing.
+      middlewares={{
+        shift: {
+          padding: 8,
+          limiter: {
+            fn: ({ x, y }) => ({ x, y }),
+          },
+        },
+        size: {
+          padding: 8,
+          apply({ availableWidth, availableHeight, elements }) {
+            if (availableWidth > 0) {
+              elements.floating.style.maxWidth = `${availableWidth}px`;
+            }
+            if (availableHeight > 0) {
+              elements.floating.style.maxHeight = `${availableHeight}px`;
+            }
+          },
+        },
+      }}
     >
       <Popover.Target>
         <SplitValueButton
@@ -149,7 +174,11 @@ export function ClausePopover({
           data-testid={testId}
         />
       </Popover.Target>
-      <Popover.Dropdown data-testid={`${testId}-popover`}>
+      <Popover.Dropdown
+        data-testid={`${testId}-popover`}
+        // Set after Mantine's inline width (max-content), which would win over a class.
+        style={{ width: `min(${POPOVER_MAX_WIDTH}px, calc(100vw - 16px))` }}
+      >
         <Stack gap="sm">
           <SegmentedControl
             size="xs"
@@ -163,7 +192,7 @@ export function ClausePopover({
           <Group
             justify="space-between"
             gap="xs"
-            wrap="nowrap"
+            wrap="wrap"
             // The SQL completion list overflows the editor onto these buttons.
             // Fields mode uses an in-popover Autocomplete, which must stay above them.
             style={
@@ -184,7 +213,7 @@ export function ClausePopover({
             >
               Reset to default
             </Button>
-            <Group gap="xs" wrap="nowrap">
+            <Group gap="xs" wrap="nowrap" ml="auto">
               <Button
                 variant="secondary"
                 size="xs"

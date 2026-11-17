@@ -261,6 +261,15 @@ describe('ColumnsPopover', () => {
     expect(await screen.findByText(/Then click Apply/)).toBeInTheDocument();
   });
 
+  it('shrinks to the viewport so Apply stays on screen', async () => {
+    renderPopover();
+    openPopover();
+    const popover = await screen.findByTestId('search-columns-button-popover', {
+      hidden: true,
+    });
+    expect(popover.getAttribute('style')).toContain('calc(100vw - 16px)');
+  });
+
   it('discards the draft on cancel', async () => {
     const { onApply } = renderPopover();
     openPopover();
