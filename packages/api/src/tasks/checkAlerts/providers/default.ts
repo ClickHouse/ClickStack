@@ -8,6 +8,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 import ms from 'ms';
+import { serializeError } from 'serialize-error';
 import { URLSearchParams } from 'url';
 
 import { ClickhouseClient } from '@/clickhouse';
@@ -31,9 +32,13 @@ import { type ISavedSearch, SavedSearch } from '@/models/savedSearch';
 import { type ISource, Source } from '@/models/source';
 import Webhook, { IWebhook } from '@/models/webhook';
 import {
-  AggregatedAlertHistory,
+  alertHasGroupBy,
+  computeHistoryMapKey,
+  getAlertWindowStart,
   getConsecutiveWindowHistories,
+  getLatestAlertHistories,
   getPreviousAlertHistories,
+  type LatestAlertHistory,
 } from '@/tasks/checkAlerts';
 import {
   type AlertDetails,
@@ -349,13 +354,9 @@ async function getInlineAlertDetails(
   ];
 }
 
-async function loadAlert(
+async function resolveAlertDetails(
   alert: IAlert,
-  groupedTasks: Map<string, AlertTask>,
-  previousAlerts: Map<string, AggregatedAlertHistory>,
-  recentHistoryMap: Map<string, AggregatedAlertHistory[]>,
-  now: Date,
-) {
+): Promise<[IConnection, PartialAlertDetails]> {
   if (!alert.source) {
     throw new Error('alert does not have a source');
   }
@@ -393,18 +394,30 @@ async function loadAlert(
     throw new Error('failed to fetch alert connection');
   }
 
-  if (!groupedTasks.has(conn.id)) {
-    groupedTasks.set(conn.id, { alerts: [], conn, now });
+  return [conn, details];
+}
+
+/**
+ * Whether the alert's latest history row is from the window processAlert would
+ * evaluate now, i.e. processAlert will skip it. A failing evaluator lookup
+ * counts as due so processAlert can record the error on that alert.
+ */
+function wasEvaluatedInCurrentWindow(
+  alert: IAlert,
+  latest: LatestAlertHistory,
+  now: Date,
+): boolean {
+  try {
+    return (
+      latest.createdAt.getTime() === getAlertWindowStart(alert, now).getTime()
+    );
+  } catch (e) {
+    logger.error(
+      { alertId: alert.id, error: serializeError(e) },
+      'Failed to compute alert window start for history gating',
+    );
+    return false;
   }
-  const v = groupedTasks.get(conn.id);
-  if (!v) {
-    throw new Error(`provider did not set key ${conn.id} before appending`);
-  }
-  v.alerts.push({
-    ...details,
-    previousMap: previousAlerts,
-    recentHistoryMap,
-  });
 }
 
 export default class DefaultAlertProvider implements AlertProvider {
@@ -426,26 +439,16 @@ export default class DefaultAlertProvider implements AlertProvider {
     const alerts = await Alert.find({});
 
     const now = new Date();
-    const alertIds = alerts.map(({ id }) => id);
-    // Share a single queue across both history fetches so their combined
-    // in-flight per-alert queries stay within one global cap.
-    const historyQueryQueue = new PQueue({
-      concurrency: ALERT_HISTORY_QUERY_CONCURRENCY,
-    });
-    const [previousAlerts, recentHistoryMap] = await Promise.all([
-      getPreviousAlertHistories(alertIds, now, historyQueryQueue),
-      getConsecutiveWindowHistories(alerts, now, historyQueryQueue),
-    ]);
 
+    const resolved: {
+      alert: IAlert;
+      conn: IConnection;
+      details: PartialAlertDetails;
+    }[] = [];
     for (const alert of alerts) {
       try {
-        await loadAlert(
-          alert,
-          groupedTasks,
-          previousAlerts,
-          recentHistoryMap,
-          now,
-        );
+        const [conn, details] = await resolveAlertDetails(alert);
+        resolved.push({ alert, conn, details });
       } catch (e) {
         logger.error({
           message: `failed to load alert: ${e}`,
@@ -455,6 +458,102 @@ export default class DefaultAlertProvider implements AlertProvider {
           provider: 'default',
         });
       }
+    }
+
+    // Share a single queue across all history fetches so their combined
+    // in-flight per-alert queries stay within one global cap.
+    const historyQueryQueue = new PQueue({
+      concurrency: ALERT_HISTORY_QUERY_CONCURRENCY,
+    });
+
+    // One index seek per alert decides whether it is due this window, so
+    // alerts on longer intervals don't re-scan their history every tick.
+    const latestHistories = await getLatestAlertHistories(
+      resolved.map(({ alert }) => alert.id),
+      now,
+      historyQueryQueue,
+    );
+
+    const dueAlertsWithHistory: IAlert[] = [];
+    const dueGroupedAlerts: IAlert[] = [];
+    const dueNonGroupedAlerts: {
+      alert: IAlert;
+      latest: LatestAlertHistory;
+    }[] = [];
+    const gatedAlerts: { alert: IAlert; latest: LatestAlertHistory }[] = [];
+    let noHistoryCount = 0;
+    for (const { alert, details } of resolved) {
+      const latest = latestHistories.get(alert.id);
+      if (!latest) {
+        noHistoryCount += 1;
+        continue;
+      }
+      if (wasEvaluatedInCurrentWindow(alert, latest, now)) {
+        gatedAlerts.push({ alert, latest });
+        continue;
+      }
+      dueAlertsWithHistory.push(alert);
+      // Non-grouped alerts only need the latest row, which the gate already
+      // fetched. Grouped alerts need the latest row of every group.
+      if (alertHasGroupBy(details)) {
+        dueGroupedAlerts.push(alert);
+      } else {
+        dueNonGroupedAlerts.push({ alert, latest });
+      }
+    }
+
+    const [previousAlerts, recentHistoryMap] = await Promise.all([
+      getPreviousAlertHistories(dueGroupedAlerts, now, historyQueryQueue),
+      getConsecutiveWindowHistories(
+        dueAlertsWithHistory,
+        now,
+        historyQueryQueue,
+      ),
+    ]);
+
+    for (const { alert, latest } of dueNonGroupedAlerts) {
+      previousAlerts.set(computeHistoryMapKey(alert.id, latest.group || ''), {
+        _id: new mongoose.Types.ObjectId(alert.id),
+        createdAt: latest.createdAt,
+        state: latest.state,
+        group: latest.group,
+        fired: latest.fired,
+      });
+    }
+
+    // A row in the current window under the bare alert ID makes
+    // processAlert's shouldSkipAlertCheck skip the alert, as it did before.
+    for (const { alert, latest } of gatedAlerts) {
+      previousAlerts.set(alert.id, {
+        _id: new mongoose.Types.ObjectId(alert.id),
+        createdAt: latest.createdAt,
+        state: latest.state,
+      });
+    }
+
+    logger.info(
+      {
+        alertCount: alerts.length,
+        resolvedCount: resolved.length,
+        dueCount: dueAlertsWithHistory.length,
+        dueGroupedCount: dueGroupedAlerts.length,
+        gatedCount: gatedAlerts.length,
+        noHistoryCount,
+      },
+      'Loaded alert histories',
+    );
+
+    for (const { conn, details } of resolved) {
+      let task = groupedTasks.get(conn.id);
+      if (!task) {
+        task = { alerts: [], conn, now };
+        groupedTasks.set(conn.id, task);
+      }
+      task.alerts.push({
+        ...details,
+        previousMap: previousAlerts,
+        recentHistoryMap,
+      });
     }
 
     // Flatten out our groupings for execution

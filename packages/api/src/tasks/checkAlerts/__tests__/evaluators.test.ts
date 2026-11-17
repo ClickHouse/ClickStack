@@ -316,11 +316,13 @@ describe('alert evaluators', () => {
     });
     const healthy = makeAlert({ numConsecutiveWindows: 2 });
     const broken = makeAlert({ numConsecutiveWindows: 2, threshold: 42 });
-    const aggregate = jest
-      .spyOn(AlertHistory, 'aggregate')
-      .mockResolvedValue([
-        { createdAt: new Date(), state: AlertState.ALERT, group: '' },
-      ]);
+    const find = jest.spyOn(AlertHistory, 'find').mockReturnValue({
+      lean: jest
+        .fn()
+        .mockResolvedValue([
+          { createdAt: new Date(), state: AlertState.ALERT, group: '' },
+        ]),
+    } as any);
 
     try {
       const map = await getConsecutiveWindowHistories(
@@ -328,11 +330,11 @@ describe('alert evaluators', () => {
         new Date('2025-01-01T00:07:00Z'),
       );
 
-      expect(aggregate).toHaveBeenCalledTimes(1);
+      expect(find).toHaveBeenCalledTimes(1);
       expect(map.has(healthy.id)).toBe(true);
       expect(map.has(broken.id)).toBe(false);
     } finally {
-      aggregate.mockRestore();
+      find.mockRestore();
     }
   });
 

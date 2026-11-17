@@ -169,10 +169,12 @@ AlertHistorySchema.index(
   { expireAfterSeconds: ms('30d') / 1000 },
 );
 
-// Used by getRecentAlertHistories (matches on alert, sorts by createdAt)
+// Serves every alert-history read: each matches on alert with a createdAt
+// range or sort.
 AlertHistorySchema.index({ alert: 1, createdAt: -1 });
 
-// Used by getPreviousAlertHistories (groups by {alert, group}, sorts by createdAt)
+// No longer read by any query. Kept for one release so task pods still running
+// the previous query keep their index during a rolling deploy.
 AlertHistorySchema.index({ alert: 1, group: 1, createdAt: -1 });
 
 export default mongoose.model<IAlertHistory>(

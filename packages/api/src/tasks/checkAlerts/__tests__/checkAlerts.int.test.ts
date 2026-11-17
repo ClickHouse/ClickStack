@@ -39,7 +39,9 @@ import * as checkAlert from '@/tasks/checkAlerts';
 import {
   alertHasGroupBy,
   doesExceedThreshold,
+  getAlertHistoryLookbackMs,
   getConsecutiveWindowHistories,
+  getLatestAlertHistories,
   getPreviousAlertHistories,
   getScheduledWindowStart,
   parseAlertData,
@@ -2152,7 +2154,7 @@ describe('checkAlerts', () => {
       teamWebhooksById: Map<string, IWebhook>,
     ) => {
       const [previousMap, recentHistoryMap] = await Promise.all([
-        getPreviousAlertHistories([details.alert.id], now),
+        getPreviousAlertHistories([details.alert], now),
         getConsecutiveWindowHistories([details.alert], now),
       ]);
       await processAlert(
@@ -6986,7 +6988,7 @@ describe('checkAlerts', () => {
         teamWebhooksById,
       }: Awaited<ReturnType<typeof setupGroupedAlertBesideFiringAlert>>) => {
         const shared = await getPreviousAlertHistories(
-          [grouped.alert.id, firing.alert.id],
+          [grouped.alert, firing.alert],
           now,
         );
         expect(shared.get(firing.alert.id)?.state).toBe(AlertState.ALERT);
@@ -9084,7 +9086,7 @@ describe('checkAlerts', () => {
       // Should NOT rescan 22:00-22:05 where service-b had data but was already checked
       const nextRun = new Date('2023-11-16T22:23:00.000Z');
       const previousMapNextRun = await getPreviousAlertHistories(
-        [details.alert.id],
+        [details.alert],
         nextRun,
       );
 
@@ -12058,10 +12060,7 @@ describe('checkAlerts', () => {
       ]);
 
       // Act - Run alerts twice to cover two periods
-      let previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
-        now,
-      );
+      let previousMap = await getPreviousAlertHistories([details.alert], now);
       await processAlert(
         now,
         {
@@ -12076,7 +12075,7 @@ describe('checkAlerts', () => {
 
       const nextWindow = new Date('2023-11-16T22:15:00.000Z');
       previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
+        [details.alert],
         nextWindow,
       );
       await processAlert(
@@ -12202,10 +12201,7 @@ describe('checkAlerts', () => {
       ]);
 
       // Act - Run alerts twice to cover two periods
-      let previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
-        now,
-      );
+      let previousMap = await getPreviousAlertHistories([details.alert], now);
       await processAlert(
         now,
         {
@@ -12220,7 +12216,7 @@ describe('checkAlerts', () => {
 
       const nextWindow = new Date('2023-11-16T22:15:00.000Z');
       previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
+        [details.alert],
         nextWindow,
       );
       await processAlert(
@@ -12267,20 +12263,32 @@ describe('checkAlerts', () => {
 
     afterEach(async () => {
       await server.clearDBs();
-      jest.clearAllMocks();
+      jest.restoreAllMocks();
     });
 
     afterAll(async () => {
       await server.stop();
     });
 
-    const saveAlert = (id: mongoose.Types.ObjectId, createdAt: Date) => {
+    const saveAlert = (
+      id: mongoose.Types.ObjectId,
+      createdAt: Date,
+      group?: string,
+      state: AlertState = AlertState.OK,
+    ) => {
       return new AlertHistory({
         alert: id,
         createdAt,
-        state: AlertState.OK,
+        state,
+        group,
       }).save();
     };
+
+    // getPreviousAlertHistories only reads id + interval off the alert.
+    const asAlert = (
+      id: mongoose.Types.ObjectId,
+      interval: IAlert['interval'] = '5m',
+    ) => ({ id: id.toString(), interval });
 
     it('should return the latest alert history for each alert', async () => {
       const alert1Id = new mongoose.Types.ObjectId();
@@ -12292,7 +12300,7 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z'));
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString(), alert2Id.toString()],
+        [asAlert(alert1Id), asAlert(alert2Id)],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12302,6 +12310,51 @@ describe('checkAlerts', () => {
       );
       expect(result.get(alert2Id.toString())!.createdAt).toEqual(
         new Date('2025-01-01T00:15:00Z'),
+      );
+    });
+
+    it('should return the latest history per group for grouped alerts', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveAlert(alertId, new Date('2025-01-01T00:00:00Z'), 'group-a');
+      await saveAlert(alertId, new Date('2025-01-01T00:05:00Z'), 'group-a');
+      await saveAlert(alertId, new Date('2025-01-01T00:00:00Z'), 'group-b');
+      // A row without a group keys off the bare alert ID
+      await saveAlert(alertId, new Date('2025-01-01T00:05:00Z'));
+
+      const result = await getPreviousAlertHistories(
+        [asAlert(alertId)],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.size).toBe(3);
+      expect(result.get(`${alertId.toString()}||group-a`)!.createdAt).toEqual(
+        new Date('2025-01-01T00:05:00Z'),
+      );
+      expect(result.get(`${alertId.toString()}||group-b`)!.createdAt).toEqual(
+        new Date('2025-01-01T00:00:00Z'),
+      );
+      expect(result.get(alertId.toString())!.createdAt).toEqual(
+        new Date('2025-01-01T00:05:00Z'),
+      );
+    });
+
+    it('should ignore ERROR rows', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveAlert(alertId, new Date('2025-01-01T00:05:00Z'), 'group-a');
+      await saveAlert(
+        alertId,
+        new Date('2025-01-01T00:10:00Z'),
+        'group-a',
+        AlertState.ERROR,
+      );
+
+      const result = await getPreviousAlertHistories(
+        [asAlert(alertId)],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.get(`${alertId.toString()}||group-a`)!.createdAt).toEqual(
+        new Date('2025-01-01T00:05:00Z'),
       );
     });
 
@@ -12315,7 +12368,7 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z')); // This one is in the future
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString(), alert2Id.toString()],
+        [asAlert(alert1Id), asAlert(alert2Id)],
         new Date('2025-01-01T00:14:00Z'),
       );
 
@@ -12328,6 +12381,29 @@ describe('checkAlerts', () => {
       );
     });
 
+    it('should not return alert histories older than the interval-derived lookback', async () => {
+      const now = new Date('2025-01-10T00:00:00Z');
+      const alertId = new mongoose.Types.ObjectId();
+      // 1m interval: 1d lookback floor, so a row from 2 days ago is out of
+      // range even though the old fixed 7d window included it.
+      await saveAlert(alertId, new Date('2025-01-08T00:00:00Z'));
+      const result = await getPreviousAlertHistories(
+        [asAlert(alertId, '1m')],
+        now,
+      );
+      expect(result.size).toBe(0);
+
+      // 1h interval: 52 windows (52h) reaches the same row.
+      const resultHourly = await getPreviousAlertHistories(
+        [asAlert(alertId, '1h')],
+        now,
+      );
+      expect(resultHourly.size).toBe(1);
+      expect(resultHourly.get(alertId.toString())!.createdAt).toEqual(
+        new Date('2025-01-08T00:00:00Z'),
+      );
+    });
+
     it('should not return a history if there are no histories for the given alert', async () => {
       const alert1Id = new mongoose.Types.ObjectId();
       await saveAlert(alert1Id, new Date('2025-01-01T00:00:00Z'));
@@ -12336,7 +12412,7 @@ describe('checkAlerts', () => {
       const alert2Id = new mongoose.Types.ObjectId();
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString(), alert2Id.toString()],
+        [asAlert(alert1Id), asAlert(alert2Id)],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12357,7 +12433,7 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z'));
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString()],
+        [asAlert(alert1Id)],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12367,7 +12443,7 @@ describe('checkAlerts', () => {
       );
     });
 
-    it('should issue one aggregation per alert ID (per-alert queries)', async () => {
+    it('should issue one streamed range find per alert and no aggregation', async () => {
       const alert1Id = new mongoose.Types.ObjectId();
       await saveAlert(alert1Id, new Date('2025-01-01T00:00:00Z'));
       await saveAlert(alert1Id, new Date('2025-01-01T00:05:00Z'));
@@ -12376,24 +12452,23 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:10:00Z'));
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z'));
 
+      const findSpy = jest.spyOn(AlertHistory, 'find');
       const aggregateSpy = jest.spyOn(AlertHistory, 'aggregate');
+      const cursorSpy = jest.spyOn(mongoose.Query.prototype, 'cursor');
 
-      const fakeAlertIds = Array(150)
+      const fakeAlerts = Array(150)
         .fill(null)
-        .map(() => new mongoose.Types.ObjectId().toString());
-      const allIds = [
-        alert1Id.toString(),
-        ...fakeAlertIds,
-        alert2Id.toString(),
-      ];
+        .map(() => asAlert(new mongoose.Types.ObjectId()));
+      const allAlerts = [asAlert(alert1Id), ...fakeAlerts, asAlert(alert2Id)];
 
       const result = await getPreviousAlertHistories(
-        allIds,
+        allAlerts,
         new Date('2025-01-01T00:20:00Z'),
       );
 
-      // One aggregation per alert ID (no chunking)
-      expect(aggregateSpy).toHaveBeenCalledTimes(allIds.length);
+      expect(findSpy).toHaveBeenCalledTimes(allAlerts.length);
+      expect(aggregateSpy).not.toHaveBeenCalled();
+      expect(cursorSpy).toHaveBeenCalledTimes(allAlerts.length);
       expect(result.size).toBe(2);
       expect(result.get(alert1Id.toString())!.createdAt).toEqual(
         new Date('2025-01-01T00:05:00Z'),
@@ -12401,6 +12476,136 @@ describe('checkAlerts', () => {
       expect(result.get(alert2Id.toString())!.createdAt).toEqual(
         new Date('2025-01-01T00:15:00Z'),
       );
+    });
+
+    it('should scan the {alert, createdAt} index with tight createdAt bounds', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      const now = new Date('2025-01-10T00:00:00Z');
+      for (let i = 0; i < 10; i++) {
+        await saveAlert(alertId, new Date(now.getTime() - i * ms('1d')));
+      }
+      await AlertHistory.syncIndexes();
+
+      const explain = (await AlertHistory.find({
+        alert: alertId,
+        createdAt: {
+          $lte: now,
+          $gte: new Date(now.getTime() - getAlertHistoryLookbackMs('5m')),
+        },
+        state: { $ne: AlertState.ERROR },
+      }).explain('executionStats')) as any;
+
+      const stages = JSON.stringify(explain.queryPlanner.winningPlan);
+      expect(stages).toContain('alert_1_createdAt_-1');
+      // 1d lookback: only today's and yesterday's rows are touched.
+      expect(explain.executionStats.totalKeysExamined).toBeLessThanOrEqual(2);
+    });
+  });
+
+  describe('getAlertHistoryLookbackMs', () => {
+    it('applies the 1d floor for short intervals', () => {
+      expect(getAlertHistoryLookbackMs('1m')).toBe(ms('1d'));
+      expect(getAlertHistoryLookbackMs('5m')).toBe(ms('1d'));
+      expect(getAlertHistoryLookbackMs('15m')).toBe(ms('1d'));
+    });
+
+    it('derives 52 windows for mid-size intervals', () => {
+      expect(getAlertHistoryLookbackMs('30m')).toBe(52 * ms('30m'));
+      expect(getAlertHistoryLookbackMs('1h')).toBe(52 * ms('1h'));
+    });
+
+    it('caps at 7d for long intervals', () => {
+      expect(getAlertHistoryLookbackMs('6h')).toBe(ms('7d'));
+      expect(getAlertHistoryLookbackMs('12h')).toBe(ms('7d'));
+      expect(getAlertHistoryLookbackMs('1d')).toBe(ms('7d'));
+    });
+  });
+
+  describe('getLatestAlertHistories', () => {
+    const server = getServer();
+
+    beforeAll(async () => {
+      await server.start();
+    });
+
+    afterEach(async () => {
+      await server.clearDBs();
+      jest.clearAllMocks();
+    });
+
+    afterAll(async () => {
+      await server.stop();
+    });
+
+    const saveAlert = (
+      id: mongoose.Types.ObjectId,
+      createdAt: Date,
+      state: AlertState = AlertState.OK,
+    ) => {
+      return new AlertHistory({
+        alert: id,
+        createdAt,
+        state,
+      }).save();
+    };
+
+    it('returns the latest row per alert and null when no history exists', async () => {
+      const alert1Id = new mongoose.Types.ObjectId();
+      await saveAlert(alert1Id, new Date('2025-01-01T00:00:00Z'));
+      await saveAlert(
+        alert1Id,
+        new Date('2025-01-01T00:05:00Z'),
+        AlertState.ALERT,
+      );
+
+      const alert2Id = new mongoose.Types.ObjectId();
+
+      const result = await getLatestAlertHistories(
+        [alert1Id.toString(), alert2Id.toString()],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.get(alert1Id.toString())).toEqual({
+        createdAt: new Date('2025-01-01T00:05:00Z'),
+        state: AlertState.ALERT,
+      });
+      expect(result.get(alert2Id.toString())).toBeNull();
+    });
+
+    it('ignores histories created after now', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveAlert(alertId, new Date('2025-01-01T00:00:00Z'));
+      await saveAlert(alertId, new Date('2025-01-01T00:10:00Z'));
+
+      const result = await getLatestAlertHistories(
+        [alertId.toString()],
+        new Date('2025-01-01T00:05:00Z'),
+      );
+
+      expect(result.get(alertId.toString())).toEqual({
+        createdAt: new Date('2025-01-01T00:00:00Z'),
+        state: AlertState.OK,
+      });
+    });
+
+    it('ignores ERROR rows', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveAlert(alertId, new Date('2025-01-01T00:00:00Z'));
+      await saveAlert(
+        alertId,
+        new Date('2025-01-01T00:05:00Z'),
+        AlertState.ERROR,
+      );
+
+      const result = await getLatestAlertHistories(
+        [alertId.toString()],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.get(alertId.toString())).toEqual({
+        createdAt: new Date('2025-01-01T00:00:00Z'),
+        state: AlertState.OK,
+      });
     });
   });
 
@@ -12451,14 +12656,14 @@ describe('checkAlerts', () => {
       const alertId = new mongoose.Types.ObjectId();
       await saveHistory(alertId, new Date('2025-01-01T00:10:00Z'));
 
-      const aggregateSpy = jest.spyOn(AlertHistory, 'aggregate');
+      const findSpy = jest.spyOn(AlertHistory, 'find');
 
       const result = await getConsecutiveWindowHistories(
         [makeAlert(alertId, 1), makeAlert(new mongoose.Types.ObjectId())],
         new Date('2025-01-01T00:17:00Z'),
       );
 
-      expect(aggregateSpy).not.toHaveBeenCalled();
+      expect(findSpy).not.toHaveBeenCalled();
       expect(result.size).toBe(0);
     });
 
