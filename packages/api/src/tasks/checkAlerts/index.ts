@@ -1962,18 +1962,26 @@ export interface AggregatedAlertHistory {
   groupValues?: GroupValue[] | null;
 }
 
-// The previous-history lookback must cover the catch-up horizon
-// (MAX_NUM_WINDOWS windows, see calcAlertDateRange) plus slack, and is floored
-// at 1d so groups whose last row predates a task outage still auto-resolve.
+// Floor/cap for the previous-history lookback window. The lookback only needs
+// to cover (a) the catch-up horizon (capped at MAX_NUM_WINDOWS windows — see
+// calcAlertDateRange) and (b) enough slack to auto-resolve groups whose last
+// history row predates a task outage. History rows are written every window
+// for every group present in the data, so anything beyond a couple of windows
+// exists purely for outage/stale-group coverage.
 const ALERT_HISTORY_MIN_LOOKBACK_MS = ms('1d');
 const ALERT_HISTORY_MAX_LOOKBACK_MS = ms('7d');
-// +2 windows so a boundary window is never clipped by the lookback.
+// +2 windows of slack over the catch-up cap so a boundary window is never
+// clipped by the history lookback.
 const ALERT_HISTORY_LOOKBACK_WINDOWS = MAX_NUM_WINDOWS + 2;
 
 /**
- * How far back to scan AlertHistory when loading an alert's previous
- * per-group state. The scan is a range on {alert: 1, createdAt: -1}, so this
- * directly bounds the index keys and documents examined per alert.
+ * Compute how far back to scan AlertHistory when loading previous per-group
+ * state for an alert, derived from the alert's evaluation interval.
+ *
+ * Bounding the scan matters on DocumentDB: the previous-history query is a
+ * range scan on {alert: 1, createdAt: -1}, so the lookback directly bounds the
+ * index entries examined and documents fetched on the (read-preferring)
+ * secondary instances.
  */
 export const getAlertHistoryLookbackMs = (interval: AlertInterval): number => {
   const windowMs = ms(interval);
@@ -1986,7 +1994,7 @@ export const getAlertHistoryLookbackMs = (interval: AlertInterval): number => {
   );
 };
 
-/** Latest AlertHistory row per alert, minus the large `lastValues` array. */
+/** Latest AlertHistory row per alert, minus the fat `lastValues` array. */
 export type LatestAlertHistory = Pick<
   AggregatedAlertHistory,
   'createdAt' | 'state' | 'group' | 'fired'
@@ -1996,14 +2004,15 @@ export type LatestAlertHistory = Pick<
  * Fetch the single most recent AlertHistory row for each of the given alert
  * IDs.
  *
- * Each lookup is a one-key index seek on {alert: 1, createdAt: -1}, so it is
- * cheap enough to run for every alert on every tick. The provider uses it to
- * tell whether an alert was already evaluated in the current window, which
- * limits the heavier per-group fetch (getPreviousAlertHistories) to grouped
- * alerts that are due. For non-grouped alerts this row is the previous state.
+ * Each lookup is a one-key index seek on {alert: 1, createdAt: -1}, so this is
+ * cheap enough to run for every alert on every task tick. loadAlerts uses the
+ * result to decide whether an alert was already evaluated in the current
+ * window — gating the much heavier per-group fetch (getPreviousAlertHistories)
+ * to grouped alerts that are due; for non-grouped alerts this row is the
+ * previous state itself.
  *
  * @returns A map from alert ID to its latest history row, or null when the
- *  alert has no history.
+ *  alert has no history at all.
  */
 export const getLatestAlertHistories = async (
   alertIds: string[],
@@ -2025,7 +2034,12 @@ export const getLatestAlertHistories = async (
             // retried/backfilled.
             state: { $ne: AlertState.ERROR },
           },
-          { createdAt: 1, state: 1, group: 1, fired: 1 },
+          {
+            createdAt: 1,
+            state: 1,
+            group: 1,
+            fired: 1,
+          },
         )
           .sort({ createdAt: -1 })
           .lean();
@@ -2055,14 +2069,20 @@ export const getLatestAlertHistories = async (
  * Fetch the most recent AlertHistory value for each of the given alerts.
  * For group-by alerts, returns the latest history for each group within each alert.
  *
- * Runs one range `find()` per alert on {alert: 1, createdAt: -1} and reduces
- * to the latest row per group in application code. A $sort {alert, group,
- * createdAt} + $group/$first aggregation is avoided on purpose: MongoDB does
- * not short-circuit it per group, so it reads every row in the window, and no
- * single index serves both a tight createdAt bound and a group-major sort.
+ * Implemented as a per-alert range `find()` on the {alert: 1, createdAt: -1}
+ * index with the latest-per-group reduce done in application code. An
+ * aggregation with $sort {alert, group, createdAt} + $group/$first is NOT used
+ * on purpose: DocumentDB has no DISTINCT_SCAN optimization, and no single
+ * B-tree index can serve both a tight createdAt range bound and a group-major
+ * sort — the aggregation either walks every index entry for the alert across
+ * the full TTL retention (loose createdAt bounds behind the unbounded `group`
+ * key) or performs a blocking in-memory sort. A plain tight-bounds range scan
+ * examines exactly the lookback window and keeps long-lived sort/group cursors
+ * off the DocumentDB secondaries (HDX-4791).
  *
- * The window is derived from each alert's interval (see
- * getAlertHistoryLookbackMs) and `lastValues` is not fetched.
+ * The lookback window is derived from each alert's interval (see
+ * getAlertHistoryLookbackMs); the projection excludes the fat `lastValues`
+ * array so only the per-group state fields are transferred.
  *
  * @param alerts The alerts (id + interval) to query the latest history for.
  * @param now The current date and time. AlertHistory documents that have a createdAt > now are ignored.
@@ -2087,8 +2107,14 @@ export const getPreviousAlertHistories = async (
         const lookbackDate = new Date(
           now.getTime() - getAlertHistoryLookbackMs(alert.interval),
         );
-        // Streamed so memory stays at O(batch + groups) rather than
-        // O(groups × windows) while the reduce keeps only the latest row.
+        // Stream the range scan instead of materializing it: the row count is
+        // O(groups × windows-in-lookback) — up to ~1,440 windows for a
+        // 1m-interval alert at the 1d lookback floor — while the reduce below
+        // only ever needs the latest row per group. Iterating a cursor bounds
+        // app memory at O(driver batch + groups) per alert instead of
+        // O(groups × windows), which matters with up to
+        // ALERT_HISTORY_QUERY_CONCURRENCY of these in flight when alerts
+        // sharing a window boundary all come due at once.
         const cursor = AlertHistory.find(
           {
             alert: alertObjectId,
@@ -2098,11 +2124,20 @@ export const getPreviousAlertHistories = async (
             // retried/backfilled.
             state: { $ne: AlertState.ERROR },
           },
-          { group: 1, state: 1, createdAt: 1, fired: 1, groupValues: 1 },
+          {
+            group: 1,
+            state: 1,
+            createdAt: 1,
+            fired: 1,
+            groupValues: 1,
+          },
         )
           .lean()
           .cursor();
 
+        // Reduce to the latest row per group. Ties on createdAt are resolved
+        // arbitrarily (first row wins), matching the previous aggregation's
+        // unstable $sort + $first behavior.
         const latestByKey = new Map<string, AggregatedAlertHistory>();
         for await (const row of cursor) {
           const key = computeHistoryMapKey(alert.id, row.group || '');
@@ -2123,7 +2158,8 @@ export const getPreviousAlertHistories = async (
     ),
   );
 
-  // Keys are namespaced by alert ID, so merging cannot collide.
+  // Merge the per-alert maps. Keys are namespaced by alert ID, so there are no
+  // collisions across alerts.
   const merged = new Map<string, AggregatedAlertHistory>();
   for (const result of results) {
     if (!result) {
@@ -2192,8 +2228,16 @@ export const getConsecutiveWindowHistories = async (
             (numWindowsToLookBack - 1) * windowSizeInMins * 60_000,
         );
         const id = new mongoose.Types.ObjectId(alert.id);
-        // Range scan on {alert: 1, createdAt: -1}; the newest-first order
-        // the consumer needs is applied below instead of a DB-side sort.
+        // Tight-bounds range scan on {alert: 1, createdAt: -1}; the
+        // newest-first ordering the consumer needs is applied in app code
+        // below. A DB-side $sort including `group` would force DocumentDB
+        // to walk the alert's full index range instead (see
+        // getPreviousAlertHistories).
+        //
+        // Unlike getPreviousAlertHistories, this deliberately materializes
+        // the result array: the consumer needs every row (sorted), so
+        // streaming saves nothing, and the row count is bounded by the small
+        // numConsecutiveWindows lookback rather than the full history window.
         const rows = await AlertHistory.find(
           {
             alert: id,

@@ -397,27 +397,138 @@ async function resolveAlertDetails(
   return [conn, details];
 }
 
-/**
- * Whether the alert's latest history row is from the window processAlert would
- * evaluate now, i.e. processAlert will skip it. A failing evaluator lookup
- * counts as due so processAlert can record the error on that alert.
- */
-function wasEvaluatedInCurrentWindow(
-  alert: IAlert,
-  latest: LatestAlertHistory,
-  now: Date,
-): boolean {
-  try {
-    return (
-      latest.createdAt.getTime() === getAlertWindowStart(alert, now).getTime()
-    );
-  } catch (e) {
-    logger.error(
-      { alertId: alert.id, error: serializeError(e) },
-      'Failed to compute alert window start for history gating',
-    );
-    return false;
+async function loadAlerts(): Promise<AlertTask[]> {
+  const groupedTasks = new Map<string, AlertTask>();
+
+  const alerts = await Alert.find({});
+
+  const now = new Date();
+
+  const resolved: {
+    alert: IAlert;
+    conn: IConnection;
+    details: PartialAlertDetails;
+  }[] = [];
+  for (const alert of alerts) {
+    try {
+      const [conn, details] = await resolveAlertDetails(alert);
+      resolved.push({ alert, conn, details });
+    } catch (e) {
+      logger.error({
+        message: `failed to load alert: ${e}`,
+        alertId: alert.id,
+        team: alert.team,
+        channel: alert.channel,
+        provider: 'default',
+      });
+    }
   }
+
+  // Share a single queue across all history fetches so their combined
+  // in-flight per-alert queries stay within one global cap.
+  const historyQueryQueue = new PQueue({
+    concurrency: ALERT_HISTORY_QUERY_CONCURRENCY,
+  });
+
+  // Due-ness gate (HDX-4791): a cheap one-key lookup per (in-scope) alert
+  // decides whether the alert was already evaluated in the current window.
+  // Only alerts that are actually due pay for the per-group history range
+  // scan — without this, every task tick (once a minute) re-scans the
+  // history window for every alert regardless of the alert's interval, which
+  // was the main driver of DocDB secondary CPU / cursor timeouts.
+  const latestHistories = await getLatestAlertHistories(
+    resolved.map(({ alert }) => alert.id),
+    now,
+    historyQueryQueue,
+  );
+
+  const dueAlertsWithHistory: IAlert[] = [];
+  const dueGroupedAlerts: IAlert[] = [];
+  const dueNonGroupedAlerts: {
+    alert: IAlert;
+    latest: NonNullable<ReturnType<(typeof latestHistories)['get']>>;
+  }[] = [];
+  const gatedAlerts: {
+    alert: IAlert;
+    latest: NonNullable<ReturnType<(typeof latestHistories)['get']>>;
+  }[] = [];
+  let noHistoryCount = 0;
+  for (const { alert, details } of resolved) {
+    const latest = latestHistories.get(alert.id);
+    if (!latest) {
+      // Never evaluated (or history expired): the alert is due, but there is
+      // no previous state to fetch.
+      noHistoryCount += 1;
+      continue;
+    }
+    if (wasEvaluatedInCurrentWindow(alert, latest, now)) {
+      // Already evaluated in the current window — processAlert will skip it.
+      gatedAlerts.push({ alert, latest });
+      continue;
+    }
+    dueAlertsWithHistory.push(alert);
+    // Non-grouped alerts only need the latest row, which the gate already
+    // fetched; only grouped alerts pay for the per-group range scan (its
+    // lookback also serves stale-group auto-resolve).
+    if (alertHasGroupBy(details)) {
+      dueGroupedAlerts.push(alert);
+    } else {
+      dueNonGroupedAlerts.push({ alert, latest });
+    }
+  }
+
+  const [previousAlerts, recentHistoryMap] = await Promise.all([
+    getPreviousAlertHistories(dueGroupedAlerts, now, historyQueryQueue),
+    getConsecutiveWindowHistories(dueAlertsWithHistory, now, historyQueryQueue),
+  ]);
+
+  // Seed non-grouped previous state from the gate row — identical to what
+  // the range scan would reduce to.
+  for (const { alert, latest } of dueNonGroupedAlerts) {
+    previousAlerts.set(computeHistoryMapKey(alert.id, latest.group || ''), {
+      _id: new mongoose.Types.ObjectId(alert.id),
+      createdAt: latest.createdAt,
+      state: latest.state,
+      group: latest.group,
+      fired: latest.fired,
+    });
+  }
+
+  // Seed a sentinel entry for each gated alert so processAlert's
+  // shouldSkipAlertCheck sees a history row in the current window and skips
+  // the evaluation exactly as before (including the skipped_window metric).
+  for (const { alert, latest } of gatedAlerts) {
+    previousAlerts.set(alert.id, {
+      _id: new mongoose.Types.ObjectId(alert.id),
+      createdAt: latest.createdAt,
+      state: latest.state,
+    });
+  }
+
+  logger.info(
+    {
+      alertCount: alerts.length,
+      dueCount: dueAlertsWithHistory.length,
+      dueGroupedCount: dueGroupedAlerts.length,
+      gatedCount: gatedAlerts.length,
+      noHistoryCount,
+    },
+    'Loaded alert histories with due-ness gating',
+  );
+
+  for (const { conn, details } of resolved) {
+    if (!groupedTasks.has(conn.id)) {
+      groupedTasks.set(conn.id, { alerts: [], conn, now });
+    }
+    groupedTasks.get(conn.id)!.alerts.push({
+      ...details,
+      previousMap: previousAlerts,
+      recentHistoryMap,
+    });
+  }
+
+  // Flatten out our groupings for execution
+  return Array.from(groupedTasks.values());
 }
 
 export default class DefaultAlertProvider implements AlertProvider {
@@ -435,129 +546,7 @@ export default class DefaultAlertProvider implements AlertProvider {
   }
 
   async getAlertTasks(): Promise<AlertTask[]> {
-    const groupedTasks = new Map<string, AlertTask>();
-    const alerts = await Alert.find({});
-
-    const now = new Date();
-
-    const resolved: {
-      alert: IAlert;
-      conn: IConnection;
-      details: PartialAlertDetails;
-    }[] = [];
-    for (const alert of alerts) {
-      try {
-        const [conn, details] = await resolveAlertDetails(alert);
-        resolved.push({ alert, conn, details });
-      } catch (e) {
-        logger.error({
-          message: `failed to load alert: ${e}`,
-          alertId: alert.id,
-          team: alert.team,
-          channel: alert.channel,
-          provider: 'default',
-        });
-      }
-    }
-
-    // Share a single queue across all history fetches so their combined
-    // in-flight per-alert queries stay within one global cap.
-    const historyQueryQueue = new PQueue({
-      concurrency: ALERT_HISTORY_QUERY_CONCURRENCY,
-    });
-
-    // One index seek per alert decides whether it is due this window, so
-    // alerts on longer intervals don't re-scan their history every tick.
-    const latestHistories = await getLatestAlertHistories(
-      resolved.map(({ alert }) => alert.id),
-      now,
-      historyQueryQueue,
-    );
-
-    const dueAlertsWithHistory: IAlert[] = [];
-    const dueGroupedAlerts: IAlert[] = [];
-    const dueNonGroupedAlerts: {
-      alert: IAlert;
-      latest: LatestAlertHistory;
-    }[] = [];
-    const gatedAlerts: { alert: IAlert; latest: LatestAlertHistory }[] = [];
-    let noHistoryCount = 0;
-    for (const { alert, details } of resolved) {
-      const latest = latestHistories.get(alert.id);
-      if (!latest) {
-        noHistoryCount += 1;
-        continue;
-      }
-      if (wasEvaluatedInCurrentWindow(alert, latest, now)) {
-        gatedAlerts.push({ alert, latest });
-        continue;
-      }
-      dueAlertsWithHistory.push(alert);
-      // Non-grouped alerts only need the latest row, which the gate already
-      // fetched. Grouped alerts need the latest row of every group.
-      if (alertHasGroupBy(details)) {
-        dueGroupedAlerts.push(alert);
-      } else {
-        dueNonGroupedAlerts.push({ alert, latest });
-      }
-    }
-
-    const [previousAlerts, recentHistoryMap] = await Promise.all([
-      getPreviousAlertHistories(dueGroupedAlerts, now, historyQueryQueue),
-      getConsecutiveWindowHistories(
-        dueAlertsWithHistory,
-        now,
-        historyQueryQueue,
-      ),
-    ]);
-
-    for (const { alert, latest } of dueNonGroupedAlerts) {
-      previousAlerts.set(computeHistoryMapKey(alert.id, latest.group || ''), {
-        _id: new mongoose.Types.ObjectId(alert.id),
-        createdAt: latest.createdAt,
-        state: latest.state,
-        group: latest.group,
-        fired: latest.fired,
-      });
-    }
-
-    // A row in the current window under the bare alert ID makes
-    // processAlert's shouldSkipAlertCheck skip the alert, as it did before.
-    for (const { alert, latest } of gatedAlerts) {
-      previousAlerts.set(alert.id, {
-        _id: new mongoose.Types.ObjectId(alert.id),
-        createdAt: latest.createdAt,
-        state: latest.state,
-      });
-    }
-
-    logger.info(
-      {
-        alertCount: alerts.length,
-        resolvedCount: resolved.length,
-        dueCount: dueAlertsWithHistory.length,
-        dueGroupedCount: dueGroupedAlerts.length,
-        gatedCount: gatedAlerts.length,
-        noHistoryCount,
-      },
-      'Loaded alert histories',
-    );
-
-    for (const { conn, details } of resolved) {
-      let task = groupedTasks.get(conn.id);
-      if (!task) {
-        task = { alerts: [], conn, now };
-        groupedTasks.set(conn.id, task);
-      }
-      task.alerts.push({
-        ...details,
-        previousMap: previousAlerts,
-        recentHistoryMap,
-      });
-    }
-
-    // Flatten out our groupings for execution
-    return Array.from(groupedTasks.values());
+    return loadAlerts();
   }
 
   buildLogSearchLink({
@@ -799,5 +788,28 @@ export default class DefaultAlertProvider implements AlertProvider {
       // Fallback for anything outside a per-alert scope.
       attribution: { surface: 'alert' },
     });
+  }
+}
+
+/**
+ * Whether the alert's latest history row is from the window processAlert would
+ * evaluate now, i.e. processAlert will skip it. A failing evaluator lookup
+ * counts as due so processAlert can record the error on that alert.
+ */
+function wasEvaluatedInCurrentWindow(
+  alert: IAlert,
+  latest: LatestAlertHistory,
+  now: Date,
+): boolean {
+  try {
+    return (
+      latest.createdAt.getTime() === getAlertWindowStart(alert, now).getTime()
+    );
+  } catch (e) {
+    logger.error(
+      { alertId: alert.id, error: serializeError(e) },
+      'Failed to compute alert window start for history gating',
+    );
+    return false;
   }
 }

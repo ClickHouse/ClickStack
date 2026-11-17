@@ -316,6 +316,9 @@ describe('alert evaluators', () => {
     });
     const healthy = makeAlert({ numConsecutiveWindows: 2 });
     const broken = makeAlert({ numConsecutiveWindows: 2, threshold: 42 });
+    // EE reads consecutive-window history with find().lean() rather than
+    // aggregate (HDX-4791).
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test double only needs lean()
     const find = jest.spyOn(AlertHistory, 'find').mockReturnValue({
       lean: jest
         .fn()

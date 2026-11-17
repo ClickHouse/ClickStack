@@ -1,6 +1,5 @@
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
-import ms from 'ms';
 
 import { createAlert } from '@/controllers/alerts';
 import { createTeam } from '@/controllers/team';
@@ -20,11 +19,8 @@ import Connection from '@/models/connection';
 import Dashboard from '@/models/dashboard';
 import { SavedSearch } from '@/models/savedSearch';
 import { Source } from '@/models/source';
+import * as checkAlertTasks from '@/tasks/checkAlerts';
 import { getScheduledWindowStart } from '@/tasks/checkAlerts';
-import {
-  clearAlertEvaluators,
-  registerAlertEvaluator,
-} from '@/tasks/checkAlerts/evaluators';
 import {
   AlertProvider,
   AlertTaskType,
@@ -746,6 +742,231 @@ describe('DefaultAlertProvider', () => {
       expect(result[0].conn.host).toBe('http://localhost:8124');
     });
 
+    describe('history fetch gating (HDX-4791)', () => {
+      afterEach(() => {
+        jest.restoreAllMocks();
+      });
+
+      // Alerts created by the helpers use interval '5m' with no schedule
+      // offset, matching processAlert's window computation.
+      const currentWindowStart = () =>
+        getScheduledWindowStart(new Date(), 5, 0);
+
+      it('skips the per-group history fetch and seeds a sentinel for alerts already evaluated in the current window', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+        );
+        // Use a 1d interval so the current window (start of the UTC day)
+        // cannot roll over mid-test.
+        await Alert.updateOne({ _id: alert._id }, { $set: { interval: '1d' } });
+        const windowStart = getScheduledWindowStart(new Date(), 1440, 0);
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: windowStart,
+          state: AlertState.ALERT,
+          group: 'group-a',
+        });
+
+        const findSpy = jest.spyOn(AlertHistory, 'find');
+        const result = await provider.getAlertTasks();
+
+        // The gate (a findOne per alert) decided the alert was already
+        // evaluated this window, so the per-group range find never runs.
+        expect(findSpy).not.toHaveBeenCalled();
+
+        expect(result).toHaveLength(1);
+        const details = result[0].alerts[0];
+        const sentinel = details.previousMap.get(alert.id);
+        expect(sentinel).toBeDefined();
+        expect(sentinel!.createdAt).toEqual(windowStart);
+        expect(sentinel!.state).toBe(AlertState.ALERT);
+      });
+
+      it('fetches full per-group history for grouped alerts that are due', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+          { groupBy: 'ServiceName' },
+        );
+        // Latest history is from a previous window -> the alert is due.
+        const previousWindowStart = new Date(
+          currentWindowStart().getTime() - 5 * 60_000,
+        );
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: previousWindowStart,
+          state: AlertState.ALERT,
+          group: 'group-a',
+        });
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: previousWindowStart,
+          state: AlertState.OK,
+          group: 'group-b',
+        });
+
+        const findSpy = jest.spyOn(AlertHistory, 'find');
+        const result = await provider.getAlertTasks();
+
+        expect(findSpy).toHaveBeenCalledTimes(1);
+
+        expect(result).toHaveLength(1);
+        const details = result[0].alerts[0];
+        const groupA = details.previousMap.get(`${alert.id}||group-a`);
+        expect(groupA).toBeDefined();
+        expect(groupA!.state).toBe(AlertState.ALERT);
+        expect(groupA!.createdAt).toEqual(previousWindowStart);
+        expect(details.previousMap.get(`${alert.id}||group-b`)!.state).toBe(
+          AlertState.OK,
+        );
+      });
+
+      it('seeds non-grouped due alerts from the gate row without a range scan (HDX-4980)', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+        );
+        // Several previous windows of history; the newest row carries the
+        // state the previousMap must reflect.
+        const windowMs = 5 * 60_000;
+        const base = currentWindowStart().getTime();
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: new Date(base - 3 * windowMs),
+          state: AlertState.OK,
+          group: '',
+        });
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: new Date(base - 2 * windowMs),
+          state: AlertState.OK,
+          group: '',
+        });
+        const newest = await AlertHistory.create({
+          alert: alert._id,
+          createdAt: new Date(base - windowMs),
+          state: AlertState.ALERT,
+          group: '',
+          fired: true,
+        });
+
+        const findSpy = jest.spyOn(AlertHistory, 'find');
+        const result = await provider.getAlertTasks();
+
+        // The gate's findOne already fetched the latest row; a non-grouped
+        // alert must not pay for the per-group range scan.
+        expect(findSpy).not.toHaveBeenCalled();
+
+        expect(result).toHaveLength(1);
+        const details = result[0].alerts[0];
+        // Seeded entry is exactly what the legacy range scan would have
+        // reduced to: the newest row, including state and fired.
+        const previous = details.previousMap.get(alert.id);
+        expect(previous).toBeDefined();
+        expect(previous!.createdAt).toEqual(newest.createdAt);
+        expect(previous!.state).toBe(AlertState.ALERT);
+        expect(previous!.fired).toBe(true);
+      });
+
+      it('skips the per-group history fetch for alerts with no history at all', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+        );
+
+        const findSpy = jest.spyOn(AlertHistory, 'find');
+        const result = await provider.getAlertTasks();
+
+        // No history exists, so there is nothing to range-scan.
+        expect(findSpy).not.toHaveBeenCalled();
+
+        // The alert is still due and loaded, just with an empty previousMap.
+        expect(result).toHaveLength(1);
+        const details = result[0].alerts[0];
+        expect(details.alert.id).toBe(alert.id);
+        expect(details.previousMap.get(alert.id)).toBeUndefined();
+      });
+
+      it('treats an alert as due when its window start cannot be computed', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+        );
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: new Date(currentWindowStart().getTime() - 5 * 60_000),
+          state: AlertState.ALERT,
+        });
+        const windowStartSpy = jest
+          .spyOn(checkAlertTasks, 'getAlertWindowStart')
+          .mockImplementation(() => {
+            throw new Error('lookup failed');
+          });
+
+        const result = await provider.getAlertTasks();
+
+        expect(windowStartSpy).toHaveBeenCalled();
+        expect(result).toHaveLength(1);
+        expect(result[0].alerts[0].previousMap.get(alert.id)?.state).toBe(
+          AlertState.ALERT,
+        );
+      });
+
+      let team: Awaited<ReturnType<typeof createTeam>>;
+
+      beforeEach(async () => {
+        team = await createTeam({ name: 'Test Team' });
+      });
+
+      const createConnectionAndSource = async () => {
+        const connection = await Connection.create({
+          team: team._id,
+          name: 'Test Connection',
+          host: 'http://localhost:8123',
+          username: 'test',
+          password: 'test',
+        });
+        const source = await Source.create({
+          team: team._id,
+          name: 'Test Source',
+          kind: 'log',
+          from: { databaseName: 'default', tableName: 'logs' },
+          timestampValueExpression: 'timestamp',
+          connection: connection._id,
+        });
+        return { connection, source };
+      };
+
+      const createValidSavedSearchAlert = async (
+        { source }: Awaited<ReturnType<typeof createConnectionAndSource>>,
+        { groupBy }: { groupBy?: string } = {},
+      ) => {
+        const savedSearch = await SavedSearch.create({
+          team: team._id,
+          name: 'Test Search',
+          select: 'message',
+          where: 'level: error',
+          whereLanguage: 'lucene',
+          orderBy: 'timestamp',
+          source: source._id,
+          tags: [],
+        });
+        const alert = await createAlert(
+          team._id,
+          {
+            source: AlertSource.SAVED_SEARCH,
+            savedSearchId: savedSearch._id.toString(),
+            threshold: 10,
+            thresholdType: AlertThresholdType.ABOVE,
+            interval: '5m',
+            ...(groupBy ? { groupBy } : {}),
+            channel: {
+              type: 'webhook',
+              webhookId: new mongoose.Types.ObjectId().toString(),
+            },
+          },
+          new mongoose.Types.ObjectId(),
+        );
+        return { alert };
+      };
+    });
+
     it('should process a single inline alert', async () => {
       const team = await createTeam({ name: 'Test Team' });
 
@@ -948,176 +1169,6 @@ describe('DefaultAlertProvider', () => {
       if (result[0].alerts[0].taskType === AlertTaskType.TILE) {
         expect(result[0].alerts[0].source).toBeUndefined();
       }
-    });
-  });
-
-  describe('history fetch gating', () => {
-    afterEach(() => {
-      jest.restoreAllMocks();
-      clearAlertEvaluators();
-    });
-
-    const createSavedSearchAlert = async ({
-      groupBy,
-      interval = '5m',
-    }: { groupBy?: string; interval?: '5m' | '1d' } = {}) => {
-      const team = await createTeam({ name: 'Test Team' });
-      const connection = await Connection.create({
-        team: team._id,
-        name: 'Test Connection',
-        host: 'http://localhost:8123',
-        username: 'test',
-        password: 'test',
-      });
-      const source = await Source.create({
-        team: team._id,
-        name: 'Test Source',
-        kind: 'log',
-        from: { databaseName: 'default', tableName: 'logs' },
-        timestampValueExpression: 'timestamp',
-        connection: connection._id,
-      });
-      const savedSearch = await SavedSearch.create({
-        team: team._id,
-        name: 'Test Search',
-        select: 'message',
-        where: 'level: error',
-        whereLanguage: 'lucene',
-        orderBy: 'timestamp',
-        source: source._id,
-        tags: [],
-      });
-      return createAlert(
-        team._id,
-        {
-          source: AlertSource.SAVED_SEARCH,
-          savedSearchId: savedSearch._id.toString(),
-          threshold: 10,
-          thresholdType: AlertThresholdType.ABOVE,
-          interval,
-          groupBy,
-          channel: {
-            type: 'webhook',
-            webhookId: new mongoose.Types.ObjectId().toString(),
-          },
-        },
-        new mongoose.Types.ObjectId(),
-      );
-    };
-
-    const previousWindowStart = () =>
-      new Date(getScheduledWindowStart(new Date(), 5, 0).getTime() - ms('5m'));
-
-    it('skips the history fetch and seeds a sentinel for alerts already evaluated in the current window', async () => {
-      // 1d interval so the current window cannot roll over mid-test.
-      const alert = await createSavedSearchAlert({ interval: '1d' });
-      const windowStart = getScheduledWindowStart(new Date(), 1440, 0);
-      await AlertHistory.create({
-        alert: alert._id,
-        createdAt: windowStart,
-        state: AlertState.ALERT,
-        group: 'group-a',
-      });
-
-      const findSpy = jest.spyOn(AlertHistory, 'find');
-      const result = await provider.getAlertTasks();
-
-      expect(findSpy).not.toHaveBeenCalled();
-      expect(result).toHaveLength(1);
-      const sentinel = result[0].alerts[0].previousMap.get(alert.id);
-      expect(sentinel?.createdAt).toEqual(windowStart);
-      expect(sentinel?.state).toBe(AlertState.ALERT);
-    });
-
-    it('fetches per-group history for grouped alerts that are due', async () => {
-      const alert = await createSavedSearchAlert({ groupBy: 'ServiceName' });
-      const createdAt = previousWindowStart();
-      await AlertHistory.create({
-        alert: alert._id,
-        createdAt,
-        state: AlertState.ALERT,
-        group: 'group-a',
-      });
-      await AlertHistory.create({
-        alert: alert._id,
-        createdAt,
-        state: AlertState.OK,
-        group: 'group-b',
-      });
-
-      const findSpy = jest.spyOn(AlertHistory, 'find');
-      const result = await provider.getAlertTasks();
-
-      expect(findSpy).toHaveBeenCalledTimes(1);
-      const { previousMap } = result[0].alerts[0];
-      expect(previousMap.get(`${alert.id}||group-a`)?.state).toBe(
-        AlertState.ALERT,
-      );
-      expect(previousMap.get(`${alert.id}||group-a`)?.createdAt).toEqual(
-        createdAt,
-      );
-      expect(previousMap.get(`${alert.id}||group-b`)?.state).toBe(
-        AlertState.OK,
-      );
-    });
-
-    it('seeds non-grouped due alerts from the latest row without a range scan', async () => {
-      const alert = await createSavedSearchAlert();
-      const base = previousWindowStart().getTime();
-      await AlertHistory.create({
-        alert: alert._id,
-        createdAt: new Date(base - ms('10m')),
-        state: AlertState.OK,
-      });
-      const newest = await AlertHistory.create({
-        alert: alert._id,
-        createdAt: new Date(base),
-        state: AlertState.ALERT,
-        fired: true,
-      });
-
-      const findSpy = jest.spyOn(AlertHistory, 'find');
-      const result = await provider.getAlertTasks();
-
-      expect(findSpy).not.toHaveBeenCalled();
-      const previous = result[0].alerts[0].previousMap.get(alert.id);
-      expect(previous?.createdAt).toEqual(newest.createdAt);
-      expect(previous?.state).toBe(AlertState.ALERT);
-      expect(previous?.fired).toBe(true);
-    });
-
-    it('skips the history fetch for alerts with no history', async () => {
-      const alert = await createSavedSearchAlert({ groupBy: 'ServiceName' });
-
-      const findSpy = jest.spyOn(AlertHistory, 'find');
-      const result = await provider.getAlertTasks();
-
-      expect(findSpy).not.toHaveBeenCalled();
-      expect(result[0].alerts[0].alert.id).toBe(alert.id);
-      expect(result[0].alerts[0].previousMap.size).toBe(0);
-    });
-
-    it('treats an alert as due when its evaluator lookup fails', async () => {
-      const alert = await createSavedSearchAlert();
-      await AlertHistory.create({
-        alert: alert._id,
-        createdAt: previousWindowStart(),
-        state: AlertState.ALERT,
-      });
-      registerAlertEvaluator({
-        name: 'broken',
-        appliesTo: () => {
-          throw new Error('lookup failed');
-        },
-        evaluate: jest.fn(),
-      });
-
-      const result = await provider.getAlertTasks();
-
-      expect(result).toHaveLength(1);
-      expect(result[0].alerts[0].previousMap.get(alert.id)?.state).toBe(
-        AlertState.ALERT,
-      );
     });
   });
 
