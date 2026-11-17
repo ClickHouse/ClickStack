@@ -178,7 +178,6 @@ export function TraceRedMetricsChart({
         <DBHeatmapChart
           title="Duration"
           query={heatmapQuery}
-          queryKeyPrefix={queryKeyPrefix}
           enabled={isReady}
           showLegend
         />

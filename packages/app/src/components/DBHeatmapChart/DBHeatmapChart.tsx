@@ -25,13 +25,6 @@ type DistributionOnlyProps = {
    * this is purely a visual mirror of that state.
    */
   selectionBounds?: SelectionBounds | null;
-  /**
-   * Namespaces the distribution heatmap's bounds and bucket queries (see
-   * `useHeatmapData`), matching `DBTimeChart`'s prop of the same name.
-   * Distribution mode only, like the drag-select props above: the series,
-   * calculated and histogram modes ignore it and keep their unprefixed keys.
-   */
-  queryKeyPrefix?: string;
 };
 
 type DBHeatmapChartProps = HeatmapChartViewProps &
@@ -44,7 +37,6 @@ function DistributionHeatmapChart({
   query,
   enabled,
   onFilter,
-  queryKeyPrefix,
   ...viewProps
 }: HeatmapChartViewProps &
   DistributionOnlyProps & { query: DistributionQuery; enabled: boolean }) {
@@ -52,7 +44,6 @@ function DistributionHeatmapChart({
     config: query.config,
     scaleType: query.scaleType,
     enabled,
-    queryKeyPrefix,
   });
   const { view } = data;
 
@@ -147,7 +138,6 @@ function DBHeatmapChart({
   onFilter,
   onClearFilter,
   selectionBounds,
-  queryKeyPrefix,
   ...viewProps
 }: DBHeatmapChartProps) {
   if (query.mode === 'series') {
@@ -173,7 +163,6 @@ function DBHeatmapChart({
       onFilter={onFilter}
       onClearFilter={onClearFilter}
       selectionBounds={selectionBounds}
-      queryKeyPrefix={queryKeyPrefix}
     />
   );
 }

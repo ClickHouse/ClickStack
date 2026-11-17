@@ -132,37 +132,4 @@ describe('useHeatmapData', () => {
     expect(boundsQuery.dateRange).toEqual(dateRange);
     expect(bucketQuery.dateRange).toEqual(dateRange);
   });
-
-  describe('queryKeyPrefix', () => {
-    const queryKeys = (queryKeyPrefix?: string) => {
-      const query = toHeatmapQuery(traceConfig);
-      if (query.mode !== 'distribution') {
-        throw new Error('Expected distribution');
-      }
-      renderHook(() =>
-        useHeatmapData({
-          config: query.config,
-          scaleType: query.scaleType,
-          enabled: true,
-          queryKeyPrefix,
-        }),
-      );
-      return mockUseQueriedChartConfig.mock.calls.map(
-        ([, options]) => options?.queryKey,
-      );
-    };
-
-    it('leaves both query keys unchanged when omitted', () => {
-      const keys = queryKeys();
-      expect(keys.map(key => key?.[0])).toEqual(['heatmap', 'heatmap_bucket']);
-    });
-
-    it('prepends the prefix to both query keys, like DBTimeChart', () => {
-      const keys = queryKeys('search-red');
-      expect(keys.map(key => key?.slice(0, 2))).toEqual([
-        ['search-red', 'heatmap'],
-        ['search-red', 'heatmap_bucket'],
-      ]);
-    });
-  });
 });
