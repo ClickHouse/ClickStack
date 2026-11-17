@@ -69,6 +69,32 @@ describe('ChartUtils', () => {
       );
     });
 
+    it('should assign the same color to a series regardless of row order', () => {
+      const meta = [
+        { name: 'count()', type: 'UInt64' },
+        { name: 'ServiceName', type: 'String' },
+        { name: '__hdx_time_bucket', type: 'DateTime' },
+      ];
+      const row = (ServiceName: string) => ({
+        'count()': 1,
+        ServiceName,
+        __hdx_time_bucket: '2025-11-26T11:12:00Z',
+      });
+      const colorsByService = (services: string[]) =>
+        Object.fromEntries(
+          formatResponseForTimeChart({
+            currentPeriodResponse: { data: services.map(row), meta },
+            dateRange: [new Date(), new Date()],
+            granularity: '1 minute',
+            generateEmptyBuckets: false,
+          }).lineData.map(line => [line.dataKey, line.color]),
+        );
+
+      const colors = colorsByService(['cart', 'checkout', 'email']);
+      expect(new Set(Object.values(colors)).size).toBe(3);
+      expect(colorsByService(['email', 'cart', 'checkout'])).toEqual(colors);
+    });
+
     it('should return empty results for an empty response', () => {
       const res = {
         data: [],
@@ -252,16 +278,6 @@ describe('ChartUtils', () => {
         },
         {
           color: COLORS[1],
-          dataKey: 'max · checkout',
-          currentPeriodKey: 'max · checkout',
-          previousPeriodKey: 'max · checkout (previous)',
-          displayName: 'max · checkout',
-          valueColumnName: 'max',
-          groupValues: ['checkout'],
-          isDashed: false,
-        },
-        {
-          color: COLORS[2],
           dataKey: 'AVG(toFloat64OrDefault(toString(Duration))) · shipping',
           currentPeriodKey:
             'AVG(toFloat64OrDefault(toString(Duration))) · shipping',
@@ -270,6 +286,16 @@ describe('ChartUtils', () => {
           displayName: 'AVG(toFloat64OrDefault(toString(Duration))) · shipping',
           valueColumnName: 'AVG(toFloat64OrDefault(toString(Duration)))',
           groupValues: ['shipping'],
+          isDashed: false,
+        },
+        {
+          color: COLORS[2],
+          dataKey: 'max · checkout',
+          currentPeriodKey: 'max · checkout',
+          previousPeriodKey: 'max · checkout (previous)',
+          displayName: 'max · checkout',
+          valueColumnName: 'max',
+          groupValues: ['checkout'],
           isDashed: false,
         },
         {
@@ -336,22 +362,22 @@ describe('ChartUtils', () => {
       expect(actual.lineData).toEqual([
         {
           color: SEMANTIC_INFO_HEX,
-          dataKey: 'info',
-          currentPeriodKey: 'info',
-          previousPeriodKey: 'info (previous)',
-          displayName: 'info',
-          valueColumnName: 'count()',
-          groupValues: ['info'],
-          isDashed: false,
-        },
-        {
-          color: SEMANTIC_INFO_HEX,
           dataKey: 'debug',
           currentPeriodKey: 'debug',
           previousPeriodKey: 'debug (previous)',
           displayName: 'debug',
           valueColumnName: 'count()',
           groupValues: ['debug'],
+          isDashed: false,
+        },
+        {
+          color: SEMANTIC_INFO_HEX,
+          dataKey: 'info',
+          currentPeriodKey: 'info',
+          previousPeriodKey: 'info (previous)',
+          displayName: 'info',
+          valueColumnName: 'count()',
+          groupValues: ['info'],
           isDashed: false,
         },
         {
@@ -457,16 +483,6 @@ describe('ChartUtils', () => {
         },
         {
           color: COLORS[1],
-          dataKey: 'max · checkout',
-          currentPeriodKey: 'max · checkout',
-          previousPeriodKey: 'max · checkout (previous)',
-          displayName: 'max · checkout',
-          valueColumnName: 'max',
-          groupValues: ['checkout'],
-          isDashed: false,
-        },
-        {
-          color: COLORS[2],
           dataKey: 'AVG(toFloat64OrDefault(toString(Duration))) · shipping',
           currentPeriodKey:
             'AVG(toFloat64OrDefault(toString(Duration))) · shipping',
@@ -475,6 +491,16 @@ describe('ChartUtils', () => {
           displayName: 'AVG(toFloat64OrDefault(toString(Duration))) · shipping',
           valueColumnName: 'AVG(toFloat64OrDefault(toString(Duration)))',
           groupValues: ['shipping'],
+          isDashed: false,
+        },
+        {
+          color: COLORS[2],
+          dataKey: 'max · checkout',
+          currentPeriodKey: 'max · checkout',
+          previousPeriodKey: 'max · checkout (previous)',
+          displayName: 'max · checkout',
+          valueColumnName: 'max',
+          groupValues: ['checkout'],
           isDashed: false,
         },
         {
