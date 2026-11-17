@@ -758,6 +758,7 @@ describe('DashboardFilterSchema ad hoc variant', () => {
   const adhocFilter = {
     id: 'f1',
     type: 'ADHOC' as const,
+    isBroadcastEnabled: true as const,
     name: 'Conditions',
     sourceType: 'sql' as const,
     sources: ['source-1'],
@@ -779,6 +780,15 @@ describe('DashboardFilterSchema ad hoc variant', () => {
         ...adhocFilter,
         where: 'up',
         whereLanguage: 'promql',
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([false, undefined])('rejects isBroadcastEnabled: %s', value => {
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...adhocFilter,
+        isBroadcastEnabled: value,
       }).success,
     ).toBe(false);
   });

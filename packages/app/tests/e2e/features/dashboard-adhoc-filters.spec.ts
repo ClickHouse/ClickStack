@@ -59,11 +59,13 @@ test.describe(
           dashboardPage.getAdhocFilterSourceTypeControl(),
         ).toBeVisible();
         await expect(dashboardPage.getAdhocFilterSourcesInput()).toBeVisible();
-        await expect(dashboardPage.broadcastFilterCheckbox).toBeChecked();
+        // Always broadcasts, so the scope is shown without a checkbox.
+        await expect(dashboardPage.broadcastFilterCheckbox).toHaveCount(0);
         await expect(dashboardPage.appliesToSourceSelector).toBeVisible();
-        // Always a variable, so the name is asked for rather than unlocked by
-        // a checkbox.
         await expect(dashboardPage.variableNameInput).toBeVisible();
+        await expect(
+          form.getByText('Unique name', { exact: true }),
+        ).toBeVisible();
 
         await expect(form.getByTestId('source-selector')).toHaveCount(0);
         await expect(form.getByText('Filter expression')).toHaveCount(0);
@@ -114,7 +116,8 @@ test.describe(
         await expect(item).toContainText(
           `${DEFAULT_LOGS_SOURCE_NAME}, ${DEFAULT_TRACES_SOURCE_NAME}`,
         );
-        await expect(item).toContainText('($conds)');
+        // The name isn't a variable, so the list doesn't present it as one.
+        await expect(item).not.toContainText('$conds');
         await expect(
           dashboardPage.getFilterBroadcastTarget('Conditions'),
         ).toHaveText(
@@ -127,9 +130,8 @@ test.describe(
         await page.reload();
         await dashboardPage.waitForLoaded();
         await dashboardPage.openEditFiltersModal();
-        await expect(
-          dashboardPage.getFilterItemByName('Conditions'),
-        ).toContainText('($conds)');
+        await dashboardPage.openEditFilterForm('Conditions');
+        await expect(dashboardPage.variableNameInput).toHaveValue('conds');
       });
     });
 
@@ -170,33 +172,18 @@ test.describe(
         await page.getByTestId('save-filter-button').click();
 
         await expect(
-          dashboardPage.getFilterItemByName('Conditions'),
-        ).toContainText('($where_clause)');
-        await expect(
           dashboardPage.getFilterBroadcastTarget('Conditions'),
         ).toHaveText(DEFAULT_TRACES_SOURCE_NAME);
-      });
-
-      await test.step('Turning broadcast off drops the broadcast attribute', async () => {
-        await dashboardPage.openEditFilterForm('Conditions');
-        await dashboardPage.broadcastFilterCheckbox.uncheck();
-        await expect(dashboardPage.appliesToSourceSelector).toHaveCount(0);
-        await page.getByTestId('save-filter-button').click();
-
-        await expect(
-          dashboardPage.getFilterItemByName('Conditions'),
-        ).toBeVisible();
-        await expect(
-          dashboardPage.getFilterBroadcastTarget('Conditions'),
-        ).toHaveCount(0);
       });
 
       await test.step('The edits survive a reload', async () => {
         await page.reload();
         await dashboardPage.waitForLoaded();
         await dashboardPage.openEditFiltersModal();
+        await expect(
+          dashboardPage.getFilterBroadcastTarget('Conditions'),
+        ).toHaveText(DEFAULT_TRACES_SOURCE_NAME);
         await dashboardPage.openEditFilterForm('Conditions');
-        await expect(dashboardPage.broadcastFilterCheckbox).not.toBeChecked();
         await expect(dashboardPage.variableNameInput).toHaveValue(
           'where_clause',
         );

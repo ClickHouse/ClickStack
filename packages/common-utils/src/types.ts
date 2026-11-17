@@ -1343,10 +1343,15 @@ export const AdhocFilterOperatorSchema = z.enum([
   '!~',
   'LIKE',
   'NOT LIKE',
+  'IN',
 ]);
 
 export type AdhocFilterOperator = z.infer<typeof AdhocFilterOperatorSchema>;
 
+/**
+ * `IN` conditions sharing a key are OR'd together when rendered; every other
+ * condition is AND'd.
+ */
 export const SQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] =
   AdhocFilterOperatorSchema.options;
 
@@ -1355,6 +1360,7 @@ export const PROMQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] = [
   '!=',
   '=~',
   '!~',
+  'IN',
 ];
 
 /** One `key operator value` condition picked in an ad hoc filter. */
@@ -2458,8 +2464,12 @@ export const AdhocDashboardFilterSchema = dashboardFilterBaseSchema
      * empty means the filter's `sources`.
      */
     appliesToSourceIds: z.array(z.string().min(1)).optional(),
-    /** Undefined / missing means ENABLED, as for QUERY_EXPRESSION filters. */
-    isBroadcastEnabled: z.boolean().optional(),
+    // Ad hoc conditions can't be referenced as variables, so broadcast is how they apply.
+    isBroadcastEnabled: z.literal(true),
+    /**
+     * Keeps `variableName` unique among the dashboard's variable names, which
+     * share the `filters=` param. Not referenceable as `$variableName`.
+     */
     isVariableEnabled: z.literal(true),
   })
   .strict();
