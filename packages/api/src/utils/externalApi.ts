@@ -1,7 +1,5 @@
 import { TIME_SERIES_DISPLAY_TYPE_BY_NAME } from '@hyperdx/common-utils/dist/core/utils';
 import {
-  isAdhocFilter,
-  isAdhocFilterValue,
   isFilterBroadcastEnabled,
   isFilterRequired,
   isFilterVariableEnabled,
@@ -238,20 +236,6 @@ export function translateExternalChartToTileConfig(
     ...(containerId !== undefined ? { containerId } : {}),
     ...(tabId !== undefined ? { tabId } : {}),
   };
-}
-
-/** The filters MCP may read; it doesn't expose ad hoc filters yet. */
-export function getMcpCompatibleFilters(
-  filters: DashboardFilter[] | undefined,
-): DashboardFilter[] {
-  return (filters ?? []).filter(filter => !isAdhocFilter(filter));
-}
-
-/** Saved filter values MCP may read; it doesn't expose ad hoc filters yet. */
-export function getMcpCompatibleFilterValues(
-  values: IDashboard['savedFilterValues'],
-): NonNullable<IDashboard['savedFilterValues']> {
-  return (values ?? []).filter(value => !isAdhocFilterValue(value));
 }
 
 export function translateFilterToExternalFilter(
