@@ -2012,10 +2012,11 @@ export type LatestAlertHistory = Pick<
  * previous state itself.
  *
  * @returns A map from alert ID to its latest history row, or null when the
- *  alert has no history at all.
+ *  alert has no history within its lookback window (see
+ *  getAlertHistoryLookbackMs).
  */
 export const getLatestAlertHistories = async (
-  alertIds: string[],
+  alerts: Array<Pick<IAlert, 'id' | 'interval'>>,
   now: Date,
   sharedQueue?: PQueue,
 ): Promise<Map<string, LatestAlertHistory | null>> => {
@@ -2023,12 +2024,21 @@ export const getLatestAlertHistories = async (
     sharedQueue ?? new PQueue({ concurrency: ALERT_HISTORY_QUERY_CONCURRENCY });
 
   const results = await Promise.all(
-    alertIds.map(alertId =>
+    alerts.map(alert =>
       queue.add(async () => {
+        const alertId = alert.id;
         const latest = await AlertHistory.findOne(
           {
             alert: new mongoose.Types.ObjectId(alertId),
-            createdAt: { $lte: now },
+            // The lower bound caps the walk past consecutive ERROR rows (the
+            // state filter is not in the index) for an alert that keeps
+            // failing, and matches getPreviousAlertHistories' window.
+            createdAt: {
+              $lte: now,
+              $gte: new Date(
+                now.getTime() - getAlertHistoryLookbackMs(alert.interval),
+              ),
+            },
             // ERROR rows record failed evaluations; they must not count as
             // "window evaluated" or the failed window would never be
             // retried/backfilled.

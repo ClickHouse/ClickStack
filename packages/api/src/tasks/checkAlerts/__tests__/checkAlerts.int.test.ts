@@ -10,6 +10,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 import ms from 'ms';
+import { z } from 'zod';
 
 import * as config from '@/config';
 import { createAlert } from '@/controllers/alerts';
@@ -12523,7 +12524,7 @@ describe('checkAlerts', () => {
       const alert2Id = new mongoose.Types.ObjectId();
 
       const result = await getLatestAlertHistories(
-        [alert1Id.toString(), alert2Id.toString()],
+        [alert1Id, alert2Id].map(id => ({ id: id.toString(), interval: '5m' })),
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12540,7 +12541,7 @@ describe('checkAlerts', () => {
       await saveAlert(alertId, new Date('2025-01-01T00:10:00Z'));
 
       const result = await getLatestAlertHistories(
-        [alertId.toString()],
+        [{ id: alertId.toString(), interval: '5m' }],
         new Date('2025-01-01T00:05:00Z'),
       );
 
@@ -12722,7 +12723,7 @@ describe('checkAlerts', () => {
       );
 
       const result = await getLatestAlertHistories(
-        [alertId.toString()],
+        [{ id: alertId.toString(), interval: '5m' }],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12730,6 +12731,37 @@ describe('checkAlerts', () => {
         createdAt: new Date('2025-01-01T00:00:00Z'),
         state: AlertState.OK,
       });
+    });
+
+    it('getLatestAlertHistories ignores rows older than the interval-derived lookback', async () => {
+      const now = new Date('2025-01-10T00:00:00Z');
+      const alertId = new mongoose.Types.ObjectId();
+      await saveHistory(
+        alertId,
+        new Date('2025-01-08T00:00:00Z'),
+        AlertState.OK,
+      );
+      await saveHistory(
+        alertId,
+        new Date('2025-01-09T12:00:00Z'),
+        AlertState.ERROR,
+      );
+
+      // 1m interval: 1d lookback, so only the ERROR row is in range.
+      const result = await getLatestAlertHistories(
+        [{ id: alertId.toString(), interval: '1m' }],
+        now,
+      );
+      expect(result.get(alertId.toString())).toBeNull();
+
+      // 1h interval: 52h lookback reaches the OK row.
+      const resultHourly = await getLatestAlertHistories(
+        [{ id: alertId.toString(), interval: '1h' }],
+        now,
+      );
+      expect(resultHourly.get(alertId.toString())?.createdAt).toEqual(
+        new Date('2025-01-08T00:00:00Z'),
+      );
     });
 
     it('scans the {alert, createdAt} index with tight createdAt bounds', async () => {
@@ -12744,14 +12776,21 @@ describe('checkAlerts', () => {
       }
       await AlertHistory.syncIndexes();
 
-      const explain = (await AlertHistory.find({
-        alert: alertId,
-        createdAt: {
-          $lte: now,
-          $gte: new Date(now.getTime() - getAlertHistoryLookbackMs('5m')),
-        },
-        state: { $ne: AlertState.ERROR },
-      }).explain('executionStats')) as any;
+      const explain = z
+        .object({
+          queryPlanner: z.object({ winningPlan: z.unknown() }),
+          executionStats: z.object({ totalKeysExamined: z.number() }),
+        })
+        .parse(
+          await AlertHistory.find({
+            alert: alertId,
+            createdAt: {
+              $lte: now,
+              $gte: new Date(now.getTime() - getAlertHistoryLookbackMs('5m')),
+            },
+            state: { $ne: AlertState.ERROR },
+          }).explain('executionStats'),
+        );
 
       expect(JSON.stringify(explain.queryPlanner.winningPlan)).toContain(
         'alert_1_createdAt_-1',
