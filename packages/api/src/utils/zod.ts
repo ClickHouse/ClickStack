@@ -5,6 +5,7 @@ import {
   AlertChartConfigSchema,
   alertDisplayNameSchema,
   alertNoteSchema,
+  alertNumConsecutiveWindowsSchema,
   alertTagsSchema,
   AlertThresholdType,
   BackgroundChartSchema,
@@ -1239,7 +1240,7 @@ const alertBaseSchema = z.object({
   note: alertNoteSchema,
   displayName: alertDisplayNameSchema,
   tags: alertTagsSchema,
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 // External v2 alert schema. Inline alerts carry their chart config in the

@@ -1090,6 +1090,14 @@ export type TagResourceType = z.infer<typeof TagResourceTypeSchema>;
 
 export const alertNoteSchema = z.string().min(1).max(4096).nullish();
 
+// nullish() (not optional()): persisted alerts store this as null, which
+// optional() would reject.
+export const alertNumConsecutiveWindowsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .nullish();
+
 export const MAX_ALERT_DISPLAY_NAME_LENGTH = 512;
 export const alertDisplayNameSchema = z
   .string()
@@ -1128,7 +1136,7 @@ export const AlertBaseObjectSchema = z.object({
       until: z.string(),
     })
     .optional(),
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 // Keep AlertBaseSchema as a ZodObject for backwards compatibility with
@@ -3151,7 +3159,7 @@ export const AlertsPageItemSchema = z.object({
     })
     .optional(),
   executionErrors: z.array(AlertErrorSchema).optional(),
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 export type AlertsPageItem = z.infer<typeof AlertsPageItemSchema>;
