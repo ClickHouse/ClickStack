@@ -2301,6 +2301,7 @@ export const DashboardFilterType = z.enum([
   'STATIC_LIST',
   'PROMETHEUS_LABEL',
   'ADHOC',
+  'SQL_QUERY',
 ]);
 
 /** Allowed variable names for dashboard filters. Alphanumeric + underscore, must start with a letter. */
@@ -2410,6 +2411,21 @@ export const PromqlLabelDashboardFilterSchema =
   });
 
 /**
+ * A filter whose dropdown lists the first column returned by a free-form
+ * ClickHouse query. The query can use the time macros and other filters'
+ * variables, but not `$__sourceTable` or `$__filters`, as it has no source.
+ */
+export const SqlQueryDashboardFilterSchema = dashboardFilterBaseSchema.extend({
+  type: z.literal(DashboardFilterType.enum.SQL_QUERY),
+  /** ID of the ClickHouse connection the query runs on. */
+  connection: z.string().min(1),
+  sqlTemplate: z.string().min(1),
+  // Variable-only: there is no column to broadcast
+  isBroadcastEnabled: z.literal(false),
+  isVariableEnabled: z.literal(true),
+});
+
+/**
  * A filter whose conditions (`key operator value`) are picked freely from the
  * keys of its sources: columns and map keys for SQL sources, labels for PromQL
  * sources. Selection limits and requirements have no meaning for a list of
@@ -2445,6 +2461,7 @@ export const DashboardFilterSchema = z.discriminatedUnion('type', [
   StaticListDashboardFilterSchema,
   PromqlLabelDashboardFilterSchema,
   AdhocDashboardFilterSchema,
+  SqlQueryDashboardFilterSchema,
 ]);
 
 export type QueryExpressionDashboardFilter = z.infer<
@@ -2457,6 +2474,9 @@ export type PromqlLabelDashboardFilter = z.infer<
   typeof PromqlLabelDashboardFilterSchema
 >;
 export type AdhocDashboardFilter = z.infer<typeof AdhocDashboardFilterSchema>;
+export type SqlQueryDashboardFilter = z.infer<
+  typeof SqlQueryDashboardFilterSchema
+>;
 export type DashboardFilter = z.infer<typeof DashboardFilterSchema>;
 
 export enum PresetDashboard {

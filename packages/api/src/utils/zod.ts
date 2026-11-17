@@ -30,6 +30,7 @@ import {
   scheduleStartAtSchema,
   SearchConditionLanguageSchema as whereLanguageSchema,
   SQLIntervalSchema,
+  SqlQueryDashboardFilterSchema,
   StaticListDashboardFilterSchema,
   tagsSchema,
   TILE_DESCRIPTION_MAX_LENGTH,
@@ -189,12 +190,22 @@ const externalPromqlLabelFilterShape = PromqlLabelDashboardFilterSchema.omit({
   isVariableEnabled: z.literal(true).default(true),
 });
 
+// `connectionId` rather than `connection`, matching raw SQL tiles.
+const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
+  connection: true,
+}).extend({
+  connectionId: objectIdSchema,
+  isBroadcastEnabled: z.literal(false).default(false),
+  isVariableEnabled: z.literal(true).default(true),
+});
+
 export const externalDashboardFilterSchemaWithId = z.discriminatedUnion(
   'type',
   [
     externalQueryExpressionFilterShape.strict(),
     externalStaticListFilterShape.strict(),
     externalPromqlLabelFilterShape.strict(),
+    externalSqlQueryFilterShape.strict(),
   ],
 );
 
@@ -211,6 +222,7 @@ export const externalDashboardFilterSchema = z.discriminatedUnion('type', [
   externalQueryExpressionFilterShape.omit({ id: true }).strict(),
   externalStaticListFilterShape.omit({ id: true }).strict(),
   externalPromqlLabelFilterShape.omit({ id: true }).strict(),
+  externalSqlQueryFilterShape.omit({ id: true }).strict(),
 ]);
 
 export type ExternalDashboardFilter = z.infer<

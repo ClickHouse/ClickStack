@@ -283,6 +283,12 @@ export function translateFilterToExternalFilter(
         sourceId: filter.source.toString(),
       };
 
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connection', ...omittedKeys),
+        connectionId: filter.connection.toString(),
+      };
+
     case 'QUERY_EXPRESSION': {
       // Ignore variableName and appliesToSourceIds if the filter is not in a mode that uses them
       const ignoredKeys = [
@@ -313,6 +319,12 @@ export function translateExternalFilterToFilter(
 
     case 'PROMETHEUS_LABEL':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connectionId'),
+        connection: filter.connectionId,
+      };
 
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };

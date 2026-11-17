@@ -24,6 +24,7 @@ import {
   PromqlReducerSchema,
   SearchConditionTrimmedLanguageSchema,
   SQLIntervalSchema,
+  SqlQueryDashboardFilterSchema,
   StaticListDashboardFilterSchema,
 } from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
@@ -1765,6 +1766,33 @@ const mcpStaticListFilterSchema = z
       'with the column passed explicitly, since the filter has no expression of its own.',
   );
 
+const mcpSqlQueryFilterSchema = z
+  .object({
+    ...mcpDashboardFilterBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.SQL_QUERY)
+      .describe(
+        'Filter type discriminator for a filter whose dropdown values come from a ClickHouse SQL query.',
+      ),
+    connectionId: objectIdSchema.describe(
+      'ClickHouse connection the query runs on. Get IDs from clickstack_list_sources.',
+    ),
+    sqlTemplate: SqlQueryDashboardFilterSchema.shape.sqlTemplate.describe(
+      'ClickHouse SELECT whose FIRST column becomes the dropdown values (cast to ' +
+        'string; nulls and duplicates dropped; row order kept, so add ORDER BY). ' +
+        'May use the time macros ($__timeFilter(<column>), $__fromTime, $__toTime) ' +
+        "and other filters' variables, ideally as $__filter(<expression>, $<variableName>). " +
+        'Cannot use $__sourceTable or $__filters: the filter has no source, so name ' +
+        'tables explicitly. Example: "SELECT DISTINCT env FROM default.envs ORDER BY env".',
+    ),
+  })
+  .describe(
+    'A variable-only filter whose dropdown lists the first column of a ClickHouse ' +
+      'query. Use it for values in lookup tables, dictionaries, or joins that no ' +
+      'single source column covers. Tiles reference the selection as ' +
+      '$__filter(<expression>, $<variableName>) with the column passed explicitly.',
+  );
+
 const mcpPromqlLabelFilterSchema = z
   .object({
     ...mcpDashboardFilterBaseShape,
@@ -1795,25 +1823,28 @@ const mcpDashboardFilterSchema = z
   .discriminatedUnion('type', [
     mcpQueryExpressionFilterSchema,
     mcpStaticListFilterSchema,
+    mcpSqlQueryFilterSchema,
   ])
   .describe(
     'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
-      'Two types: QUERY_EXPRESSION queries its dropdown values from a source column; ' +
-      'STATIC_LIST declares them inline and is always variable-only.',
+      'QUERY_EXPRESSION queries its dropdown values from a source column; ' +
+      'STATIC_LIST declares them inline; SQL_QUERY reads them from a SQL query. ' +
+      'STATIC_LIST and SQL_QUERY are always variable-only.',
   );
 
 const mcpPromqlDashboardFilterSchema = z
   .discriminatedUnion('type', [
     mcpQueryExpressionFilterSchema,
     mcpStaticListFilterSchema,
+    mcpSqlQueryFilterSchema,
     mcpPromqlLabelFilterSchema,
   ])
   .describe(
     'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
       'QUERY_EXPRESSION queries its dropdown values from a source column; ' +
-      'STATIC_LIST declares them inline and is always variable-only; ' +
-      'PROMETHEUS_LABEL lists the values of a label on a promql source and is ' +
-      'always variable-only.',
+      'STATIC_LIST declares them inline; SQL_QUERY reads them from a SQL query; ' +
+      'PROMETHEUS_LABEL lists the values of a label on a promql source. All but ' +
+      'QUERY_EXPRESSION are always variable-only.',
   );
 
 export type McpDashboardFilter = z.infer<typeof mcpPromqlDashboardFilterSchema>;
@@ -1826,9 +1857,10 @@ const mcpFiltersParam = z
       'If another tile\'s onClick targets THIS dashboard with `filters: [{ expression: "X", ... }]`, ' +
       'this array MUST declare a filter whose `expression` is "X". Otherwise the value is ' +
       'dropped on arrival and the destination opens unfiltered.\n\n' +
-      'Two filter types: QUERY_EXPRESSION queries its dropdown values from a source column, ' +
-      'while STATIC_LIST declares them inline via `options` and is always variable-only ' +
-      '(it has no expression to broadcast).\n\n' +
+      'Filter types: QUERY_EXPRESSION queries its dropdown values from a source column. ' +
+      'STATIC_LIST declares them inline via `options`, and SQL_QUERY reads them from the ' +
+      'first column of a ClickHouse query; both are always variable-only (they have no ' +
+      'expression to broadcast).\n\n' +
       'A QUERY_EXPRESSION filter runs in one of two modes (or both). BROADCAST (the default) applies the ' +
       'selected value as a condition on matching tiles with no per-tile wiring. VARIABLE ' +
       '(isVariableEnabled) exposes the value to tile queries as $variableName, which the tile ' +
@@ -1867,6 +1899,13 @@ const mcpFiltersParam = z
       'Always pass the column explicitly: the one-argument $__filter($env) form reuses the ' +
       "filter's own expression, which a static filter does not have. Prefer STATIC_LIST when " +
       'the values are a fixed business list or a curated subset rather than derivable from the data.\n\n' +
+      'Example (SQL query: values from a lookup table no source covers, narrowed by another filter):\n' +
+      '[\n' +
+      '  { "type": "SQL_QUERY", "name": "Environment", "connectionId": "<connection-id>",\n' +
+      '    "sqlTemplate": "SELECT DISTINCT env FROM default.envs WHERE $__filter(cloud, $cloud) ORDER BY env",\n' +
+      '    "variableName": "env" }\n' +
+      ']\n' +
+      'Prefer QUERY_EXPRESSION when the values are a column of a registered source.\n\n' +
       "Example (dependent filter: the Endpoint dropdown only lists the selected service's " +
       'endpoints):\n' +
       '[\n' +
@@ -1883,7 +1922,7 @@ const mcpFiltersParam = z
   );
 
 const PROMQL_FILTERS_EXAMPLE =
-  '\n\nA third type, PROMETHEUS_LABEL, lists the values of a label on a promql source ' +
+  '\n\nAnother type, PROMETHEUS_LABEL, lists the values of a label on a promql source ' +
   'and is always variable-only.\n\n' +
   'Example (PROMETHEUS_LABEL):\n' +
   '[\n' +
