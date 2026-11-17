@@ -170,7 +170,7 @@ import {
   TRACE_CHART_MODES,
   TraceRedMetricsChart,
 } from './components/Search/TraceRedMetricsChart';
-import { useTraceChartModeGuards } from './components/Search/useTraceChartModeGuards';
+import { useHeatmapLiveTailGuard } from './components/Search/useHeatmapLiveTailGuard';
 import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from './components/SourceSchemaPreview';
@@ -1611,6 +1611,13 @@ function DBSearchPageContent() {
         // a freshly loaded page pushes its defaults into the search config.
         if (!isCatchingUpToConfig) {
           pendingGroupByReconcileRef.current = watchedSource ?? null;
+          // The RED/Heatmap choice was made for the previous source, so a source
+          // the user picks opens in the default RED view, and coming back to a
+          // trace source doesn't silently reopen the heatmap (and turn live tail
+          // off again). Cleared rather than set to 'red': nuqs 1.x writes an
+          // explicit default into the URL. Catch-up skips this branch, so
+          // Back/Forward keeps the mode the URL restores.
+          setTraceChartMode(null);
           // If the user isn't in a saved search (or the source is different from the saved search source), reset fields
           if (savedSearchId == null || savedSearch?.source !== watchedSource) {
             setValue('select', '');
@@ -1641,6 +1648,7 @@ function DBSearchPageContent() {
     searchedSource?.id,
     rawSearchedConfig.source,
     setSearchedConfig,
+    setTraceChartMode,
   ]);
 
   const retainCompatibleFiltersAndGroupBy = useStableCallback(
@@ -2221,13 +2229,7 @@ function DBSearchPageContent() {
     analysisMode === 'results' &&
     traceChartsSource != null &&
     traceChartMode === 'heatmap';
-  useTraceChartModeGuards({
-    sourceId: searchedSource?.id,
-    setTraceChartMode,
-    isHeatmapChartVisible,
-    isLive,
-    setIsLive,
-  });
+  useHeatmapLiveTailGuard({ isHeatmapChartVisible, isLive, setIsLive });
 
   const histogramGroupBySelect = (
     <SearchGroupBySelect
