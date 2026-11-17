@@ -3,6 +3,7 @@ import {
   alertDisplayNameSchema,
   type AlertInterval,
   alertNoteSchema,
+  alertNumConsecutiveWindowsSchema,
   checkAlertChannelSelection,
   isRangeThresholdType,
   MAX_ALERT_CHANNELS,
@@ -245,17 +246,11 @@ export const mcpSaveAlertSchema = z.object({
         'stored value or send null to clear it.',
     ),
 
-  numConsecutiveWindows: z
-    .number()
-    .int()
-    .min(1)
-    .nullable()
-    .optional()
-    .describe(
-      'Fire only after the threshold condition is met in this many ' +
-        'consecutive evaluation windows; 1 fires on the first. On update, ' +
-        'omit to keep the stored value or send null to clear it.',
-    ),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema.describe(
+    'Fire only after the threshold condition is met in this many ' +
+      'consecutive evaluation windows; 1 fires on the first. On update, ' +
+      'omit to keep the stored value or send null to clear it.',
+  ),
 
   // Channel
   channel: mcpAlertChannelSchema.optional(),
