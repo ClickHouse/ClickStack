@@ -24,6 +24,7 @@ import {
   getYAxisTicks,
   HARD_LINES_LIMIT,
   sameActiveClickSeries,
+  scanStackedYAxisValueRange,
   scanYAxisValueRange,
 } from '@/HDXMultiSeriesTimeChart';
 import { COLORS } from '@/utils';
@@ -421,6 +422,39 @@ describe('scanYAxisValueRange', () => {
   });
 });
 
+describe('scanStackedYAxisValueRange', () => {
+  const series = (dataKey: string): LineData => ({
+    dataKey,
+    currentPeriodKey: dataKey,
+    previousPeriodKey: `${dataKey}.prev`,
+    displayName: dataKey,
+    valueColumnName: dataKey,
+    groupValues: [],
+    color: '#a',
+  });
+
+  it('spans every running sum of the stack, as Recharts draws it', () => {
+    // Recharts stacks each series on the previous one's top (stackOffset
+    // "none"), so a negative series can dip a segment below its baseline.
+    const lineData = [series('a'), series('b'), series('c')];
+    const graphResults = [
+      { a: 10, b: 30, c: -50 },
+      { a: 5, c: 20 },
+    ];
+    expect(scanStackedYAxisValueRange(graphResults, lineData)).toEqual({
+      min: -10,
+      max: 40,
+    });
+  });
+
+  it('returns an empty range when no series has a numeric value', () => {
+    expect(scanStackedYAxisValueRange([{ a: null }], [series('a')])).toEqual({
+      min: Infinity,
+      max: -Infinity,
+    });
+  });
+});
+
 describe('computeYAxisBounds', () => {
   const series = (dataKey: string): LineData => ({
     dataKey,
@@ -536,40 +570,77 @@ describe('computeYAxisBounds', () => {
     expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
-  it('leaves a stacked bar`s max to Recharts, selection or not', () => {
-    // Regression: 60 and 40 individually reach a stack height of 100, not
-    // 63 - the guard must apply regardless of hasSelection.
-    const lineData = [series('a'), series('b')];
-    const graphResults = [{ a: 60, b: 40 }];
-    for (const hasSelection of [false, true]) {
-      expect(
-        computeYAxisBounds(
-          graphResults,
-          lineData,
-          hasSelection,
-          false,
-          DisplayType.StackedBar,
-          [],
-        ),
-      ).toEqual({ domain: [0, 'auto'], ticks: undefined });
-    }
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'sizes a %s axis to the stack height, not the tallest series',
+    displayType => {
+      // 60 and 40 individually reach a stack height of 100, not 63.
+      const lineData = [series('a'), series('b')];
+      const graphResults = [{ a: 60, b: 40 }];
+      for (const hasSelection of [false, true]) {
+        expect(
+          computeYAxisBounds(
+            graphResults,
+            lineData,
+            hasSelection,
+            false,
+            displayType,
+            [],
+          ),
+        ).toEqual({
+          domain: [0, 105],
+          ticks: [0, 25, 50, 75, 100],
+          tickFormatter: expect.any(Function),
+        });
+      }
+    },
+  );
+
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'never shows duplicate %s tick labels when 1.5k rounds to 2k',
+    displayType => {
+      // Regression: stacked charts deferred to Recharts' ticks, which
+      // rendered 0/500/1k/2k/2k for a 2000-high stack at 0 decimals.
+      const bounds = computeYAxisBounds(
+        [
+          { a: 1200, b: 800 },
+          { a: 600, b: 300 },
+        ],
+        [series('a'), series('b')],
+        false,
+        false,
+        displayType,
+        [],
+        { output: 'number', mantissa: 0 },
+      );
+      const labels = bounds.ticks!.map(t => bounds.tickFormatter!(t));
+      expect(labels).toEqual(['0', '500', '1k', '1.5k', '2k']);
+    },
+  );
+
+  it('keeps a stacked axis pinned at zero even when fit-to-data is on', () => {
+    // Fit-to-data only applies to line charts; a stacked bar cut off above
+    // zero would misrepresent each segment's height.
+    const bounds = computeYAxisBounds(
+      [{ a: 900, b: 100 }],
+      [series('a'), series('b')],
+      false,
+      true,
+      DisplayType.StackedBar,
+      [],
+    );
+    expect(bounds.domain).toEqual([0, 1050]);
   });
 
-  it('leaves a stacked line`s max to Recharts, selection or not', () => {
-    const lineData = [series('a'), series('b')];
-    const graphResults = [{ a: 60, b: 40 }];
-    for (const hasSelection of [false, true]) {
-      expect(
-        computeYAxisBounds(
-          graphResults,
-          lineData,
-          hasSelection,
-          false,
-          DisplayType.StackedLine,
-          [],
-        ),
-      ).toEqual({ domain: [0, 'auto'], ticks: undefined });
-    }
+  it('leaves a stacked axis with a reference line to Recharts', () => {
+    const bounds = computeYAxisBounds(
+      [{ a: 60, b: 40 }],
+      [series('a'), series('b')],
+      false,
+      false,
+      DisplayType.StackedBar,
+      [150],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
   it('falls back to auto when there is no numeric data', () => {
