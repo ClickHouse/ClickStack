@@ -1142,7 +1142,7 @@ describe('Metadata', () => {
               ? ({
                   name: 'LogAttributes',
                   type: 'Map(LowCardinality(String), String)',
-                } as any)
+                } as ColumnMeta)
               : undefined,
           ),
         );
