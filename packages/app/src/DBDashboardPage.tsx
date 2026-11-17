@@ -42,6 +42,7 @@ import {
 } from '@hyperdx/common-utils/dist/filters';
 import {
   displayTypeRequiresSource,
+  getSavedConfigAllowedSourceKinds,
   isBuilderChartConfig,
   isBuilderSavedChartConfig,
   isPromqlChartConfig,
@@ -630,17 +631,7 @@ const Tile = ({
   const isSourceKindUnsupported =
     usesReferenceVariable &&
     source != null &&
-    !getAllowedSourceKinds({
-      configType: isPromqlSavedChartConfig(chart.config)
-        ? 'promql'
-        : isRawSqlSavedChartConfig(chart.config)
-          ? 'sql'
-          : 'builder',
-      displayType: chart.config.displayType,
-      heatmapMode: isRawSqlSavedChartConfig(chart.config)
-        ? undefined
-        : chart.config.heatmap?.mode,
-    }).includes(source.kind);
+    !getSavedConfigAllowedSourceKinds(chart.config).includes(source.kind);
   const isSourceUnset =
     !!chart.config &&
     isBuilderSavedChartConfig(chart.config) &&

@@ -1572,7 +1572,9 @@ describe('useDashboardFilters', () => {
         });
         expect(result.referenceVariableValues.get('logs')).toBeUndefined();
         expect(result.selectionByFilterId.has('ds')).toBe(false);
-        expect(result.unsatisfiedRequiredFilters).toEqual([scopedFilter]);
+        expect(result.unsatisfiedRequiredFilters.map(f => f.id)).toEqual([
+          'ds',
+        ]);
       });
 
       it('drops a source while its connection variable is unselected', () => {
@@ -1603,6 +1605,24 @@ describe('useDashboardFilters', () => {
       );
       expect(result.current.unsatisfiedRequiredFilters).toEqual([
         dataSourceFilter,
+      ]);
+    });
+
+    it('reports an unmet required filter scoped to the variable with its selected source', () => {
+      mockState = [{ type: 'variable', name: 'logs', values: ['src-1'] }];
+      const { result } = renderHook(() =>
+        useDashboardFilters([
+          dataSourceFilter,
+          { ...scopedFilter, minSelections: 1 },
+        ]),
+      );
+
+      expect(result.current.unsatisfiedRequiredFilters).toEqual([
+        expect.objectContaining({
+          id: 'svc',
+          source: 'src-1',
+          appliesToSourceIds: ['src-1'],
+        }),
       ]);
     });
 

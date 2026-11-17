@@ -224,7 +224,6 @@ const useDashboardFilters = (
     ignoredVariableNames,
     variables,
     referenceVariableValues,
-    unsatisfiedRequiredFilters,
   } = useMemo<{
     selectionByFilterId: ReadonlyMap<string, FilterSelection>;
     adhocConditionsByFilterId: ReadonlyMap<string, AdhocFilterCondition[]>;
@@ -232,7 +231,6 @@ const useDashboardFilters = (
     ignoredVariableNames: string[];
     variables: ChartVariable[];
     referenceVariableValues: ReferenceVariableValues;
-    unsatisfiedRequiredFilters: DashboardFilter[];
   }>(() => {
     const parsed = parseDashboardFilterValues(filterValueEntries ?? []);
     // Ad hoc filters aren't exposed as variables yet
@@ -340,10 +338,6 @@ const useDashboardFilters = (
       referenceVariableValues,
       ignoredExpressions,
       ignoredVariableNames,
-      unsatisfiedRequiredFilters: getUnsatisfiedRequiredFilters(
-        filters,
-        selectionByFilterId,
-      ),
     };
   }, [filterValueEntries, filters, sources]);
 
@@ -354,6 +348,7 @@ const useDashboardFilters = (
     resolvedFilters,
     unresolvedReferenceVariablesByFilterId,
     incompatibleReferenceVariablesByFilterId,
+    unsatisfiedRequiredFilters,
   } = useMemo(() => {
     const sourceKindById = new Map(
       sources?.map(source => [source.id, source.kind]),
@@ -367,14 +362,21 @@ const useDashboardFilters = (
           .filter(result => result[key].length > 0)
           .map(result => [result.filter.id, result[key]]),
       );
+    const resolvedFilters = resolved.map(({ filter }) => filter);
     return {
-      resolvedFilters: resolved.map(({ filter }) => filter),
+      resolvedFilters,
       unresolvedReferenceVariablesByFilterId: byFilterId('unresolvedVariables'),
       incompatibleReferenceVariablesByFilterId: byFilterId(
         'incompatibleVariables',
       ),
+      // Resolved, so their source scopes match the resolved tile sources that
+      // getBlockingRequiredFilters compares them with
+      unsatisfiedRequiredFilters: getUnsatisfiedRequiredFilters(
+        resolvedFilters,
+        selectionByFilterId,
+      ),
     };
-  }, [filters, referenceVariableValues, sources]);
+  }, [filters, referenceVariableValues, sources, selectionByFilterId]);
 
   /** Returns the set of rendered filter conditions corresponding to filters matching the given predicate */
   const getFiltersQueriesFor = useCallback(
