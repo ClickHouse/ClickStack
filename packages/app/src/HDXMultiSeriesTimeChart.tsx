@@ -1728,9 +1728,17 @@ export const MemoChart = memo(function MemoChart({
 
   // Compact mode: anchor the first label to the start and the last to the end
   // so neither is clipped on a narrow chart. Renders every tick through one
-  // path (token color, mono) so the axis stays visually consistent.
+  // path (axis color, mono) so the axis stays visually consistent. `fill` is
+  // the color Recharts gives every tick, so these match the y-axis labels.
   const renderCompactXTick = useCallback(
-    ({ x, y, payload, index, visibleTicksCount }: XAxisTickContentProps) => {
+    ({
+      x,
+      y,
+      payload,
+      index,
+      visibleTicksCount,
+      fill,
+    }: XAxisTickContentProps) => {
       const textAnchor = compactTickAnchor(index, visibleTicksCount);
       return (
         <Text
@@ -1741,7 +1749,7 @@ export const MemoChart = memo(function MemoChart({
           verticalAnchor="start"
           fontSize={axisTickFontSize}
           fontFamily="IBM Plex Mono, monospace"
-          fill="var(--color-text-muted)"
+          fill={fill}
         >
           {xTickFormatter(Number(payload.value), index)}
         </Text>
