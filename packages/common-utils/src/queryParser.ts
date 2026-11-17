@@ -132,7 +132,7 @@ function normalizeChExpression(expr: string): string {
 export const IMPLICIT_FIELD = '<implicit>';
 const RANGE_UNBOUNDED = '*';
 
-// parseToNumber also accepts hex such as 0x10; keep those as strings.
+// Decimal numbers only; parseToNumber also accepts hex such as 0x10.
 const isNumericLiteral = (term: string) =>
   /^[-+.\deE]+$/.test(term) && parseToNumber(term) !== undefined;
 
@@ -146,9 +146,12 @@ function isStringComparedToNumbers(
   columnType: string | undefined,
   terms: string[],
 ) {
-  const baseType = columnType ? stripTypeWrappers(columnType) : '';
+  if (!columnType) {
+    return false;
+  }
   return (
-    (baseType === 'String' || baseType.startsWith('FixedString(')) &&
+    (stripTypeWrappers(columnType) === 'String' ||
+      isCHFixedStringType(columnType)) &&
     terms.length > 0 &&
     terms.every(isNumericLiteral)
   );
