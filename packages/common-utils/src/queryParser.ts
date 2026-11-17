@@ -2195,13 +2195,28 @@ async function serialize(
     const parenthesized = binaryAST.parenthesized;
 
     const newContext = createSerializerContext(context, binaryAST);
+    // The parser right-nests mixed-operator chains but only marks nodes that
+    // were parenthesized in the source. Without explicit parens, SQL evaluates
+    // AND before OR, regrouping `a AND b OR c` as `(a AND b) OR c`. Only wrap a
+    // child whose operator differs; same-operator, start-marked and negated
+    // forms keep their current spelling so saved searches are unaffected.
+    const negatingOperator =
+      binaryAST.operator === 'NOT' ||
+      binaryAST.operator === 'AND NOT' ||
+      binaryAST.operator === 'OR NOT';
+    const serializeOperand = async (child: lucene.AST | lucene.Node) => {
+      const text = await serialize(child, serializer, newContext);
+      return isBinaryAST(child) &&
+        !child.parenthesized &&
+        !hasStart(child) &&
+        !negatingOperator &&
+        child.operator !== binaryAST.operator
+        ? `(${text})`
+        : text;
+    };
     const serialized = `${isNegatedAndParenthesized(binaryAST) ? 'NOT ' : ''}${parenthesized ? '(' : ''}${
       hasStart(binaryAST) ? `${binaryAST.start} ` : ''
-    }${await serialize(
-      binaryAST.left,
-      serializer,
-      newContext,
-    )} ${operator} ${await serialize(binaryAST.right, serializer, newContext)}${
+    }${await serializeOperand(binaryAST.left)} ${operator} ${await serializeOperand(binaryAST.right)}${
       parenthesized ? ')' : ''
     }`;
     return serialized;

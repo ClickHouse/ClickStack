@@ -2774,6 +2774,54 @@ describe('CustomSchemaSQLSerializerV2 - Array and Nested Fields', () => {
   );
 });
 
+describe('CustomSchemaSQLSerializerV2 - mixed operator precedence', () => {
+  const metadata = getMetadata(
+    new ClickhouseClient({ host: 'http://localhost:8123' }),
+  );
+  metadata.getColumn = jest.fn().mockImplementation(async ({ column }) => ({
+    name: column,
+    type: 'String',
+  }));
+  metadata.getMaterializedColumnsLookupTable = jest
+    .fn()
+    .mockImplementation(async () => new Map());
+  const serializer = new CustomSchemaSQLSerializerV2({
+    metadata,
+    databaseName: 'testName',
+    tableName: 'testTable',
+    connectionId: 'testId',
+    implicitColumnExpression: 'Body',
+  });
+
+  it('groups a right-nested OR inside an AND when the source has no parentheses', async () => {
+    const sql = await new SearchQueryBuilder(
+      'a:"1" AND b:"2" OR c:"3"',
+      serializer,
+    ).build();
+    expect(sql).toBe("((a = '1') AND ((b = '2') OR (c = '3')))");
+  });
+
+  it('emits the same SQL when the grouping is explicit in the source', async () => {
+    const implicit = await new SearchQueryBuilder(
+      'a:"1" AND b:"2" OR c:"3"',
+      serializer,
+    ).build();
+    const explicit = await new SearchQueryBuilder(
+      'a:"1" AND (b:"2" OR c:"3")',
+      serializer,
+    ).build();
+    expect(explicit).toBe(implicit);
+  });
+
+  it('leaves same-operator chains unchanged', async () => {
+    const sql = await new SearchQueryBuilder(
+      'a:"1" AND b:"2" AND c:"3"',
+      serializer,
+    ).build();
+    expect(sql).toBe("((a = '1') AND (b = '2') AND (c = '3'))");
+  });
+});
+
 describe('genEnglishExplanation', () => {
   const metadata = getMetadata(
     new ClickhouseClient({ host: 'http://localhost:8123' }),
