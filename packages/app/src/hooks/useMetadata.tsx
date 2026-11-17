@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { groupBy } from 'lodash';
 import objectHash from 'object-hash';
 import {
   ColumnMeta,
@@ -15,6 +16,7 @@ import {
   TableConnection,
   TableMetadata,
   tcFromSource,
+  unquoteIdentifier,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   FilterState,
@@ -458,6 +460,12 @@ export function useFilterKeysFetchLimit() {
   return me?.team?.filterKeysFetchLimit ?? DEFAULT_FILTER_KEYS_FETCH_LIMIT;
 }
 
+/** '' for a plain column, else the column a nested key reads from. */
+const keyQueryGroup = (key: string) => {
+  const column = /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)/.exec(key)?.[0] ?? key;
+  return column === key ? '' : unquoteIdentifier(column);
+};
+
 /**
  * Throw the first rejection when every lookup failed, otherwise return what
  * succeeded, so one failing source doesn't empty a multi-source result.
@@ -477,7 +485,9 @@ async function settleAllOrThrow<T>(promises: Promise<T>[]): Promise<T[]> {
  *
  * - `'exact'` reads metadata MVs, else the raw table, sampling the first
  *   `max_rows_to_read` rows unless `disableRowLimit` is set. Supports
- *   `keyConditions`.
+ *   `keyConditions`. Without them, plain columns share one query and each Map /
+ *   JSON column gets its own; when no values are showing yet, each query's
+ *   values land in `data` as it finishes.
  * - `'all'` tries text indexes, then metadata MVs, then the raw table, so it is
  *   cheaper for typeahead. It skips JSON-column keys, and its lookups return no
  *   values instead of failing, so it rarely errors. When no values are showing
@@ -525,9 +535,9 @@ export function useMultipleGetKeyValues(
   const { data: sources, isLoading: isLoadingSources } = useSources();
   const maxKeys = useFilterKeysFetchLimit();
 
-  // 'exact' lookups don't stream, so they keep the client's defaults rather
-  // than the streaming hook's. An unset default stays `undefined` here, which
-  // React Query reads as its own default. `refetchOnWindowFocus` is React
+  // 'exact' lookups yield a few large chunks, so they keep the client's defaults
+  // rather than the streaming hook's. An unset default stays `undefined` here,
+  // which React Query reads as its own default. `refetchOnWindowFocus` is React
   // Query's default outright: the client's can be a function typed against
   // `Query<unknown>`, which doesn't fit this query's data.
   const { retry, structuralSharing } =
@@ -605,22 +615,43 @@ export function useMultipleGetKeyValues(
       });
 
       if (mode === 'exact') {
-        const results = await settleAllOrThrow(
-          lookups.map(({ chartConfig, source }) =>
-            metadata.getKeyValuesWithMVs({
-              chartConfig,
-              keys: limitedKeys,
-              keyConditions: limitedKeyConditions,
-              limit,
-              disableRowLimit,
-              source,
-              signal,
-            }),
+        // Map / JSON keys are far slower to read than plain columns, so plain
+        // columns share one query and each Map / JSON column gets its own: one
+        // wide map can't hold up the rest. Faceted lookups stay in one query: a
+        // key's condition can reference any sibling key.
+        const keyGroups = limitedKeyConditions
+          ? [limitedKeys]
+          : Object.values(groupBy(limitedKeys, keyQueryGroup));
+        const groupResults = keyGroups.map(keys =>
+          settleAllOrThrow(
+            lookups.map(({ chartConfig, source }) =>
+              metadata.getKeyValuesWithMVs({
+                chartConfig,
+                keys,
+                keyConditions: limitedKeyConditions,
+                limit,
+                disableRowLimit,
+                source,
+                signal,
+              }),
+            ),
           ),
         );
-        // Numeric values have always passed through unconverted here; `useQuery`
-        // used to hide the mismatch with `Facet`. HDX-1548.
-        yield results.flat() as Facet[];
+        // Unlike `mergeStreams`, a failed group fails the lookup rather than
+        // silently leaving its keys empty.
+        const pending = new Map(
+          groupResults.map((results, i) => [
+            i,
+            results.then(r => [i, r] as const),
+          ]),
+        );
+        while (pending.size > 0) {
+          const [i, results] = await Promise.race(pending.values());
+          pending.delete(i);
+          // Numeric values have always passed through unconverted here; `useQuery`
+          // used to hide the mismatch with `Facet`. HDX-1548.
+          yield results.flat() as Facet[];
+        }
         return;
       }
 

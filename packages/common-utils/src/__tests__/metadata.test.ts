@@ -1133,6 +1133,118 @@ describe('Metadata', () => {
         },
       });
     });
+
+    describe('with several keys on one Map column', () => {
+      beforeEach(() => {
+        jest.spyOn(metadata, 'getColumn').mockImplementation(({ column }) =>
+          Promise.resolve(
+            column === 'LogAttributes'
+              ? ({
+                  name: 'LogAttributes',
+                  type: 'Map(LowCardinality(String), String)',
+                } as any)
+              : undefined,
+          ),
+        );
+      });
+
+      it('reads them with one groupUniqArrayMap', async () => {
+        const renderChartConfigSpy = jest.spyOn(
+          renderChartConfigModule,
+          'renderChartConfig',
+        );
+
+        await metadata.getKeyValues({
+          chartConfig: mockChartConfig,
+          keys: [
+            "LogAttributes['a']",
+            'SeverityText',
+            "`LogAttributes`['b\\'c']",
+            "LogAttributes['d']",
+          ],
+          limit: 10,
+          source,
+        });
+
+        const actualConfig = renderChartConfigSpy.mock.calls[0][0];
+        if (!isBuilderChartConfig(actualConfig))
+          throw new Error('Expected builder config');
+        expect(actualConfig.with?.[0]).toMatchObject({
+          chartConfig: {
+            select:
+              'SeverityText as param1, ' +
+              "mapFilter((k, v) -> k IN ('a', 'b\\'c', 'd'), LogAttributes) as mapParam0",
+          },
+        });
+        expect(actualConfig.select).toBe(
+          [
+            "groupUniqArrayMap(10)(mapParam0)['a'] AS param0",
+            'groupUniqArray(10)(param1) AS param1',
+            "groupUniqArrayMap(10)(mapParam0)['b\\'c'] AS param2",
+            "groupUniqArrayMap(10)(mapParam0)['d'] AS param3",
+          ].join(', '),
+        );
+      });
+
+      it('keeps faceted keys on their own predicate', async () => {
+        const renderChartConfigSpy = jest.spyOn(
+          renderChartConfigModule,
+          'renderChartConfig',
+        );
+
+        await metadata.getKeyValues({
+          chartConfig: mockChartConfig,
+          keys: ["LogAttributes['a']", "LogAttributes['b']", 'SeverityText'],
+          keyConditions: [
+            {
+              SeverityText: {
+                included: new Set(['info']),
+                excluded: new Set(),
+              },
+            },
+          ],
+          limit: 10,
+          disableRowLimit: true,
+          source,
+        });
+
+        const actualConfig = renderChartConfigSpy.mock.calls[0][0];
+        if (!isBuilderChartConfig(actualConfig))
+          throw new Error('Expected builder config');
+        // Only one unconstrained key is left on the Map, so nothing to share.
+        expect(actualConfig.select).toBe(
+          [
+            "groupUniqArrayIf(10)(LogAttributes['a'], (SeverityText IN ('info'))) AS param0",
+            "groupUniqArray(10)(LogAttributes['b']) AS param1",
+            'groupUniqArray(10)(SeverityText) AS param2',
+          ].join(', '),
+        );
+      });
+
+      it('shares the Map read when the row limit is disabled', async () => {
+        const renderChartConfigSpy = jest.spyOn(
+          renderChartConfigModule,
+          'renderChartConfig',
+        );
+
+        await metadata.getKeyValues({
+          chartConfig: mockChartConfig,
+          keys: ["LogAttributes['a']", "LogAttributes['b']"],
+          limit: 10,
+          disableRowLimit: true,
+          source,
+        });
+
+        const actualConfig = renderChartConfigSpy.mock.calls[0][0];
+        if (!isBuilderChartConfig(actualConfig))
+          throw new Error('Expected builder config');
+        const filter = "mapFilter((k, v) -> k IN ('a', 'b'), LogAttributes)";
+        expect(actualConfig.select).toBe(
+          `groupUniqArrayMap(10)(${filter})['a'] AS param0, ` +
+            `groupUniqArrayMap(10)(${filter})['b'] AS param1`,
+        );
+      });
+    });
   });
 
   // Each of the four fetch strategies emits a distinct SQL shape (map-text-
