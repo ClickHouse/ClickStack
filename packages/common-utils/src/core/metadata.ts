@@ -184,10 +184,6 @@ const inlineNonNegativeInt = (value: number, label: string): string => {
   return String(value);
 };
 
-// `Col['key']` or `` `Col`['key'] `` with a well-formed single-quoted key.
-const MAP_SUBSCRIPT_REGEX =
-  /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\['((?:[^'\\]|\\.)*)'\]$/;
-
 /** Strip one level of `…` / "…" identifier quoting, if present. */
 export const unquoteIdentifier = (identifier: string): string => {
   if (
@@ -611,11 +607,11 @@ export class Metadata {
   }> {
     const literalsByColumn = new Map<string, Map<string, string>>();
     for (const key of keys) {
-      const match = MAP_SUBSCRIPT_REGEX.exec(key);
-      if (!match) continue;
-      const column = unquoteIdentifier(match[1]);
+      const path = parseKeyPath(key);
+      if (path.length < 2) continue;
+      const column = unquoteIdentifier(path[0]);
       const literals = literalsByColumn.get(column) ?? new Map();
-      literals.set(key, `'${match[2]}'`);
+      literals.set(key, `'${path[1]}'`);
       literalsByColumn.set(column, literals);
     }
 

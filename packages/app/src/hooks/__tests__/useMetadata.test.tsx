@@ -600,7 +600,8 @@ describe('useGetKeyValues', () => {
     const allKeys = [
       "LogAttributes['a']",
       "LogAttributes['b']",
-      "LogAttributes['c']",
+      // Quoting doesn't make it a different column
+      "`LogAttributes`['c']",
       "`Resource-Attributes`['x']",
       'ServiceName',
       'SeverityText',
@@ -612,6 +613,7 @@ describe('useGetKeyValues', () => {
       "`Resource-Attributes`['x']",
       'ServiceName',
       'SeverityText',
+      'SpanName',
     ];
 
     const { result } = renderHook(
@@ -693,17 +695,16 @@ describe('useGetKeyValues', () => {
       expect(result.current.isFetching).toBe(true);
       expect(getKeyValuesWithMVs.mock.calls.map(([args]) => args.keys)).toEqual(
         [
+          ['ServiceName', '`__hdx_materialized_k8s.pod.name`', 'Body.`user`'],
           ["LogAttributes['a']", "`LogAttributes`['c']"],
-          ['ServiceName', '`__hdx_materialized_k8s.pod.name`'],
           ["ResourceAttributes['b']"],
-          ['Body.`user`'],
         ],
       );
 
       releaseNested();
 
       await waitForSettled(result);
-      expect(result.current.data).toHaveLength(4);
+      expect(result.current.data).toHaveLength(3);
     });
 
     it('errors when either group fails', async () => {

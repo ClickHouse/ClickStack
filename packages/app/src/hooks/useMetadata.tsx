@@ -460,11 +460,45 @@ export function useFilterKeysFetchLimit() {
   return me?.team?.filterKeysFetchLimit ?? DEFAULT_FILTER_KEYS_FETCH_LIMIT;
 }
 
-/** '' for a plain column, else the column a nested key reads from. */
-const keyQueryGroup = (key: string) => {
-  const column = /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)/.exec(key)?.[0] ?? key;
-  return column === key ? '' : unquoteIdentifier(column);
-};
+/** `LogAttributes['k']` -> `LogAttributes`; `ServiceName` -> null */
+function getMapColumn(key: string): string | null {
+  const path = parseKeyPath(key);
+  return path.length > 1 ? unquoteIdentifier(path[0]) : null;
+}
+
+/** Indexes of the keys left after keeping the first `max` keys of each Map. */
+function indexesWithinMapKeyLimit(keys: string[], max: number): number[] {
+  const countByMap = new Map<string, number>();
+  return keys.flatMap((key, i) => {
+    const mapColumn = getMapColumn(key);
+    if (mapColumn === null) return [i];
+    const count = (countByMap.get(mapColumn) ?? 0) + 1;
+    countByMap.set(mapColumn, count);
+    return count <= max ? [i] : [];
+  });
+}
+
+/** One group for all native columns, plus one group per Map column. */
+function groupKeysByMapColumn(keys: string[]): string[][] {
+  const nativeColumnKeys = keys.filter(key => getMapColumn(key) === null);
+  const mapKeys = keys.filter(key => getMapColumn(key) !== null);
+  return [
+    nativeColumnKeys,
+    ...Object.values(groupBy(mapKeys, getMapColumn)),
+  ].filter(group => group.length > 0);
+}
+
+/** Yields each promise's value as it resolves; throws on the first rejection. */
+async function* inCompletionOrder<T>(promises: Promise<T>[]) {
+  const pending = new Map(
+    promises.map((promise, i) => [i, promise.then(value => ({ i, value }))]),
+  );
+  while (pending.size > 0) {
+    const { i, value } = await Promise.race(pending.values());
+    pending.delete(i);
+    yield value;
+  }
+}
 
 /**
  * Throw the first rejection when every lookup failed, otherwise return what
@@ -485,9 +519,9 @@ async function settleAllOrThrow<T>(promises: Promise<T>[]): Promise<T[]> {
  *
  * - `'exact'` reads metadata MVs, else the raw table, sampling the first
  *   `max_rows_to_read` rows unless `disableRowLimit` is set. Supports
- *   `keyConditions`. Without them, plain columns share one query and each Map /
- *   JSON column gets its own; when no values are showing yet, each query's
- *   values land in `data` as it finishes.
+ *   `keyConditions`. Without them, native columns share one query and each Map
+ *   column gets its own; when no values are showing yet, each query's values
+ *   land in `data` as it finishes.
  * - `'all'` tries text indexes, then metadata MVs, then the raw table, so it is
  *   cheaper for typeahead. It skips JSON-column keys, and its lookups return no
  *   values instead of failing, so it rarely errors. When no values are showing
@@ -535,8 +569,8 @@ export function useMultipleGetKeyValues(
   const { data: sources, isLoading: isLoadingSources } = useSources();
   const maxKeys = useFilterKeysFetchLimit();
 
-  // 'exact' lookups yield a few large chunks, so they keep the client's defaults
-  // rather than the streaming hook's. An unset default stays `undefined` here,
+  // 'exact' lookups yield one chunk per query, so they keep the client's
+  // defaults rather than the streaming hook's. An unset default stays `undefined` here,
   // which React Query reads as its own default. `refetchOnWindowFocus` is React
   // Query's default outright: the client's can be a function typed against
   // `Query<unknown>`, which doesn't fit this query's data.
@@ -577,30 +611,10 @@ export function useMultipleGetKeyValues(
       if (keys.length === 0) return;
       const usableMVsOverride =
         chartConfigsArr.length === 1 ? metadataMVsOverride : undefined;
-      // The limit applies per Map column, so one wide Map (e.g. LogAttributes)
-      // can't crowd out the others. Top-level columns share a single limit.
-      const { limitedKeys, limitedKeyConditions } = keys.reduce<{
-        countByColumn: Map<string, number>;
-        limitedKeys: string[];
-        limitedKeyConditions?: (FilterState | undefined)[];
-      }>(
-        (acc, key, i) => {
-          const path = parseKeyPath(key);
-          const column = path.length > 1 ? path[0] : '';
-          const count = acc.countByColumn.get(column) ?? 0;
-          acc.countByColumn.set(column, count + 1);
-          if (count < maxKeys) {
-            acc.limitedKeys.push(key);
-            acc.limitedKeyConditions?.push(keyConditions?.[i]);
-          }
-          return acc;
-        },
-        {
-          countByColumn: new Map(),
-          limitedKeys: [],
-          limitedKeyConditions: keyConditions ? [] : undefined,
-        },
-      );
+      const keptIndexes = indexesWithinMapKeyLimit(keys, maxKeys);
+      const limitedKeys = keptIndexes.map(i => keys[i]);
+      const limitedKeyConditions =
+        keyConditions && keptIndexes.map(i => keyConditions[i]);
 
       const lookups = chartConfigsArr.map((chartConfig, i) => {
         const source = chartConfig.source
@@ -615,19 +629,17 @@ export function useMultipleGetKeyValues(
       });
 
       if (mode === 'exact') {
-        // Map / JSON keys are far slower to read than plain columns, so plain
-        // columns share one query and each Map / JSON column gets its own: one
-        // wide map can't hold up the rest. Faceted lookups stay in one query: a
-        // key's condition can reference any sibling key.
+        // A key's condition can reference any sibling key, so faceted lookups
+        // stay in one query.
         const keyGroups = limitedKeyConditions
           ? [limitedKeys]
-          : Object.values(groupBy(limitedKeys, keyQueryGroup));
-        const groupResults = keyGroups.map(keys =>
-          settleAllOrThrow(
+          : groupKeysByMapColumn(limitedKeys);
+        const fetchGroup = async (groupKeys: string[]) => {
+          const results = await settleAllOrThrow(
             lookups.map(({ chartConfig, source }) =>
               metadata.getKeyValuesWithMVs({
                 chartConfig,
-                keys,
+                keys: groupKeys,
                 keyConditions: limitedKeyConditions,
                 limit,
                 disableRowLimit,
@@ -635,23 +647,12 @@ export function useMultipleGetKeyValues(
                 signal,
               }),
             ),
-          ),
-        );
-        // Unlike `mergeStreams`, a failed group fails the lookup rather than
-        // silently leaving its keys empty.
-        const pending = new Map(
-          groupResults.map((results, i) => [
-            i,
-            results.then(r => [i, r] as const),
-          ]),
-        );
-        while (pending.size > 0) {
-          const [i, results] = await Promise.race(pending.values());
-          pending.delete(i);
+          );
           // Numeric values have always passed through unconverted here; `useQuery`
           // used to hide the mismatch with `Facet`. HDX-1548.
-          yield results.flat() as Facet[];
-        }
+          return results.flat() as Facet[];
+        };
+        yield* inCompletionOrder(keyGroups.map(fetchGroup));
         return;
       }
 
