@@ -1390,6 +1390,7 @@ describe('utils', () => {
           {
             id: 'filter-scoped',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Scoped',
             sourceType: 'sql',
             sources: ['source1', 'source2'],
@@ -1400,6 +1401,7 @@ describe('utils', () => {
           {
             id: 'filter-unresolved',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Unresolved',
             sourceType: 'sql',
             sources: ['source1'],
@@ -1416,6 +1418,7 @@ describe('utils', () => {
         {
           id: 'filter-scoped',
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           name: 'Scoped',
           sourceType: 'sql',
           sources: ['Logs', 'Traces'],
@@ -1426,6 +1429,7 @@ describe('utils', () => {
         {
           id: 'filter-unresolved',
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           name: 'Unresolved',
           sourceType: 'sql',
           sources: ['Logs'],

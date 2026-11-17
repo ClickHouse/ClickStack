@@ -1090,6 +1090,14 @@ export type TagResourceType = z.infer<typeof TagResourceTypeSchema>;
 
 export const alertNoteSchema = z.string().min(1).max(4096).nullish();
 
+// nullish() (not optional()): persisted alerts store this as null, which
+// optional() would reject.
+export const alertNumConsecutiveWindowsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .nullish();
+
 export const MAX_ALERT_DISPLAY_NAME_LENGTH = 512;
 export const alertDisplayNameSchema = z
   .string()
@@ -1128,7 +1136,7 @@ export const AlertBaseObjectSchema = z.object({
       until: z.string(),
     })
     .optional(),
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 // Keep AlertBaseSchema as a ZodObject for backwards compatibility with
@@ -1335,10 +1343,15 @@ export const AdhocFilterOperatorSchema = z.enum([
   '!~',
   'LIKE',
   'NOT LIKE',
+  'IN',
 ]);
 
 export type AdhocFilterOperator = z.infer<typeof AdhocFilterOperatorSchema>;
 
+/**
+ * `IN` conditions sharing a key are OR'd together when rendered; every other
+ * condition is AND'd.
+ */
 export const SQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] =
   AdhocFilterOperatorSchema.options;
 
@@ -1347,6 +1360,7 @@ export const PROMQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] = [
   '!=',
   '=~',
   '!~',
+  'IN',
 ];
 
 /** One `key operator value` condition picked in an ad hoc filter. */
@@ -2450,8 +2464,12 @@ export const AdhocDashboardFilterSchema = dashboardFilterBaseSchema
      * empty means the filter's `sources`.
      */
     appliesToSourceIds: z.array(z.string().min(1)).optional(),
-    /** Undefined / missing means ENABLED, as for QUERY_EXPRESSION filters. */
-    isBroadcastEnabled: z.boolean().optional(),
+    // Ad hoc conditions can't be referenced as variables, so broadcast is how they apply.
+    isBroadcastEnabled: z.literal(true),
+    /**
+     * Keeps `variableName` unique among the dashboard's variable names, which
+     * share the `filters=` param. Not referenceable as `$variableName`.
+     */
     isVariableEnabled: z.literal(true),
   })
   .strict();
@@ -3151,7 +3169,7 @@ export const AlertsPageItemSchema = z.object({
     })
     .optional(),
   executionErrors: z.array(AlertErrorSchema).optional(),
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 export type AlertsPageItem = z.infer<typeof AlertsPageItemSchema>;

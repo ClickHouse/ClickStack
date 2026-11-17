@@ -353,6 +353,97 @@ describe('MCP Alert Tools', () => {
         expect(output.state).toBe('OK');
       });
 
+      it('should create an alert with a note and consecutive-window count', async () => {
+        const savedSearch = await createTestSavedSearch();
+        const webhook = await createTestWebhook();
+
+        const result = await callTool(client, 'clickstack_save_alert', {
+          source: 'saved_search',
+          savedSearchId: savedSearch._id.toString(),
+          threshold: 50,
+          thresholdType: 'above',
+          interval: '5m',
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+          note: 'See the [runbook](https://example.com/runbook).',
+          numConsecutiveWindows: 3,
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.note).toBe(
+          'See the [runbook](https://example.com/runbook).',
+        );
+        expect(output.numConsecutiveWindows).toBe(3);
+
+        const persisted = await Alert.findById(output.id);
+        expect(persisted?.note).toBe(
+          'See the [runbook](https://example.com/runbook).',
+        );
+        expect(persisted?.numConsecutiveWindows).toBe(3);
+      });
+
+      it('should reject a consecutive-window count below 1', async () => {
+        const savedSearch = await createTestSavedSearch();
+        const webhook = await createTestWebhook();
+
+        const result = await callTool(client, 'clickstack_save_alert', {
+          source: 'saved_search',
+          savedSearchId: savedSearch._id.toString(),
+          threshold: 50,
+          thresholdType: 'above',
+          interval: '5m',
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+          numConsecutiveWindows: 0,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(await Alert.countDocuments({ team: team._id })).toBe(0);
+      });
+
+      it.each([
+        ['empty', ''],
+        ['longer than 4096 characters', 'a'.repeat(4097)],
+      ])('should reject a note that is %s', async (_description, note) => {
+        const savedSearch = await createTestSavedSearch();
+        const webhook = await createTestWebhook();
+
+        const result = await callTool(client, 'clickstack_save_alert', {
+          source: 'saved_search',
+          savedSearchId: savedSearch._id.toString(),
+          threshold: 50,
+          thresholdType: 'above',
+          interval: '5m',
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+          note,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(await Alert.countDocuments({ team: team._id })).toBe(0);
+      });
+
+      it('should persist an omitted note and consecutive-window count as null', async () => {
+        const savedSearch = await createTestSavedSearch();
+        const webhook = await createTestWebhook();
+
+        const result = await callTool(client, 'clickstack_save_alert', {
+          source: 'saved_search',
+          savedSearchId: savedSearch._id.toString(),
+          threshold: 50,
+          thresholdType: 'above',
+          interval: '5m',
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.note).toBeNull();
+        expect(output.numConsecutiveWindows).toBeNull();
+
+        const persisted = await Alert.findById(output.id);
+        expect(persisted?.note).toBeNull();
+        expect(persisted?.numConsecutiveWindows).toBeNull();
+      });
+
       it('should create an alert with an explicit displayName and tags', async () => {
         const savedSearch = await createTestSavedSearch();
         const webhook = await createTestWebhook();
@@ -1295,6 +1386,86 @@ describe('MCP Alert Tools', () => {
         expect(updatedAlert?.groupBy).toBe('http.route');
         expect(updatedAlert?.dashboard).toBeNull();
         expect(updatedAlert?.tileId).toBeNull();
+      });
+
+      describe('note and numConsecutiveWindows', () => {
+        async function saveExisting(
+          alertId: string,
+          savedSearchId: string,
+          webhookId: string,
+          extra: Record<string, unknown> = {},
+        ) {
+          return callTool(client, 'clickstack_save_alert', {
+            id: alertId,
+            source: 'saved_search',
+            savedSearchId,
+            threshold: 200,
+            thresholdType: 'above',
+            interval: '15m',
+            channel: { type: 'webhook', webhookId },
+            ...extra,
+          });
+        }
+
+        it('keeps the stored values when omitted', async () => {
+          const webhook = await createTestWebhook();
+          const alert = await createTestAlert({
+            note: 'Set in the UI',
+            numConsecutiveWindows: 4,
+          });
+
+          const result = await saveExisting(
+            alert._id.toString(),
+            alert.savedSearch!.toString(),
+            webhook._id.toString(),
+          );
+
+          expect(result.isError).toBeFalsy();
+          const output = JSON.parse(getFirstText(result));
+          expect(output.threshold).toBe(200);
+          expect(output.note).toBe('Set in the UI');
+          expect(output.numConsecutiveWindows).toBe(4);
+        });
+
+        it('replaces the stored values when provided', async () => {
+          const webhook = await createTestWebhook();
+          const alert = await createTestAlert({
+            note: 'Set in the UI',
+            numConsecutiveWindows: 4,
+          });
+
+          const result = await saveExisting(
+            alert._id.toString(),
+            alert.savedSearch!.toString(),
+            webhook._id.toString(),
+            { note: 'Updated note', numConsecutiveWindows: 2 },
+          );
+
+          expect(result.isError).toBeFalsy();
+          const persisted = await Alert.findById(alert._id);
+          expect(persisted?.note).toBe('Updated note');
+          expect(persisted?.numConsecutiveWindows).toBe(2);
+        });
+
+        it('clears the stored values when sent as null', async () => {
+          const webhook = await createTestWebhook();
+          const alert = await createTestAlert({
+            note: 'Set in the UI',
+            numConsecutiveWindows: 4,
+          });
+
+          const result = await saveExisting(
+            alert._id.toString(),
+            alert.savedSearch!.toString(),
+            webhook._id.toString(),
+            { note: null, numConsecutiveWindows: null },
+          );
+
+          expect(result.isError).toBeFalsy();
+          const persisted = await Alert.findById(alert._id);
+          expect(persisted?.note).toBeNull();
+          expect(persisted?.numConsecutiveWindows).toBeNull();
+        });
       });
 
       it('should return not found for non-existent alert id', async () => {

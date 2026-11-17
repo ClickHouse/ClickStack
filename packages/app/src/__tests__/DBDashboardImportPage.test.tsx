@@ -618,6 +618,7 @@ const adhocFilterTemplate = DashboardTemplateSchema.parse({
     {
       id: 'filter-adhoc',
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       name: 'Conditions',
       sourceType: 'sql',
       sources: ['Logs', 'Traces', MISSING],
@@ -649,6 +650,7 @@ describe('Dashboard import - ad hoc filter sources', () => {
     const payload = mockMutateAsync.mock.calls[0][0];
     expect(payload.filters[0]).toMatchObject({
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       sources: ['src-logs', 'src-traces'],
       appliesToSourceIds: ['src-traces'],
     });
