@@ -562,65 +562,6 @@ describe('MCP Dashboard Tools - PromQL tiles and label filters', () => {
       expect(await Dashboard.countDocuments({ team: ctx.team._id })).toBe(0);
     });
 
-    it('rejects a DATA_SOURCE filter that offers promql sources', async () => {
-      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
-        name: 'PromQL off',
-        tiles: [],
-        filters: [
-          {
-            type: 'DATA_SOURCE',
-            name: 'Metrics',
-            variableName: 'metrics',
-            allowedSourceKinds: ['promql'],
-          },
-        ],
-      });
-
-      expect(result.isError).toBe(true);
-      expect(await Dashboard.countDocuments({ team: ctx.team._id })).toBe(0);
-    });
-
-    it('hides and keeps DATA_SOURCE filters that offer promql sources', async () => {
-      const dataSource = (name: string, allowedSourceKinds: string[]) => ({
-        id: name,
-        type: 'DATA_SOURCE' as const,
-        name,
-        variableName: name,
-        allowedSourceKinds,
-        minSelections: 1 as const,
-        maxSelections: 1 as const,
-        isBroadcastEnabled: false as const,
-        isVariableEnabled: true as const,
-      });
-      const dashboard = await new Dashboard({
-        name: 'Source variables',
-        team: ctx.team._id,
-        tiles: [],
-        filters: [
-          dataSource('logs', ['log']),
-          dataSource('metrics', ['promql']),
-        ],
-      }).save();
-
-      const get = await callTool(ctx.client!, 'clickstack_get_dashboard', {
-        id: dashboard._id.toString(),
-      });
-      expect(get.isError).toBeFalsy();
-      expect(parseOutput(get).filters.map((f: { id: string }) => f.id)).toEqual(
-        ['logs'],
-      );
-
-      const save = await callTool(ctx.client!, 'clickstack_save_dashboard', {
-        id: dashboard._id.toString(),
-        name: 'Source variables',
-        tiles: [],
-        filters: [{ ...dataSource('logs', ['log']), name: 'Renamed' }],
-      });
-      expect(save.isError).toBeFalsy();
-      const stored = await Dashboard.findById(dashboard._id).lean();
-      expect(stored?.filters?.map(f => f.name)).toEqual(['Renamed', 'metrics']);
-    });
-
     it('rejects a PromQL tile', async () => {
       const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
         name: 'PromQL off',

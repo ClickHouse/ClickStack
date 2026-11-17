@@ -540,34 +540,28 @@ describe('convertToExternalDashboard orphan-ref heal', () => {
     expect(hidden.savedFilterValues).toEqual([adhocValue]);
   });
 
-  it('hides data source variables that offer promql sources with hidePromql', () => {
-    const dataSource = (id: string, allowedSourceKinds: SourceKind[]) => ({
-      id,
-      type: 'DATA_SOURCE' as const,
-      name: id,
-      variableName: id,
-      allowedSourceKinds,
-      minSelections: 1 as const,
-      maxSelections: 1 as const,
-      isBroadcastEnabled: false as const,
-      isVariableEnabled: true as const,
-    });
+  it('keeps data source variables that offer promql sources with hidePromql', () => {
     const doc = makeDoc({
       filters: [
-        dataSource('logs', [SourceKind.Log]),
-        dataSource('mixed', [SourceKind.Metric, SourceKind.Promql]),
+        {
+          id: 'mixed',
+          type: 'DATA_SOURCE',
+          name: 'mixed',
+          variableName: 'mixed',
+          allowedSourceKinds: [SourceKind.Metric, SourceKind.Promql],
+          minSelections: 1,
+          maxSelections: 1,
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
       ],
     });
 
-    expect(convertToExternalDashboard(doc).filters?.map(f => f.id)).toEqual([
-      'logs',
-      'mixed',
-    ]);
     expect(
       convertToExternalDashboard(doc, { hidePromql: true }).filters?.map(
         f => f.id,
       ),
-    ).toEqual(['logs']);
+    ).toEqual(['mixed']);
   });
 
   // seriesLimit is three-state (matching the internal schema): omitted =

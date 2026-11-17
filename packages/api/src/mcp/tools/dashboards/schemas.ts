@@ -1927,7 +1927,7 @@ const mcpReferenceVariableBaseShape = {
   ),
 };
 
-const mcpPromqlDataSourceFilterSchema = z
+const mcpDataSourceFilterSchema = z
   .object({
     ...mcpReferenceVariableBaseShape,
     type: z
@@ -1956,23 +1956,6 @@ const mcpPromqlDataSourceFilterSchema = z
       'reference it as `$variableName` in sourceId (or appliesToSourceIds) instead of a ' +
       'source ID; tiles stay blocked until a source is selected.',
   );
-
-const mcpDataSourceFilterSchema = mcpPromqlDataSourceFilterSchema.extend({
-  allowedSourceKinds: z
-    .array(
-      z.enum([
-        SourceKind.Log,
-        SourceKind.Trace,
-        SourceKind.Session,
-        SourceKind.Metric,
-      ]),
-    )
-    .min(1)
-    .describe(
-      mcpPromqlDataSourceFilterSchema.shape.allowedSourceKinds.description ??
-        '',
-    ),
-});
 
 const mcpConnectionFilterSchema = z
   .object({
@@ -2013,7 +1996,7 @@ const mcpPromqlDashboardFilterSchema = z
     mcpSqlQueryFilterSchema,
     mcpPromqlLabelFilterSchema,
     mcpPromqlAdhocFilterSchema,
-    mcpPromqlDataSourceFilterSchema,
+    mcpDataSourceFilterSchema,
     mcpConnectionFilterSchema,
   ])
   .describe(
