@@ -80,6 +80,7 @@ export async function userWhereAsSql({
   tableName,
   connectionId,
   implicitColumnExpression,
+  bodyExpression,
   useTextIndexForImplicitColumn,
 }: {
   where: string;
@@ -90,6 +91,7 @@ export async function userWhereAsSql({
   tableName: string;
   connectionId: string;
   implicitColumnExpression?: string;
+  bodyExpression?: string;
   useTextIndexForImplicitColumn?: UseTextIndex;
 }): Promise<string> {
   if (!where.trim()) return '';
@@ -103,6 +105,7 @@ export async function userWhereAsSql({
     from: { databaseName, tableName },
     connectionId,
     implicitColumnExpression,
+    bodyExpression,
     useTextIndexForImplicitColumn,
   });
 }
