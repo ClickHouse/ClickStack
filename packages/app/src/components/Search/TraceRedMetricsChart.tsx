@@ -23,7 +23,13 @@ import {
   redBaseConfig,
 } from './traceRedMetrics';
 
-export type TraceChartMode = 'red' | 'heatmap';
+/**
+ * The trace results chart views, RED first as the default. The URL parser and
+ * the view switch both read this list, so a new mode can't be added to the type
+ * alone and silently parse back to RED.
+ */
+export const TRACE_CHART_MODES = ['red', 'heatmap'] as const;
+export type TraceChartMode = (typeof TRACE_CHART_MODES)[number];
 
 // Each RED tile is a ChartCard flex child that fills its column; ChartCard
 // supplies the dashboard-tile chrome (border, background, full-bleed header
