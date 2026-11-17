@@ -2,6 +2,7 @@ import {
   ALERT_INTERVAL_TO_MINUTES,
   alertDisplayNameSchema,
   type AlertInterval,
+  alertNoteSchema,
   checkAlertChannelSelection,
   isRangeThresholdType,
   MAX_ALERT_CHANNELS,
@@ -244,6 +245,18 @@ export const mcpSaveAlertSchema = z.object({
         'stored value or send null to clear it.',
     ),
 
+  numConsecutiveWindows: z
+    .number()
+    .int()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      'Fire only after the threshold condition is met in this many ' +
+        'consecutive evaluation windows; 1 fires on the first. On update, ' +
+        'omit to keep the stored value or send null to clear it.',
+    ),
+
   // Channel
   channel: mcpAlertChannelSchema.optional(),
   channels: z
@@ -273,6 +286,11 @@ export const mcpSaveAlertSchema = z.object({
     .max(4096)
     .optional()
     .describe('Handlebars template for the notification body.'),
+  note: alertNoteSchema.describe(
+    'Markdown note shown with the alert, e.g. why it exists and links to ' +
+      'runbooks. On update, omit to keep the stored value or send null to ' +
+      'clear it.',
+  ),
   displayName: alertDisplayNameSchema.describe(
     'Display name shown for the alert in the UI. Defaults to the saved search name, dashboard tile name, or inline chartConfig name when omitted. Overridden by the "name" field in alert notifications when provided.',
   ),
