@@ -51,6 +51,7 @@ gingerwizard
 gyancr7
 harshul1484
 hercynium FIPS fix for #3390
+igor-kupczynski
 jaggederest
 jeyrathnam
 jordan-simonovski

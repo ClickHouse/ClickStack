@@ -678,6 +678,8 @@ export async function runConfigTile(
       connection: source.connection.toString(),
       timestampValueExpression: source.timestampValueExpression,
       implicitColumnExpression: implicitColumn,
+      bodyExpression:
+        source.kind === SourceKind.Log ? source.bodyExpression : undefined,
       useTextIndexForImplicitColumn,
       dateRange: [startDate, endDate] as [Date, Date],
       variables: options?.variables,
@@ -738,6 +740,7 @@ export async function runConfigTile(
   let sourceFields: {
     from?: { databaseName: string; tableName: string };
     implicitColumnExpression?: string;
+    bodyExpression?: string;
     useTextIndexForImplicitColumn?: UseTextIndex;
     metricTables?: MetricTable;
   } = {};
@@ -752,6 +755,8 @@ export async function runConfigTile(
           'implicitColumnExpression' in source
             ? source.implicitColumnExpression
             : undefined,
+        bodyExpression:
+          source.kind === SourceKind.Log ? source.bodyExpression : undefined,
         useTextIndexForImplicitColumn:
           'useTextIndexForImplicitColumn' in source
             ? source.useTextIndexForImplicitColumn

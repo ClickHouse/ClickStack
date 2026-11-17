@@ -13,7 +13,11 @@ import {
   validateDashboardFilterVariableNames,
   validateDashboardTileContainerRefs,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
-import { isPrometheusLabelFilter } from '@hyperdx/common-utils/dist/filters';
+import {
+  isAdhocFilter,
+  isPrometheusLabelFilter,
+  isQueryExpressionFilter,
+} from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
   isHeatmapCompatibleSource,
@@ -27,12 +31,12 @@ import {
   DASHBOARD_MAX_CONTAINERS,
   DashboardContainer,
   DashboardContainerSchema,
+  DashboardFilter,
   DisplayType,
   HeatmapMode,
   isLogSource,
   isOnClickDashboardById,
   isOnClickSearchById,
-  isPromqlSource,
   isTraceSource,
   NumberTileColorCondition,
   NumberTileColorConditionSchema,
@@ -40,6 +44,7 @@ import {
   RawSqlSavedChartConfig,
   resolveChartPaletteToken,
   SavedChartConfig,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { SearchConditionLanguageSchema as whereLanguageSchema } from '@hyperdx/common-utils/dist/types';
 import { pick } from 'lodash';
@@ -52,12 +57,15 @@ import { getConnectionsByTeam } from '@/controllers/connection';
 import { getSources } from '@/controllers/sources';
 import Dashboard, { DashboardDocument } from '@/models/dashboard';
 import {
-  getExternalCompatibleFilters,
-  getExternalCompatibleFilterValues,
   translateExternalChartToTileConfig,
   translateExternalFilterToFilter,
   translateFilterToExternalFilter,
 } from '@/utils/externalApi';
+import {
+  getChangedFilterSourceRefs,
+  getFilterSourceRefError,
+  getInvalidSourceIds,
+} from '@/utils/filterSources';
 import logger from '@/utils/logger';
 import {
   ExternalDashboardBuilderTileConfig,
@@ -766,13 +774,21 @@ function convertTileToExternalChart(
   };
 }
 
+/** Whether a filter only works while PromQL is enabled. */
+export function isPromqlFilter(filter: DashboardFilter): boolean {
+  return (
+    isPrometheusLabelFilter(filter) ||
+    (isAdhocFilter(filter) && filter.sourceType === 'promql')
+  );
+}
+
 export function convertToExternalDashboard(
   dashboard: DashboardDocument,
   {
     hidePromql = false,
   }: {
-    // MCP hides PromQL tiles and PROMETHEUS_LABEL filters while PromQL is
-    // disabled on the deployment.
+    // MCP hides PromQL tiles and PromQL filters while PromQL is disabled on
+    // the deployment.
     hidePromql?: boolean;
   } = {},
 ): ExternalDashboard {
@@ -795,14 +811,12 @@ export function convertToExternalDashboard(
         convertTileToExternalChart(tile, containerById, dashboardId),
       ),
     tags: dashboard.tags || [],
-    filters: getExternalCompatibleFilters(dashboard.filters)
-      .filter(filter => !(hidePromql && isPrometheusLabelFilter(filter)))
+    filters: (dashboard.filters ?? [])
+      .filter(filter => !(hidePromql && isPromqlFilter(filter)))
       .map(translateFilterToExternalFilter),
     savedQuery: dashboard.savedQuery ?? null,
     savedQueryLanguage: dashboard.savedQueryLanguage ?? null,
-    savedFilterValues: getExternalCompatibleFilterValues(
-      dashboard.savedFilterValues,
-    ),
+    savedFilterValues: dashboard.savedFilterValues ?? [],
     // Mongoose persists missing arrays as []. Only emit containers when
     // the user actually saved one or more, so dashboards without the
     // organization layer round-trip with the field absent.
@@ -1304,12 +1318,10 @@ function getMissingSources(
     }
   }
 
-  if (filters?.length) {
-    for (const filter of filters) {
-      if ('sourceId' in filter) {
-        sourceIds.add(filter.sourceId);
-      }
-    }
+  for (const filter of filters ?? []) {
+    // PROMETHEUS_LABEL and ADHOC sources are checked with the stored filter's
+    // references skipped; see `validateDashboardTiles`.
+    if (isQueryExpressionFilter(filter)) sourceIds.add(filter.sourceId);
   }
 
   const existingSourceIds = new Set(
@@ -1348,25 +1360,6 @@ function getHeatmapTilesWithIncompatibleSources(
     }
   }
   return { distribution: [...distribution], series: [...series] };
-}
-
-/**
- * Returns an error message string if any of the referenced source IDs is not
- * a valid PromQL source, or null if all of them are. `subject` names what
- * referenced them, e.g. "PromQL tiles".
- */
-function getNonPromqlSourceError(
-  sources: SourceForValidation[],
-  referencedSourceIds: string[],
-  subject: string,
-): string | null {
-  const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
-  const invalid = [...new Set(referencedSourceIds)].filter(id => {
-    const source = sourceById.get(id);
-    return source === undefined || !isPromqlSource(source);
-  });
-  if (invalid.length === 0) return null;
-  return `${subject} require a PromQL source. The following source IDs are not PromQL sources: ${invalid.join(', ')}`;
 }
 
 /**
@@ -1733,6 +1726,8 @@ export type TileValidationContext = {
   filters?: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[];
   /** Existing internal tiles for scoping heatmap change detection (update paths). */
   existingTiles?: DashboardDocument['tiles'];
+  /** Existing filters, whose source references aren't re-checked (update paths). */
+  existingFilters?: DashboardFilter[];
   /** Container set to validate tile containerId/tabId refs against. */
   containers: DashboardContainer[];
 };
@@ -1749,7 +1744,8 @@ export type TileValidationContext = {
 export async function validateDashboardTiles(
   ctx: TileValidationContext,
 ): Promise<string | null> {
-  const { teamId, tiles, filters, existingTiles, containers } = ctx;
+  const { teamId, tiles, filters, existingTiles, existingFilters, containers } =
+    ctx;
 
   // Container/tab ref resolution.
   const tileRefIssues = collectTileContainerRefIssues(containers, tiles);
@@ -1817,22 +1813,33 @@ export async function validateDashboardTiles(
     return `Tiles with formulas require a Metric, Log, or Trace source. The following source IDs are not formula-capable: ${formulaIncompatibleSources.join(', ')}`;
   }
 
-  // PromQL tiles and PROMETHEUS_LABEL filters query through their source's
-  // connection and TimeSeries table, which only a PromQL source carries.
-  const promqlTileError = getNonPromqlSourceError(
+  // PromQL tiles query through their source's connection and TimeSeries
+  // table, which only a PromQL source carries.
+  const nonPromqlTileSourceIds = getInvalidSourceIds(
+    getChangedPromqlTileSourceIds(tiles, existingTiles).map(id => ({
+      id,
+      kinds: [SourceKind.Promql],
+    })),
     sources,
-    getChangedPromqlTileSourceIds(tiles, existingTiles),
-    'PromQL tiles',
   );
-  if (promqlTileError != null) return promqlTileError;
+  if (nonPromqlTileSourceIds.length > 0) {
+    return `PromQL tiles require a PromQL source. The following source IDs are not PromQL sources: ${nonPromqlTileSourceIds.join(', ')}`;
+  }
 
-  const promqlLabelFilters = (filters ?? []).filter(isPrometheusLabelFilter);
-  const promqlLabelFilterError = getNonPromqlSourceError(
+  // PROMETHEUS_LABEL and ADHOC filters need live sources of the right kind. As
+  // in the internal API, references the stored filter already made are not
+  // re-checked, so a since-deleted source doesn't block unrelated saves.
+  const filterSourceError = getFilterSourceRefError(
+    getChangedFilterSourceRefs(
+      // Create bodies carry no filter IDs; an empty one matches no stored filter.
+      (filters ?? []).map(filter =>
+        translateExternalFilterToFilter({ id: '', ...filter }),
+      ),
+      existingFilters,
+    ),
     sources,
-    promqlLabelFilters.map(f => f.sourceId),
-    'PROMETHEUS_LABEL filters',
   );
-  if (promqlLabelFilterError != null) return promqlLabelFilterError;
+  if (filterSourceError != null) return filterSourceError;
 
   if (missingOnClickDashboards.length > 0) {
     return `Could not find the following onClick dashboard IDs: ${missingOnClickDashboards.join(', ')}`;
