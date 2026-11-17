@@ -437,7 +437,7 @@ async function loadAlerts(): Promise<AlertTask[]> {
   // history window for every alert regardless of the alert's interval, which
   // was the main driver of DocDB secondary CPU / cursor timeouts.
   const latestHistories = await getLatestAlertHistories(
-    resolved.map(({ alert }) => alert),
+    resolved.map(({ alert }) => alert.id),
     now,
     historyQueryQueue,
   );

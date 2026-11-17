@@ -12524,7 +12524,7 @@ describe('checkAlerts', () => {
       const alert2Id = new mongoose.Types.ObjectId();
 
       const result = await getLatestAlertHistories(
-        [alert1Id, alert2Id].map(id => ({ id: id.toString(), interval: '5m' })),
+        [alert1Id.toString(), alert2Id.toString()],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12541,7 +12541,7 @@ describe('checkAlerts', () => {
       await saveAlert(alertId, new Date('2025-01-01T00:10:00Z'));
 
       const result = await getLatestAlertHistories(
-        [{ id: alertId.toString(), interval: '5m' }],
+        [alertId.toString()],
         new Date('2025-01-01T00:05:00Z'),
       );
 
@@ -12723,7 +12723,7 @@ describe('checkAlerts', () => {
       );
 
       const result = await getLatestAlertHistories(
-        [{ id: alertId.toString(), interval: '5m' }],
+        [alertId.toString()],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12733,13 +12733,13 @@ describe('checkAlerts', () => {
       });
     });
 
-    it('getLatestAlertHistories ignores rows older than the interval-derived lookback', async () => {
+    it('getLatestAlertHistories ignores rows older than 7 days', async () => {
       const now = new Date('2025-01-10T00:00:00Z');
       const alertId = new mongoose.Types.ObjectId();
       await saveHistory(
         alertId,
-        new Date('2025-01-08T00:00:00Z'),
-        AlertState.OK,
+        new Date('2025-01-02T00:00:00Z'),
+        AlertState.ALERT,
       );
       await saveHistory(
         alertId,
@@ -12747,20 +12747,17 @@ describe('checkAlerts', () => {
         AlertState.ERROR,
       );
 
-      // 1m interval: 1d lookback, so only the ERROR row is in range.
-      const result = await getLatestAlertHistories(
-        [{ id: alertId.toString(), interval: '1m' }],
-        now,
-      );
+      // The ALERT row is 8 days old, so only the ERROR row is in range.
+      const result = await getLatestAlertHistories([alertId.toString()], now);
       expect(result.get(alertId.toString())).toBeNull();
 
-      // 1h interval: 52h lookback reaches the OK row.
-      const resultHourly = await getLatestAlertHistories(
-        [{ id: alertId.toString(), interval: '1h' }],
-        now,
-      );
-      expect(resultHourly.get(alertId.toString())?.createdAt).toEqual(
+      // Six days after the ALERT row, it is still found.
+      const sixDaysLater = await getLatestAlertHistories(
+        [alertId.toString()],
         new Date('2025-01-08T00:00:00Z'),
+      );
+      expect(sixDaysLater.get(alertId.toString())?.state).toBe(
+        AlertState.ALERT,
       );
     });
 
