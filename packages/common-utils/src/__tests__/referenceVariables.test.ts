@@ -278,6 +278,7 @@ describe('resolveFilterReferences', () => {
       name: 'Conditions',
       sourceType: 'sql',
       sources: ['$logs'],
+      isBroadcastEnabled: true,
       isVariableEnabled: true,
     };
     const { filter, unresolvedVariables } = resolveFilterReferences(
@@ -506,6 +507,7 @@ describe('validateDashboardVariableReferences', () => {
           name: 'Conditions',
           sourceType: 'promql',
           sources: ['$logs'],
+          isBroadcastEnabled: true,
           isVariableEnabled: true,
         },
       ],

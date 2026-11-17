@@ -1628,6 +1628,7 @@ describe('dashboard router', () => {
         name: 'Conditions',
         sourceType: 'sql' as const,
         sources: ['$logs'],
+        isBroadcastEnabled: true,
         isVariableEnabled: true,
       };
       const created = await agent

@@ -58,9 +58,9 @@ import { getConnectionsByTeam } from '@/controllers/connection';
 import { getSources } from '@/controllers/sources';
 import Dashboard, { DashboardDocument } from '@/models/dashboard';
 import {
+  getExternalCompatibleFilters,
   translateExternalChartToTileConfig,
   translateExternalFilterToFilter,
-  getExternalCompatibleFilters,
   translateFilterToExternalFilter,
 } from '@/utils/externalApi';
 import {
