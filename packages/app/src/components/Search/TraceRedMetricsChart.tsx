@@ -112,12 +112,11 @@ export function TraceRedMetricsChart({
   const durationMsExpression = getDurationMsExpression(source);
   /**
    * Heatmap tile query (duration distribution over time), matching the
-   * dashboard heatmap tile: no significant-fields comparison panel. The value,
-   * count and scale are fixed here rather than read from the delta view's
-   * settings drawer, so this stays a plain duration heatmap independent of
-   * that view's query state.
-   *
-   * @source packages/app/src/components/Search/DBSearchHeatmapChart.tsx (tile query)
+   * dashboard heatmap tile: no significant-fields comparison panel. It is the
+   * query the delta view's heatmap builds with its default settings, but the
+   * value, count and scale are fixed here rather than read from that view's
+   * settings drawer, so this stays a plain duration heatmap independent of the
+   * delta view's query state.
    */
   const heatmapQuery = useMemo(
     () =>

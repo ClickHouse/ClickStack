@@ -28,6 +28,8 @@ type DistributionOnlyProps = {
   /**
    * Namespaces the distribution heatmap's bounds and bucket queries (see
    * `useHeatmapData`), matching `DBTimeChart`'s prop of the same name.
+   * Distribution mode only, like the drag-select props above: the series,
+   * calculated and histogram modes ignore it and keep their unprefixed keys.
    */
   queryKeyPrefix?: string;
 };

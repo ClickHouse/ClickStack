@@ -170,6 +170,7 @@ import {
   type TraceChartMode,
   TraceRedMetricsChart,
 } from './components/Search/TraceRedMetricsChart';
+import { useTraceChartModeGuards } from './components/Search/useTraceChartModeGuards';
 import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from './components/SourceSchemaPreview';
@@ -2122,23 +2123,6 @@ function DBSearchPageContent() {
       ? searchedSource
       : null;
 
-  // Reset to the default RED view when the source actually changes, so
-  // returning to a trace source after viewing another one doesn't silently
-  // reopen in Heatmap. The ref starts undefined and is only compared once a
-  // real id has been seen, so the async source resolution on first load
-  // (undefined -> id) doesn't count as a change and a shared link that pins
-  // ?traceChartMode=heatmap survives.
-  const prevSourceIdRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (
-      prevSourceIdRef.current !== undefined &&
-      prevSourceIdRef.current !== searchedSource?.id
-    ) {
-      setTraceChartMode('red');
-    }
-    prevSourceIdRef.current = searchedSource?.id;
-  }, [searchedSource?.id, setTraceChartMode]);
-
   const histogramTimeChartConfig = useMemo(() => {
     if (chartConfig == null) {
       return undefined;
@@ -2226,24 +2210,24 @@ function DBSearchPageContent() {
     [chartConfig, searchedTimeRange, aliasWith],
   );
 
-  // Pin live tail off while the heatmap is the visible chart. A live tick
-  // moves the absolute time range, and the heatmap keys its uPlot instance on
-  // the chart config, so every refresh would tear the chart down and rebuild
-  // it with a recomputed y-axis instead of updating in place. Delta and
-  // pattern modes already pin it off, so the delta-view heatmap never hit
-  // this; results mode defaults to live, so the view has to opt out for
-  // itself. Only pinned while the heatmap is actually rendered, so a stale
+  // Live tail stays off while the heatmap is the visible chart, the way delta
+  // and pattern modes keep it off: the guard below turns it off, and the
+  // TimePicker's Live option and the Resume Live Tail button are hidden.
+  // Results mode defaults to live, so this view has to opt out for itself.
+  // Only while the heatmap is actually rendered, so a stale
   // ?traceChartMode=heatmap on a source that shows the histogram can't disable
   // live tail.
   const isHeatmapChartVisible =
     analysisMode === 'results' &&
     traceChartsSource != null &&
     traceChartMode === 'heatmap';
-  useEffect(() => {
-    if (isHeatmapChartVisible) {
-      setIsLive(false);
-    }
-  }, [isHeatmapChartVisible, setIsLive]);
+  useTraceChartModeGuards({
+    sourceId: searchedSource?.id,
+    setTraceChartMode,
+    isHeatmapChartVisible,
+    isLive,
+    setIsLive,
+  });
 
   const histogramGroupBySelect = (
     <SearchGroupBySelect
@@ -2814,7 +2798,7 @@ function DBSearchPageContent() {
               setInputValue={setDisplayedTimeInputValue}
               onSearch={onTimePickerSearch}
               onRelativeSearch={onTimePickerRelativeSearch}
-              showLive={analysisMode === 'results'}
+              showLive={analysisMode === 'results' && !isHeatmapChartVisible}
               isLiveMode={isLive}
               // Default to relative time mode if the user has made changes to interval and reloaded.
               defaultRelativeTimeMode={
@@ -3056,7 +3040,8 @@ function DBSearchPageContent() {
                                 />
                               )}
                               {shouldShowLiveModeHint &&
-                                denoiseResults != true && (
+                                denoiseResults != true &&
+                                !isHeatmapChartVisible && (
                                   <ResumeLiveTailButton
                                     handleResumeLiveTail={handleResumeLiveTail}
                                   />
