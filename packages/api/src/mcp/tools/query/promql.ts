@@ -17,7 +17,7 @@ import { endTimeSchema, startTimeSchema } from './schemas';
 const promqlSchema = z.object({
   sourceId: objectIdSchema.describe(
     'ID of a source whose kind is "promql". Call clickstack_list_sources to ' +
-      'find it, and clickstack_describe_source for its metric and label names.',
+      "find it, and clickstack_describe_source for its metric names (with metricName, a metric's label names).",
   ),
   expression: z
     .string()
@@ -63,7 +63,7 @@ export function registerPromql({ context, registerTool }: ToolRegistrar) {
         'about Prometheus metrics; the builder tools (clickstack_timeseries, ' +
         'clickstack_table, clickstack_search) do not read PromQL sources.\n\n' +
         'Discovery: clickstack_list_sources lists sources with kind "promql"; ' +
-        'clickstack_describe_source lists their metric names and label names.\n\n' +
+        "clickstack_describe_source lists their metric names, and with metricName that metric's label names.\n\n" +
         'A range query (the default) returns rows { __hdx_time_bucket, ' +
         'series_name, value } plus seriesLabels, which maps each series_name to ' +
         'its labels once. An instant query returns one row per series with a ' +
