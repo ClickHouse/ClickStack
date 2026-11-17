@@ -31,11 +31,20 @@ export function useHeatmapData({
   config,
   scaleType,
   enabled,
+  queryKeyPrefix,
 }: {
   config: HeatmapChartConfig;
   scaleType: HeatmapScaleType;
   enabled: boolean;
+  /**
+   * Prepended to both query keys, matching `DBTimeChart`'s prop of the same
+   * name, so a caller that gates on `useIsFetching` for its sibling charts
+   * (the search page pausing live tail) also waits on these queries. Keys are
+   * unchanged when omitted.
+   */
+  queryKeyPrefix?: string;
 }): HeatmapData {
+  const keyPrefix = queryKeyPrefix != null ? [queryKeyPrefix] : [];
   const { granularity, generatedTsBuckets } = useHeatmapTimeBuckets({
     dateRange: config.dateRange,
     granularity: config.granularity,
@@ -56,7 +65,7 @@ export function useHeatmapData({
     isPlaceholderData: isMinMaxPlaceholderData,
     error: minMaxError,
   } = useQueriedChartConfig(minMaxConfig, {
-    queryKey: ['heatmap', minMaxConfig],
+    queryKey: [...keyPrefix, 'heatmap', minMaxConfig],
     enabled,
     placeholderData: prev => prev,
   });
@@ -81,7 +90,7 @@ export function useHeatmapData({
   const { data, isLoading, isPlaceholderData, error } = useQueriedChartConfig(
     bucketConfig,
     {
-      queryKey: ['heatmap_bucket', bucketConfig],
+      queryKey: [...keyPrefix, 'heatmap_bucket', bucketConfig],
       // Wait for fresh bounds, so a refresh doesn't also query the new range
       // bucketed with the previous range's min/max.
       enabled: enabled && canQueryBuckets && !isMinMaxPlaceholderData,

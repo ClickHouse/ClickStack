@@ -8,7 +8,12 @@ import { Flex, SegmentedControl } from '@mantine/core';
 
 import { IsolatedChartSyncProvider } from '@/chartSync';
 import { ChartCard } from '@/components/charts/ChartCard';
+import DBHeatmapChart, {
+  HEATMAP_DURATION_NUMBER_FORMAT,
+  toHeatmapQuery,
+} from '@/components/DBHeatmapChart';
 import { DBTimeChart, type SeriesGroupFilter } from '@/components/DBTimeChart';
+import { getDurationMsExpression } from '@/source';
 
 import {
   durationConfig,
@@ -17,6 +22,8 @@ import {
   ErrorsMode,
   redBaseConfig,
 } from './traceRedMetrics';
+
+export type TraceChartMode = 'red' | 'heatmap';
 
 // Each RED tile is a ChartCard flex child that fills its column; ChartCard
 // supplies the dashboard-tile chrome (border, background, full-bleed header
@@ -29,18 +36,27 @@ const RED_TILE_STYLE = {
   height: '100%',
 } satisfies CSSProperties;
 
+const HEATMAP_TILE_STYLE = {
+  height: '100%',
+  minHeight: 0,
+} satisfies CSSProperties;
+
 /**
  * RED metrics (Throughput, Errors, Duration) for the trace search results view,
  * replacing the single count histogram. The three charts render side by side as
  * sibling DBTimeCharts under a shared sync scope, so hovering one shows a
- * cross-chart cursor on all three at the same timestamp.
+ * cross-chart cursor on all three at the same timestamp. The RED/Heatmap switch
+ * lives in the search stats row (passed in as `mode`); the Heatmap view is the
+ * same bare heatmap tile the dashboard renders.
  *
  * The per-chart aggregations are built by ./traceRedMetrics from the same base
  * config the histogram uses, so all three honor the active WHERE filter and
  * selected time range.
  */
 export function TraceRedMetricsChart({
+  mode,
   histogramTimeChartConfig,
+  heatmapChartConfig,
   source,
   isReady,
   queryKeyPrefix,
@@ -48,8 +64,12 @@ export function TraceRedMetricsChart({
   onTimeRangeSelect,
   onFocusSeries,
 }: {
+  /** RED vs heatmap; owned by the search stats row so the switch sits inline. */
+  mode: TraceChartMode;
   /** The count-histogram config; RED charts spread this and swap only select. */
   histogramTimeChartConfig: BuilderChartConfigWithDateRange;
+  /** Base config for the heatmap tile, mirroring the delta-mode callsite. */
+  heatmapChartConfig: BuilderChartConfigWithDateRange;
   source: TTraceSource;
   isReady: boolean;
   /** Query-key prefix for the auxiliary Errors/Duration tiles, kept separate so
@@ -86,6 +106,35 @@ export function TraceRedMetricsChart({
     [base, durationExpression],
   );
 
+  // The heatmap plots getDurationMsExpression (the source's duration already
+  // scaled to ms by its durationPrecision), which is the value
+  // HEATMAP_DURATION_NUMBER_FORMAT is paired with.
+  const durationMsExpression = getDurationMsExpression(source);
+  /**
+   * Heatmap tile query (duration distribution over time), matching the
+   * dashboard heatmap tile: no significant-fields comparison panel. The value,
+   * count and scale are fixed here rather than read from the delta view's
+   * settings drawer, so this stays a plain duration heatmap independent of
+   * that view's query state.
+   *
+   * @source packages/app/src/components/Search/DBSearchHeatmapChart.tsx (tile query)
+   */
+  const heatmapQuery = useMemo(
+    () =>
+      toHeatmapQuery({
+        ...heatmapChartConfig,
+        select: [
+          {
+            valueExpression: durationMsExpression,
+            countExpression: 'count()',
+            heatmapScaleType: 'log',
+          },
+        ],
+        numberFormat: HEATMAP_DURATION_NUMBER_FORMAT,
+      }),
+    [heatmapChartConfig, durationMsExpression],
+  );
+
   const errorsModeControl = (
     <SegmentedControl
       key="errors-mode"
@@ -117,6 +166,20 @@ export function TraceRedMetricsChart({
   // none" it collapses to a single count() series, so hide the legend instead
   // of surfacing the raw aggregate expression as a label.
   const throughputGrouped = isUsingGroupBy(histogramTimeChartConfig);
+
+  if (mode === 'heatmap') {
+    return (
+      <ChartCard style={HEATMAP_TILE_STYLE}>
+        <DBHeatmapChart
+          title="Duration"
+          query={heatmapQuery}
+          queryKeyPrefix={queryKeyPrefix}
+          enabled={isReady}
+          showLegend
+        />
+      </ChartCard>
+    );
+  }
 
   return (
     <IsolatedChartSyncProvider>
