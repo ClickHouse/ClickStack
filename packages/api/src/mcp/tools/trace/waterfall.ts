@@ -318,7 +318,7 @@ export function registerTraceWaterfall({
         "instead of writing TraceId self-JOINs in raw SQL; it uses the source's " +
         'configured trace, span, and parent-span ID expressions.\n\n' +
         'NOT FOR AGGREGATE QUESTIONS. "Where does the time go across many slow traces ' +
-        'of operation X" is clickstack_trace_top_time_consuming_operations, called ' +
+        'of operation X" is clickstack_trace_top_time_consuming_ops, called ' +
         'once per (service, operation) with minParentDurationMs. Use this tool for a ' +
         'single concrete example, typically after that breakdown has pointed at a ' +
         'suspicious operation.\n\n' +
