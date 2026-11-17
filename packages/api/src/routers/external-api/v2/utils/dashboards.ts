@@ -17,6 +17,7 @@ import {
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import {
   isAdhocFilter,
+  isDataSourceFilter,
   isPrometheusLabelFilter,
   isQueryExpressionFilter,
 } from '@hyperdx/common-utils/dist/filters';
@@ -784,7 +785,9 @@ function convertTileToExternalChart(
 export function isPromqlFilter(filter: DashboardFilter): boolean {
   return (
     isPrometheusLabelFilter(filter) ||
-    (isAdhocFilter(filter) && filter.sourceType === 'promql')
+    (isAdhocFilter(filter) && filter.sourceType === 'promql') ||
+    (isDataSourceFilter(filter) &&
+      filter.allowedSourceKinds.includes(SourceKind.Promql))
   );
 }
 

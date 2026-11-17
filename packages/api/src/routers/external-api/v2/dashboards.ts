@@ -2471,6 +2471,30 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             Blocks every tile on the dashboard until a value is selected. False
  *             (the default) blocks only the tiles that reference the variable.
  *           example: true
+ *         minSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable always requires a selection.
+ *           example: 1
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable is always single-select.
+ *           example: 1
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true if provided, and is true when omitted.
+ *           example: true
  *         allowedSourceKinds:
  *           type: array
  *           minItems: 1
@@ -2522,6 +2546,30 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           description: |
  *             Blocks every tile on the dashboard until a value is selected. False
  *             (the default) blocks only the tiles that reference the variable.
+ *           example: true
+ *         minSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable always requires a selection.
+ *           example: 1
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable is always single-select.
+ *           example: 1
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true if provided, and is true when omitted.
  *           example: true
  *
  *     QueryExpressionFilterInput:
