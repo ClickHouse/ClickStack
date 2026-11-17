@@ -24,6 +24,7 @@ import {
 } from '@/core/metadata';
 import {
   parseTokenizerFromTextIndex,
+  parseToNumber,
   splitAndTrimWithBracket,
 } from '@/core/utils';
 import { UseTextIndex } from '@/types';
@@ -130,9 +131,9 @@ function normalizeChExpression(expr: string): string {
 export const IMPLICIT_FIELD = '<implicit>';
 const RANGE_UNBOUNDED = '*';
 
-// Decimal and exponent notation only, so hex such as 0x10 stays a string.
+// parseToNumber also accepts hex such as 0x10; keep those as strings.
 const isNumericLiteral = (term: string) =>
-  /^[-+.\deE]+$/.test(term) && Number.isFinite(Number(term));
+  /^[-+.\deE]+$/.test(term) && parseToNumber(term) !== undefined;
 
 /**
  * Map attributes (and other String columns) hold numbers as text. Compared as
