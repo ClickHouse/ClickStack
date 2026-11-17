@@ -4189,6 +4189,26 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       ]);
     });
 
+    it('saves a SQL query filter that runs on a connection variable', async () => {
+      const sqlFilter = {
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        variableName: 'env',
+        connectionId: '$conn',
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+      };
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [],
+        filters: [filters[0], sqlFilter],
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(getFirstText(result)).filters[1]).toMatchObject(
+        sqlFilter,
+      );
+    });
+
     it('rejects a tile referencing an undeclared variable', async () => {
       const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
         name: 'Variable dashboard',

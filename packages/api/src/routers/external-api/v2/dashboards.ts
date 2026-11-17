@@ -2518,8 +2518,8 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *       description: |
  *         A variable whose single, required value is a connection. Raw SQL tiles
  *         reference it as `$variableName` in their connectionId, and data source
- *         variables in theirs. Tiles that use it do not load until a connection is
- *         selected, and cannot have alerts.
+ *         variables and SQL query filters in theirs. Tiles that use it do not load
+ *         until a connection is selected, and cannot have alerts.
  *       required:
  *         - type
  *         - name
@@ -2905,7 +2905,9 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "Environment"
  *         connectionId:
  *           type: string
- *           description: ID of the ClickHouse connection the query runs on.
+ *           description: |
+ *             ClickHouse connection the query runs on: a connection ID, or
+ *             `$name` of a CONNECTION filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a567890"
  *         sqlTemplate:
  *           type: string

@@ -4151,7 +4151,7 @@
       },
       "ConnectionFilterInput": {
         "type": "object",
-        "description": "A variable whose single, required value is a connection. Raw SQL tiles\nreference it as `$variableName` in their connectionId, and data source\nvariables in theirs. Tiles that use it do not load until a connection is\nselected, and cannot have alerts.\n",
+        "description": "A variable whose single, required value is a connection. Raw SQL tiles\nreference it as `$variableName` in their connectionId, and data source\nvariables and SQL query filters in theirs. Tiles that use it do not load\nuntil a connection is selected, and cannot have alerts.\n",
         "required": [
           "type",
           "name"
@@ -4548,7 +4548,7 @@
           },
           "connectionId": {
             "type": "string",
-            "description": "ID of the ClickHouse connection the query runs on.",
+            "description": "ClickHouse connection the query runs on: a connection ID, or\n`$name` of a CONNECTION filter on the dashboard.\n",
             "example": "65f5e4a3b9e77c001a567890"
           },
           "sqlTemplate": {

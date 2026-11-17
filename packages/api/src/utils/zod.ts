@@ -211,7 +211,7 @@ const externalPromqlLabelFilterShape = PromqlLabelDashboardFilterSchema.omit({
 const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
   connection: true,
 }).extend({
-  connectionId: objectIdSchema,
+  connectionId: objectIdOrVariableReferenceSchema,
   isBroadcastEnabled: z.literal(false).default(false),
   isVariableEnabled: z.literal(true).default(true),
 });

@@ -2145,6 +2145,42 @@ describe('dashboard router', () => {
 
       expect(updated.body.filters).toEqual([moved]);
     });
+
+    const connectionFilter = {
+      id: new Types.ObjectId().toString(),
+      type: 'CONNECTION' as const,
+      name: 'Connection',
+      variableName: 'conn',
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    };
+
+    it('accepts a connection variable as the connection', async () => {
+      const filter = makeSqlFilter({ connection: '$conn' });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [connectionFilter, filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([connectionFilter, filter]);
+    });
+
+    it('rejects a reference that names no connection variable', async () => {
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ connection: '$conn' })],
+        })
+        .expect(400);
+
+      expect(response.body.message).toMatch(
+        /does not name a connection variable/,
+      );
+    });
   });
 
   describe('ad hoc filters', () => {

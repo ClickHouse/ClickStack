@@ -90,7 +90,8 @@ async function validateFilterSources(
 /**
  * Rejects SQL_QUERY filters whose connection doesn't belong to the team. As in
  * `validateFilterSources`, a connection the stored filter with the same ID
- * already used is skipped. Returns an error message, or null.
+ * already used is skipped, and so is a variable reference. Returns an error
+ * message, or null.
  */
 async function validateFilterConnections(
   teamId: ObjectId,
@@ -106,7 +107,10 @@ async function validateFilterConnections(
     filters
       .filter(isSqlQueryFilter)
       .filter(
-        filter => existingConnectionById.get(filter.id) !== filter.connection,
+        filter =>
+          // Variable references are checked by validateDashboardVariableReferences
+          parseVariableReference(filter.connection) == null &&
+          existingConnectionById.get(filter.id) !== filter.connection,
       )
       .map(filter => filter.connection),
   );

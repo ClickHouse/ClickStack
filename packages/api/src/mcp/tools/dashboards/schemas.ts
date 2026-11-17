@@ -1794,8 +1794,9 @@ const mcpSqlQueryFilterSchema = z
       .describe(
         'Filter type discriminator for a filter whose dropdown values come from a ClickHouse SQL query.',
       ),
-    connectionId: objectIdSchema.describe(
-      'ClickHouse connection the query runs on. Get IDs from clickstack_list_sources.',
+    connectionId: objectIdOrVariableReferenceSchema.describe(
+      'ClickHouse connection the query runs on: a connection ID from ' +
+        'clickstack_list_sources, or `$name` of a CONNECTION filter on this dashboard.',
     ),
     sqlTemplate: SqlQueryDashboardFilterSchema.shape.sqlTemplate.describe(
       'ClickHouse SELECT whose FIRST column becomes the dropdown values (cast to ' +
@@ -1968,7 +1969,8 @@ const mcpConnectionFilterSchema = z
   })
   .describe(
     'A variable whose single, required value is a connection. Raw SQL tiles reference ' +
-      'it as `$variableName` in connectionId, and DATA_SOURCE filters in connectionId.',
+      'it as `$variableName` in connectionId, and DATA_SOURCE and SQL_QUERY filters in ' +
+      'connectionId.',
   );
 
 const mcpDashboardFilterSchema = z

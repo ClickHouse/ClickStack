@@ -225,9 +225,9 @@ export function getFilterReferenceFields(
         acceptedKinds: getAdhocFilterSourceKinds(filter.sourceType),
       }));
     case 'DATA_SOURCE':
+    case 'SQL_QUERY':
       return [{ key: 'connection', target: 'connection' }];
     case 'STATIC_LIST':
-    case 'SQL_QUERY':
     case 'CONNECTION':
       return [];
     default:

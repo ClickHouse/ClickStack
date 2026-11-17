@@ -6329,6 +6329,35 @@ describe('External API v2 Dashboards - new format', () => {
         expect(response.body.message).toContain(connectionId);
       });
 
+      it('accepts a connection variable as the connection', async () => {
+        const response = await sendFilters([
+          {
+            id: new ObjectId().toString(),
+            type: 'CONNECTION',
+            name: 'Connection',
+            variableName: 'conn',
+          },
+          sqlFilterInput({ connectionId: '$conn' }),
+        ]);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.filters[1]).toMatchObject({
+          type: 'SQL_QUERY',
+          connectionId: '$conn',
+        });
+      });
+
+      it('rejects a reference that names no connection variable', async () => {
+        const response = await sendFilters([
+          sqlFilterInput({ connectionId: '$conn' }),
+        ]);
+
+        expect(response.status).toBe(400);
+        expect(response.body.message).toMatch(
+          /does not name a connection variable/,
+        );
+      });
+
       it.each([
         ['broadcast enabled', { isBroadcastEnabled: true }],
         ['not variable-enabled', { isVariableEnabled: false }],

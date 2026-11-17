@@ -38,6 +38,7 @@ import {
   RawSqlSavedChartConfig,
   SavedChartConfig,
   SourceKind,
+  SqlQueryDashboardFilter,
 } from '@/types';
 
 const dataSourceFilter = (
@@ -75,6 +76,20 @@ const connectionFilter = (
   variableName: 'conn',
   minSelections: 1,
   maxSelections: 1,
+  isBroadcastEnabled: false,
+  isVariableEnabled: true,
+  ...overrides,
+});
+
+const sqlQueryFilter = (
+  overrides: Partial<SqlQueryDashboardFilter> = {},
+): SqlQueryDashboardFilter => ({
+  id: 'sql',
+  type: 'SQL_QUERY',
+  name: 'Environment',
+  variableName: 'env',
+  connection: '$conn',
+  sqlTemplate: 'SELECT DISTINCT env FROM envs',
   isBroadcastEnabled: false,
   isVariableEnabled: true,
   ...overrides,
@@ -458,6 +473,17 @@ describe('validateDashboardVariableReferences', () => {
     ]);
   });
 
+  it("checks a SQL query filter's connection reference", () => {
+    expect(collectIssues([], [connectionFilter(), sqlQueryFilter()])).toEqual(
+      [],
+    );
+    expect(
+      collectIssues([], [sqlQueryFilter({ connection: '$nope' })]).map(
+        issue => issue.path,
+      ),
+    ).toEqual([['filters', 0, 'connection']]);
+  });
+
   it('reports each issue as path: message', () => {
     expect(
       getVariableReferenceError(
@@ -654,6 +680,7 @@ describe('convertToDashboardTemplate (connections)', () => {
         filters: [
           connectionFilter(),
           dataSourceFilter({ connection: 'conn-1' }),
+          sqlQueryFilter(),
         ],
         savedFilterValues: [{ type: 'variable', name: 'conn', values: ['c'] }],
       },
@@ -662,6 +689,7 @@ describe('convertToDashboardTemplate (connections)', () => {
     );
     expect(template.tiles[0].config).toMatchObject({ connection: '$conn' });
     expect(template.filters?.[1]).toMatchObject({ connection: 'Primary' });
+    expect(template.filters?.[2]).toMatchObject({ connection: '$conn' });
     expect(template.savedFilterValues).toBeUndefined();
   });
 });
@@ -693,6 +721,19 @@ describe('convertToDashboardTemplate', () => {
 });
 
 describe('resolveFilterReferences (connections)', () => {
+  it("resolves a SQL query filter's connection reference", () => {
+    expect(
+      resolveFilterReferences(sqlQueryFilter(), new Map([['conn', 'conn-1']])),
+    ).toEqual({
+      filter: sqlQueryFilter({ connection: 'conn-1' }),
+      unresolvedVariables: [],
+      incompatibleVariables: [],
+    });
+    expect(
+      resolveFilterReferences(sqlQueryFilter(), new Map()).unresolvedVariables,
+    ).toEqual(['conn']);
+  });
+
   it("resolves a data source variable's connection reference", () => {
     expect(
       resolveFilterReferences(
