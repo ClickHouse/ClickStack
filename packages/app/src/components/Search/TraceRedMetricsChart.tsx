@@ -1,4 +1,5 @@
 import { type CSSProperties, useMemo, useState } from 'react';
+import { isUsingGroupBy } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
   BuilderChartConfigWithDateRange,
   TTraceSource,
@@ -115,12 +116,7 @@ export function TraceRedMetricsChart({
   // where the legend names each status and is worth showing. With "group by
   // none" it collapses to a single count() series, so hide the legend instead
   // of surfacing the raw aggregate expression as a label.
-  const throughputGrouped =
-    typeof histogramTimeChartConfig.groupBy === 'string'
-      ? histogramTimeChartConfig.groupBy.trim().length > 0
-      : Array.isArray(histogramTimeChartConfig.groupBy)
-        ? histogramTimeChartConfig.groupBy.length > 0
-        : false;
+  const throughputGrouped = isUsingGroupBy(histogramTimeChartConfig);
 
   return (
     <IsolatedChartSyncProvider>
