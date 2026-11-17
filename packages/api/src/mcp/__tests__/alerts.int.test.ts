@@ -400,6 +400,50 @@ describe('MCP Alert Tools', () => {
         expect(await Alert.countDocuments({ team: team._id })).toBe(0);
       });
 
+      it.each([
+        ['empty', ''],
+        ['longer than 4096 characters', 'a'.repeat(4097)],
+      ])('should reject a note that is %s', async (_description, note) => {
+        const savedSearch = await createTestSavedSearch();
+        const webhook = await createTestWebhook();
+
+        const result = await callTool(client, 'clickstack_save_alert', {
+          source: 'saved_search',
+          savedSearchId: savedSearch._id.toString(),
+          threshold: 50,
+          thresholdType: 'above',
+          interval: '5m',
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+          note,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(await Alert.countDocuments({ team: team._id })).toBe(0);
+      });
+
+      it('should persist an omitted note and consecutive-window count as null', async () => {
+        const savedSearch = await createTestSavedSearch();
+        const webhook = await createTestWebhook();
+
+        const result = await callTool(client, 'clickstack_save_alert', {
+          source: 'saved_search',
+          savedSearchId: savedSearch._id.toString(),
+          threshold: 50,
+          thresholdType: 'above',
+          interval: '5m',
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+        });
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output.note).toBeNull();
+        expect(output.numConsecutiveWindows).toBeNull();
+
+        const persisted = await Alert.findById(output.id);
+        expect(persisted?.note).toBeNull();
+        expect(persisted?.numConsecutiveWindows).toBeNull();
+      });
+
       it('should create an alert with an explicit displayName and tags', async () => {
         const savedSearch = await createTestSavedSearch();
         const webhook = await createTestWebhook();
