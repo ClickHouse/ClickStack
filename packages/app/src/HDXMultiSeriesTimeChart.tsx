@@ -1134,6 +1134,38 @@ export function scanYAxisValueRange(
   return { min, max };
 }
 
+// The stacked counterpart of scanYAxisValueRange: a stack's drawn height at
+// each timestamp is the sum of its series. Positive values sum up from zero
+// and negative ones down from it, so min stays 0 unless a value is negative.
+export function scanStackedYAxisValueRange(
+  graphResults: Record<string, unknown>[],
+  lineData: LineData[],
+): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  graphResults.forEach(dataPoint => {
+    let positiveSum = 0;
+    let negativeSum = 0;
+    let hasValue = false;
+    lineData.forEach(ld => {
+      const value = dataPoint[ld.dataKey];
+      if (typeof value === 'number' && !isNaN(value)) {
+        hasValue = true;
+        if (value < 0) {
+          negativeSum += value;
+        } else {
+          positiveSum += value;
+        }
+      }
+    });
+    if (hasValue) {
+      min = Math.min(min, negativeSum);
+      max = Math.max(max, positiveSum);
+    }
+  });
+  return { min, max };
+}
+
 export interface YAxisBounds {
   domain: AxisDomain;
   ticks: number[] | undefined;
@@ -1168,8 +1200,9 @@ export function getLineCurveType(
   ];
 }
 
-// A stacked bar's rendered height sums its series at each timestamp - leave
-// that entirely to Recharts, regardless of selection/fit-to-data state.
+// A stack's drawn height at each timestamp sums its series, and it stays
+// pinned at zero whatever the selection or fit-to-data state: a selection only
+// narrows which series are summed, and fitting applies to line charts only.
 export function computeYAxisBounds(
   graphResults: any[],
   visibleLineData: LineData[],
@@ -1179,22 +1212,23 @@ export function computeYAxisBounds(
   referenceLineValues: number[],
   axisNumberFormat?: NumberFormat,
 ): YAxisBounds {
-  if (
+  const isStacked =
     displayType === DisplayType.StackedBar ||
-    displayType === DisplayType.StackedLine
-  ) {
-    return DEFAULT_Y_AXIS_BOUNDS;
-  }
+    displayType === DisplayType.StackedLine;
   const shouldFitYAxis = fitYAxisToData;
 
-  if (!hasSelection && !shouldFitYAxis) {
+  if (isStacked || (!hasSelection && !shouldFitYAxis)) {
     // A fully numeric domain skips Recharts' own nice rounding, and a
     // reference line can extend it further - defer to Recharts entirely.
     if (referenceLineValues.length > 0) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }
-    const { min, max } = scanYAxisValueRange(graphResults, visibleLineData);
-    if (max === -Infinity) {
+    const { min, max } = isStacked
+      ? scanStackedYAxisValueRange(graphResults, visibleLineData)
+      : scanYAxisValueRange(graphResults, visibleLineData);
+    // Where negative values land in a stack depends on Recharts' stackOffset,
+    // so a stack holding any keeps Recharts' own stacked domain.
+    if (max === -Infinity || (isStacked && min < 0)) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }
     // Recharts widens an explicit domain to fit out-of-range data, so

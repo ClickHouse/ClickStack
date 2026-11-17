@@ -24,6 +24,7 @@ import {
   getYAxisTicks,
   HARD_LINES_LIMIT,
   sameActiveClickSeries,
+  scanStackedYAxisValueRange,
   scanYAxisValueRange,
 } from '@/HDXMultiSeriesTimeChart';
 import { COLORS } from '@/utils';
@@ -421,6 +422,54 @@ describe('scanYAxisValueRange', () => {
   });
 });
 
+describe('scanStackedYAxisValueRange', () => {
+  const series = (dataKey: string): LineData => ({
+    dataKey,
+    currentPeriodKey: dataKey,
+    previousPeriodKey: `${dataKey}.prev`,
+    displayName: dataKey,
+    valueColumnName: dataKey,
+    groupValues: [],
+    color: '#a',
+  });
+
+  it('sums the series it is given at each timestamp', () => {
+    // Only the drawn series stack, so `c` (not passed in) adds nothing.
+    const lineData = [series('a'), series('b')];
+    const graphResults = [
+      { a: 10, b: 40, c: 1000 },
+      { a: 30, b: 5 },
+    ];
+    expect(scanStackedYAxisValueRange(graphResults, lineData)).toEqual({
+      min: 0,
+      max: 50,
+    });
+  });
+
+  it('skips missing and non-numeric values, like scanYAxisValueRange', () => {
+    const lineData = [series('a'), series('b')];
+    const graphResults = [{ a: NaN, b: 7 }, { a: null, b: 'x' }, {}];
+    expect(scanStackedYAxisValueRange(graphResults, lineData)).toEqual({
+      min: 0,
+      max: 7,
+    });
+  });
+
+  it('returns an empty range when there is no numeric data', () => {
+    expect(scanStackedYAxisValueRange([{ a: null }], [series('a')])).toEqual({
+      min: Infinity,
+      max: -Infinity,
+    });
+  });
+
+  it('sums negative values apart from positive ones', () => {
+    const lineData = [series('a'), series('b'), series('c')];
+    expect(
+      scanStackedYAxisValueRange([{ a: 5, b: -3, c: -1 }], lineData),
+    ).toEqual({ min: -4, max: 5 });
+  });
+});
+
 describe('computeYAxisBounds', () => {
   const series = (dataKey: string): LineData => ({
     dataKey,
@@ -536,40 +585,103 @@ describe('computeYAxisBounds', () => {
     expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
-  it('leaves a stacked bar`s max to Recharts, selection or not', () => {
-    // Regression: 60 and 40 individually reach a stack height of 100, not
-    // 63 - the guard must apply regardless of hasSelection.
-    const lineData = [series('a'), series('b')];
-    const graphResults = [{ a: 60, b: 40 }];
-    for (const hasSelection of [false, true]) {
-      expect(
-        computeYAxisBounds(
-          graphResults,
-          lineData,
-          hasSelection,
-          false,
-          DisplayType.StackedBar,
-          [],
-        ),
-      ).toEqual({ domain: [0, 'auto'], ticks: undefined });
-    }
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'sizes a %s axis to the stack total, whatever the selection or fit',
+    displayType => {
+      // Regression: 60 and 40 individually reach a stack height of 100, not
+      // 63. A selection only narrows which series are summed, and fitting
+      // never lifts a stack off zero.
+      const lineData = [series('a'), series('b')];
+      const graphResults = [{ a: 60, b: 40 }];
+      for (const [hasSelection, fitYAxisToData] of [
+        [false, false],
+        [true, false],
+        [false, true],
+        [true, true],
+      ]) {
+        expect(
+          computeYAxisBounds(
+            graphResults,
+            lineData,
+            hasSelection,
+            fitYAxisToData,
+            displayType,
+            [],
+          ),
+        ).toEqual({
+          domain: [0, 105],
+          ticks: [0, 25, 50, 75, 100],
+          tickFormatter: expect.any(Function),
+        });
+      }
+    },
+  );
+
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'keeps %s tick labels distinct where Recharts` own ticks collide',
+    displayType => {
+      // Regression: Recharts ticked a 1870-high stack at 0/500/1000/1500/2000,
+      // which a 0-decimal number format labels "0, 500, 1k, 2k, 2k".
+      const bounds = computeYAxisBounds(
+        [{ a: 1000, b: 870 }],
+        [series('a'), series('b')],
+        false,
+        false,
+        displayType,
+        [],
+        { output: 'number' },
+      );
+      expect(bounds.domain).toEqual([0, 2000]);
+      expect(bounds.ticks).toEqual([0, 500, 1000, 1500, 2000]);
+      expect(bounds.ticks!.map(t => bounds.tickFormatter!(t))).toEqual([
+        '0',
+        '500',
+        '1k',
+        '1.5k',
+        '2k',
+      ]);
+    },
+  );
+
+  it('leaves a stack holding a negative value to Recharts', () => {
+    // Where a negative value lands depends on Recharts' stackOffset: with
+    // the default, 5 and -3 reach 5 before the stack settles at 2.
+    const bounds = computeYAxisBounds(
+      [
+        { a: 5, b: -3 },
+        { a: 2, b: 1 },
+      ],
+      [series('a'), series('b')],
+      false,
+      false,
+      DisplayType.StackedBar,
+      [],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
-  it('leaves a stacked line`s max to Recharts, selection or not', () => {
-    const lineData = [series('a'), series('b')];
-    const graphResults = [{ a: 60, b: 40 }];
-    for (const hasSelection of [false, true]) {
-      expect(
-        computeYAxisBounds(
-          graphResults,
-          lineData,
-          hasSelection,
-          false,
-          DisplayType.StackedLine,
-          [],
-        ),
-      ).toEqual({ domain: [0, 'auto'], ticks: undefined });
-    }
+  it('defers a stack to Recharts when a reference line is present', () => {
+    const bounds = computeYAxisBounds(
+      [{ a: 60, b: 40 }],
+      [series('a'), series('b')],
+      false,
+      false,
+      DisplayType.StackedLine,
+      [150],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+  });
+
+  it('falls back to auto for an all-zero stack', () => {
+    const bounds = computeYAxisBounds(
+      [{ a: 0, b: 0 }],
+      [series('a'), series('b')],
+      true,
+      false,
+      DisplayType.StackedBar,
+      [],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
   it('falls back to auto when there is no numeric data', () => {
