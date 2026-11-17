@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import {
   ALERT_COUNT_DEFAULT_SELECT,
   buildSearchChartConfig,
+  getSourceImplicitColumnExpression,
 } from '@hyperdx/common-utils/dist/core/searchChartConfig';
 import { aliasMapToWithClauses } from '@hyperdx/common-utils/dist/core/utils';
 import {
@@ -10,8 +11,7 @@ import {
   ChartConfigWithDateRange,
   DisplayType,
   Filter,
-  isLogSource,
-  isTraceSource,
+  isSearchableSource,
   SearchCondition,
   SearchConditionLanguage,
   TSource,
@@ -61,12 +61,13 @@ export const AlertPreviewChart = ({
   const resolvedSelect =
     (select && select.trim().length > 0
       ? select
-      : isLogSource(source) || isTraceSource(source)
+      : isSearchableSource(source)
         ? source.defaultTableSelectExpression
         : undefined) ?? '';
 
   const { data: aliasMap } = useAliasMapFromChartConfig({
     select: resolvedSelect,
+    implicitColumnExpression: getSourceImplicitColumnExpression(source),
     where: where || '',
     connection: source.connection,
     from: source.from,

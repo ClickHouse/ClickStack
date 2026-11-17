@@ -37,6 +37,7 @@ import {
   type MetricNameSample,
   sampleMetricNamesWithLookback,
 } from './metricNames';
+import { getNetflowKeyColumns } from './netflowKeyColumns';
 import { extractSourceConfig } from './schemas';
 
 // How far back to look when querying the rollup tables for value samples.
@@ -157,6 +158,8 @@ async function describeSourceSchema(
       eventName: source.eventNameExpression,
       traceId: source.traceIdExpression,
     };
+  } else if (source.kind === SourceKind.Netflow) {
+    meta.keyColumns = getNetflowKeyColumns(source);
   } else if (source.kind === SourceKind.Metric) {
     // Filter out implementation-detail keys (e.g. a stray Mongoose `_id`
     // on the metricTables subdoc) so the agent only sees valid metric

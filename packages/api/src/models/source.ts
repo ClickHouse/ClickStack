@@ -3,6 +3,7 @@ import {
   LogSourceSchema,
   MetricsDataType,
   MetricSourceSchema,
+  NetflowSourceSchema,
   PROMQL_SOURCE_BACKENDS,
   PromqlSourceSchema,
   QuerySettings,
@@ -23,6 +24,10 @@ import { objectIdSchema } from '@/utils/zod';
 // runtime value is intentionally never parsed, so no-unused-vars is a false positive here.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const ISourceSchema = z.discriminatedUnion('kind', [
+  NetflowSourceSchema.omit({ connection: true }).extend({
+    team: objectIdSchema,
+    connection: objectIdSchema.or(z.string()),
+  }),
   LogSourceSchema.omit({ connection: true }).extend({
     team: objectIdSchema,
     connection: objectIdSchema.or(z.string()),
@@ -311,5 +316,25 @@ export const PromqlSource = Source.discriminator<IPromqlSource>(
   new Schema<Extract<ISource, { kind: SourceKind.Promql }>>({
     minAutoGranularity: minAutoGranularityField,
     promqlBackend: { type: String, enum: PROMQL_SOURCE_BACKENDS },
+  }),
+);
+
+type INetflowSource = Extract<ISource, { kind: SourceKind.Netflow }>;
+export const NetflowSource = Source.discriminator<INetflowSource>(
+  SourceKind.Netflow,
+  new Schema<INetflowSource>({
+    defaultTableSelectExpression: String,
+    implicitColumnExpression: String,
+    bytesExpression: String,
+    packetsExpression: String,
+    samplingRateExpression: String,
+    srcAddrExpression: String,
+    dstAddrExpression: String,
+    srcPortExpression: String,
+    dstPortExpression: String,
+    protocolExpression: String,
+    exporterExpression: String,
+    inIfExpression: String,
+    outIfExpression: String,
   }),
 );

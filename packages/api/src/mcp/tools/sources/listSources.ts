@@ -25,6 +25,7 @@ import logger from '@/utils/logger';
 
 import { QUERYABLE_METRIC_KINDS, sanitizeMetricTables } from './metricKinds';
 import { sampleMetricNamesWithLookback } from './metricNames';
+import { getNetflowKeyColumns } from './netflowKeyColumns';
 
 // Wall-clock budget for the best-effort metric-name preview sampling.
 // list_sources is usually the agent's first call — it must stay snappy,
@@ -307,6 +308,8 @@ export function registerListSources({
             eventName: s.eventNameExpression,
             traceId: s.traceIdExpression,
           };
+        } else if (s.kind === SourceKind.Netflow) {
+          meta.keyColumns = getNetflowKeyColumns(s);
         } else if (s.kind === SourceKind.Metric) {
           // Filter out implementation-detail keys (e.g. a stray Mongoose
           // `_id` on the metricTables subdoc) so the agent only sees

@@ -4,6 +4,8 @@ import {
   DisplayType,
   Filter,
   isLogSource,
+  isNetflowSource,
+  isSearchableSource,
   isTraceSource,
   pickSampleWeightExpressionProps,
   SearchCondition,
@@ -11,6 +13,7 @@ import {
   SelectList,
   SortSpecificationList,
   SQLInterval,
+  TNetflowSource,
   TSource,
 } from '@/types';
 
@@ -39,6 +42,59 @@ export function getSourceTableFilters(source: TSource): Filter[] {
  * after adding `dateRange` without TS rejecting the timestamp field.
  */
 export type SearchChartConfig = BuilderChartConfig & Partial<DateRange>;
+
+export const NETFLOW_PROTOCOL_NAMES = {
+  1: 'ICMP',
+  6: 'TCP',
+  17: 'UDP',
+  47: 'GRE',
+  50: 'ESP',
+  58: 'ICMPv6',
+};
+
+/** Shows well-known IP protocol numbers by name, e.g. 6 as TCP. */
+export function netflowProtocolNameExpression(expression: string): string {
+  return `transform(toString(${expression}), [${Object.keys(
+    NETFLOW_PROTOCOL_NAMES,
+  )
+    .map(value => `'${value}'`)
+    .join(', ')}], [${Object.values(NETFLOW_PROTOCOL_NAMES)
+    .map(value => `'${value}'`)
+    .join(', ')}], toString(${expression}))`;
+}
+
+/** Bare terms search mapped dimensions even on sources saved before this option existed. */
+function getNetflowImplicitColumnExpression(source: TNetflowSource): string {
+  if (source.implicitColumnExpression?.trim()) {
+    return source.implicitColumnExpression.trim();
+  }
+  const protocol = source.protocolExpression?.trim();
+  const expressions = [
+    source.srcAddrExpression,
+    source.dstAddrExpression,
+    source.srcPortExpression,
+    source.dstPortExpression,
+    protocol,
+    protocol && netflowProtocolNameExpression(protocol),
+    source.exporterExpression,
+    source.inIfExpression,
+    source.outIfExpression,
+  ]
+    .map(expression => expression?.trim())
+    .filter(Boolean);
+  return `concatWithSeparator(' ', ${expressions.map(expression => `ifNull(toString(${expression}), '')`).join(', ')})`;
+}
+
+export function getSourceImplicitColumnExpression(
+  source: TSource,
+): string | undefined {
+  if (isNetflowSource(source)) {
+    return getNetflowImplicitColumnExpression(source);
+  }
+  return isLogSource(source) || isTraceSource(source)
+    ? source.implicitColumnExpression
+    : undefined;
+}
 
 /**
  * Default SELECT used by alert evaluators when no caller-supplied SELECT
@@ -96,7 +152,7 @@ export type SearchChartConfigInput = {
 
 /**
  * Resolve the SELECT list, preferring caller-provided `select`, then the
- * source's `defaultTableSelectExpression` (for Log / Trace sources), falling
+ * source's `defaultTableSelectExpression` (for searchable sources), falling
  * back to an empty string.
  *
  * Both `string` and `DerivedColumn[]` SELECT shapes have a `.length` property,
@@ -108,7 +164,7 @@ function resolveSelect(
   select: SelectList | null | undefined,
 ): BuilderChartConfig['select'] {
   if (select != null && select.length > 0) return select;
-  if (isLogSource(source) || isTraceSource(source)) {
+  if (isSearchableSource(source)) {
     return source.defaultTableSelectExpression ?? '';
   }
   return '';
@@ -147,10 +203,7 @@ export function buildSearchChartConfig(
   const userFilters: Filter[] = input.filters ?? [];
   const mergedFilters: Filter[] = [...tableFilter, ...userFilters];
 
-  const implicitColumnExpression =
-    isLogSource(source) || isTraceSource(source)
-      ? source.implicitColumnExpression
-      : undefined;
+  const implicitColumnExpression = getSourceImplicitColumnExpression(source);
   const useTextIndexForImplicitColumn =
     isLogSource(source) || isTraceSource(source)
       ? source.useTextIndexForImplicitColumn
