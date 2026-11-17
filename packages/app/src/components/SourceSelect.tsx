@@ -27,6 +27,7 @@ import {
   useFilteredSortedSourceItems,
   useSourceKindMap,
 } from '@/components/sourceSelectUtils';
+import { useSelectAllOnFocus } from '@/hooks/useSelectAllOnFocus';
 import { useSources } from '@/source';
 
 import styles from '@styles/SourceSelectControlled.module.scss';
@@ -192,6 +193,7 @@ function SourceSelectControlledComponent({
   );
 
   const sourceKindMap = useSourceKindMap(data);
+  const selectAllOnFocus = useSelectAllOnFocus();
 
   // Mantine passes `checked` to renderOption for the currently selected
   // option; render a trailing check so the active source is obvious in the
@@ -249,6 +251,7 @@ function SourceSelectControlledComponent({
         renderOption={renderOption}
         filter={sourceSelectFilter}
         searchable
+        {...selectAllOnFocus}
         placeholder="Data Source"
         leftSection={leftIcon}
         maxDropdownHeight={280}
