@@ -264,10 +264,12 @@ describe('ColumnsPopover', () => {
   it('shrinks to the viewport so Apply stays on screen', async () => {
     renderPopover();
     openPopover();
-    const popover = await screen.findByTestId('search-columns-button-popover', {
-      hidden: true,
+    await waitFor(() => {
+      const popover = document.querySelector(
+        '[data-testid="search-columns-button-popover"]',
+      );
+      expect(popover?.getAttribute('style')).toContain('calc(100vw - 16px)');
     });
-    expect(popover.getAttribute('style')).toContain('calc(100vw - 16px)');
   });
 
   it('discards the draft on cancel', async () => {
