@@ -1307,6 +1307,7 @@ function DBSearchPageContent() {
         source: searchedConfig?.source ?? undefined,
         filters: searchedConfig?.filters ?? [],
         orderBy: searchedConfig?.orderBy ?? '',
+        searchScope: resolveSearchScope(searchedConfig?.searchScope),
       });
     }
   }, [searchedConfig, reset, prevSearched]);

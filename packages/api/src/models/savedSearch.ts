@@ -61,6 +61,9 @@ const savedSearchSchema = new Schema<
     },
     tags: [String],
     filters: [{ type: mongoose.Schema.Types.Mixed }],
+    // Strict mode drops undeclared paths, so a saved Trace search would
+    // silently reload as Span without this.
+    searchScope: { type: String, enum: ['span', 'trace'], required: false },
     // Immutable: ownership attribution is set once at creation.
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

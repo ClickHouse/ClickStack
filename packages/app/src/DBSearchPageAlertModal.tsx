@@ -22,6 +22,7 @@ import {
   scheduleStartAtSchema,
   SearchCondition,
   SearchConditionLanguage,
+  SearchScope,
   validateAlertScheduleOffsetMinutes,
   validateAlertThresholdMax,
   zAlertChannels,
@@ -165,6 +166,7 @@ const AlertForm = ({
   where,
   whereLanguage,
   filters,
+  searchScope,
   select,
   defaultValues,
   loading,
@@ -180,6 +182,7 @@ const AlertForm = ({
   where?: SearchCondition | null;
   whereLanguage?: SearchConditionLanguage | null;
   filters?: Filter[] | null;
+  searchScope?: SearchScope | null;
   select?: string | null;
   defaultValues?: null | AlertWithCreatedBy;
   loading?: boolean;
@@ -476,6 +479,7 @@ const AlertForm = ({
                 where={where}
                 whereLanguage={whereLanguage}
                 filters={filters}
+                searchScope={searchScope}
                 select={select}
                 interval={interval}
                 groupBy={groupByValue}
@@ -579,6 +583,7 @@ export const DBSearchPageAlertModal = ({
           source: searchedConfig.source ?? '',
           orderBy: searchedConfig.orderBy ?? '',
           filters: searchedConfig.filters ?? [],
+          searchScope: searchedConfig.searchScope ?? undefined,
           tags: newSavedSearchTags,
         });
         await createAlert.mutateAsync({
@@ -713,6 +718,7 @@ export const DBSearchPageAlertModal = ({
           where={searchedConfig?.where}
           whereLanguage={searchedConfig?.whereLanguage}
           filters={searchedConfig?.filters}
+          searchScope={searchedConfig?.searchScope}
           select={searchedConfig?.select}
           defaultValues={
             activeIndex === 'stage'
