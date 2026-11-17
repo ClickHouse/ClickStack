@@ -1893,7 +1893,7 @@ const mcpPromqlAdhocFilterSchema = mcpAdhocFilterSchema.extend({
         '"sql", promql sources for "promql".',
     ),
   where: mcpAdhocFilterSchema.shape.where.describe(
-    `${mcpAdhocFilterSchema.shape.where.description} sourceType "sql" only.`,
+    `${mcpAdhocFilterSchema.shape.where.description} sourceType "sql" only; rejected when sourceType is "promql".`,
   ),
 });
 
@@ -2083,11 +2083,10 @@ const mcpAdhocSavedFilterValueSchema =
               'name for a promql filter.',
           ),
           operator: AdhocFilterConditionSchema.shape.operator.describe(
-            '=, !=, =~ (regex), !~ (not regex). sql filters also take LIKE, ' +
-              'NOT LIKE, and IN; promql filters take =|. Conditions are ANDed, ' +
-              'except that IN (sql) or =| (promql) conditions on the same key ' +
-              'are ORed into one IN (...) or =~"a|b" condition, so each carries ' +
-              'one value.',
+            '=, !=, =~ (regex), !~ (not regex), and IN. sql filters also take ' +
+              'LIKE and NOT LIKE. Conditions are ANDed, except that IN conditions ' +
+              'on the same key are ORed into one IN (...) for a sql filter or ' +
+              '=~"a|b" matcher for a promql filter, so each carries one value.',
           ),
           value: AdhocFilterConditionSchema.shape.value.describe(
             'The value, LIKE pattern, or regular expression to compare against.',

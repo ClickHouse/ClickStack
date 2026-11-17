@@ -274,7 +274,7 @@ describe('MCP Dashboard Tools - PromQL tiles and label filters', () => {
           {
             type: 'adhoc',
             name: variableName,
-            conditions: [{ key: 'job', operator: '=|', value: 'api' }],
+            conditions: [{ key: 'job', operator: 'IN', value: 'api' }],
           },
         ],
       });
@@ -293,6 +293,28 @@ describe('MCP Dashboard Tools - PromQL tiles and label filters', () => {
       });
       expect(saved.isError).toBeFalsy();
       expect(parseOutput(saved).filters).toEqual(filters);
+    });
+
+    it('warns about saved conditions a PromQL filter cannot apply', async () => {
+      const { sources, sourceType, name, variableName } =
+        storedAdhocFilter('promql');
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Ad hoc',
+        tiles: [],
+        filters: [{ type: 'ADHOC', name, sourceType, sources, variableName }],
+        savedFilterValues: [
+          {
+            type: 'adhoc',
+            name: variableName,
+            conditions: [{ key: 'job', operator: 'LIKE', value: '%api%' }],
+          },
+        ],
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parseOutput(result).warnings).toEqual([
+        expect.stringContaining('using LIKE'),
+      ]);
     });
 
     it.each([

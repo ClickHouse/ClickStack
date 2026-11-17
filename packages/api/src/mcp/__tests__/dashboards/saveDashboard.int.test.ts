@@ -4118,24 +4118,17 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       expect(saved.isError).toBeFalsy();
     });
 
-    it('warns about saved conditions that no ad hoc filter, or not its source type, can apply', async () => {
+    it('warns about saved conditions that no ad hoc filter matches', async () => {
       const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
         name: 'Bad defaults',
         tiles: [],
         filters: [adhocFilter()],
-        savedFilterValues: [
-          { ...adhocValue, name: 'conditons' },
-          {
-            ...adhocValue,
-            conditions: [{ key: 'job', operator: '=|', value: 'api' }],
-          },
-        ],
+        savedFilterValues: [{ ...adhocValue, name: 'conditons' }],
       });
 
       expect(result.isError).toBeFalsy();
       expect(parse(result).warnings).toEqual([
         expect.stringContaining('"conditons"'),
-        expect.stringContaining('=|'),
       ]);
     });
   });
