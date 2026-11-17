@@ -884,6 +884,35 @@ describe('DefaultAlertProvider', () => {
         expect(details.previousMap.get(alert.id)).toBeUndefined();
       });
 
+      it('seeds a grouped alert from its latest row when that row is older than the scan window', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+          { groupBy: 'ServiceName' },
+        );
+        // 5m interval: the per-group scan covers 1 day, so a 2-day-old row is
+        // outside it but inside the 7-day latest-row lookup.
+        const twoDaysAgo = new Date(
+          currentWindowStart().getTime() - 2 * 24 * 60 * 60_000,
+        );
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: twoDaysAgo,
+          state: AlertState.ALERT,
+          group: 'group-a',
+          fired: true,
+        });
+
+        const result = await provider.getAlertTasks();
+
+        expect(result).toHaveLength(1);
+        const { previousMap } = result[0].alerts[0];
+        expect(previousMap.size).toBe(1);
+        const groupA = previousMap.get(`${alert.id}||group-a`);
+        expect(groupA?.createdAt).toEqual(twoDaysAgo);
+        expect(groupA?.state).toBe(AlertState.ALERT);
+        expect(groupA?.fired).toBe(true);
+      });
+
       it('treats an alert as due when its window start cannot be computed', async () => {
         const { alert } = await createValidSavedSearchAlert(
           await createConnectionAndSource(),

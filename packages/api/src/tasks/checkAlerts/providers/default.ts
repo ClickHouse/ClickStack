@@ -494,6 +494,27 @@ async function loadAlerts(): Promise<AlertTask[]> {
     });
   }
 
+  // A grouped alert whose latest row is older than its scan window gets no
+  // rows back. Seed that row so the evaluation still starts from it and
+  // catches up on the missed windows. When the scan did return rows, the
+  // latest one is among them and its key is already set.
+  for (const alert of dueGroupedAlerts) {
+    const latest = latestHistories.get(alert.id);
+    if (!latest) {
+      continue;
+    }
+    const key = computeHistoryMapKey(alert.id, latest.group || '');
+    if (!previousAlerts.has(key)) {
+      previousAlerts.set(key, {
+        _id: new mongoose.Types.ObjectId(alert.id),
+        createdAt: latest.createdAt,
+        state: latest.state,
+        group: latest.group,
+        fired: latest.fired,
+      });
+    }
+  }
+
   // Seed a sentinel entry for each gated alert so processAlert's
   // shouldSkipAlertCheck sees a history row in the current window and skips
   // the evaluation exactly as before (including the skipped_window metric).
