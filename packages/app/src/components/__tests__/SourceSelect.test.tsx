@@ -183,10 +183,14 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
 
   function SelectHarness({
     isSourceAllowed,
+    defaultSource,
   }: {
     isSourceAllowed?: (source: TSource) => boolean;
+    defaultSource?: string;
   } = {}) {
-    const { control } = useForm();
+    const { control } = useForm({
+      defaultValues: { source: defaultSource },
+    });
     return (
       <SourceSelectControlled
         control={control}
@@ -231,6 +235,32 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
     // "Prod Logs" matches "logs" but not "billing", so its whole section drops out.
     expect(screen.queryByText('Prod Logs')).not.toBeInTheDocument();
     expect(screen.queryByText('Control Plane Prod')).not.toBeInTheDocument();
+  });
+
+  it('selects the current label on a focusing click so typing replaces it', async () => {
+    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
+    const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
+    expect(input).toHaveValue('Billing Logs');
+
+    await userEvent.click(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe('Billing Logs'.length);
+
+    await userEvent.keyboard('prod');
+    expect(input).toHaveValue('prod');
+    expect(await screen.findByText('Prod Logs')).toBeInTheDocument();
+    expect(screen.queryByText('Billing Logs')).not.toBeInTheDocument();
+  });
+
+  it('places the caret normally on a click into an already focused input', async () => {
+    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
+    const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
+
+    await userEvent.click(input);
+    await userEvent.click(input);
+    expect(input.selectionStart).toBe(input.selectionEnd);
   });
 
   it('hides sources rejected by isSourceAllowed, along with sections left empty', async () => {
