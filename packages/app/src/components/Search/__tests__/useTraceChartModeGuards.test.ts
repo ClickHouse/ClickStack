@@ -38,7 +38,9 @@ describe('useTraceChartModeGuards', () => {
       expect(setTraceChartMode).not.toHaveBeenCalled();
     });
 
-    it('resets to RED when the source changes', () => {
+    // null clears the param, so the URL falls back to the RED default instead
+    // of carrying ?traceChartMode=red after every source switch.
+    it('resets to RED by clearing the param when the source changes', () => {
       const { rerender, setTraceChartMode } = renderGuards({
         sourceId: 'traces',
         isHeatmapChartVisible: true,
@@ -51,7 +53,7 @@ describe('useTraceChartModeGuards', () => {
       });
 
       expect(setTraceChartMode).toHaveBeenCalledTimes(1);
-      expect(setTraceChartMode).toHaveBeenCalledWith('red');
+      expect(setTraceChartMode).toHaveBeenCalledWith(null);
     });
 
     it('does not reset on a re-render with the same source', () => {

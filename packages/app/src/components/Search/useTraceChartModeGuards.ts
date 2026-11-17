@@ -7,10 +7,13 @@ import type { TraceChartMode } from './TraceRedMetricsChart';
  *
  * - Resets to the default RED view when the searched source actually changes,
  *   so returning to a trace source after viewing another one doesn't silently
- *   reopen in Heatmap. The ref starts undefined and is only compared once a
- *   real id has been seen, so the async source resolution on first load
- *   (undefined -> id) doesn't count as a change and a shared link that pins
- *   ?traceChartMode=heatmap survives.
+ *   reopen in Heatmap (and turn live tail off again). It clears the param
+ *   rather than setting 'red', since nuqs 1.x writes an explicitly set default
+ *   into the URL and every source switch would add ?traceChartMode=red. The
+ *   ref starts undefined and is only compared once a real id has been seen,
+ *   so the async source resolution on first load (undefined -> id) doesn't
+ *   count as a change and a shared link that pins ?traceChartMode=heatmap
+ *   survives.
  * - Keeps live tail off while the heatmap is the visible chart. A live tick
  *   moves the absolute time range, and the heatmap keys its uPlot instance on
  *   the chart config, so every refresh would tear the chart down and rebuild
@@ -26,7 +29,7 @@ export function useTraceChartModeGuards({
   setIsLive,
 }: {
   sourceId: string | undefined;
-  setTraceChartMode: (mode: TraceChartMode) => unknown;
+  setTraceChartMode: (mode: TraceChartMode | null) => unknown;
   isHeatmapChartVisible: boolean;
   isLive: boolean;
   setIsLive: (isLive: boolean) => unknown;
@@ -37,7 +40,7 @@ export function useTraceChartModeGuards({
       prevSourceIdRef.current !== undefined &&
       prevSourceIdRef.current !== sourceId
     ) {
-      setTraceChartMode('red');
+      setTraceChartMode(null);
     }
     prevSourceIdRef.current = sourceId;
   }, [sourceId, setTraceChartMode]);
