@@ -30,6 +30,10 @@ type FilterForModeValidation = {
 type FilterForGatingValidation = FilterForModeValidation & {
   variableName?: string;
   appliesToSourceIds?: string[];
+  type?: string;
+  sourceType?: string;
+  where?: string;
+  whereLanguage?: string;
 };
 
 /**
@@ -238,6 +242,8 @@ export function validateDashboardFilterModes<T extends FilterForModeValidation>(
  * Issues raised:
  * - `variableName` on a filter that is not variable-enabled (path `<filtersPath>[i].variableName`).
  * - A non-empty `appliesToSourceIds` on a filter that does not broadcast (path `<filtersPath>[i].appliesToSourceIds`).
+ * - `where` or `whereLanguage` on a PromQL ad hoc filter, which only SQL ad hoc
+ *   filters read (path `<filtersPath>[i].where` / `.whereLanguage`).
  */
 export function validateDashboardFilterFieldGating<
   T extends FilterForGatingValidation,
@@ -267,6 +273,21 @@ export function validateDashboardFilterFieldGating<
         message: `Filter "${filter.name}" sets appliesToSourceIds but does not broadcast its value; set isBroadcastEnabled to true or drop appliesToSourceIds`,
         path: [...filtersPath, filterIdx, 'appliesToSourceIds'],
       });
+    }
+
+    if (filter.type === 'ADHOC' && filter.sourceType === 'promql') {
+      const fields = [
+        ['where', filter.where],
+        ['whereLanguage', filter.whereLanguage],
+      ] as const;
+      for (const [field, value] of fields) {
+        if (value === undefined) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Filter "${filter.name}" sets ${field}, which only ad hoc filters with sourceType "sql" use; drop ${field}`,
+          path: [...filtersPath, filterIdx, field],
+        });
+      }
     }
   });
 }

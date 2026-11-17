@@ -508,6 +508,37 @@ describe('convertToExternalDashboard orphan-ref heal', () => {
     expect(hidden.filters?.map(f => f.id)).toEqual(['static-filter']);
   });
 
+  it('returns ad hoc filters and their saved conditions, hiding PromQL ones with PromQL', () => {
+    const adhoc = (sourceType: 'sql' | 'promql') => ({
+      id: `${sourceType}-adhoc`,
+      type: 'ADHOC' as const,
+      name: sourceType,
+      sourceType,
+      sources: ['65f5e4a3b9e77c001a111111'],
+      isBroadcastEnabled: true as const,
+      isVariableEnabled: true as const,
+    });
+    const adhocValue = {
+      type: 'adhoc' as const,
+      name: 'sql',
+      conditions: [
+        { key: 'ServiceName', operator: '=' as const, value: 'api' },
+      ],
+    };
+    const doc = makeDoc({
+      filters: [adhoc('sql'), adhoc('promql')],
+      savedFilterValues: [adhocValue],
+    });
+
+    const shown = convertToExternalDashboard(doc);
+    expect(shown.filters).toEqual([adhoc('sql'), adhoc('promql')]);
+    expect(shown.savedFilterValues).toEqual([adhocValue]);
+
+    const hidden = convertToExternalDashboard(doc, { hidePromql: true });
+    expect(hidden.filters).toEqual([adhoc('sql')]);
+    expect(hidden.savedFilterValues).toEqual([adhocValue]);
+  });
+
   // seriesLimit is three-state (matching the internal schema): omitted =
   // default cap, 0 = unlimited, positive N = top-N. All three must survive a
   // GET->PUT round-trip: 0 and N pass through, null maps to absent (the

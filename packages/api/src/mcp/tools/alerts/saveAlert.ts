@@ -5,6 +5,7 @@ import * as config from '@/config';
 import {
   type AlertInput,
   createAlert,
+  getAlertById,
   updateAlert,
   validateAlertInput,
 } from '@/controllers/alerts';
@@ -54,9 +55,9 @@ export function registerSaveAlert({
         'required: pass "channels", or the legacy singular "channel" for one ' +
         '(webhook IDs come from clickstack_get_webhook). Updates replace the ' +
         'alert configuration rather than merging it: channels you do not resend are ' +
-        'removed, omitted name and message are cleared, omitted displayName and tags ' +
-        'are re-derived from the source, and settings this tool cannot set ' +
-        '(note, consecutive-window count) are cleared. Omitting both ' +
+        'removed, omitted name and message are cleared, and omitted displayName ' +
+        'and tags are re-derived from the source. Omitted note and ' +
+        'numConsecutiveWindows keep their stored values. Omitting both ' +
         'scheduleStartAt and scheduleOffsetMinutes keeps the stored schedule; ' +
         'clearing scheduleStartAt without an offset resets the offset to 0. Read the alert with ' +
         'clickstack_get_alert first and resend every field you want to keep.',
@@ -74,6 +75,14 @@ export function registerSaveAlert({
       if (alertId != null) {
         const idError = validateObjectId(alertId, 'alert ID');
         if (idError) return idError;
+      }
+
+      const mongoTeamId = new mongoose.Types.ObjectId(teamId);
+      const existing = alertId
+        ? await getAlertById(alertId, mongoTeamId)
+        : null;
+      if (alertId && !existing) {
+        return mcpUserError('Alert not found');
       }
 
       // Inline alerts: run the chart config through the shared external
@@ -114,6 +123,14 @@ export function registerSaveAlert({
         scheduleStartAt: input.scheduleStartAt,
         name: input.name,
         message: input.message,
+        // Unlike name and message, an omitted note or window count keeps the
+        // stored value: callers written before this tool accepted them would
+        // otherwise wipe what was set in the UI. null still clears.
+        note: input.note === undefined ? existing?.note : input.note,
+        numConsecutiveWindows:
+          input.numConsecutiveWindows === undefined
+            ? existing?.numConsecutiveWindows
+            : input.numConsecutiveWindows,
         displayName: input.displayName,
         tags: input.tags,
         groupBy: input.groupBy,
@@ -124,7 +141,6 @@ export function registerSaveAlert({
       };
 
       // ── Validate referenced entities exist ──
-      const mongoTeamId = new mongoose.Types.ObjectId(teamId);
       let refs;
       try {
         refs = await validateAlertInput(mongoTeamId, alertInput);

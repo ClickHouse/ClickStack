@@ -3,6 +3,9 @@
 // separator (e.g. "Source ID – call clickstack_list_sources") for LLM
 // readability. Reformatting all separators is out of scope here.
 import {
+  ADHOC_FILTER_MAX_CONDITIONS,
+  AdhocFilterConditionSchema,
+  AdhocFilterSourceTypeSchema,
   AggregateFunctionSchema,
   BackgroundChartSchema,
   ChartPaletteTokenSchema,
@@ -24,6 +27,7 @@ import {
   PromqlReducerSchema,
   SearchConditionTrimmedLanguageSchema,
   SQLIntervalSchema,
+  SqlQueryDashboardFilterSchema,
   StaticListDashboardFilterSchema,
 } from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
@@ -34,6 +38,7 @@ import {
 } from '@/mcp/tools/query/schemas';
 import { QUERYABLE_METRIC_KINDS } from '@/mcp/tools/sources/metricKinds';
 import {
+  externalAdhocSavedFilterValueSchema,
   externalSqlSavedFilterValueSchema,
   externalVariableSavedFilterValueSchema,
   objectIdSchema,
@@ -1765,6 +1770,33 @@ const mcpStaticListFilterSchema = z
       'with the column passed explicitly, since the filter has no expression of its own.',
   );
 
+const mcpSqlQueryFilterSchema = z
+  .object({
+    ...mcpDashboardFilterBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.SQL_QUERY)
+      .describe(
+        'Filter type discriminator for a filter whose dropdown values come from a ClickHouse SQL query.',
+      ),
+    connectionId: objectIdSchema.describe(
+      'ClickHouse connection the query runs on. Get IDs from clickstack_list_sources.',
+    ),
+    sqlTemplate: SqlQueryDashboardFilterSchema.shape.sqlTemplate.describe(
+      'ClickHouse SELECT whose FIRST column becomes the dropdown values (cast to ' +
+        'string; nulls and duplicates dropped; row order kept, so add ORDER BY). ' +
+        'May use the time macros ($__timeFilter(<column>), $__fromTime, $__toTime) ' +
+        "and other filters' variables, ideally as $__filter(<expression>, $<variableName>). " +
+        'Cannot use $__sourceTable or $__filters: the filter has no source, so name ' +
+        'tables explicitly. Example: "SELECT DISTINCT env FROM default.envs ORDER BY env".',
+    ),
+  })
+  .describe(
+    'A variable-only filter whose dropdown lists the first column of a ClickHouse ' +
+      'query. Use it for values in lookup tables, dictionaries, or joins that no ' +
+      'single source column covers. Tiles reference the selection as ' +
+      '$__filter(<expression>, $<variableName>) with the column passed explicitly.',
+  );
+
 const mcpPromqlLabelFilterSchema = z
   .object({
     ...mcpDashboardFilterBaseShape,
@@ -1791,29 +1823,110 @@ const mcpPromqlLabelFilterSchema = z
       'default multi-select, or {job="$job"} with maxSelections: 1.',
   );
 
+// Selection limits and requirements have no meaning for a list of conditions,
+// so the ad hoc shape doesn't carry them.
+const mcpAdhocFilterSchema = z
+  .object({
+    id: mcpDashboardFilterBaseShape.id,
+    name: mcpDashboardFilterBaseShape.name,
+    variableName: variableNameSchema.describe(
+      "Unique name the filter's conditions are saved under in savedFilterValues. " +
+        'Tiles CANNOT reference it as a variable. A default is derived from the ' +
+        "display name when omitted. Must be unique across the dashboard's " +
+        'variable-enabled filters.',
+    ),
+    type: z
+      .literal(DashboardFilterType.enum.ADHOC)
+      .describe(
+        'Filter type discriminator for a filter holding free-form key / operator / value conditions.',
+      ),
+    sourceType: z
+      .literal('sql')
+      .describe(
+        '"sql": keys are the columns and map keys of Log, Trace, or Session sources.',
+      ),
+    sources: z
+      .array(objectIdSchema)
+      .min(1)
+      .describe(
+        'IDs of the Log, Trace, or Session sources (from clickstack_list_sources) ' +
+          'whose keys and values the filter suggests.',
+      ),
+    where: z
+      .string()
+      .optional()
+      .describe(
+        'Optional condition narrowing the rows keys and values are suggested from. ' +
+          "Never applied to tiles. May reference other filters' variables.",
+      ),
+    whereLanguage: SearchConditionTrimmedLanguageSchema.describe(
+      'Query language of `where`.',
+    ),
+    appliesToSourceIds: z
+      .array(objectIdSchema)
+      .optional()
+      .describe(
+        'IDs of the sources whose tiles the conditions apply to, of the same kind ' +
+          "as `sources`. Omit to apply to the tiles of the filter's `sources`.",
+      ),
+  })
+  .describe(
+    'An ad hoc filter: the user picks any number of key / operator / value ' +
+      'conditions in the filter bar, or clicks values in tiles, and every ' +
+      'condition is ANDed onto the tiles the filter applies to. Always ' +
+      'broadcasts and is never a variable. Seed its conditions with an ' +
+      '"adhoc" entry in savedFilterValues.',
+  );
+
+const mcpPromqlAdhocFilterSchema = mcpAdhocFilterSchema.extend({
+  sourceType: AdhocFilterSourceTypeSchema.describe(
+    '"sql": keys are the columns and map keys of Log, Trace, or Session sources. ' +
+      '"promql": keys are the labels of promql sources, and conditions are added ' +
+      'as label matchers to every selector in PromQL tiles.',
+  ),
+  sources: z
+    .array(objectIdSchema)
+    .min(1)
+    .describe(
+      'IDs of the sources (from clickstack_list_sources) whose keys and values ' +
+        'the filter suggests: Log, Trace, or Session sources for sourceType ' +
+        '"sql", promql sources for "promql".',
+    ),
+  where: mcpAdhocFilterSchema.shape.where.describe(
+    `${mcpAdhocFilterSchema.shape.where.description} sourceType "sql" only; rejected when sourceType is "promql".`,
+  ),
+});
+
 const mcpDashboardFilterSchema = z
   .discriminatedUnion('type', [
     mcpQueryExpressionFilterSchema,
     mcpStaticListFilterSchema,
+    mcpSqlQueryFilterSchema,
+    mcpAdhocFilterSchema,
   ])
   .describe(
     'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
-      'Two types: QUERY_EXPRESSION queries its dropdown values from a source column; ' +
-      'STATIC_LIST declares them inline and is always variable-only.',
+      'QUERY_EXPRESSION queries its dropdown values from a source column; ' +
+      'STATIC_LIST declares them inline; SQL_QUERY reads them from a SQL query. ' +
+      'STATIC_LIST and SQL_QUERY are always variable-only. ADHOC holds free-form ' +
+      'conditions and always broadcasts.',
   );
 
 const mcpPromqlDashboardFilterSchema = z
   .discriminatedUnion('type', [
     mcpQueryExpressionFilterSchema,
     mcpStaticListFilterSchema,
+    mcpSqlQueryFilterSchema,
     mcpPromqlLabelFilterSchema,
+    mcpPromqlAdhocFilterSchema,
   ])
   .describe(
     'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
       'QUERY_EXPRESSION queries its dropdown values from a source column; ' +
-      'STATIC_LIST declares them inline and is always variable-only; ' +
-      'PROMETHEUS_LABEL lists the values of a label on a promql source and is ' +
-      'always variable-only.',
+      'STATIC_LIST declares them inline; SQL_QUERY reads them from a SQL query; ' +
+      'PROMETHEUS_LABEL lists the values of a label on a promql source. Those three ' +
+      'are always variable-only. ADHOC holds free-form conditions on SQL or promql ' +
+      'sources and always broadcasts.',
   );
 
 export type McpDashboardFilter = z.infer<typeof mcpPromqlDashboardFilterSchema>;
@@ -1826,9 +1939,12 @@ const mcpFiltersParam = z
       'If another tile\'s onClick targets THIS dashboard with `filters: [{ expression: "X", ... }]`, ' +
       'this array MUST declare a filter whose `expression` is "X". Otherwise the value is ' +
       'dropped on arrival and the destination opens unfiltered.\n\n' +
-      'Two filter types: QUERY_EXPRESSION queries its dropdown values from a source column, ' +
-      'while STATIC_LIST declares them inline via `options` and is always variable-only ' +
-      '(it has no expression to broadcast).\n\n' +
+      'Filter types: QUERY_EXPRESSION queries its dropdown values from a source column. ' +
+      'STATIC_LIST declares them inline via `options`, and SQL_QUERY reads them from the ' +
+      'first column of a ClickHouse query; both are always variable-only (they have no ' +
+      'expression to broadcast). ADHOC lets the user build any number of ' +
+      'key / operator / value conditions, with keys and values suggested from its ' +
+      '`sources`, and always broadcasts them; it is never a variable.\n\n' +
       'A QUERY_EXPRESSION filter runs in one of two modes (or both). BROADCAST (the default) applies the ' +
       'selected value as a condition on matching tiles with no per-tile wiring. VARIABLE ' +
       '(isVariableEnabled) exposes the value to tile queries as $variableName, which the tile ' +
@@ -1867,6 +1983,13 @@ const mcpFiltersParam = z
       'Always pass the column explicitly: the one-argument $__filter($env) form reuses the ' +
       "filter's own expression, which a static filter does not have. Prefer STATIC_LIST when " +
       'the values are a fixed business list or a curated subset rather than derivable from the data.\n\n' +
+      'Example (SQL query: values from a lookup table no source covers, narrowed by another filter):\n' +
+      '[\n' +
+      '  { "type": "SQL_QUERY", "name": "Environment", "connectionId": "<connection-id>",\n' +
+      '    "sqlTemplate": "SELECT DISTINCT env FROM default.envs WHERE $__filter(cloud, $cloud) ORDER BY env",\n' +
+      '    "variableName": "env" }\n' +
+      ']\n' +
+      'Prefer QUERY_EXPRESSION when the values are a column of a registered source.\n\n' +
       "Example (dependent filter: the Endpoint dropdown only lists the selected service's " +
       'endpoints):\n' +
       '[\n' +
@@ -1879,18 +2002,30 @@ const mcpFiltersParam = z
       ']\n' +
       "A filter's `where` scopes only the values ITS dropdown offers; it is not applied to " +
       'any tile. That is why Service keeps broadcasting here: its variable is read by the ' +
-      'Endpoint dropdown, not by a tile, so the value is never applied twice.',
+      'Endpoint dropdown, not by a tile, so the value is never applied twice.\n\n' +
+      'Example (ad hoc: free-form conditions on the log and trace tiles, seeded via ' +
+      'savedFilterValues):\n' +
+      '[\n' +
+      '  { "type": "ADHOC", "name": "Conditions", "sourceType": "sql",\n' +
+      '    "sources": ["<log-source-id>", "<trace-source-id>"], "variableName": "conditions" }\n' +
+      ']\n' +
+      'with savedFilterValues: [{ "type": "adhoc", "name": "conditions", "conditions": ' +
+      '[{ "key": "ServiceName", "operator": "IN", "value": "api" }, ' +
+      '{ "key": "ServiceName", "operator": "IN", "value": "web" }] }].',
   );
 
 const PROMQL_FILTERS_EXAMPLE =
-  '\n\nA third type, PROMETHEUS_LABEL, lists the values of a label on a promql source ' +
+  '\n\nAnother type, PROMETHEUS_LABEL, lists the values of a label on a promql source ' +
   'and is always variable-only.\n\n' +
   'Example (PROMETHEUS_LABEL):\n' +
   '[\n' +
   '  { "type": "PROMETHEUS_LABEL", "name": "Job", "sourceId": "<promql-source-id>",\n' +
   '    "label": "job", "variableName": "job" }\n' +
   ']\n' +
-  'A PromQL tile references it as rate(http_requests_total{job=~"$job"}[$__rate_interval]).';
+  'A PromQL tile references it as rate(http_requests_total{job=~"$job"}[$__rate_interval]).\n\n' +
+  'An ADHOC filter with sourceType "promql" reads label keys and values from promql ' +
+  '`sources` and adds its conditions as label matchers to every selector in the PromQL ' +
+  'tiles it applies to; no tile wiring is needed.';
 
 /** PROMETHEUS_LABEL filters are offered only while PromQL is enabled. */
 export function buildMcpFiltersParam(promqlEnabled: boolean) {
@@ -1930,9 +2065,45 @@ const mcpVariableSavedFilterValueSchema =
     ),
   });
 
+const adhocValueShape = externalAdhocSavedFilterValueSchema.shape;
+const mcpAdhocSavedFilterValueSchema =
+  externalAdhocSavedFilterValueSchema.extend({
+    type: adhocValueShape.type.describe(
+      'Entry kind: the conditions of an ADHOC filter.',
+    ),
+    name: adhocValueShape.name.describe(
+      'The variableName of the ADHOC filter these conditions belong to.',
+    ),
+    conditions: z
+      .array(
+        AdhocFilterConditionSchema.extend({
+          key: AdhocFilterConditionSchema.shape.key.describe(
+            'A SQL expression (column or map access, e.g. "ServiceName" or ' +
+              '"SpanAttributes[\'http.method\']") for a sql filter, or a label ' +
+              'name for a promql filter.',
+          ),
+          operator: AdhocFilterConditionSchema.shape.operator.describe(
+            '=, !=, =~ (regex), !~ (not regex), and IN. sql filters also take ' +
+              'LIKE and NOT LIKE. Conditions are ANDed, except that IN conditions ' +
+              'on the same key are ORed into one IN (...) for a sql filter or ' +
+              '=~"a|b" matcher for a promql filter, so each carries one value.',
+          ),
+          value: AdhocFilterConditionSchema.shape.value.describe(
+            'The value, LIKE pattern, or regular expression to compare against.',
+          ),
+        }),
+      )
+      .max(ADHOC_FILTER_MAX_CONDITIONS)
+      .describe("The filter's conditions."),
+  });
+
 export const mcpSavedFilterValuesParam = z
   .array(
-    z.union([mcpSqlSavedFilterValueSchema, mcpVariableSavedFilterValueSchema]),
+    z.union([
+      mcpSqlSavedFilterValueSchema,
+      mcpVariableSavedFilterValueSchema,
+      mcpAdhocSavedFilterValueSchema,
+    ]),
   )
   .describe(
     'Default filter selections restored every time the dashboard is opened. ' +

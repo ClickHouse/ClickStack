@@ -265,6 +265,24 @@ const unresolvedConnectionTemplate = DashboardTemplateSchema.parse({
   ],
 });
 
+const sqlQueryFilterTemplate = (connection: string) =>
+  DashboardTemplateSchema.parse({
+    version: '0.1.0',
+    name: 'SQL Query Filter',
+    tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+    filters: [
+      {
+        id: 'filter-env',
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        connection,
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+    ],
+  });
+
 // A markdown tile renders static content, so its source is not worth blocking
 // the import over even when the template names one that no longer exists.
 const markdownStaleSourceTemplate = DashboardTemplateSchema.parse({
@@ -383,6 +401,44 @@ describe('Dashboard import - PromQL label filter source', () => {
     await waitFor(() =>
       expect(
         screen.getByText('Select a PromQL source for this filter'),
+      ).toBeInTheDocument(),
+    );
+    expect(mockMutateAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('Dashboard import - SQL query filter connection', () => {
+  it('auto-maps the connection by name and imports it as an id', async () => {
+    renderWithMantine(<Mapping input={sqlQueryFilterTemplate('default')} />);
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(DashboardWithoutIdSchema.safeParse(payload).success).toBe(true);
+    expect(payload.filters[0]).toMatchObject({
+      type: 'SQL_QUERY',
+      connection: 'conn-default',
+    });
+  });
+
+  it('blocks the import and flags the filter row when its connection is unmapped', async () => {
+    renderWithMantine(<Mapping input={sqlQueryFilterTemplate(MISSING)} />);
+
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole('button', { name: /finish import/i }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Select a connection for this filter'),
       ).toBeInTheDocument(),
     );
     expect(mockMutateAsync).not.toHaveBeenCalled();
@@ -562,6 +618,7 @@ const adhocFilterTemplate = DashboardTemplateSchema.parse({
     {
       id: 'filter-adhoc',
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       name: 'Conditions',
       sourceType: 'sql',
       sources: ['Logs', 'Traces', MISSING],
@@ -593,6 +650,7 @@ describe('Dashboard import - ad hoc filter sources', () => {
     const payload = mockMutateAsync.mock.calls[0][0];
     expect(payload.filters[0]).toMatchObject({
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       sources: ['src-logs', 'src-traces'],
       appliesToSourceIds: ['src-traces'],
     });

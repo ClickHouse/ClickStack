@@ -51,6 +51,7 @@ gingerwizard
 gyancr7
 harshul1484
 hercynium FIPS fix for #3390
+igor-kupczynski
 jaggederest
 jeyrathnam
 jordan-simonovski
@@ -70,6 +71,7 @@ mikeshi42
 milansanjeev
 mkaesz
 motsc
+mrkaye97 wants to implement improvements to ClickStack
 niladrix719
 peter-leonov-ch
 pttydou wants to improve FE type safety
