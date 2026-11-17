@@ -768,7 +768,7 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
   });
 });
 
-describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => {
+describe('CustomSchemaSQLSerializerV2 - numeric range bounds on String values', () => {
   const metadata = getMetadata(
     new ClickhouseClient({ host: 'http://localhost:8123' }),
   );
@@ -785,8 +785,6 @@ describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => 
       return { name: 'ServiceName', type: 'LowCardinality(String)' };
     } else if (column === 'Severity') {
       return { name: 'Severity', type: "Enum8('debug' = 1, 'info' = 5)" };
-    } else if (column === 'SrcIp') {
-      return { name: 'SrcIp', type: 'IPv4' };
     }
     return undefined;
   });
@@ -807,41 +805,12 @@ describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => 
 
   it.each([
     {
-      lucene: 'LogAttributes.gc_pause_ms:>100',
-      sql: `((ifNull(${attr} > 100, 0) AND ${hint}))`,
-    },
-    {
-      lucene: 'LogAttributes.gc_pause_ms:>=100',
-      sql: `((ifNull(${attr} >= 100, 0) AND ${hint}))`,
-    },
-    {
-      lucene: 'LogAttributes.gc_pause_ms:<100',
-      sql: `((ifNull(${attr} < 100, 0) AND ${hint}))`,
-    },
-    {
-      lucene: 'LogAttributes.gc_pause_ms:<=100',
-      sql: `((ifNull(${attr} <= 100, 0) AND ${hint}))`,
-    },
-    {
-      lucene: 'LogAttributes.gc_pause_ms:>-2.5',
-      sql: `((ifNull(${attr} > -2.5, 0) AND ${hint}))`,
-    },
-    {
-      lucene: 'LogAttributes.gc_pause_ms:>1e3',
-      sql: `((ifNull(${attr} > 1000, 0) AND ${hint}))`,
-    },
-    {
-      // Missing and non-numeric values match, as for NOT and -field:[a TO b].
-      lucene: '-LogAttributes.gc_pause_ms:>100',
-      sql: `((ifNull(${attr} <= 100, 1)))`,
-    },
-    {
-      lucene: '-LogAttributes.gc_pause_ms:<10',
-      sql: `((ifNull(${attr} >= 10, 1)))`,
-    },
-    {
       lucene: 'LogAttributes.gc_pause_ms:[10 TO 20]',
       sql: `((ifNull(${attr} BETWEEN 10 AND 20, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:[-2.5 TO 1e3]',
+      sql: `((ifNull(${attr} BETWEEN -2.5 AND 1000, 0) AND ${hint}))`,
     },
     {
       lucene: 'LogAttributes.gc_pause_ms:{10 TO 20}',
@@ -866,19 +835,13 @@ describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => 
 
   it.each([
     {
-      // A non-numeric bound keeps the string comparison.
-      lucene: 'LogAttributes.version:>abc',
-      sql: "((`LogAttributes`['version'] > 'abc' AND indexHint(mapContains(`LogAttributes`, 'version'))))",
+      // Comparisons stay lexical: fixed-width values such as dates rely on it.
+      lucene: 'LogAttributes.gc_pause_ms:>100',
+      sql: `((\`LogAttributes\`['gc_pause_ms'] > '100' AND ${hint}))`,
     },
     {
-      // Hex is not a numeric literal here.
-      lucene: 'LogAttributes.version:>0x10',
-      sql: "((`LogAttributes`['version'] > '0x10' AND indexHint(mapContains(`LogAttributes`, 'version'))))",
-    },
-    {
-      // Numeric columns are compared by ClickHouse already.
-      lucene: 'Duration:>100',
-      sql: "((Duration > '100'))",
+      lucene: 'LogAttributes.version:[a TO m]',
+      sql: "((`LogAttributes`['version'] BETWEEN 'a' AND 'm' AND indexHint(mapContains(`LogAttributes`, 'version'))))",
     },
     {
       lucene: 'Duration:[10 TO 20]',
@@ -888,10 +851,6 @@ describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => 
       // Enum compares to numbers already; toFloat64OrNull would reject it.
       lucene: 'Severity:[1 TO 5]',
       sql: '((Severity BETWEEN 1 AND 5))',
-    },
-    {
-      lucene: 'SrcIp:>100',
-      sql: "((SrcIp > '100'))",
     },
   ])('leaves "$lucene" unchanged', async ({ lucene, sql }) => {
     const builder = new SearchQueryBuilder(lucene, serializer);
