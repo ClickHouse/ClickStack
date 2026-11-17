@@ -8554,7 +8554,7 @@ describe('External API v2 Dashboards - new format', () => {
       const promqlValue = {
         type: 'adhoc' as const,
         name: 'prom',
-        conditions: [{ key: 'job', operator: '=|', value: 'api' }],
+        conditions: [{ key: 'job', operator: 'IN', value: 'api' }],
       };
       const response = await authRequest('post', BASE_URL)
         .send(

@@ -128,7 +128,8 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *       type: object
  *       description: >
  *         One "key operator value" condition. Conditions are AND'd, except that
- *         IN (sql) and =| (promql) conditions sharing a key are OR'd into one.
+ *         IN conditions sharing a key are OR'd into one: IN (...) for sql
+ *         filters, a =~"a|b" matcher for promql filters.
  *       required: [key, operator, value]
  *       properties:
  *         key:
@@ -139,10 +140,10 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "ServiceName"
  *         operator:
  *           type: string
- *           enum: ["=", "!=", "=~", "!~", "LIKE", "NOT LIKE", "IN", "=|"]
+ *           enum: ["=", "!=", "=~", "!~", "LIKE", "NOT LIKE", "IN"]
  *           description: >
- *             Comparison operator. =~ and !~ match a regular expression. LIKE,
- *             NOT LIKE, and IN apply to sql filters only, and =| to promql
+ *             Comparison operator. =~ and !~ match a regular expression. IN
+ *             takes one value per condition. LIKE and NOT LIKE apply to sql
  *             filters only; a condition its filter's sourceType can't express
  *             is not applied.
  *           example: "="
