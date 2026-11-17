@@ -42,6 +42,7 @@ import {
   isSearchableSource,
   MetricsDataType as MetricsDataTypeV2,
   PromqlChartConfig,
+  resolveChartPaletteToken,
   SourceKind,
   SQLInterval,
   TMetricSource,
@@ -640,6 +641,30 @@ interface LineDataWithOptionalColor extends Omit<LineData, 'color'> {
   color?: string;
 }
 
+/**
+ * Series colors set on a chart's select items, keyed by result-column name
+ * (the item's alias), in the shape formatResponseForTimeChart's
+ * `seriesColors` takes. Tokens go through resolveChartPaletteToken, as on
+ * table and number tiles, so a legacy token maps to its hue and an
+ * unrecognized one is skipped: that series falls back to the positional
+ * palette instead of failing the whole chart.
+ */
+export function getSelectSeriesColors(
+  config: ChartConfigWithDateRange,
+): Record<string, ChartPaletteToken> | undefined {
+  if (!isBuilderChartConfig(config) || !Array.isArray(config.select)) {
+    return undefined;
+  }
+  const entries: [string, ChartPaletteToken][] = [];
+  for (const selectItem of config.select) {
+    const token = resolveChartPaletteToken(selectItem.color);
+    if (selectItem.alias && token) {
+      entries.push([selectItem.alias, token]);
+    }
+  }
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function setLineColors(
   sortedLineData: LineDataWithOptionalColor[],
   seriesColors?: Record<string, ChartPaletteToken>,
@@ -833,7 +858,8 @@ export function formatResponseForTimeChart({
    * Pin specific series (keyed by result-column name) to a palette token instead
    * of the positional palette, so their color is stable across sessions and can
    * avoid hues reserved for other meanings (e.g. keeping latency off error red).
-   * Callers derive this from each select item's `color`.
+   * DBTimeChart derives this from each select item's `color`
+   * (getSelectSeriesColors) when its caller opts in with `applySelectColors`.
    */
   seriesColors?: Record<string, ChartPaletteToken>;
 }) {

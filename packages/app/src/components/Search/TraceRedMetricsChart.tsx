@@ -168,12 +168,13 @@ export function TraceRedMetricsChart({
           </ChartCard>
         )}
         <ChartCard style={RED_TILE_STYLE}>
-          {/* Duration series pin their colors via each select item's `color`
-              (set in durationConfig), so no seriesColors prop is needed here. */}
+          {/* The duration series pin their colors on their select items (set
+              in durationConfig); applySelectColors opts this chart into them. */}
           <DBTimeChart
             title="Duration"
             config={duration}
             showLegend
+            applySelectColors
             {...commonProps}
           />
         </ChartCard>

@@ -19,6 +19,7 @@ import {
   findNearestSeriesKey,
   formatResponseForCategoricalChart,
   formatResponseForTimeChart,
+  getSelectSeriesColors,
   getSeriesColorForGroup,
   type LineData,
 } from '@/ChartUtils';
@@ -1996,6 +1997,95 @@ describe('getSeriesColorForGroup', () => {
     const lineData = [line('api', '#dashed', true), line('api', '#solid')];
 
     expect(getSeriesColorForGroup(lineData, 'api')).toBe('#solid');
+  });
+});
+
+describe('getSelectSeriesColors', () => {
+  const config = (
+    select: BuilderChartConfigWithDateRange['select'],
+  ): BuilderChartConfigWithDateRange => ({
+    connection: 'conn',
+    from: { databaseName: 'default', tableName: 'otel_traces' },
+    timestampValueExpression: 'Timestamp',
+    select,
+    where: '',
+    dateRange: [new Date(0), new Date(60_000)],
+  });
+
+  it('keys each aliased select item that sets a color by its alias', () => {
+    expect(
+      getSelectSeriesColors(
+        config([
+          {
+            alias: 'Avg',
+            aggFn: 'avg',
+            aggCondition: '',
+            valueExpression: 'Duration',
+            color: 'chart-blue',
+          },
+          {
+            alias: 'P99',
+            aggFn: 'quantile',
+            level: 0.99,
+            aggCondition: '',
+            valueExpression: 'Duration',
+            color: 'chart-purple',
+          },
+          {
+            alias: 'Total',
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+          },
+        ]),
+      ),
+    ).toEqual({ Avg: 'chart-blue', P99: 'chart-purple' });
+  });
+
+  it('maps a legacy numeric token to its hue', () => {
+    expect(
+      getSelectSeriesColors(
+        config([
+          {
+            alias: 'Total',
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+            // @ts-expect-error legacy token saved before the hue-named palette
+            color: 'chart-1',
+          },
+        ]),
+      ),
+    ).toEqual({ Total: 'chart-green' });
+  });
+
+  // An unknown token would make the CSS resolver throw and fail the whole
+  // chart, so the series falls back to the positional palette instead.
+  it('skips unrecognized tokens and items without an alias', () => {
+    expect(
+      getSelectSeriesColors(
+        config([
+          {
+            alias: 'Total',
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+            // @ts-expect-error unrecognized token from a hand-edited config
+            color: 'not-a-token',
+          },
+          {
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+            color: 'chart-blue',
+          },
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined for a SQL select string', () => {
+    expect(getSelectSeriesColors(config('count() AS Total'))).toBeUndefined();
   });
 });
 
