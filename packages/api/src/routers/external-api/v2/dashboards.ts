@@ -2368,12 +2368,14 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *         - $ref: '#/components/schemas/QueryExpressionFilterInput'
  *         - $ref: '#/components/schemas/StaticListFilterInput'
  *         - $ref: '#/components/schemas/PrometheusLabelFilterInput'
+ *         - $ref: '#/components/schemas/SqlQueryFilterInput'
  *       discriminator:
  *         propertyName: type
  *         mapping:
  *           QUERY_EXPRESSION: '#/components/schemas/QueryExpressionFilterInput'
  *           STATIC_LIST: '#/components/schemas/StaticListFilterInput'
  *           PROMETHEUS_LABEL: '#/components/schemas/PrometheusLabelFilterInput'
+ *           SQL_QUERY: '#/components/schemas/SqlQueryFilterInput'
  *
  *     QueryExpressionFilterInput:
  *       type: object
@@ -2682,6 +2684,83 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             Maximum number of values that can be selected at once. Set to 1 to make
  *             the filter single-select. Omit the field for the default multi-select
  *             behavior.
+ *           example: 1
+ *
+ *     SqlQueryFilterInput:
+ *       type: object
+ *       description: |
+ *         A filter whose dropdown lists the first column returned by a ClickHouse
+ *         query, cast to strings with nulls and duplicates removed. Supports
+ *         variable mode only.
+ *       required:
+ *         - type
+ *         - name
+ *         - connectionId
+ *         - sqlTemplate
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [SQL_QUERY]
+ *           description: Discriminator. Must be "SQL_QUERY".
+ *           example: "SQL_QUERY"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name for the dashboard filter
+ *           example: "Environment"
+ *         connectionId:
+ *           type: string
+ *           description: ID of the ClickHouse connection the query runs on.
+ *           example: "65f5e4a3b9e77c001a567890"
+ *         sqlTemplate:
+ *           type: string
+ *           minLength: 1
+ *           description: |
+ *             Query whose first column populates the dropdown. May use the time
+ *             macros and other filters' variables, but not `$__sourceTable` or
+ *             `$__filters`, since the filter has no source.
+ *           example: "SELECT DISTINCT env FROM default.envs ORDER BY env"
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: |
+ *             Must be true if provided, and is true when omitted. Tiles reference
+ *             the selection as `$variableName`.
+ *           example: true
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: |
+ *             Token that tiles reference this filter's selected value by, as
+ *             `$variableName`. Defaults to the display name with whitespace
+ *             replaced by underscores and remaining illegal characters removed.
+ *             Must be unique across a dashboard's variable-enabled filters.
+ *           example: "env"
+ *         minSelections:
+ *           type: integer
+ *           enum: [0, 1]
+ *           default: 0
+ *           description: Set to 1 to make the filter required.
+ *           example: 1
+ *         isGlobalRequirement:
+ *           type: boolean
+ *           default: false
+ *           description: |
+ *             Widens a required filter's block to every tile on the dashboard.
+ *             Ignored unless minSelections is 1.
+ *           example: true
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           description: Set to 1 to make the filter single-select.
  *           example: 1
  *
  *     Filter:

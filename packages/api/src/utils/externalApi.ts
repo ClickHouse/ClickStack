@@ -5,7 +5,6 @@ import {
   isFilterBroadcastEnabled,
   isFilterRequired,
   isFilterVariableEnabled,
-  isSqlQueryFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AlertErrorType,
@@ -242,10 +241,7 @@ export function translateExternalChartToTileConfig(
 }
 
 /** Filter types the external API and MCP don't expose yet. */
-type InternalOnlyDashboardFilter = Extract<
-  DashboardFilter,
-  { type: 'ADHOC' | 'SQL_QUERY' }
->;
+type InternalOnlyDashboardFilter = Extract<DashboardFilter, { type: 'ADHOC' }>;
 export type ExternalCompatibleDashboardFilter = Exclude<
   DashboardFilter,
   InternalOnlyDashboardFilter
@@ -257,7 +253,7 @@ export function getExternalCompatibleFilters(
 ): ExternalCompatibleDashboardFilter[] {
   return (filters ?? []).filter(
     (filter): filter is ExternalCompatibleDashboardFilter =>
-      !isAdhocFilter(filter) && !isSqlQueryFilter(filter),
+      !isAdhocFilter(filter),
   );
 }
 
@@ -285,6 +281,12 @@ export function translateFilterToExternalFilter(
       return {
         ...omit(filter, 'source', ...omittedKeys),
         sourceId: filter.source.toString(),
+      };
+
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connection', ...omittedKeys),
+        connectionId: filter.connection.toString(),
       };
 
     case 'QUERY_EXPRESSION': {
@@ -317,6 +319,12 @@ export function translateExternalFilterToFilter(
 
     case 'PROMETHEUS_LABEL':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connectionId'),
+        connection: filter.connectionId,
+      };
 
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
