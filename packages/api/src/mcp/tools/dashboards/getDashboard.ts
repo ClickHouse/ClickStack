@@ -63,6 +63,7 @@ export function registerGetDashboard({
       }
       const externalDashboard = convertToExternalDashboard(dashboard, {
         hidePromql: !isPromqlEnabled(context),
+        hideAdhoc: true,
       });
       return {
         content: [
