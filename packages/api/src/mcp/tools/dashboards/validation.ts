@@ -6,9 +6,9 @@ import {
   getFilterVariableName,
   isAdhocConditionSupported,
   isFilterVariableEnabled,
-  validateSqlQueryFilterTemplate,
   isReferenceVariableFilterType,
   pairWithVariableNames,
+  validateSqlQueryFilterTemplate,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,

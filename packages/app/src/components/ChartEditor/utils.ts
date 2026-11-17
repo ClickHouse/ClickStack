@@ -13,10 +13,13 @@ import {
   validateRawSqlForAlert,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
-  getHeatmapSourceKinds,
+  getAllowedSourceKinds,
   isBuilderSavedChartConfig,
+  isPromqlDisplayType,
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
+  isStringSelectDisplayType,
+  toBuilderHeatmapMode,
 } from '@hyperdx/common-utils/dist/guards';
 import { MACRO_SUGGESTIONS } from '@hyperdx/common-utils/dist/macros';
 import { QUERY_PARAMS_BY_DISPLAY_TYPE } from '@hyperdx/common-utils/dist/rawSqlParams';
@@ -26,12 +29,10 @@ import {
   ChartVariable,
   DisplayType,
   getSampleWeightExpression,
-  HeatmapMode,
   isLogSource,
   isMetricSource,
   isRangeThresholdType,
   isTraceSource,
-  NON_PROMQL_SOURCE_KINDS,
   PromqlChartConfig,
   PromqlHeatmapMode,
   PromqlSavedChartConfig,
@@ -178,68 +179,6 @@ export const isRawSqlDisplayType = (
   displayType === DisplayType.Bar ||
   displayType === DisplayType.Number;
 
-/**
- * Display types that store `select` as a plain string (column expression)
- * rather than a structured `DerivedColumn[]` series array. These types
- * don't use the builder series editor and skip series-level validation.
- */
-export const isStringSelectDisplayType = (
-  displayType: DisplayType | undefined,
-): displayType is DisplayType.Search | DisplayType.EventPatterns =>
-  displayType === DisplayType.Search ||
-  displayType === DisplayType.EventPatterns;
-
-export const isPromqlDisplayType = (
-  displayType: DisplayType | undefined,
-): displayType is
-  | DisplayType.Table
-  | DisplayType.Line
-  | DisplayType.StackedBar
-  | DisplayType.StackedLine
-  | DisplayType.Pie
-  | DisplayType.Bar
-  | DisplayType.Number
-  | DisplayType.Heatmap =>
-  displayType === DisplayType.Table ||
-  displayType === DisplayType.Line ||
-  displayType === DisplayType.StackedBar ||
-  displayType === DisplayType.StackedLine ||
-  displayType === DisplayType.Pie ||
-  displayType === DisplayType.Bar ||
-  displayType === DisplayType.Number ||
-  displayType === DisplayType.Heatmap;
-
-/**
- * Search and event patterns list raw rows out of the source's `from` table. A
- * metric source keeps its rows in `metricTables` and leaves `from.tableName`
- * empty, so there is nothing for them to read.
- */
-const ROW_LISTING_SOURCE_KINDS = NON_PROMQL_SOURCE_KINDS.filter(
-  kind => kind !== SourceKind.Metric,
-);
-
-/** Source kinds the Data Source picker offers, given the editor mode and the display type. */
-export function getAllowedSourceKinds({
-  configType,
-  displayType,
-  heatmapMode,
-}: {
-  configType: ChartEditorFormState['configType'];
-  displayType: DisplayType | undefined;
-  heatmapMode?: PromqlHeatmapMode;
-}): SourceKind[] {
-  if (configType === 'promql' && isPromqlDisplayType(displayType)) {
-    return [SourceKind.Promql];
-  }
-  if (displayType === DisplayType.Heatmap) {
-    return [...getHeatmapSourceKinds(toBuilderHeatmapMode(heatmapMode))];
-  }
-  if (isStringSelectDisplayType(displayType)) {
-    return ROW_LISTING_SOURCE_KINDS;
-  }
-  return [...NON_PROMQL_SOURCE_KINDS];
-}
-
 const isCustomOrderByDisplayType = (
   displayType: DisplayType | undefined,
 ): displayType is DisplayType.Table | DisplayType.Bar | DisplayType.Pie =>
@@ -251,6 +190,15 @@ const isCustomOrderByDisplayType = (
 // external API / MCP tile validation) so the "Add Formula" gating in
 // ChartEditorControls and the server-side surfaces cannot drift.
 export { isFormulaDisplayType, isFormulaSourceKind };
+
+// Shared with MCP tile runs, which reject a variable's source selection the
+// tile can't use, as the dashboard does.
+export {
+  getAllowedSourceKinds,
+  isPromqlDisplayType,
+  isStringSelectDisplayType,
+  toBuilderHeatmapMode,
+};
 
 export function convertFormStateToSavedChartConfig(
   form: ChartEditorFormState,
@@ -567,13 +515,6 @@ function formBuilderHeatmap(
   return form.heatmap == null
     ? undefined
     : { mode: toBuilderHeatmapMode(form.heatmap.mode) };
-}
-
-/** A heatmap mode as a builder heatmap's, which has no histogram mode. */
-export function toBuilderHeatmapMode(
-  mode: PromqlHeatmapMode | undefined,
-): HeatmapMode | undefined {
-  return mode === 'histogram' ? undefined : mode;
 }
 
 const DEFAULT_PROMQL_PLACEHOLDER =

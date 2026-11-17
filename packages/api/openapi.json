@@ -4101,7 +4101,7 @@
                 "promql"
               ]
             },
-            "description": "Kinds of sources offered. A field can only reference the variable\nif it accepts every listed kind.\n",
+            "description": "Kinds of sources offered. A field can reference the variable if it\naccepts at least one listed kind. A tile whose selected source is a\nkind it cannot use shows an error instead of running.\n",
             "example": [
               "log"
             ]

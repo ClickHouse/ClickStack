@@ -2478,8 +2478,9 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             type: string
  *             enum: [log, trace, session, metric, promql]
  *           description: |
- *             Kinds of sources offered. A field can only reference the variable
- *             if it accepts every listed kind.
+ *             Kinds of sources offered. A field can reference the variable if it
+ *             accepts at least one listed kind. A tile whose selected source is a
+ *             kind it cannot use shows an error instead of running.
  *           example: ["log"]
  *         connectionId:
  *           type: string

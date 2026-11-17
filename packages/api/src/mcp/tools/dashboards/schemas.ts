@@ -1939,9 +1939,10 @@ const mcpDataSourceFilterSchema = z
       .array(z.nativeEnum(SourceKind))
       .min(1)
       .describe(
-        'Kinds of sources offered in the dropdown. A tile can only use the variable ' +
-          'if it accepts every listed kind, so keep kinds that charts treat alike ' +
-          '(log + trace, or a single kind).',
+        'Kinds of sources offered in the dropdown. A tile or filter can reference the ' +
+          'variable if it accepts at least one listed kind. A tile whose selected source ' +
+          'is a kind it cannot use (e.g. a log source on a PromQL tile) errors instead of ' +
+          'running, so prefer kinds that charts treat alike (log + trace, or a single kind).',
       ),
     connectionId: objectIdOrVariableReferenceSchema
       .optional()

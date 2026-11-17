@@ -6,6 +6,7 @@ import {
   isFilterVariableEnabled,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
+import { getSavedConfigAllowedSourceKinds } from '@hyperdx/common-utils/dist/guards';
 import {
   getReferenceVariableFilters,
   getStringField,
@@ -14,6 +15,7 @@ import {
 } from '@hyperdx/common-utils/dist/referenceVariables';
 import type {
   ChartVariable,
+  SavedChartConfig,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
@@ -21,7 +23,12 @@ import { z } from 'zod';
 
 import { getConnectionsByTeam } from '@/controllers/connection';
 import { getSources } from '@/controllers/sources';
-import type { ExternalDashboard } from '@/routers/external-api/v2/utils/dashboards';
+import {
+  convertToInternalTileConfig,
+  type ExternalDashboard,
+  isConfigTile,
+  isRawSqlExternalTileConfig,
+} from '@/routers/external-api/v2/utils/dashboards';
 import type {
   ExternalDashboardFilter,
   ExternalDashboardFilterWithId,
@@ -275,7 +282,68 @@ export function resolveTileVariableReferences<
     }
     config = { ...config, [field]: id };
   }
-  return { tile: { ...tile, config } };
+
+  const resolved = { ...tile, config };
+  const tileError = getResolvedSourceError(resolved, tile.config, targets);
+  return tileError != null ? { error: tileError } : { tile: resolved };
+}
+
+/**
+ * Checks a resolved source the variable offers but the tile can't use, which
+ * the dashboard shows as an error in place of the tile: a kind the tile's
+ * chart type doesn't accept, or, for raw SQL, a source on another connection
+ * than the query runs on.
+ */
+function getResolvedSourceError(
+  tile: ExternalDashboardTileWithId,
+  storedConfig: object,
+  targets: ReferenceTargets,
+): string | null {
+  if (!isConfigTile(tile)) return null;
+  const sourceId = getStringField(tile.config, 'sourceId');
+  const source = targets.sources.find(s => s.id === sourceId);
+  if (source == null) return null;
+  const sourceName = parseVariableReference(
+    getStringField(storedConfig, 'sourceId'),
+  );
+  const connectionName = parseVariableReference(
+    getStringField(storedConfig, 'connectionId'),
+  );
+
+  if (sourceName != null) {
+    let config: SavedChartConfig;
+    try {
+      config = convertToInternalTileConfig(tile).config;
+    } catch {
+      // A shape the converter refuses fails when the tile runs
+      return null;
+    }
+    const allowedKinds = getSavedConfigAllowedSourceKinds(config);
+    if (!allowedKinds.includes(source.kind)) {
+      return (
+        `Tile "${tile.id}" reads its sourceId from the $${sourceName} variable, which ` +
+        `selects "${source.id}", a ${source.kind} source, but this tile only accepts ` +
+        `${allowedKinds.join(', ')} sources.`
+      );
+    }
+  }
+
+  if (
+    (sourceName != null || connectionName != null) &&
+    isRawSqlExternalTileConfig(tile.config) &&
+    source.connection !== tile.config.connectionId
+  ) {
+    const from = [sourceName, connectionName]
+      .filter((name): name is string => name != null)
+      .map(name => `$${name}`)
+      .join(' and ');
+    return (
+      `Tile "${tile.id}" resolves source "${source.id}" and connection ` +
+      `"${tile.config.connectionId}" from ${from}, but the source is on connection ` +
+      `"${source.connection}". Select a source on the connection the query runs on.`
+    );
+  }
+  return null;
 }
 
 /** Options of each static filter, keyed by the variable name it answers to. */
