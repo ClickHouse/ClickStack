@@ -3,6 +3,8 @@ import React from 'react';
 import { useController as mockUseController } from 'react-hook-form';
 import {
   AlertThresholdType,
+  DashboardFilter,
+  DataSourceDashboardFilter,
   DisplayType,
   MetricsDataType,
   SavedChartConfig,
@@ -13,6 +15,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import DBEditTimeChartForm from '@/components/DBEditTimeChartForm';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { useSource } from '@/source';
 import { DEFAULT_TILE_ALERT } from '@/utils/alerts';
 
@@ -40,6 +43,8 @@ jest.mock('@/hooks/useFetchMetricMetadata', () => ({
 
 jest.mock('@/hooks/useMetadata', () => ({
   useMetadataWithSettings: jest.fn().mockReturnValue({}),
+  // The raw SQL editor's completions
+  useMultipleAllFields: jest.fn().mockReturnValue({ data: [] }),
   useGetKeyValues: jest.fn().mockReturnValue({
     data: [
       {
@@ -1583,5 +1588,116 @@ describe('DBEditTimeChartForm - Inline alerts', () => {
 
     expect(screen.getByTestId('alert-details')).toBeInTheDocument();
     expect(screen.queryByTestId('remove-alert-button')).not.toBeInTheDocument();
+  });
+});
+
+describe('DBEditTimeChartForm - Raw SQL data source variables', () => {
+  const logsVariable: DataSourceDashboardFilter = {
+    id: 'logs',
+    type: 'DATA_SOURCE',
+    name: 'logs',
+    variableName: 'logs',
+    allowedSourceKinds: [SourceKind.Log],
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  };
+
+  const rawSqlConfig: SavedChartConfig = {
+    configType: 'sql',
+    displayType: DisplayType.Table,
+    name: 'Raw SQL tile',
+    source: '$logs',
+    connection: 'conn-2',
+    sqlTemplate: 'SELECT count() FROM $__sourceTable',
+  };
+
+  const renderWithSelection = (sourceId: string) =>
+    renderWithMantine(
+      <QueryClientProvider client={queryClient}>
+        <ReferenceVariablesProvider
+          filters={[logsVariable]}
+          values={new Map([['logs', sourceId]])}
+        >
+          <DBEditTimeChartForm
+            chartConfig={rawSqlConfig}
+            dateRange={[new Date('2024-01-01'), new Date('2024-01-02')]}
+            dashboardId="dashboard-1"
+          />
+        </ReferenceVariablesProvider>
+      </QueryClientProvider>,
+    );
+
+  const logSource = (connection: string) => ({
+    id: 'logs-source',
+    kind: SourceKind.Log,
+    name: 'Logs',
+    from: { databaseName: 'default', tableName: 'otel_logs' },
+    connection,
+    timestampValueExpression: 'Timestamp',
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("blocks the preview when the variable's source is on another connection", async () => {
+    mockUseSourceData(logSource('conn-1'));
+    renderWithSelection('logs-source');
+
+    expect(await screen.findByTestId('preview-blocked')).toHaveTextContent(
+      "The selected data source is on a different connection than this tile's query.",
+    );
+  });
+
+  it('blocks only on the unselected variable once filters are not applied', async () => {
+    const globalFilter: DashboardFilter = {
+      id: 'service',
+      type: 'QUERY_EXPRESSION',
+      name: 'Service',
+      expression: 'ServiceName',
+      source: 'logs-source',
+      minSelections: 1,
+      isGlobalRequirement: true,
+    };
+    mockUseSourceData(undefined);
+    renderWithMantine(
+      <QueryClientProvider client={queryClient}>
+        <ReferenceVariablesProvider filters={[logsVariable]} values={new Map()}>
+          <DBEditTimeChartForm
+            chartConfig={rawSqlConfig}
+            dateRange={[new Date('2024-01-01'), new Date('2024-01-02')]}
+            dashboardId="dashboard-1"
+            getDashboardFilters={() => []}
+            unsatisfiedRequiredFilters={[logsVariable, globalFilter]}
+          />
+        </ReferenceVariablesProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByTestId('preview-missing-required-filters'),
+    ).toHaveTextContent(
+      /^Missing required filters or variables: logs, Service\. Select a value for each required filter, or turn off “Apply filters” to preview this tile without them\.$/,
+    );
+
+    await userEvent.click(
+      screen.getByRole('switch', { name: 'Apply filters' }),
+    );
+
+    expect(
+      screen.getByTestId('preview-missing-required-filters'),
+    ).toHaveTextContent(
+      /^Missing required filters or variables: logs\. Select a value for each one to preview this tile\.$/,
+    );
+  });
+
+  it("previews when the variable's source is on the tile's connection", async () => {
+    mockUseSourceData(logSource('conn-2'));
+    renderWithSelection('logs-source');
+
+    await screen.findByTestId('chart-run-query-button');
+    expect(screen.queryByTestId('preview-blocked')).not.toBeInTheDocument();
   });
 });

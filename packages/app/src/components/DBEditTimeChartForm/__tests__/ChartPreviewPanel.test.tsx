@@ -514,6 +514,7 @@ describe('ChartPreviewPanel', () => {
       queriedConfig: baseBuilderConfig,
       dbTimeChartConfig: baseBuilderConfig,
       missingRequiredFilterNames: ['Service', 'Environment'],
+      canPreviewWithoutFilters: true,
     };
 
     it('names them instead of querying', () => {
@@ -531,6 +532,16 @@ describe('ChartPreviewPanel', () => {
       ).not.toBeInTheDocument();
     });
 
+    it('leaves out the "Apply filters" hint when turning it off would not help', () => {
+      renderPanel({ ...blockedProps, canPreviewWithoutFilters: false });
+
+      expect(
+        screen.getByTestId('preview-missing-required-filters'),
+      ).toHaveTextContent(
+        /^Missing required filters or variables: Service, Environment\. Select a value for each one to preview this tile\.$/,
+      );
+    });
+
     it('does not block a markdown tile, which queries nothing', () => {
       renderPanel({ ...blockedProps, activeTab: 'markdown' });
 
@@ -546,6 +557,38 @@ describe('ChartPreviewPanel', () => {
       expect(
         screen.queryByText(/Missing required filters or variables/),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  describe('when the selections are blocked', () => {
+    const blockedProps = {
+      queriedConfig: baseBuilderConfig,
+      dbTimeChartConfig: baseBuilderConfig,
+      blockedReason: 'The selected data source is on another connection.',
+    };
+
+    it('shows the reason instead of querying', () => {
+      renderPanel(blockedProps);
+
+      expect(screen.getByTestId('preview-blocked')).toHaveTextContent(
+        'The selected data source is on another connection.',
+      );
+      expect(screen.queryByTestId('db-time-chart')).not.toBeInTheDocument();
+    });
+
+    it('shows missing required filters first', () => {
+      renderPanel({ ...blockedProps, missingRequiredFilterNames: ['Service'] });
+
+      expect(
+        screen.getByTestId('preview-missing-required-filters'),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId('preview-blocked')).not.toBeInTheDocument();
+    });
+
+    it('does not block a markdown tile, which queries nothing', () => {
+      renderPanel({ ...blockedProps, activeTab: 'markdown' });
+
+      expect(screen.queryByTestId('preview-blocked')).not.toBeInTheDocument();
     });
   });
 });

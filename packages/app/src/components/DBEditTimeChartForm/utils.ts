@@ -10,7 +10,7 @@ import {
 import { isTimeSeriesDisplayType } from '@hyperdx/common-utils/dist/core/utils';
 import {
   configConsumesBroadcastFilters,
-  getBlockingRequiredFilterNames,
+  getBlockingRequiredFilters,
 } from '@hyperdx/common-utils/dist/dashboardFilterValues';
 import {
   getPromqlFilters,
@@ -29,6 +29,7 @@ import {
   BuilderChartConfigWithDateRange,
   ChartAlertBaseSchema,
   ChartConfigWithDateRange,
+  ChartConfigWithOptDateRange,
   ChartConfigWithOptTimestamp,
   ChartVariable,
   DashboardFilter,
@@ -205,14 +206,89 @@ export function resolvePreviewVariables({
     : referenced.map(variable => ({ ...variable, values: [] }));
 }
 
+/**
+ * The required filters that block a preview with `applySelections` off: only
+ * the reference variables the tile can't be queried without.
+ */
+function getUnappliedPreviewBlockingFilterNames(
+  unsatisfiedRequiredFilters: DashboardFilter[] | undefined,
+  referenceVariableNames: readonly string[] | undefined,
+): string[] {
+  const referenced = new Set(referenceVariableNames);
+  return getReferenceVariableFilters(unsatisfiedRequiredFilters)
+    .filter(({ name }) => referenced.has(name))
+    .map(({ filter }) => filter.name);
+}
+
+export type PreviewBlockingFilters = {
+  /** Names of the required filters that have nothing selected and block the preview. */
+  missingRequiredFilterNames: string[];
+  /** Whether turning off "Apply filters" would clear the block. */
+  canPreviewWithoutFilters: boolean;
+};
+
+/**
+ * The required filters with nothing selected that block a tile preview.
+ *
+ * With `applySelections` off, only the reference variables the tile can't be
+ * queried without still block. `config` is undefined when no query could be
+ * built, e.g. because a source variable has no selection; the tile then
+ * consumes no broadcast filters and references no template variables.
+ */
+export function getPreviewBlockingFilters({
+  config,
+  sourceId,
+  variables,
+  unsatisfiedRequiredFilters,
+  applySelections,
+  referenceVariableNames,
+}: {
+  config: ChartConfigWithOptDateRange | SavedChartConfig | undefined;
+  sourceId: string | undefined;
+  variables: ChartVariable[] | undefined;
+  unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
+  applySelections: boolean;
+  /** The data source and connection variables the tile's stored config references. */
+  referenceVariableNames: readonly string[] | undefined;
+}): PreviewBlockingFilters {
+  const unappliedNames = getUnappliedPreviewBlockingFilterNames(
+    unsatisfiedRequiredFilters,
+    referenceVariableNames,
+  );
+  if (!applySelections) {
+    return {
+      missingRequiredFilterNames: unappliedNames,
+      canPreviewWithoutFilters: false,
+    };
+  }
+
+  const missingRequiredFilterNames = getBlockingRequiredFilters(
+    unsatisfiedRequiredFilters ?? [],
+    {
+      sourceId,
+      referenceVariableNames,
+      referencedVariableNames:
+        config && variables
+          ? filterReferencedVariables(config, variables).map(v => v.name)
+          : undefined,
+      consumesBroadcastFilters:
+        config != null && configConsumesBroadcastFilters(config, sourceId),
+    },
+  ).map(filter => filter.name);
+  return {
+    missingRequiredFilterNames,
+    canPreviewWithoutFilters: missingRequiredFilterNames.some(
+      name => !unappliedNames.includes(name),
+    ),
+  };
+}
+
 /** What the dashboard's filter state contributes to a tile preview. */
-export type TilePreviewFilters = {
+export type TilePreviewFilters = PreviewBlockingFilters & {
   /** Broadcast filter conditions to query the preview with, in its query language. */
   filters: BroadcastFilter[] | undefined;
   /** The referenced variables, with or without their selections. */
   variables: ChartVariable[] | undefined;
-  /** Names of the required filters that have nothing selected. */
-  missingRequiredFilterNames: string[];
 };
 
 /**
@@ -240,6 +316,14 @@ export function resolveTilePreviewFilters({
   unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
   applySelections: boolean;
 }): TilePreviewFilters {
+  const blocking = getPreviewBlockingFilters({
+    config,
+    sourceId,
+    variables,
+    unsatisfiedRequiredFilters,
+    applySelections,
+    referenceVariableNames,
+  });
   const previewVariables = resolvePreviewVariables({
     config,
     variables,
@@ -247,18 +331,7 @@ export function resolveTilePreviewFilters({
   });
 
   if (!applySelections) {
-    // Without a selection, a variable the tile's source or connection
-    // references leaves nothing to query, so it still blocks.
-    const referenced = new Set(referenceVariableNames);
-    return {
-      filters: undefined,
-      variables: previewVariables,
-      missingRequiredFilterNames: getReferenceVariableFilters(
-        unsatisfiedRequiredFilters,
-      )
-        .filter(({ name }) => referenced.has(name))
-        .map(({ filter }) => filter.name),
-    };
+    return { ...blocking, filters: undefined, variables: previewVariables };
   }
 
   // PromQL tiles take only PromQL conditions; `configConsumesBroadcastFilters`
@@ -269,17 +342,7 @@ export function resolveTilePreviewFilters({
       ? getSqlFilters(filters)
       : undefined;
 
-  return {
-    filters: previewFilters,
-    variables: previewVariables,
-    missingRequiredFilterNames: getBlockingRequiredFilterNames({
-      config,
-      sourceId,
-      unsatisfiedRequiredFilters,
-      referencedVariables: previewVariables,
-      referenceVariableNames,
-    }),
-  };
+  return { ...blocking, filters: previewFilters, variables: previewVariables };
 }
 
 /** The config with the broadcast filters in its own query language attached. */

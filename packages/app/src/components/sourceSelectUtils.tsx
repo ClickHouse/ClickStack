@@ -129,11 +129,13 @@ export function useWithSourceVariableItems(
     if (items.length === 0) return sourceItems;
     // Mantine renders ungrouped items after a group as part of it, so a flat
     // source list gets a header of its own
-    const isFlat = sourceItems.some(item => !('group' in item));
+    const ungrouped = sourceItems.filter(
+      (item): item is ComboboxItem => !('group' in item),
+    );
     return [
       { group: 'Variables', items },
-      ...(isFlat
-        ? [{ group: 'Sources', items: sourceItems as ComboboxItem[] }]
+      ...(ungrouped.length > 0
+        ? [{ group: 'Sources', items: ungrouped }]
         : sourceItems),
     ];
   }, [enabled, sourceVariables, allowedSourceKinds, sourceItems]);

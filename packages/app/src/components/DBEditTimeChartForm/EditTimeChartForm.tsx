@@ -17,7 +17,6 @@ import {
   displayTypeSupportsRawSqlAlerts,
   isTimeSeriesDisplayType,
 } from '@hyperdx/common-utils/dist/core/utils';
-import { getBlockingRequiredFilters } from '@hyperdx/common-utils/dist/dashboardFilterValues';
 import {
   displayTypeRequiresSource,
   isRawSqlSavedChartConfig,
@@ -49,7 +48,7 @@ import {
   Text,
   Textarea,
 } from '@mantine/core';
-import { useDebouncedValue, useDisclosure, usePrevious } from '@mantine/hooks';
+import { useDisclosure, usePrevious } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
   IconBracketsContain,
@@ -118,10 +117,12 @@ import { ChartPreviewPanel } from './ChartPreviewPanel';
 import { ChartSaveActions } from './ChartSaveActions';
 import { ErrorNotificationMessage } from './ErrorNotificationMessage';
 import { useBuilderToSqlConversion } from './useBuilderToSqlConversion';
+import { useDebouncedFormValues } from './useDebouncedFormValues';
 import {
   buildChartConfigForExplanations,
   computeDbTimeChartConfig,
   displayTypeToActiveTab,
+  getPreviewBlockingFilters,
   resolveTilePreviewFilters,
   TABS_WITH_GENERATED_SQL,
   withBroadcastFilters,
@@ -411,6 +412,17 @@ export default function EditTimeChartForm({
           ? `Select a source for $${sourceVariableName} in the filter bar to save this tile`
           : `The source selected for $${sourceVariableName} can't be used with this chart type`;
 
+  // A variable can select a source on another connection than the one a raw
+  // SQL query runs on, which the dashboard blocks too
+  const previewBlockedReason =
+    isRawSqlInput &&
+    usesReferenceVariable &&
+    tableSource != null &&
+    resolvedConnection != null &&
+    tableSource.connection !== resolvedConnection
+      ? "The selected data source is on a different connection than this tile's query. Select a source on the same connection."
+      : undefined;
+
   const databaseName = tableSource?.from.databaseName;
   const tableName = tableSource?.from.tableName;
 
@@ -619,26 +631,33 @@ export default function EditTimeChartForm({
     };
   }, [queriedConfig, previewDashboardFilters]);
 
+  const debouncedForm = useDebouncedFormValues(watch, getValues, 300);
+
   // With no selection for a variable it references the tile has nothing to
   // query, so there may be no queried config to compute the block from.
-  const missingRequiredFilterNames = useMemo(() => {
-    if (previewDashboardFilters) {
-      return previewDashboardFilters.missingRequiredFilterNames;
-    }
-    const unresolved = referenceVariableNames.filter(
-      name => !referenceVariableValues.get(name),
-    );
-    return unresolved.length > 0
-      ? getBlockingRequiredFilters(unsatisfiedRequiredFilters ?? [], {
-          referenceVariableNames: unresolved,
-          consumesBroadcastFilters: false,
-        }).map(filter => filter.name)
-      : undefined;
+  const previewBlockingFilters = useMemo(() => {
+    if (previewDashboardFilters) return previewDashboardFilters;
+    if (
+      !referenceVariableNames.some(name => !referenceVariableValues.get(name))
+    )
+      return undefined;
+    return getPreviewBlockingFilters({
+      config: convertFormStateToSavedChartConfig(debouncedForm, tableSource),
+      sourceId: undefined,
+      variables,
+      unsatisfiedRequiredFilters,
+      applySelections: resolvedApplyFilters,
+      referenceVariableNames,
+    });
   }, [
     previewDashboardFilters,
     referenceVariableNames,
     referenceVariableValues,
+    debouncedForm,
+    tableSource,
+    variables,
     unsatisfiedRequiredFilters,
+    resolvedApplyFilters,
   ]);
 
   const dbTimeChartConfig = useMemo(
@@ -646,10 +665,6 @@ export default function EditTimeChartForm({
     [previewConfig, alert],
   );
 
-  // Casting because `useWatch` returns a deep partial type, but we know that the
-  // form state is complete due to default values set above.
-  const watchedForm = useWatch({ control }) as ChartEditorFormState;
-  const [debouncedForm] = useDebouncedValue(watchedForm, 300);
   const additionalAlertWarnings = useMemo(() => {
     if (alert == null) return [];
     const config = convertFormStateToSavedChartConfig(
@@ -1510,7 +1525,13 @@ export default function EditTimeChartForm({
           showSampleEvents={showSampleEvents}
           showGeneratedPromql={isPromqlInput}
           dbTimeChartConfig={dbTimeChartConfig}
-          missingRequiredFilterNames={missingRequiredFilterNames}
+          missingRequiredFilterNames={
+            previewBlockingFilters?.missingRequiredFilterNames
+          }
+          canPreviewWithoutFilters={
+            previewBlockingFilters?.canPreviewWithoutFilters
+          }
+          blockedReason={previewBlockedReason}
           setValue={(name, value) => setValue(name, value)}
           setDisplayType={type =>
             setValue('displayType', type, { shouldDirty: true })

@@ -74,7 +74,10 @@ export const AdhocFilterEditForm = ({
           ),
       );
   }, [otherFilters, sourceType, sourceIds, appliesToSourceIds]);
-  const allowedSourceKinds = getAdhocFilterSourceKinds(sourceType);
+  const allowedSourceKinds = useMemo(
+    () => getAdhocFilterSourceKinds(sourceType),
+    [sourceType],
+  );
   const referenceVariableValues = useReferenceVariableValues();
   const tableConnections = useMemo(() => {
     const resolvedIds = new Set(
@@ -83,13 +86,14 @@ export const AdhocFilterEditForm = ({
       ),
     );
     // A data source variable can select a source of a kind this filter can't use
-    const kinds = getAdhocFilterSourceKinds(sourceType);
     return (allSources ?? [])
       .filter(
-        source => resolvedIds.has(source.id) && kinds.includes(source.kind),
+        source =>
+          resolvedIds.has(source.id) &&
+          allowedSourceKinds.includes(source.kind),
       )
       .map(tcFromSource);
-  }, [allSources, sourceIds, referenceVariableValues, sourceType]);
+  }, [allSources, sourceIds, referenceVariableValues, allowedSourceKinds]);
   // Kept visible for a saved PromQL filter so its source type can be changed
   const showSourceType =
     sourceType === 'promql' ||

@@ -19,6 +19,7 @@ import {
   buildSampleEventsConfig,
   computeDbTimeChartConfig,
   displayTypeToActiveTab,
+  getPreviewBlockingFilters,
   isQueryReady,
   resolvePreviewVariables,
   resolveTilePreviewFilters,
@@ -696,6 +697,7 @@ describe('resolveTilePreviewFilters', () => {
       filters: dashboardFilters,
       variables: [],
       missingRequiredFilterNames: [],
+      canPreviewWithoutFilters: false,
     });
   });
 
@@ -708,6 +710,7 @@ describe('resolveTilePreviewFilters', () => {
       filters: undefined,
       variables: [{ name: 'service', values: [] }],
       missingRequiredFilterNames: [],
+      canPreviewWithoutFilters: false,
     });
   });
 
@@ -823,6 +826,79 @@ describe('resolveTilePreviewFilters', () => {
       resolve({ unsatisfiedRequiredFilters, applySelections: false })
         .missingRequiredFilterNames,
     ).toEqual([]);
+  });
+});
+
+describe('getPreviewBlockingFilters', () => {
+  const sourceVariable: DashboardFilter = {
+    id: 'logs',
+    type: 'DATA_SOURCE',
+    name: 'Logs source',
+    allowedSourceKinds: [SourceKind.Log],
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'logs',
+    minSelections: 1,
+    maxSelections: 1,
+  };
+  const requiredVariable: DashboardFilter = {
+    id: 'env',
+    type: 'STATIC_LIST',
+    name: 'Environment',
+    options: ['prod'],
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'env',
+    minSelections: 1,
+  };
+  const rawSqlWithVariable: ChartConfigWithDateRange = {
+    configType: 'sql',
+    sqlTemplate: "SELECT count() FROM logs WHERE env = '$env'",
+    connection: 'clickhouse',
+    dateRange,
+  };
+
+  const getBlocking = (
+    overrides: Partial<Parameters<typeof getPreviewBlockingFilters>[0]> = {},
+  ) =>
+    getPreviewBlockingFilters({
+      config: rawSqlWithVariable,
+      sourceId: undefined,
+      variables: [{ name: 'env', values: [] }],
+      unsatisfiedRequiredFilters: [sourceVariable, requiredVariable],
+      applySelections: true,
+      referenceVariableNames: ['logs'],
+      ...overrides,
+    });
+
+  it('offers turning off the filters when that clears part of the block', () => {
+    expect(getBlocking()).toEqual({
+      missingRequiredFilterNames: ['Logs source', 'Environment'],
+      canPreviewWithoutFilters: true,
+    });
+  });
+
+  it('does not offer turning off the filters when only a reference variable blocks', () => {
+    expect(
+      getBlocking({ unsatisfiedRequiredFilters: [sourceVariable] }),
+    ).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
+  });
+
+  it('does not offer turning off the filters when they are already off', () => {
+    expect(getBlocking({ applySelections: false })).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
+  });
+
+  it('blocks only on reference variables when no query could be built', () => {
+    expect(getBlocking({ config: undefined })).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
   });
 });
 
