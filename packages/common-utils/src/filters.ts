@@ -1,6 +1,7 @@
 import * as SQLParser from 'node-sql-parser';
 
 import { escapeSqlString, replaceJsonExpressions } from '@/core/utils';
+import { getSourceDependentMacrosUsed, replaceMacros } from '@/macros';
 import { parse } from '@/queryParser';
 import {
   AdhocDashboardFilter,
@@ -770,7 +771,7 @@ export type DashboardFilterQueryIssue = {
   filterName: string;
   /** Query language of the filter's `where` clause */
   language: 'lucene' | 'sql';
-  /** The raw `where` clause that failed to parse */
+  /** The raw `where` clause, or a SQL query filter's template, that failed to validate */
   where: string;
   /** Why it failed, when the clause itself parses but its variables don't resolve. */
   detail?: string;
@@ -803,6 +804,23 @@ export function validateDashboardFilterQueries(
   ).map(declaration => ({ ...declaration, values: [] }));
 
   for (const filter of filters) {
+    if (isSqlQueryFilter(filter)) {
+      const detail = validateSqlQueryFilterTemplate(
+        filter.sqlTemplate,
+        variables,
+      );
+      if (detail) {
+        issues.push({
+          filterId: filter.id,
+          filterName: filter.name,
+          language: 'sql',
+          where: filter.sqlTemplate,
+          detail,
+        });
+      }
+      continue;
+    }
+
     // Only ClickHouse-queried filters carry a values query to validate.
     // A PromQL ad hoc filter may store a `where`, but nothing reads it.
     const isSqlAdhoc = isAdhocFilter(filter) && filter.sourceType === 'sql';
@@ -830,6 +848,28 @@ export function validateDashboardFilterQueries(
     }
   }
   return issues;
+}
+
+/**
+ * Why a SQL query filter's template can't expand, or undefined when it can.
+ * The SQL itself is not parsed: ClickHouse syntax is only checked when it runs.
+ */
+export function validateSqlQueryFilterTemplate(
+  sqlTemplate: string,
+  variables: ChartVariable[],
+): string | undefined {
+  try {
+    const sourceMacros = getSourceDependentMacrosUsed(sqlTemplate);
+    if (sourceMacros.length > 0) {
+      return `SQL query filters have no source, so ${sourceMacros
+        .map(macro => `$__${macro}`)
+        .join(' and ')} cannot be used`;
+    }
+    replaceMacros({ sqlTemplate, variables });
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }
 
 /** Derive the default `variableName` for a filter from its display name. */
@@ -936,6 +976,13 @@ export function isAdhocFilter<T extends { type: DashboardFilterKind }>(
   filter: T,
 ): filter is Extract<T, { type: 'ADHOC' }> {
   return filter.type === 'ADHOC';
+}
+
+/** Type guard for SQL_QUERY type filters. */
+export function isSqlQueryFilter<T extends { type: DashboardFilterKind }>(
+  filter: T,
+): filter is Extract<T, { type: 'SQL_QUERY' }> {
+  return filter.type === 'SQL_QUERY';
 }
 
 /**
