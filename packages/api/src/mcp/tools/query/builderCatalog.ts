@@ -14,7 +14,7 @@ export const BUILDER_TOOLS_LIST = [
   '  • clickstack_event_deltas — attributes that differ between two row groups',
   '  • clickstack_emerging_signals — patterns new or gone vs a baseline window',
   '  • clickstack_trace_waterfall — one trace as a parent/child span tree',
-  '  • clickstack_trace_top_time_consuming_operations — slowest child operations in a trace',
+  '  • clickstack_trace_top_time_consuming_ops — slowest child operations in a trace',
 ].join('\n');
 
 /** When raw SQL is actually warranted. */
