@@ -1,16 +1,17 @@
-import {
-  ClickHouseError,
-  type ClickHouseSettings,
-} from '@clickhouse/client-common';
+import { type ClickHouseSettings } from '@clickhouse/client-common';
 import { getHeatmapMode } from '@hyperdx/common-utils/dist/core/heatmap';
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
+import { PromqlChartError } from '@hyperdx/common-utils/dist/core/promqlChart';
 import {
   convertToCategoricalChartConfig,
   getFirstTimestampValueExpression,
   isTimeSeriesDisplayType,
   splitAndTrimWithBracket,
 } from '@hyperdx/common-utils/dist/core/utils';
-import { isBuilderSavedChartConfig } from '@hyperdx/common-utils/dist/guards';
+import {
+  isBuilderSavedChartConfig,
+  isPromqlSavedChartConfig,
+} from '@hyperdx/common-utils/dist/guards';
 import { UnknownVariableError } from '@hyperdx/common-utils/dist/macroErrors';
 import type {
   ChartConfigWithDateRange,
@@ -27,18 +28,26 @@ import ms from 'ms';
 
 import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';
+import { PromQLQueryError } from '@/controllers/promql';
 import { getSource } from '@/controllers/sources';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
+import {
+  MCP_QUERY_MAX_EXECUTION_SEC,
+  MCP_TIMEOUT_GRACE_MS,
+  MCP_TOOL_TIMEOUT_MS,
+} from '@/mcp/utils/timeout';
 import {
   convertToInternalTileConfig,
   isConfigTile,
 } from '@/routers/external-api/v2/utils/dashboards';
 import { isQueryTimeoutError } from '@/tasks/checkAlerts/errors';
+import { isClickHouseError } from '@/utils/clickhouseErrors';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 import { externalDashboardTileSchemaWithId } from '@/utils/zod';
 
+import { runPromqlTile } from './promqlTile';
 import { runEventPatterns } from './runEventPatterns';
 
 // ─── Source body expression helpers ──────────────────────────────────────────
@@ -68,16 +77,74 @@ export function resolveBodyExpression(
   return multiExpr.length === 1 ? expression : multiExpr[0];
 }
 
-/** Reject bodyExpression values containing SQL-unsafe characters. */
+/**
+ * A bodyExpression made only of word characters, `.`, `'`, `:`, `[`, `]` and
+ * `-`. No spaces, parentheses, commas or operators, so it cannot carry a
+ * function call or a second condition.
+ *
+ * Accepts: `Body`, `SpanAttributes['http.url']`
+ * Rejects: `Body) OR (1=1`, `lower(Body)`
+ */
 // eslint-disable-next-line no-useless-escape
-export const SAFE_BODY_EXPR_CHARS = /^[\w.':\[\]\-]+$/;
+const SAFE_BODY_EXPR_CHARS = /^[\w.':\[\]\-]+$/;
+
+/**
+ * The column argument of JSONExtractString: an identifier (letters, digits,
+ * `_`, `.`; not starting with a digit), optionally followed by one map key in
+ * single quotes. The key may not contain `'` or `\`.
+ *
+ * Accepts: `Body`, `ResourceAttributes.service`, `LogAttributes['object']`
+ * Rejects: `lower(Body)`, `Body'`, `LogAttributes['a'']`
+ */
+const COLUMN_OR_MAP_REF = /^[A-Za-z_][\w.]*$|^[A-Za-z_][\w.]*\['[^'\\]*'\]$/;
+
+/**
+ * One complete single-quoted SQL string. Inside the quotes, any character
+ * other than `'` and `\`, a backslash escape (`\'`, `\\`), or a doubled
+ * quote (`''`).
+ *
+ * Accepts: `'message'`, `'it\'s'`, `'it''s'`
+ * Rejects: `message`, `'a' || 'b'`, `'m'' OR 1=1` (unterminated)
+ */
+const SQL_STRING_LITERAL = /^'([^'\\]|\\.|'')*'$/;
+
+/**
+ * A whole expression of the form `JSONExtractString(...)`. Captures the raw
+ * argument list (which may span lines, hence the `s` flag) for
+ * `normalizeBodyExpression` to split and validate argument by argument.
+ */
+const JSON_EXTRACT_STRING_CALL = /^JSONExtractString\((.*)\)$/s;
+
+/**
+ * Return a caller-supplied bodyExpression in a form that is safe to embed in
+ * SQL, or null when it is not allowed. Accepts a column or map reference, or
+ * JSONExtractString(<column or map reference>, '<key>', ...), the form the app
+ * generates for JSON fields. The JSONExtractString form is rebuilt from its
+ * validated arguments, so nothing else reaches the SQL.
+ */
+export function normalizeBodyExpression(expression: string): string | null {
+  const trimmed = expression.trim();
+  if (SAFE_BODY_EXPR_CHARS.test(trimmed)) return trimmed;
+  const call = JSON_EXTRACT_STRING_CALL.exec(trimmed);
+  if (!call) return null;
+  const [column, ...keys] = splitAndTrimWithBracket(call[1]);
+  if (
+    column == null ||
+    keys.length === 0 ||
+    !COLUMN_OR_MAP_REF.test(column) ||
+    !keys.every(k => SQL_STRING_LITERAL.test(k))
+  ) {
+    return null;
+  }
+  return `JSONExtractString(${[column, ...keys].join(', ')})`;
+}
 
 // ─── Safety limits ───────────────────────────────────────────────────────────
 
 /** ClickHouse settings applied to all MCP query-tool executions.
  *  readonly=2 so max_execution_time can be set (readonly=1 rejects it). */
 export const MCP_CLICKHOUSE_SETTINGS: ClickHouseSettings = {
-  max_execution_time: 30,
+  max_execution_time: MCP_QUERY_MAX_EXECUTION_SEC,
   readonly: '2',
 };
 
@@ -86,7 +153,7 @@ export const MCP_CLICKHOUSE_SETTINGS: ClickHouseSettings = {
  * max_execution_time so ClickHouse returns a clean timeout before the HTTP
  * connection is aborted.
  */
-export const MCP_REQUEST_TIMEOUT = 32_000; // 30s query limit + 2s buffer
+export const MCP_REQUEST_TIMEOUT = MCP_TOOL_TIMEOUT_MS + MCP_TIMEOUT_GRACE_MS;
 
 // ─── Increase top-N cap hint ────────────────────────────────────────────────
 
@@ -258,11 +325,12 @@ export function buildTile(
 export function parseTimeRange(
   startTime?: string,
   endTime?: string,
+  defaultLookbackMs: number = ms('15m'),
 ): { error: string } | { startDate: Date; endDate: Date } {
   const endDate = endTime ? new Date(endTime) : new Date();
   const startDate = startTime
     ? new Date(startTime)
-    : new Date(endDate.getTime() - ms('15m'));
+    : new Date(endDate.getTime() - defaultLookbackMs);
   if (isNaN(endDate.getTime()) || isNaN(startDate.getTime())) {
     return {
       error: 'Invalid startTime or endTime: must be valid ISO 8601 strings',
@@ -287,8 +355,13 @@ function isEmptyResult(result: unknown): boolean {
   return false;
 }
 
-function formatQueryResult(result: unknown) {
-  const { data: trimmedResult, isTrimmed } = trimToolResponse(result);
+function formatQueryResult(result: unknown, maxResponseChars?: number) {
+  // Trimmed under its response key, so note paths read `result.data…`.
+  const {
+    data: { result: trimmedResult },
+    isTrimmed,
+    notes: trimNotes,
+  } = trimToolResponse({ result }, maxResponseChars);
   const empty = isEmptyResult(result);
   return {
     content: [
@@ -300,6 +373,7 @@ function formatQueryResult(result: unknown) {
             ...(isTrimmed
               ? {
                   note: 'Result was trimmed for context size. Narrow the time range or add filters to reduce data.',
+                  trimNotes,
                 }
               : {}),
             ...(empty
@@ -409,6 +483,14 @@ export async function runConfigTile(
     abortSignal?: AbortSignal;
     /** Dashboard variables and their selected values. Omitted when not in a dashboard context. */
     variables?: ChartVariable[];
+    /** Serialized size the result is trimmed to. Defaults to trimToolResponse's limit. */
+    maxResponseChars?: number;
+    /** Post-aggregation SQL HAVING condition for builder tiles (MCP table tool). */
+    having?: string;
+    /** SQL LIMIT for builder tiles that aren't searches (MCP table tool). */
+    limit?: number;
+    /** Source lookup for raw SQL tiles, so a batch can share one per-call cache. */
+    lookupSource?: (sourceId: string) => ReturnType<typeof getSource>;
   },
 ) {
   if (!isConfigTile(tile)) {
@@ -567,9 +649,23 @@ export async function runConfigTile(
         ? { granularity: options?.granularity ?? 'auto' }
         : {};
 
+    // having/limit come from the MCP table tool's own inputs, not from the
+    // tile, so dashboard tiles and the app keep their current behaviour.
+    const tableToolOverrides = isSearch
+      ? {}
+      : {
+          ...(options?.having
+            ? { having: options.having, havingLanguage: 'sql' as const }
+            : {}),
+          ...(options?.limit
+            ? { limit: { limit: options.limit, offset: 0 } }
+            : {}),
+        };
+
     const chartConfig = {
       ...builderConfig,
       ...searchOverrides,
+      ...tableToolOverrides,
       ...metricSelectOverrides,
       ...granularityOverride,
       from: {
@@ -606,8 +702,34 @@ export async function runConfigTile(
           abort_signal: options?.abortSignal,
         },
       });
-      return formatQueryResult(result);
+      return formatQueryResult(result, options?.maxResponseChars);
     } catch (e) {
+      return clickHouseErrorResult(e);
+    }
+  }
+
+  // PromQL is evaluated by the Prometheus API, not the SQL renderer.
+  if (isPromqlSavedChartConfig(savedConfig)) {
+    try {
+      return formatQueryResult(
+        await runPromqlTile({
+          teamId,
+          config: savedConfig,
+          dateRange: [startDate, endDate],
+          variables: options?.variables,
+          signal: options?.abortSignal,
+        }),
+      );
+    } catch (e) {
+      if (e instanceof PromQLQueryError) {
+        return e.category === 'user'
+          ? mcpUserError(e.message)
+          : mcpServerError(e.message);
+      }
+      if (e instanceof PromqlChartError) {
+        return mcpUserError(e.message);
+      }
+      // The table-function backend throws ClickHouse errors as they come.
       return clickHouseErrorResult(e);
     }
   }
@@ -620,7 +742,9 @@ export async function runConfigTile(
     metricTables?: MetricTable;
   } = {};
   if (savedConfig.source) {
-    const source = await getSource(teamId, savedConfig.source);
+    const source = await (options?.lookupSource
+      ? options.lookupSource(savedConfig.source)
+      : getSource(teamId, savedConfig.source));
     if (source) {
       sourceFields = {
         from: source.from,
@@ -676,9 +800,9 @@ export async function runConfigTile(
         abort_signal: options?.abortSignal,
       },
     });
-    return formatQueryResult(result);
+    return formatQueryResult(result, options?.maxResponseChars);
   } catch (e) {
-    return clickHouseErrorResult(e);
+    return clickHouseErrorResult(e, { rawSql: true });
   }
 }
 
@@ -716,51 +840,6 @@ const SERVER_NODE_ERROR_CODES = new Set([
   'EPIPE',
   'UND_ERR_CONNECT_TIMEOUT',
 ]);
-
-/**
- * Check whether an error is a ClickHouseError, using both `instanceof`
- * and a constructor-name fallback. The fallback handles the case where
- * multiple copies of `@clickhouse/client-common` are installed (e.g.
- * the root workspace uses one version while `common-utils` bundles
- * another). In that scenario, `instanceof` fails because the class
- * identities are different even though the shapes are identical.
- */
-function isClickHouseError(
-  err: unknown,
-): err is ClickHouseError & { type: string } {
-  if (err instanceof ClickHouseError) return true;
-  if (
-    err instanceof Error &&
-    err.constructor?.name === 'ClickHouseError' &&
-    'type' in err &&
-    typeof (err as Record<string, unknown>).type === 'string'
-  ) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Extract the ClickHouse error `type` from an error, walking `.cause` to
- * find the original `ClickHouseError` from `@clickhouse/client-common`.
- *
- * Uses `instanceof` with a constructor-name fallback to handle duplicate
- * package installations across the monorepo (see `isClickHouseError`).
- *
- * @internal Exported for testing only.
- */
-export function getClickHouseErrorType(e: unknown): string | undefined {
-  if (!(e instanceof Error)) return undefined;
-  // ClickHouseQueryError wraps the original ClickHouseError as .cause
-  if (isClickHouseError(e.cause)) {
-    return e.cause.type;
-  }
-  // Direct ClickHouseError (has .type on itself)
-  if (isClickHouseError(e)) {
-    return e.type;
-  }
-  return undefined;
-}
 
 /**
  * Check whether an error represents a system-level infrastructure failure
@@ -835,11 +914,11 @@ function hasNodeErrorCode(val: unknown, codes: ReadonlySet<string>): boolean {
  */
 export function clickHouseErrorResult(
   e: unknown,
-  context?: string | { prefix?: string; suffix?: string },
+  context?: string | { prefix?: string; suffix?: string; rawSql?: boolean },
 ): McpErrorResult {
-  const { prefix, suffix } =
+  const { prefix, suffix, rawSql } =
     typeof context === 'string'
-      ? { prefix: context, suffix: undefined }
+      ? { prefix: context, suffix: undefined, rawSql: undefined }
       : (context ?? {});
 
   // Prefer .message, but fall back to .cause.message when the wrapper
@@ -851,7 +930,7 @@ export function clickHouseErrorResult(
         (e.cause instanceof Error ? e.cause.message : '') ||
         String(e)
       : String(e);
-  const hint = errorHint(raw, e);
+  const hint = errorHint(raw, e, { rawSql });
   const base = hint ? `${raw}\n\nHINT: ${hint}` : raw;
   const text = `${prefix ? `${prefix}: ` : ''}${base}${suffix ? ` ${suffix}` : ''}`;
 
@@ -891,7 +970,11 @@ export function isQueryOutOfTime(e: unknown): boolean {
 }
 
 /** @internal Exported for testing only. */
-export function errorHint(msg: string, error?: unknown): string | null {
+export function errorHint(
+  msg: string,
+  error?: unknown,
+  options?: { rawSql?: boolean },
+): string | null {
   const unknownVariableError = findCause(
     error,
     (e): e is UnknownVariableError => e instanceof UnknownVariableError,
@@ -946,6 +1029,22 @@ export function errorHint(msg: string, error?: unknown): string | null {
     return (
       'The query returned too many rows. ' +
       'Add a LIMIT, narrow the time range, or add filters to reduce the result set.'
+    );
+  }
+  // Checked before unknown identifiers: "Unknown table expression identifier"
+  // names a table, so describe_source's column list would not help. Only raw
+  // SQL names its own table; source-based tools would be sent back to the
+  // same source table that just failed.
+  if (
+    options?.rawSql &&
+    /Unknown table expression identifier|(Table|Database) \S+ does not exist|UNKNOWN_(TABLE|DATABASE)/.test(
+      msg,
+    )
+  ) {
+    return (
+      'Use the `table` of a source from clickstack_list_sources, which is ' +
+      'qualified with its database. Unqualified names resolve only in the ' +
+      "connection's default database."
     );
   }
   if (

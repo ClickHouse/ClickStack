@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import cx from 'classnames';
 import uPlot from 'uplot';
 import UplotReact from 'uplot-react';
-import { useElementSize } from '@mantine/hooks';
+import { useElementSize, useMergedRef } from '@mantine/hooks';
 
+import { useStableValue } from '@/hooks/useStableValue';
 import { NumberFormat } from '@/types';
 
 import {
+  formatBucketBound,
+  formatBucketRange,
   formatHeatmapTick,
   formatHeatmapValue,
   heatmapYAxisOptions,
@@ -70,6 +73,16 @@ export function HeatmapPlot({
     HighlightedPoint | undefined
   >(undefined);
 
+  // The tooltip is fixed to the viewport, so a scroll under a still cursor
+  // would leave it behind; hide it until the next mouse move.
+  const hasHighlight = highlightedPoint != null;
+  useEffect(() => {
+    if (!hasHighlight) return;
+    const hide = () => setHighlightedPoint(undefined);
+    window.addEventListener('scroll', hide, { capture: true, passive: true });
+    return () => window.removeEventListener('scroll', hide, { capture: true });
+  }, [hasHighlight]);
+
   // Gate tooltip display on actual mouse interaction. uPlot fires setCursor
   // on init (before user hovers), which would show the tooltip on page load.
   const mouseInsideRef = useRef(false);
@@ -106,6 +119,8 @@ export function HeatmapPlot({
   });
 
   const { ref, width, height } = useElementSize();
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const mergedRef = useMergedRef(ref, setContainer);
 
   // Reapply the URL-backed selection whenever the bounds prop changes
   // (e.g. a fresh drag-select arrives via the round-trip through the
@@ -131,51 +146,46 @@ export function HeatmapPlot({
   // render; depending on its identity would rebuild tickFormatter, then
   // the options memo, then uplot-react would see new top-level keys via
   // optionsUpdateState and treat the change as 'create', destroying the
-  // chart and wiping u.select. Hashing the contents lets the memo skip
-  // when the actual format is unchanged. (HDX-4147)
-  //
-  // Relies on NumberFormat being JSON-serializable: today it is plain
-  // config (string + number fields), so JSON.stringify is a faithful
-  // fingerprint. If the type ever grows a function-valued field
-  // (e.g. a custom `formatter` callback), switch to a shallow-equal
-  // helper keyed on the known fields, because functions stringify to
-  // undefined and would silently skip rebuilds.
-  const numberFormatKey = useMemo(
-    () => (numberFormat ? JSON.stringify(numberFormat) : ''),
-    [numberFormat],
-  );
+  // chart and wiping u.select.
+  const stableNumberFormat = useStableValue(numberFormat);
   const tickFormatter = useCallback(
-    (value: number) => formatHeatmapTick(value, scaleType, numberFormat),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [numberFormatKey, scaleType],
+    (value: number) => formatHeatmapTick(value, scaleType, stableNumberFormat),
+    [stableNumberFormat, scaleType],
+  );
+  const boundFormatter = useCallback(
+    (bound: number) => formatBucketBound(bound, stableNumberFormat),
+    [stableNumberFormat],
   );
 
   const plotData = useMemo(() => gridToPlotData(grid), [grid]);
   const rowCount = heatmapRowCount(grid.yAxis);
   const cellKind = heatmapCellKind(grid.yAxis);
 
-  // Key on label content: every refresh builds a fresh labels array, and new
-  // options make uplot-react recreate the chart instead of updating its data.
-  const seriesLabelsKey =
-    grid.yAxis.type === 'series'
-      ? JSON.stringify(grid.yAxis.labels)
-      : undefined;
-  const seriesLabels = useMemo<string[] | undefined>(
-    () =>
-      seriesLabelsKey === undefined ? undefined : JSON.parse(seriesLabelsKey),
-    [seriesLabelsKey],
+  // Fresh grids carry fresh arrays, and new options make uplot-react recreate
+  // the chart instead of updating its data.
+  const seriesLabels = useStableValue(
+    grid.yAxis.type === 'series' ? grid.yAxis.labels : undefined,
+  );
+  const bucketBounds = useStableValue(
+    grid.yAxis.type === 'buckets' ? grid.yAxis.bounds : undefined,
   );
 
   const bucketPercentiles = useMemo(
     () =>
-      grid.yAxis.type === 'numeric' ? computeBucketPercentiles(grid) : null,
+      grid.yAxis.type === 'series' ? null : computeBucketPercentiles(grid),
     [grid],
   );
 
   const options: uPlot.Options = useMemo(() => {
     const opt = baseHeatmapOptions;
     const themedSeries = buildSeriesForPalette(palette, cellKind);
-    const yAxis = heatmapYAxisOptions(seriesLabels, scaleType, tickFormatter);
+    const yAxis = heatmapYAxisOptions({
+      seriesLabels,
+      bucketBounds,
+      scaleType,
+      tickFormatter,
+      boundFormatter,
+    });
     return {
       ...opt,
       ...(yAxis.scale != null
@@ -224,6 +234,9 @@ export function HeatmapPlot({
         },
       },
       plugins: [
+        // False positive: onPointHighlight reads mouseInsideRef on cursor
+        // moves, not during render.
+        // eslint-disable-next-line react-hooks/refs
         highlightDataPlugin({
           margin: 20,
           cellKind,
@@ -287,6 +300,8 @@ export function HeatmapPlot({
     palette,
     hasFilter,
     seriesLabels,
+    bucketBounds,
+    boundFormatter,
     cellKind,
   ]);
 
@@ -308,15 +323,25 @@ export function HeatmapPlot({
               numberFormat,
             ),
           }
-        : {
-            kind: 'distribution',
-            formattedY: tickFormatter(highlightedPoint.yVal),
-            percentile: bucketPercentiles?.get(highlightedRow),
-          };
+        : bucketBounds != null
+          ? {
+              kind: 'bucket',
+              formattedRange: formatBucketRange(
+                bucketBounds,
+                highlightedRow,
+                boundFormatter,
+              ),
+              percentile: bucketPercentiles?.get(highlightedRow),
+            }
+          : {
+              kind: 'distribution',
+              formattedY: tickFormatter(highlightedPoint.yVal),
+              percentile: bucketPercentiles?.get(highlightedRow),
+            };
 
   return (
     <div
-      ref={ref}
+      ref={mergedRef}
       className={cx('heatmap-selection-container', className)}
       style={{ width: '100%', height: '100%', position: 'relative' }}
       onClick={() => {
@@ -361,8 +386,7 @@ export function HeatmapPlot({
         <HeatmapTooltip
           point={highlightedPoint}
           cell={highlightedCell}
-          width={width}
-          height={height}
+          containerRect={container?.getBoundingClientRect()}
           showDragHint={!!onFilter}
         />
       )}

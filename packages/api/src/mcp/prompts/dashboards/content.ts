@@ -3,15 +3,28 @@
 // no AI hallmarks) so the prose-lint hook treats it like any other
 // reviewer-facing artifact.
 
+import {
+  PROMQL_DASHBOARD_SECTION,
+  PROMQL_QUERY_GUIDE_SECTION,
+} from './promqlContent';
+
+/** Which optional sections a prompt includes. */
+export type PromptOptions = {
+  /** Whether PromQL is enabled for this deployment. */
+  promql?: boolean;
+};
+
 export function buildCreateDashboardPrompt(
   sourceSummary: string,
   traceSourceId: string,
   logSourceId: string,
   description?: string,
+  options: PromptOptions = {},
 ): string {
   const userContext = description
     ? `\nThe user wants to create a dashboard for: ${description}\nTailor the dashboard tiles to match this goal.\n`
     : '';
+  const promqlSection = options.promql ? `\n\n${PROMQL_DASHBOARD_SECTION}` : '';
 
   return `You are an expert at creating HyperDX observability dashboards.
 ${userContext}
@@ -72,7 +85,7 @@ Use RAW SQL tiles (with connectionId) only for queries the builder cannot expres
   Use when you need JOINs, sub-queries, CTEs, or expressions the builder does not generate.
   ALWAYS set sourceId on a raw SQL tile (in addition to connectionId) UNLESS the query reads
   from multiple tables (e.g. JOINs across sources). sourceId enables the $__filters and 
-  $__sourceTable macros. When you can set sourceId, include "AND $__filters" in the WHERE clause.
+  $__sourceTable macros. When you can set sourceId, include "AND $__filters" in the WHERE clause.${promqlSection}
 
 == COLUMN NAMING ==
 
@@ -119,6 +132,8 @@ Apply these before calling clickstack_save_dashboard. Each rule is enforced by t
 9e. MAKE A FILTER REQUIRED ONLY WHEN AN UNSCOPED VIEW IS MEANINGLESS. minSelections: 1 blocks the tiles that read the filter - the ones referencing its $variableName, and the ones its broadcast applies to - until the user picks a value. isGlobalRequirement: true widens that to every tile on the dashboard. Consider pairing either form with savedFilterValues so the dashboard opens on a sensible default rather than blocked.
 
 9f. MAKE A FILTER SINGLE-SELECT WHEN A TILE ONLY MAKES SENSE FOR ONE VALUE. maxSelections: 1 limits the dropdown to one value at a time, for example a host picker feeding a per-host detail view.
+
+9g. SET savedFilterValues TO GIVE THE DASHBOARD A DEFAULT SELECTION. Pass savedFilterValues on clickstack_save_dashboard or clickstack_patch_dashboard to pre-select filter values whenever the dashboard opens. Pair this with a required filter (9e) so the dashboard opens scoped rather than blocked.
 
 10. UPDATE IS REPLACE, NOT MERGE. clickstack_save_dashboard with an id overwrites tiles, containers, and filters in their entirety. Call clickstack_get_dashboard first when you only want to add or rename one entry; do not send a partial set or you will silently drop everything you omitted.
 
@@ -181,7 +196,7 @@ Dashboards open with a 15-minute default window. There is no dashboard-level fie
 - Using $__filter or $__conditionalAll in a Lucene where (they are matched as literal text; switch to whereLanguage: "sql", or write ServiceName:$var).
 - Chaining a filter's where off a filter that is not variable-enabled. Only isVariableEnabled: true publishes the $variableName token; without it the reference resolves to nothing and the downstream dropdown is unscoped or empty.
 - Referencing a filter's OWN variable in its where. That narrows its dropdown to the values already picked, so the rest of the options vanish from a multi-select. Reference a sibling filter's variable instead.
-- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters.
+- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters, connectionId/sqlTemplate to SQL_QUERY filters.
 - Expecting a STATIC_LIST filter to broadcast. It cannot; a tile must reference its $variableName (via $__filter with the column passed explicitly) or nothing changes when the user picks a value.`;
 }
 
@@ -802,8 +817,12 @@ SQL TEMPLATE REFERENCE:
   );
 }
 
-export function buildQueryGuidePrompt(): string {
-  return `Reference guide for writing queries with ClickStack MCP tools (clickstack_timeseries, clickstack_table, clickstack_search, clickstack_event_patterns, clickstack_sql, and clickstack_save_dashboard).
+export function buildQueryGuidePrompt(options: PromptOptions = {}): string {
+  const promqlTool = options.promql ? 'clickstack_promql, ' : '';
+  const promqlSection = options.promql
+    ? `${PROMQL_QUERY_GUIDE_SECTION}\n\n`
+    : '';
+  return `Reference guide for writing queries with ClickStack MCP tools (clickstack_timeseries, clickstack_table, clickstack_search, clickstack_event_patterns, ${promqlTool}clickstack_sql, and clickstack_save_dashboard).
 
 == AGGREGATION FUNCTIONS (aggFn) ==
 
@@ -860,7 +879,7 @@ Used in the "where" field of select items and search tiles.
   OR:                 level:error OR level:fatal
   NOT:                NOT level:debug
   Wildcard:           ServiceName:front*
-  Phrase:             Body:"connection refused"
+  Phrase:             "connection refused"   (default search column, e.g. the log body)
   Exists:             _exists_:http.route
   Range (numeric):    Duration:>1000000000
   Range (inclusive):  http.status_code:[400 TO 499]
@@ -881,13 +900,22 @@ Lucene field:value does NOT mean exact equality. It translates to ilike(field, '
      ServiceName:api*    does NOT mean "starts with api". It means "contains a substring starting with api".
                          In practice this often works for prefix matching, but it is NOT equivalent to SQL LIKE 'api%'.
 
-  For exact matching or true prefix/suffix/contains patterns, use SQL instead:
+  For exact matching in Lucene, quote the value: SpanKind:"Server" compiles to SpanKind = 'Server'
+  (case-sensitive, unlike the unquoted form).
+
+  For true prefix/suffix/contains patterns, use SQL instead:
      Exact:    whereLanguage: "sql", where: "SpanKind = 'Server'"
      Prefix:   whereLanguage: "sql", where: "ServiceName LIKE 'api%'"
-     Contains: whereLanguage: "sql", where: "Body LIKE '%timeout%'"
+     Contains: whereLanguage: "sql", where: "StatusMessage LIKE '%timeout%'"
      Regex:    whereLanguage: "sql", where: "match(ServiceName, '^api-v[0-9]+')"
 
-  When Lucene substring matching is FINE: free-text columns like Body, StatusMessage where substring is the intent.
+  For text in the log body, write a bare Lucene term or phrase (timeout, "connection refused"). It searches the
+  source's default search column (the body for logs) and uses its text index when the source has one. With an
+  index it matches whole tokens (timeout does not match ConnectionTimeoutException); for a substring inside a word, use
+  SQL ILIKE. Body:timeout, Body LIKE and Body ILIKE read the whole column, and Body:"..." is exact equality on
+  the whole body.
+
+  When Lucene substring matching is FINE: free-text columns like StatusMessage where substring is the intent.
   When Lucene substring matching is WRONG: enum-like columns (SpanKind, SeverityText, StatusCode, ServiceName) where you want exact or true prefix match.
 
 *** MAP-ATTRIBUTE GOTCHA ***
@@ -921,7 +949,7 @@ Alternative to Lucene. Set whereLanguage: "sql" when using SQL syntax.
   Basic:              SeverityText = 'error'
   AND/OR:             ServiceName = 'api' AND StatusCode = 'STATUS_CODE_ERROR'
   IN:                 ServiceName IN ('api', 'web', 'worker')
-  LIKE:               Body LIKE '%timeout%'
+  LIKE:               StatusMessage LIKE '%timeout%'
   Comparison:         Duration > 1000000000
   Map access:         SpanAttributes['http.status_code'] = '500'
 
@@ -985,6 +1013,11 @@ For configType: "sql" tiles, write ClickHouse SQL with template macros:
 
   IMPORTANT: Always include a LIMIT clause in table / number / pie / bar SQL queries.
 
+  BATCHING WITH clickstack_sql: to run several independent queries at once, pass
+  queries: [{ id, sql, sourceId?, connectionId? }, ...] (max 10) instead of sql. They run
+  in parallel over one shared time range, and each result reports status ok, error, or
+  timeout. Re-run a timed-out query on its own.
+
 == PER-TILE TYPE CONSTRAINTS ==
 
   number       Exactly 1 select item. No groupBy.
@@ -1024,7 +1057,7 @@ Examples:
   Exponential histogram p95 latency:
     { aggFn: "quantile", level: 0.95, metricType: "exponential histogram", metricName: "http.server.request.duration", alias: "P95 Latency" }, groupBy: "ServiceName"
 
-== NUMBER FORMAT ==
+${promqlSection}== NUMBER FORMAT ==
 
 numberFormat controls how a value renders. Two places to set it:
 
@@ -1135,7 +1168,7 @@ Rules:
 
 Optional dashboard-level filter declarations. Each entry adds a dropdown to the dashboard header. Use this for focused per-dimension dashboards (per-service, per-tenant, per-endpoint) instead of hardcoding the dimension into every tile's where clause.
 
-Two filter types: QUERY_EXPRESSION queries its dropdown values from a source column, while STATIC_LIST declares them inline as a hand-authored options list and is always variable-only (see the static filter shape below).
+Filter types: QUERY_EXPRESSION queries its dropdown values from a source column. STATIC_LIST declares them inline as a hand-authored options list, and SQL_QUERY reads them from a ClickHouse query; both are always variable-only (see their shapes below).
 
 A QUERY_EXPRESSION filter does one of two things with the value the user picks, or both:
 
@@ -1172,6 +1205,19 @@ Static filter shape:
 Example (static list):
   filters: [
     { type: "STATIC_LIST", name: "Environment", options: ["prod", "staging", "dev"], variableName: "env" }
+  ]
+
+SQL query filter shape:
+  { type: "SQL_QUERY", name, connectionId, sqlTemplate, variableName? }
+
+  connectionId         ClickHouse connection the query runs on (from clickstack_list_sources).
+  sqlTemplate          SELECT whose FIRST column becomes the dropdown values, cast to string with nulls and duplicates dropped, in row order (add ORDER BY). May use the time macros and other filters' variables; cannot use $__sourceTable or $__filters, because the filter has no source.
+
+  Use it when the values live in a lookup table, dictionary, or join that no single source column covers; otherwise prefer QUERY_EXPRESSION. Like a static filter it is variable-only, so tiles pass the column explicitly: $__filter(<expression>, $<variableName>).
+
+Example (SQL query, narrowed by another filter's variable):
+  filters: [
+    { type: "SQL_QUERY", name: "Environment", connectionId: "<connection-id>", sqlTemplate: "SELECT DISTINCT env FROM default.envs WHERE $__filter(cloud, $cloud) ORDER BY env", variableName: "env" }
   ]
 
 Example (broadcast to every tile, the common case):
@@ -1224,6 +1270,7 @@ Only add one when the default is wrong. \${service:sqlstring} is redundant in a 
   sqlstring  'a', 'b'             NULL        the default in SQL inputs
   lucene     ("a" OR "b")         ("")        the default in Lucene inputs; ("") is a match-all, so no guard is needed
   regex      (a|b)                .*          use with match()
+  promql     a  or  (a|b)         ""  or  .*  the default in PromQL; a single-select variable (maxSelections: 1) renders its raw value for {label="$var"}, a multi-select one an escaped regex for {label=~"$var"}
   csv        a,b                  <empty>     use INSIDE a string literal
   markdown   a, b                 <empty>     the default in markdown tiles; markdown syntax in values is escaped
 
@@ -1450,33 +1497,10 @@ containers[i].tabs[j].id). Read the path to know which input to fix.
 
 == EVENT PATTERN MINING ==
 
-Use clickstack_event_patterns when asked to find common log messages, recurring
-patterns, noisy services, or top event types. This is the right choice whenever
-the question is about "most common logs", "top patterns", "what is generating
-the most log volume", or similar pattern-discovery questions.
-
-It samples random events and clusters them with the Drain algorithm, returning:
-  - pattern templates (with <*> wildcards for variable parts)
-  - estimated counts (scaled from the sample to the full time range)
-  - time-bucketed trends
-  - a whereSnippet for each pattern to drill into matching raw events
-
-Required parameters:
-  - sourceId (call clickstack_list_sources first)
-  - startTime / endTime for the time window
-
-Optional parameters:
-  - where: filter to specific services or severity levels before mining
-  - sampleSize: increase for more accurate patterns (default 10000, max 25000)
-  - bodyExpression: column to mine (auto-detected: Body for logs, SpanName for traces)
-
-Example: find top patterns for production services over the last 4 hours:
-  clickstack_event_patterns({
-    sourceId: "<log-source-id>",
-    startTime: "<4 hours ago ISO>",
-    endTime: "<now ISO>",
-    where: "service.name:prod-*"
-  })
+Use clickstack_event_patterns for pattern-discovery questions: most common
+logs, top patterns, noisy services, what generates the most log volume. Its
+tool description covers parameters, examples, sampling limits, and how to
+drill into a pattern with clickstack_search.
 
 == COMMON MISTAKES ==
 
@@ -1554,8 +1578,9 @@ Example: find top patterns for production services over the last 4 hours:
     Wrong:   where: "SpanKind:Server"             (whereLanguage: "lucene"; translates to ilike(SpanKind, '%Server%') and matches "ServerStreaming", "InternalServer", etc.)
     Wrong:   where: "ServiceName:api*"            (whereLanguage: "lucene"; NOT a true prefix match -- it is prefix-within-substring)
     Correct: where: "SpanKind = 'Server'"          (whereLanguage: "sql"; exact match)
+    Correct: where: 'SpanKind:"Server"'            (whereLanguage: "lucene"; a quoted value is an exact match)
     Correct: where: "ServiceName LIKE 'api%'"      (whereLanguage: "sql"; true prefix match)
-    Lucene field:value is a substring match (ilike with surrounding wildcards), not exact equality. Lucene field:value* is prefix-within-substring, not SQL LIKE 'value%'. Fine for free-text columns (Body, StatusMessage); wrong for enum-like columns where exact match matters (SpanKind, SeverityText, StatusCode) and wrong when true prefix matching is needed. Use SQL for exact match (=), prefix (LIKE 'x%'), contains (LIKE '%x%'), or regex (match(col, 'pattern')).
+    Lucene field:value is a substring match (ilike with surrounding wildcards), not exact equality. Lucene field:value* is prefix-within-substring, not SQL LIKE 'value%'. Fine for free-text columns (StatusMessage; for Body use a bare term or phrase, which uses the index); wrong for enum-like columns where exact match matters (SpanKind, SeverityText, StatusCode) and wrong when true prefix matching is needed. Use SQL for exact match (=), prefix (LIKE 'x%'), contains (LIKE '%x%'), or regex (match(col, 'pattern')).
 
 16. Forgetting that map-attribute values are often empty strings
     Wrong:   groupBy on SpanAttributes['db.collection.name'] without filtering empty values; the result has an empty-string bucket alongside the real ones, which renders as a blank row in tables and an unlabelled slice in pies.

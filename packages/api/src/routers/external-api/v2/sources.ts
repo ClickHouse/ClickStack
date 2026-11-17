@@ -1,12 +1,12 @@
 import {
-  SourceKind,
-  SourceSchema,
-  SourceSchemaNoId,
-  type TSource,
-} from '@hyperdx/common-utils/dist/types';
+  mapGranularityToInternalFormat,
+  toExternalSource,
+} from '@hyperdx/common-utils/dist/externalSource';
+import { SourceKind, SourceSchemaNoId } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
 import { z } from 'zod';
 
+import * as config from '@/config';
 import { validateConnectionId } from '@/controllers/connection';
 import {
   createSource,
@@ -19,44 +19,6 @@ import { SourceDocument } from '@/models/source';
 import { processRequestWithEnhancedErrors as validateRequest } from '@/utils/enhancedErrors';
 import logger from '@/utils/logger';
 import { objectIdSchema } from '@/utils/zod';
-
-export function mapGranularityToExternalFormat(granularity: string): string {
-  const matches = granularity.match(/^(\d+) (second|minute|hour|day)$/);
-  if (matches == null) return granularity;
-
-  const [, amount, unit] = matches;
-  switch (unit) {
-    case 'second':
-      return `${amount}s`;
-    case 'minute':
-      return `${amount}m`;
-    case 'hour':
-      return `${amount}h`;
-    case 'day':
-      return `${amount}d`;
-    default:
-      return granularity;
-  }
-}
-
-export function mapGranularityToInternalFormat(granularity: string): string {
-  const matches = granularity.match(/^(\d+)(s|m|h|d)$/);
-  if (matches == null) return granularity;
-
-  const [, amount, unit] = matches;
-  switch (unit) {
-    case 's':
-      return `${amount} second`;
-    case 'm':
-      return `${amount} minute`;
-    case 'h':
-      return `${amount} hour`;
-    case 'd':
-      return `${amount} day`;
-    default:
-      return granularity;
-  }
-}
 
 // Maps external short-form granularities (e.g. "5m") in the request body to
 // the internal SQL interval format (e.g. "5 minute") expected by SourceSchema.
@@ -111,42 +73,19 @@ async function requireValidConnectionId(
   }
 }
 
-function mapSourceToExternalSource(source: TSource): TSource {
-  if (!('materializedViews' in source)) return source;
-
-  const mapped = { ...source };
-
-  if (Array.isArray(source.materializedViews)) {
-    mapped.materializedViews = source.materializedViews.map(view => ({
-      ...view,
-      minGranularity: mapGranularityToExternalFormat(view.minGranularity),
-    }));
+// PromQL is a preview feature: without it enabled, a PromQL source cannot be
+// queried. Runs after body validation so req.body is the parsed shape.
+function rejectPromqlSourceWhenDisabled(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  if (req.body?.kind === SourceKind.Promql && !config.IS_PROMQL_ENABLED) {
+    return res
+      .status(400)
+      .json({ message: 'PromQL is not enabled on this deployment' });
   }
-
-  if (
-    'metadataMaterializedViews' in source &&
-    source.metadataMaterializedViews
-  ) {
-    mapped.metadataMaterializedViews = {
-      ...source.metadataMaterializedViews,
-      granularity: mapGranularityToExternalFormat(
-        source.metadataMaterializedViews.granularity,
-      ),
-    };
-  }
-
-  return mapped;
-}
-
-function applyLegacyDefaults(
-  parsed: Record<string, unknown>,
-): Record<string, unknown> {
-  // Legacy Session sources were created before timestampValueExpression was
-  // required. The old code defaulted it to 'TimestampTime' at query time.
-  if (parsed.kind === SourceKind.Session && !parsed.timestampValueExpression) {
-    return { ...parsed, timestampValueExpression: 'TimestampTime' };
-  }
-  return parsed;
+  next();
 }
 
 function formatExternalSource(source: SourceDocument) {
@@ -171,13 +110,8 @@ function formatExternalSource(source: SourceDocument) {
     })(),
   );
 
-  // Parse using the SourceSchema to strip out any fields not defined in the schema
-  const parseResult = SourceSchema.safeParse(
-    applyLegacyDefaults(JSON.parse(json)),
-  );
-  if (parseResult.success) {
-    return mapSourceToExternalSource(parseResult.data);
-  }
+  const parseResult = toExternalSource(JSON.parse(json));
+  if (parseResult.success) return parseResult.data;
 
   // If parsing fails, log the error and return undefined
   logger.error(
@@ -408,11 +342,21 @@ function formatExternalSource(source: SourceDocument) {
  *           description: Expression to extract the severity/log level text.
  *           nullable: true
  *           example: SeverityText
+ *         severityNumberExpression:
+ *           type: string
+ *           description: Expression for the numeric OpenTelemetry SeverityNumber (1-24).
+ *           nullable: true
+ *           example: SeverityNumber
  *         bodyExpression:
  *           type: string
  *           description: Expression to extract the log message body.
  *           nullable: true
  *           example: Body
+ *         eventNameExpression:
+ *           type: string
+ *           description: Expression for the OpenTelemetry log EventName.
+ *           nullable: true
+ *           example: EventName
  *         eventAttributesExpression:
  *           type: string
  *           description: Expression to extract event-level attributes.
@@ -462,6 +406,11 @@ function formatExternalSource(source: SourceDocument) {
  *           description: For Distributed table sources whose target tables have non-matching column sets. A list of columns supported across all target tables, used instead of SELECT * when fetching full row data. Leave blank to select all columns.
  *           nullable: true
  *           example: Timestamp, Body, ServiceName
+ *         rowKeyExpression:
+ *           type: string
+ *           description: Comma-separated expressions that together identify one row, e.g. the partition key, primary key, _block_number and _block_offset. When set, row details are looked up by these columns only. Leave blank to detect keys from table metadata.
+ *           nullable: true
+ *           example: toDate(Timestamp), ServiceName, Timestamp, _block_number, _block_offset
  *         useTextIndexForImplicitColumn:
  *           type: string
  *           enum: [auto, enabled, disabled]
@@ -663,6 +612,11 @@ function formatExternalSource(source: SourceDocument) {
  *           description: For Distributed table sources whose target tables have non-matching column sets. A list of columns supported across all target tables, used instead of SELECT * when fetching full row data. Leave blank to select all columns.
  *           nullable: true
  *           example: Timestamp, Body, ServiceName
+ *         rowKeyExpression:
+ *           type: string
+ *           description: Comma-separated expressions that together identify one row, e.g. the partition key, primary key, _block_number and _block_offset. When set, row details are looked up by these columns only. Leave blank to detect keys from table metadata.
+ *           nullable: true
+ *           example: toDate(Timestamp), SpanName, Timestamp, _block_number, _block_offset
  *         useTextIndexForImplicitColumn:
  *           type: string
  *           enum: [auto, enabled, disabled]
@@ -776,6 +730,11 @@ function formatExternalSource(source: SourceDocument) {
  *           description: HyperDX Source for logs associated with metrics. Optional
  *           nullable: true
  *           example: 507f1f77bcf86cd799439011
+ *         minAutoGranularity:
+ *           type: string
+ *           description: Floor for the auto-inferred chart granularity. Set it to the scrape/report interval of the metrics so a short time range does not produce buckets smaller than that interval (sparse, steppy series). Only constrains "Auto" granularity; an explicit granularity picked on a tile is never overridden. Omit for no minimum. Uses the SQL interval format (a positive integer followed by second, minute, hour, or day), not the short form of the materialized view granularity fields.
+ *           pattern: '^\d+ (second|minute|hour|day)$'
+ *           example: 1 minute
  *     SessionSource:
  *       type: object
  *       required:
@@ -837,7 +796,7 @@ function formatExternalSource(source: SourceDocument) {
  *           example: ResourceAttributes
  *     PromqlSource:
  *       type: object
- *       description: A source backed by a Prometheus-compatible endpoint, queried with PromQL. The referenced connection should be a Prometheus connection (isPrometheusEndpoint set to true).
+ *       description: A source queried with PromQL. It reads either a ClickHouse TimeSeries table (through a ClickHouse connection) or a Prometheus-compatible endpoint (through a connection with isPrometheusEndpoint set to true). PromQL is a preview feature, so creating or updating a PromQL source is rejected unless it is enabled on the deployment (ENABLE_PROMQL).
  *       required:
  *         - name
  *         - kind
@@ -871,11 +830,11 @@ function formatExternalSource(source: SourceDocument) {
  *           example: promql
  *         connection:
  *           type: string
- *           description: ID of the connection used by this source. Should reference a Prometheus-compatible connection.
+ *           description: ID of the connection used by this source. Either a ClickHouse connection holding the TimeSeries table, or a Prometheus-compatible connection.
  *           example: 507f1f77bcf86cd799439012
  *         from:
  *           $ref: '#/components/schemas/SourceFrom'
- *           description: Required by the API for all source kinds; not used when querying a Prometheus endpoint (empty strings are not accepted — use placeholder values such as "default").
+ *           description: The database and TimeSeries table to query on a ClickHouse connection. Not used for a Prometheus-compatible connection, but still required (empty strings are not accepted — use placeholder values such as "default").
  *         querySettings:
  *           type: array
  *           description: Optional ClickHouse query settings applied when querying this source.
@@ -884,8 +843,18 @@ function formatExternalSource(source: SourceDocument) {
  *           nullable: true
  *         timestampValueExpression:
  *           type: string
- *           description: Required by the API for all source kinds; not used when querying a Prometheus endpoint.
+ *           description: Required by the API for all source kinds; not used by PromQL queries.
  *           example: timestamp
+ *         minAutoGranularity:
+ *           type: string
+ *           description: Floor for the auto-inferred chart granularity, and the scrape interval that `$__rate_interval` is computed from. Set it to the Prometheus scrape interval so a short time range does not produce buckets smaller than that interval. Only constrains "Auto" granularity; an explicit granularity picked on a tile is never overridden. Omit for no minimum. Uses the SQL interval format (a positive integer followed by second, minute, hour, or day), not the short form of the materialized view granularity fields.
+ *           pattern: '^\d+ (second|minute|hour|day)$'
+ *           example: 1 minute
+ *         promqlBackend:
+ *           type: string
+ *           enum: [auto, clickhouse-http, table-function]
+ *           description: How PromQL is evaluated on a ClickHouse connection. "clickhouse-http" uses ClickHouse's Prometheus HTTP API, which needs ClickHouse 26.6+ with the prometheus_api_v1 handler configured; queries fail with an error when the server does not serve it. "table-function" uses the prometheusQuery table functions. "auto" (the default when omitted) checks the server and prefers the HTTP API. Ignored when the connection is a Prometheus-compatible endpoint.
+ *           example: auto
  *     Source:
  *       oneOf:
  *         - $ref: '#/components/schemas/LogSource'
@@ -1105,6 +1074,7 @@ router.post(
   validateRequest({
     body: SourceSchemaNoId,
   }),
+  rejectPromqlSourceWhenDisabled,
   requireValidConnectionId,
   async (req, res, next) => {
     try {
@@ -1210,6 +1180,7 @@ router.put(
     }),
     body: SourceSchemaNoId,
   }),
+  rejectPromqlSourceWhenDisabled,
   requireValidConnectionId,
   async (req, res, next) => {
     try {

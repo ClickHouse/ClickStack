@@ -4,6 +4,7 @@
 const baseConfig = {
   APP_VERSION: '9.9.9',
   BASE_PATH: '',
+  IS_ADHOC_FILTERS_ENABLED: false,
   IS_ALERT_DETAILS_ENABLED: false,
   IS_CLICKHOUSE_BUILD: false,
   IS_LLM_COST_ENABLED: false,
@@ -13,12 +14,14 @@ const baseConfig = {
   IS_PROMQL_ENABLED: false,
 };
 
-function loadHdxDebug(configOverrides: Partial<typeof baseConfig> = {}) {
+function loadHdxDebug(
+  configOverrides: Partial<typeof baseConfig> = {},
+  sessionId: string | null = null,
+) {
   jest.resetModules();
   jest.doMock('@/config', () => ({ ...baseConfig, ...configOverrides }));
-  jest.doMock('@hyperdx/browser', () => ({
-    __esModule: true,
-    default: { getSessionId: () => undefined },
+  jest.doMock('@clickhouse/clickstack-browser', () => ({
+    getSessionId: () => sessionId,
   }));
   jest.doMock('@/utils/clipboard', () => ({
     copyTextToClipboard: jest.fn().mockResolvedValue(true),
@@ -168,6 +171,20 @@ describe('report identity + features', () => {
 
   it('reports "none" when no feature is enabled', () => {
     expect(reportFor(loadHdxDebug())).toContain('features: none');
+  });
+});
+
+describe('report session line', () => {
+  it('reports N/A until the RUM SDK has a session', () => {
+    const report = reportFor(loadHdxDebug());
+    expect(report).toContain('session:  N/A');
+    expect(window.hdx?.sessionId()).toBeUndefined();
+  });
+
+  it('reports the RUM session id once there is one', () => {
+    const report = reportFor(loadHdxDebug({}, 'abc123'));
+    expect(report).toContain('session:  abc123');
+    expect(window.hdx?.sessionId()).toBe('abc123');
   });
 });
 

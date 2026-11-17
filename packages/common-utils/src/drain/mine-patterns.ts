@@ -1,5 +1,6 @@
 import {
   convertDateRangeToGranularityString,
+  Granularity,
   timeBucketByGranularity,
   toStartOfInterval,
 } from '@/core/utils';
@@ -13,8 +14,12 @@ import { TemplateMiner } from './template-miner';
 /** Number of random rows to sample for pattern learning. */
 export const DENOISE_SAMPLE_SIZE = 10_000;
 
-/** Patterns matching more than this fraction of sampled events are "noisy". */
-export const DENOISE_NOISE_THRESHOLD = 0.1;
+/**
+ * Patterns matching more than this fraction of sampled events are "noisy".
+ * Drain splits one logical pattern across clusters (by token count and
+ * first token), so dominant patterns often sit well below 10% each.
+ */
+export const DENOISE_NOISE_THRESHOLD = 0.05;
 
 // ─── Body normalization ──────────────────────────────────────────────────────
 
@@ -53,6 +58,18 @@ export interface PatternGroup<TRow = Record<string, unknown>> {
 export interface MinePatternResult<TRow = Record<string, unknown>> {
   patterns: PatternGroup<TRow>[];
   sampleMultiplier: number;
+  /**
+   * Bucket width actually used for `trend`. Rounded up to a standard
+   * interval, so there can be fewer buckets than requested. Undefined when
+   * trends are disabled (trendBuckets <= 0).
+   */
+  trendGranularity?: Granularity;
+  /**
+   * Start of every trend bucket in ms. Buckets align to the interval, so the
+   * first one can start before `startDate` and the last can end after
+   * `endDate`.
+   */
+  trendBucketStarts: number[];
 }
 
 export interface MinePatternOptions<TRow extends Record<string, unknown>> {
@@ -62,7 +79,7 @@ export interface MinePatternOptions<TRow extends Record<string, unknown>> {
   startDate: Date;
   /** End of the query time range. */
   endDate: Date;
-  /** Max number of trend time buckets to generate. Default: 24. */
+  /** Max number of trend time buckets to generate. Default: 24. 0 disables trends. */
   trendBuckets?: number;
   /** Max number of sample rows to keep per pattern. Default: 5. */
   maxSamples?: number;
@@ -102,25 +119,28 @@ export function minePatterns<TRow extends Record<string, unknown>>(
     getTimestamp,
   } = options;
 
+  const granularity =
+    trendBuckets > 0
+      ? convertDateRangeToGranularityString([startDate, endDate], trendBuckets)
+      : undefined;
+  const allBuckets = granularity
+    ? timeBucketByGranularity(startDate, endDate, granularity).map(d =>
+        d.getTime(),
+      )
+    : [];
+
   if (rows.length === 0) {
-    return { patterns: [], sampleMultiplier: 1 };
+    return {
+      patterns: [],
+      sampleMultiplier: 1,
+      trendGranularity: granularity,
+      trendBucketStarts: allBuckets,
+    };
   }
 
   // ── Set up Drain miner ──
   const drainConfig = new TemplateMinerConfig();
   const miner = new TemplateMiner(drainConfig);
-
-  // ── Compute time buckets using shared helpers ──
-  const granularity = convertDateRangeToGranularityString(
-    [startDate, endDate],
-    trendBuckets,
-  );
-  const allBucketDates = timeBucketByGranularity(
-    startDate,
-    endDate,
-    granularity,
-  );
-  const allBuckets = allBucketDates.map(d => d.getTime());
 
   // ── Process each row through Drain ──
   const clustered: Array<{
@@ -147,7 +167,9 @@ export function minePatterns<TRow extends Record<string, unknown>>(
   >();
 
   for (const { clusterId, row, bodyText, tsMs } of clustered) {
-    const bucket = toStartOfInterval(new Date(tsMs), granularity).getTime();
+    const bucket = granularity
+      ? toStartOfInterval(new Date(tsMs), granularity).getTime()
+      : 0;
     const existing = groups.get(clusterId);
     if (existing) {
       if (existing.samples.length < maxSamples) {
@@ -158,12 +180,15 @@ export function minePatterns<TRow extends Record<string, unknown>>(
         (existing.bucketCounts.get(bucket) ?? 0) + 1,
       );
     } else {
-      const match = miner.match(bodyText, 'fallback');
+      // Read the template from the row's own cluster: re-matching the body can
+      // land on a different same-length cluster whose template other members
+      // of this one do not fit.
+      const cluster = miner.drain.getCluster(clusterId);
       const bucketCounts = new Map<number, number>();
       bucketCounts.set(bucket, 1);
       groups.set(clusterId, {
         samples: [row],
-        template: match?.getTemplate() ?? bodyText,
+        template: cluster?.getTemplate() ?? bodyText,
         bucketCounts,
       });
     }
@@ -200,5 +225,10 @@ export function minePatterns<TRow extends Record<string, unknown>>(
 
   patterns.sort((a, b) => b.estimatedCount - a.estimatedCount);
 
-  return { patterns, sampleMultiplier };
+  return {
+    patterns,
+    sampleMultiplier,
+    trendGranularity: granularity,
+    trendBucketStarts: allBuckets,
+  };
 }

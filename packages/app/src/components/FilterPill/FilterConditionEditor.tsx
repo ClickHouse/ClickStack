@@ -26,10 +26,20 @@ export type FilterConditionEditorProps<TOperator extends string = string> = {
   initial?: FilterCondition<TOperator>;
   keyOptions: string[];
   isLoadingKeys?: boolean;
+  isKeysError?: boolean;
+  /** Why the key suggestions failed, shown after the generic error. */
+  keysErrorMessage?: string;
   /** Suggestions for the key last reported by `onKeyChange`. */
   valueOptions: string[];
   isLoadingValues?: boolean;
-  /** The trimmed key, once typing pauses, so the caller can fetch its values. */
+  isValuesError?: boolean;
+  /** Why the value suggestions failed, shown after the generic error. */
+  valuesErrorMessage?: string;
+  /**
+   * The key to fetch values for: a suggested key once typing pauses, or any key
+   * once committed (Enter, picking it, or leaving the input). Empty while
+   * another key is being typed.
+   */
   onKeyChange?: (key: string) => void;
   keyLabel?: string;
   keyPlaceholder?: string;
@@ -38,6 +48,13 @@ export type FilterConditionEditorProps<TOperator extends string = string> = {
 };
 
 const KEY_DEBOUNCE_MS = 300;
+const SUGGESTIONS_ERROR = "Couldn't load suggestions";
+
+// Database errors can run to several lines; the first says what went wrong.
+const suggestionsError = (message: string | undefined) => {
+  const firstLine = message?.trim().split('\n')[0];
+  return firstLine ? `${SUGGESTIONS_ERROR}: ${firstLine}` : SUGGESTIONS_ERROR;
+};
 
 /** Pick a key, an operator, and a value. Free text is accepted for both inputs. */
 export function FilterConditionEditor<TOperator extends string = string>({
@@ -45,8 +62,12 @@ export function FilterConditionEditor<TOperator extends string = string>({
   initial,
   keyOptions,
   isLoadingKeys,
+  isKeysError,
+  keysErrorMessage,
   valueOptions,
   isLoadingValues,
+  isValuesError,
+  valuesErrorMessage,
   onKeyChange,
   keyLabel = 'Key',
   keyPlaceholder = 'Select a key',
@@ -62,13 +83,20 @@ export function FilterConditionEditor<TOperator extends string = string>({
 
   const trimmedKey = key.trim();
   const [debouncedKey] = useDebouncedValue(trimmedKey, KEY_DEBOUNCE_MS);
+  const [committedKey, setCommittedKey] = useState(trimmedKey);
+  const commitKey = (next: string) => setCommittedKey(next.trim());
+  // A partial key names no column, so looking it up would only fail.
+  const lookupKey =
+    trimmedKey === committedKey ||
+    (trimmedKey === debouncedKey && keyOptions.includes(trimmedKey))
+      ? trimmedKey
+      : '';
   useEffect(() => {
-    onKeyChange?.(debouncedKey);
-  }, [debouncedKey, onKeyChange]);
+    onKeyChange?.(lookupKey);
+  }, [lookupKey, onKeyChange]);
 
-  // Values shown while the key is still settling belong to the previous key.
-  const isValueLoading =
-    !!trimmedKey && (!!isLoadingValues || debouncedKey !== trimmedKey);
+  const isValueLoading = !!lookupKey && !!isLoadingValues;
+  const isValuesErrorShown = !!lookupKey && !isValueLoading && !!isValuesError;
   const selectedOperator = operators.find(op => op.value === operator);
   const canSubmit = !!trimmedKey && operator != null;
 
@@ -84,10 +112,20 @@ export function FilterConditionEditor<TOperator extends string = string>({
         placeholder={keyPlaceholder}
         options={keyOptions}
         isLoading={isLoadingKeys}
+        error={
+          !isLoadingKeys && isKeysError
+            ? suggestionsError(keysErrorMessage)
+            : undefined
+        }
         value={key}
         onChange={setKey}
+        onOptionSubmit={commitKey}
+        onBlur={() => commitKey(key)}
         // Enter moves on to the value instead of applying an empty-value filter.
-        onSubmit={() => valueInputRef.current?.focus()}
+        onSubmit={() => {
+          commitKey(key);
+          valueInputRef.current?.focus();
+        }}
         data-testid={`${testId}-key`}
       />
       <Select<TOperator>
@@ -105,6 +143,9 @@ export function FilterConditionEditor<TOperator extends string = string>({
         placeholder={selectedOperator?.valuePlaceholder ?? 'Select a value'}
         options={valueOptions}
         isLoading={isValueLoading}
+        error={
+          isValuesErrorShown ? suggestionsError(valuesErrorMessage) : undefined
+        }
         value={value}
         onChange={setValue}
         onSubmit={submit}

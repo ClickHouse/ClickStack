@@ -27,6 +27,7 @@ jest.mock('next/router', () => ({
 jest.mock('nuqs', () => ({
   parseAsString: 'parseAsString',
   useQueryState: () => [null, jest.fn()],
+  createParser: (opts: object) => opts,
 }));
 jest.mock('../source', () => ({
   useSources: () => ({ data: mockSources }),
@@ -264,6 +265,24 @@ const unresolvedConnectionTemplate = DashboardTemplateSchema.parse({
   ],
 });
 
+const sqlQueryFilterTemplate = (connection: string) =>
+  DashboardTemplateSchema.parse({
+    version: '0.1.0',
+    name: 'SQL Query Filter',
+    tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+    filters: [
+      {
+        id: 'filter-env',
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        connection,
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+    ],
+  });
+
 // A markdown tile renders static content, so its source is not worth blocking
 // the import over even when the template names one that no longer exists.
 const markdownStaleSourceTemplate = DashboardTemplateSchema.parse({
@@ -382,6 +401,44 @@ describe('Dashboard import - PromQL label filter source', () => {
     await waitFor(() =>
       expect(
         screen.getByText('Select a PromQL source for this filter'),
+      ).toBeInTheDocument(),
+    );
+    expect(mockMutateAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('Dashboard import - SQL query filter connection', () => {
+  it('auto-maps the connection by name and imports it as an id', async () => {
+    renderWithMantine(<Mapping input={sqlQueryFilterTemplate('default')} />);
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(DashboardWithoutIdSchema.safeParse(payload).success).toBe(true);
+    expect(payload.filters[0]).toMatchObject({
+      type: 'SQL_QUERY',
+      connection: 'conn-default',
+    });
+  });
+
+  it('blocks the import and flags the filter row when its connection is unmapped', async () => {
+    renderWithMantine(<Mapping input={sqlQueryFilterTemplate(MISSING)} />);
+
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole('button', { name: /finish import/i }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Select a connection for this filter'),
       ).toBeInTheDocument(),
     );
     expect(mockMutateAsync).not.toHaveBeenCalled();
@@ -550,5 +607,118 @@ describe('Dashboard import - filter source kind', () => {
   it('does not flag a kind it cannot resolve, so a loading workspace is not an error', () => {
     // `sources` unavailable: the id is real, we just cannot say what it is yet.
     expect(issuesFor(promqlFilterTemplate, 'src-logs')).toBeUndefined();
+  });
+});
+
+const adhocFilterTemplate = DashboardTemplateSchema.parse({
+  version: '0.1.0',
+  name: 'Ad Hoc Filter',
+  tiles: [builderTile('tile-search', 'search', 'Logs', 0)],
+  filters: [
+    {
+      id: 'filter-adhoc',
+      type: 'ADHOC',
+      name: 'Conditions',
+      sourceType: 'sql',
+      sources: ['Logs', 'Traces', MISSING],
+      appliesToSourceIds: ['Traces'],
+      isVariableEnabled: true,
+      variableName: 'conditions',
+    },
+  ],
+  savedFilterValues: [
+    {
+      type: 'adhoc',
+      name: 'conditions',
+      conditions: [{ key: 'ServiceName', operator: '=', value: 'api' }],
+    },
+  ],
+});
+
+describe('Dashboard import - ad hoc filter sources', () => {
+  it('auto-maps sources and applies-to by name and imports them as ids', async () => {
+    renderWithMantine(<Mapping input={adhocFilterTemplate} />);
+
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole('button', { name: /finish import/i }),
+      );
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(payload.filters[0]).toMatchObject({
+      type: 'ADHOC',
+      sources: ['src-logs', 'src-traces'],
+      appliesToSourceIds: ['src-traces'],
+    });
+    expect(payload.savedFilterValues).toEqual(
+      adhocFilterTemplate.savedFilterValues,
+    );
+  });
+
+  it('does not auto-map a source of a kind the filter cannot read', async () => {
+    const template = DashboardTemplateSchema.parse({
+      ...adhocFilterTemplate,
+      filters: [
+        {
+          ...adhocFilterTemplate.filters![0],
+          sources: ['Metrics'],
+          appliesToSourceIds: undefined,
+        },
+      ],
+    });
+    renderWithMantine(<Mapping input={template} />);
+
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole('button', { name: /finish import/i }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Select at least one source for this filter'),
+      ).toBeInTheDocument(),
+    );
+    expect(mockMutateAsync).not.toHaveBeenCalled();
+  });
+
+  const issuesFor = (sources: string[], appliesTo: string[] = []) =>
+    buildMappingFormSchema(adhocFilterTemplate, mockSources)
+      .safeParse({
+        dashboardName: adhocFilterTemplate.name,
+        tags: [],
+        tileSourceMappings: ['src-logs'],
+        connectionMappings: [''],
+        filterAdhocSourceMappings: [sources],
+        filterAppliesToSourceMappings: [appliesTo],
+      })
+      .error?.issues.map(issue => [issue.path.join('.'), issue.message]);
+
+  it('requires at least one source', () => {
+    expect(issuesFor([])).toEqual([
+      [
+        'filterAdhocSourceMappings.0',
+        'Select at least one source for this filter',
+      ],
+    ]);
+  });
+
+  it('rejects sources and applies-to entries of the wrong kind', () => {
+    expect(issuesFor(['src-promql'], ['src-metrics'])).toEqual([
+      [
+        'filterAdhocSourceMappings.0',
+        'Select only log, trace, or session sources for this filter',
+      ],
+      [
+        'filterAppliesToSourceMappings.0',
+        'Select only log, trace, or session sources for this filter',
+      ],
+    ]);
+  });
+
+  it('accepts sources of the right kind with an empty applies-to', () => {
+    expect(issuesFor(['src-logs'])).toBeUndefined();
   });
 });

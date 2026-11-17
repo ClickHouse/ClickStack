@@ -114,7 +114,7 @@ describe('DBBarChart', () => {
       ).toBeNull();
     });
 
-    it('pulses the empty state while a refetch is running', () => {
+    it('shows loading instead of the stale empty result during a refetch', () => {
       mockUseQueriedChartConfig.mockReturnValue({
         data: { data: [], meta: groupedData.meta },
         isLoading: false,
@@ -123,9 +123,11 @@ describe('DBBarChart', () => {
       });
 
       renderWithMantine(<DBBarChart config={baseTestConfig} />);
-      expect(screen.getByText('No data found within time range.')).toHaveClass(
-        'effect-pulse',
-      );
+      const loadingState = screen.getByText('Loading Chart Data...');
+      expect(
+        loadingState.querySelector('.mantine-Loader-root'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
     });
   });
 

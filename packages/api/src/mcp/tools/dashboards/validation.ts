@@ -1,12 +1,15 @@
+import { getPromqlSeries } from '@hyperdx/common-utils/dist/core/promql';
 import { TIME_SERIES_DISPLAY_TYPE_BY_NAME } from '@hyperdx/common-utils/dist/core/utils';
 import type { FilterForVariableDeclaration } from '@hyperdx/common-utils/dist/filters';
 import {
   getDashboardVariableDeclarations,
   getFilterVariableName,
   isFilterVariableEnabled,
+  validateSqlQueryFilterTemplate,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
+  isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
 import {
@@ -19,6 +22,7 @@ import {
   DisplayType,
   QueryExpressionDashboardFilter,
   SavedChartConfig,
+  SqlQueryDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import {
   getVariableReferences,
@@ -33,6 +37,8 @@ import {
   isRawSqlExternalTileConfig,
 } from '@/routers/external-api/v2/utils/dashboards';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
+
+import type { McpSavedFilterValues } from './schemas';
 
 /**
  * Returns one entry per raw SQL tile that uses a source-dependent macro but
@@ -150,11 +156,13 @@ export function getRawSqlTileMacroWarnings(
 }
 
 /**
- * Minimal projection needed to check a filter's dropdown-values query. Static
- * list filters have no dropdown query, so `where` / `whereLanguage` are optional.
+ * Minimal projection needed to check a filter's dropdown-values query: a
+ * queried filter's `where`, or a SQL query filter's `sqlTemplate`. Static list
+ * filters have no dropdown query, so all of these are optional.
  */
 export type FilterForVariableValidation = FilterForVariableDeclaration &
-  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>>;
+  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>> &
+  Partial<Pick<SqlQueryDashboardFilter, 'sqlTemplate'>>;
 
 /**
  * Non-blocking checks on the dashboard variables references in a filter's `where`.
@@ -198,17 +206,24 @@ export function getFilterVariableWarnings(
 
   const warnings: string[] = [];
   filters.forEach((filter, index) => {
-    const where = filter.where?.trim();
+    const sqlTemplate = filter.sqlTemplate?.trim();
+    const where = sqlTemplate || filter.where?.trim();
     if (!where) return;
 
     const label = filter.name?.trim() || `filter #${index + 1}`;
-    const language = filter.whereLanguage ?? 'sql';
+    const language = sqlTemplate ? 'sql' : (filter.whereLanguage ?? 'sql');
 
     const result = validateVariableReferencesInTemplate(where, variables, {
       subject: 'The dropdown values query',
       language,
     });
     const issues = [...result.errors, ...result.warnings];
+
+    if (sqlTemplate) {
+      // Also reports variable macro errors, which `result` already holds.
+      const detail = validateSqlQueryFilterTemplate(sqlTemplate, variables);
+      if (detail && !issues.includes(detail)) issues.push(detail);
+    }
 
     const referencedNames = new Set(
       getVariableReferences(where).map(reference => reference.name),
@@ -239,6 +254,37 @@ export function getFilterVariableWarnings(
     warnings.push(...issues.map(issue => `Filter "${label}": ${issue}`));
   });
 
+  return warnings;
+}
+
+/**
+ * Non-blocking check: a saved filter value of type 'variable' whose `name`
+ * matches no variable-enabled filter is silently ignored when the dashboard
+ * loads, so a typo'd variable name looks like a saved default but never
+ * applies. Warn so the agent can fix the name or add the filter.
+ */
+export function getSavedFilterValueWarnings(
+  savedFilterValues: McpSavedFilterValues | undefined,
+  filters: FilterForVariableDeclaration[] | undefined,
+): string[] {
+  if (!savedFilterValues?.length) return [];
+  const declaredNames = new Set(
+    getDashboardVariableDeclarations(filters).map(
+      declaration => declaration.name,
+    ),
+  );
+  const warnings: string[] = [];
+  for (const value of savedFilterValues) {
+    if (value.type !== 'variable') continue;
+    const name = value.name.trim();
+    if (!name || declaredNames.has(name)) continue;
+    warnings.push(
+      `savedFilterValues references variable $${name}, which no variable-enabled ` +
+        'filter declares. This default is ignored when the dashboard loads: add a ' +
+        `filter with isVariableEnabled: true and variableName: "${name}", or remove ` +
+        'the entry.',
+    );
+  }
   return warnings;
 }
 
@@ -294,6 +340,10 @@ export function getTileVariableWarnings(
 
     if (isRawSqlSavedChartConfig(config)) {
       validate(config.sqlTemplate, 'sql');
+    } else if (isPromqlSavedChartConfig(config)) {
+      for (const { expression } of getPromqlSeries(config)) {
+        validate(expression, 'promql');
+      }
     } else if (
       isBuilderSavedChartConfig(config) &&
       config.displayType === DisplayType.Markdown

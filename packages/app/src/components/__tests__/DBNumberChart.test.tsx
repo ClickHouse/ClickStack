@@ -259,7 +259,7 @@ describe('DBNumberChart', () => {
       ).toBeNull();
     });
 
-    it('pulses the empty state while a refetch is running', () => {
+    it('shows loading instead of the stale empty result during a refetch', () => {
       mockUseQueriedChartConfig.mockReturnValue({
         data: { data: [] },
         isLoading: false,
@@ -268,9 +268,8 @@ describe('DBNumberChart', () => {
       });
 
       renderWithMantine(<DBNumberChart config={baseTestConfig} />);
-      expect(screen.getByText('No data found within time range.')).toHaveClass(
-        'effect-pulse',
-      );
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
     });
   });
 
@@ -779,6 +778,7 @@ describe('DBNumberChart', () => {
       displayType: DisplayType.Number,
       promqlExpression: 'e2e_service_up',
       connection: 'test-connection',
+      source: 'source-promql',
       dateRange: [new Date(), new Date()] as [Date, Date],
     };
 

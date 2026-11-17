@@ -17,7 +17,11 @@ import {
   streamToAsyncIterator,
   tableExpr,
 } from '@/clickhouse';
-import { renderChartConfig, timeFilterExpr } from '@/core/renderChartConfig';
+import {
+  renderChartConfig,
+  renderWhereExpressionStr,
+  timeFilterExpr,
+} from '@/core/renderChartConfig';
 import {
   FilterState,
   filterStateToPredicate,
@@ -92,6 +96,34 @@ export type KeyValues = {
   value: string[] | number[];
 };
 
+type AllKeyValuesQuery = {
+  databaseName: string;
+  tableName: string;
+  keyExpressions: string[];
+  maxValuesPerKey?: number;
+  connectionId: string;
+  metadataMVs?: MetadataMaterializedViews;
+  dateRange: [Date, Date];
+  timestampValueExpression: string;
+  signal?: AbortSignal;
+};
+
+/** Yields each promise's value as it resolves, fastest first. */
+async function* inCompletionOrder<T>(
+  promises: Promise<T>[],
+): AsyncGenerator<T, void, undefined> {
+  const pending = new Map(
+    promises.map(
+      (promise, i) => [i, promise.then(value => ({ i, value }))] as const,
+    ),
+  );
+  while (pending.size > 0) {
+    const { i, value } = await Promise.race(pending.values());
+    pending.delete(i);
+    yield value;
+  }
+}
+
 export type MetricNames = {
   names: string[];
   /** True when more names matched than `limit`, so the page is incomplete. */
@@ -106,7 +138,7 @@ export const DEFAULT_METRIC_NAMES_LIMIT = 500;
 const escapeLikePattern = (value: string): string =>
   value.replace(/[\\%_]/g, char => `\\${char}`);
 
-// See https://github.com/hyperdxio/hyperdx/issues/2163. Inlining a validated
+// See https://github.com/ClickHouse/ClickStack/issues/2163. Inlining a validated
 // integer literal avoids the `_CAST` wrapper entirely.
 const inlineNonNegativeInt = (value: number, label: string): string => {
   if (!Number.isInteger(value) || value < 0) {
@@ -162,19 +194,56 @@ export const quoteIdentifierIfNeeded = (identifier: string): string => {
     : quoteJsonPathSegment(unquoted);
 };
 
+// A single column or JSON path segment. No quoting/grouping characters, no `.` separator.
+const PLAIN_PATH_SEGMENT = /^[^`'"()[\],.]+/;
+
+// A JSON sub-object accessor or type cast. ClickHouse reports the operand
+// backticked (j.^`a`, j.a.:`Int64`).
+const OPERATOR_PATH_SEGMENT = /^[\^:]`(?:[^`]|``)*`/;
+
+// Split a name into `.`-separated path segments, or undefined when it isn't a
+// plain JSON path (function calls, literals, empty segments).
+const splitResultColumnPath = (name: string): string[] | undefined => {
+  const segments: string[] = [];
+  let rest = name;
+  while (true) {
+    const segment =
+      rest.match(OPERATOR_PATH_SEGMENT)?.[0] ??
+      rest.match(PLAIN_PATH_SEGMENT)?.[0];
+    if (segment == null) return undefined;
+    segments.push(segment);
+    rest = rest.slice(segment.length);
+    if (rest === '') return segments;
+    if (!rest.startsWith('.')) return undefined;
+    rest = rest.slice(1);
+  }
+};
+
+const quotePathSegment = (segment: string): string =>
+  OPERATOR_PATH_SEGMENT.test(segment)
+    ? segment
+    : quoteIdentifierIfNeeded(segment);
+
 /**
  * Quote a query result column name so it can be referenced in raw SQL.
  *
  * Most result column names do not need quoting:
  * - Bare identifiers (alphanumeric and underscore, starting with a letter or underscore)
  * - Numeric literals (e.g., `1`, `0x10`)
- * - Dotted column names (e.g., `my.col`)
  * - Function calls (e.g., `plus(a, b)`, `arrayElement(m, 'key')`)
+ *
+ * Dotted names are JSON/nested subcolumn paths (e.g. `event.@request_id`,
+ * which ClickHouse reports for the select `` event.`@request_id` ``). Each
+ * segment is quoted on its own. JSON type casts (eg. `` .:`String` ``) and
+ * `` ^`sub` `` sub-object accessors are preserved.
  */
-export const quoteResultColumnNameIfNeeded = (name: string): string =>
-  /^[^`'"()[\],.]+$/.test(name) && !Number.isFinite(Number(name))
-    ? quoteIdentifierIfNeeded(name)
-    : name;
+export const quoteResultColumnNameIfNeeded = (name: string): string => {
+  if (Number.isFinite(Number(name))) {
+    return name;
+  }
+  const segments = splitResultColumnPath(name);
+  return segments ? segments.map(quotePathSegment).join('.') : name;
+};
 
 const columnAppearsInMvSelect = (sql: string, columnName: string): boolean => {
   const escaped = columnName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -223,17 +292,27 @@ const renderJsonStringSubcolumn = (
 };
 
 export class MetadataCache {
-  private cache = new Map<string, any>();
+  private cache = new Map<string, { value: any; expiresAt?: number }>();
   private pendingQueries = new Map<string, Promise<any>>();
 
   // this should be getOrUpdate... or just query to follow react query
   get<T>(key: string): T | undefined {
-    return this.cache.get(key);
+    const entry = this.cache.get(key);
+    if (entry?.expiresAt != null && Date.now() >= entry.expiresAt) {
+      this.cache.delete(key);
+      return undefined;
+    }
+    return entry?.value;
   }
 
-  async getOrFetch<T>(key: string, query: () => Promise<T>): Promise<T> {
+  /** Entries stored without `ttlMs` are kept for the life of the cache. */
+  async getOrFetch<T>(
+    key: string,
+    query: () => Promise<T>,
+    { ttlMs }: { ttlMs?: number } = {},
+  ): Promise<T> {
     // Check if value exists in cache
-    const cachedValue: T | undefined = this.cache.get(key);
+    const cachedValue: T | undefined = this.get(key);
     if (cachedValue != null) {
       return cachedValue;
     }
@@ -251,7 +330,7 @@ export class MetadataCache {
 
     try {
       const result = await queryPromise;
-      this.cache.set(key, result);
+      this.set(key, result, ttlMs);
       return result;
     } finally {
       // Clean up the pending query map
@@ -259,8 +338,11 @@ export class MetadataCache {
     }
   }
 
-  set<T>(key: string, value: T) {
-    return this.cache.set(key, value);
+  set<T>(key: string, value: T, ttlMs?: number) {
+    this.cache.set(key, {
+      value,
+      expiresAt: ttlMs == null ? undefined : Date.now() + ttlMs,
+    });
   }
 
   // TODO: This needs to be async, and use tanstack query on frontend for cache
@@ -324,6 +406,13 @@ export type SkipIndexMetadata = {
 };
 
 const FIELD_METADATA_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+// The API keeps one cache for the life of the process, so without a TTL a
+// column added by ALTER TABLE (such as a MATERIALIZED one) is only seen after a
+// restart. #3475
+export const COLUMNS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const CONDITION_KEYS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 // Hour-aligned so a range-keyed cache rotates hourly instead of every call.
 export function defaultFieldMetadataDateRange(): [Date, Date] {
@@ -591,6 +680,7 @@ export class Metadata {
           .then(d => d.data);
         return columns;
       },
+      { ttlMs: COLUMNS_CACHE_TTL_MS },
     );
   }
 
@@ -604,7 +694,7 @@ export class Metadata {
     connectionId: string;
     databaseName: string;
     tableName: string;
-    innerTableType: 'Tags' | 'Metrics' | 'Data';
+    innerTableType: 'Tags' | 'Metrics' | 'Data' | 'TimeRanges';
   }) {
     return this.cache.getOrFetch<ColumnMeta[]>(
       `${connectionId}.${databaseName}.${tableName}.${innerTableType}.getTimeSeriesTableColumns`,
@@ -984,6 +1074,7 @@ export class Metadata {
     metadataMVs,
     dateRange: callerDateRange,
     timestampValueExpression,
+    conditionSql,
     signal,
   }: {
     databaseName: string;
@@ -995,6 +1086,7 @@ export class Metadata {
     metadataMVs?: MetadataMaterializedViews;
     dateRange?: [Date, Date];
     timestampValueExpression?: string;
+    conditionSql?: string;
     signal?: AbortSignal;
   }) {
     inlineNonNegativeInt(maxKeys, 'maxKeys');
@@ -1017,11 +1109,14 @@ export class Metadata {
       alignedDateRange && timestampValueExpression
         ? `${alignedDateRange[0].getTime()}.${alignedDateRange[1].getTime()}.${timestampValueExpression}`
         : '';
-    const cacheKey = metricName
-      ? `${connectionId}.${databaseName}.${tableName}.${column}.${metricName}.${dateRangeCacheSuffix}.keys`
+    const unscopedCacheKey = metricName
+      ? `${connectionId}.${databaseName}.${tableName}.${column}.${metricName}.${dateRangeCacheSuffix}.${maxKeys}.keys`
       : alignedDateRange
-        ? `${connectionId}.${databaseName}.${tableName}.${column}.${alignedCacheSuffix}.keys`
-        : `${connectionId}.${databaseName}.${tableName}.${column}.${dateRangeCacheSuffix}.keys`;
+        ? `${connectionId}.${databaseName}.${tableName}.${column}.${alignedCacheSuffix}.${maxKeys}.keys`
+        : `${connectionId}.${databaseName}.${tableName}.${column}.${dateRangeCacheSuffix}.${maxKeys}.keys`;
+    const cacheKey = conditionSql
+      ? `${unscopedCacheKey}.${objectHash(conditionSql)}.condition`
+      : unscopedCacheKey;
     const cachedKeys = this.cache.get<string[]>(cacheKey);
 
     if (cachedKeys != null) {
@@ -1050,6 +1145,7 @@ export class Metadata {
     let rowPolicyDenied = false;
     // Without timestampValueExpression, partsFilter can't bound this either. #3037
     if (
+      !conditionSql &&
       textIndexInfo?.key?.indexName &&
       canQueryMergeTreeTextIndex &&
       timestampValueExpression
@@ -1097,6 +1193,7 @@ export class Metadata {
         );
       }
     } else if (
+      !conditionSql &&
       textIndexInfo?.kv?.indexName &&
       canQueryMergeTreeTextIndex &&
       timestampValueExpression
@@ -1146,7 +1243,7 @@ export class Metadata {
     // Rollup path: query the key rollup table filtered by ColumnIdentifier and date range.
     // Rollups are separate tables the source's row policy doesn't cover, so
     // after a policy denial only the source-table scan below is safe.
-    if (metadataMVs && alignedDateRange && !rowPolicyDenied) {
+    if (!conditionSql && metadataMVs && alignedDateRange && !rowPolicyDenied) {
       // Own cache key: the shipped OTel rollups only index NativeColumn, so
       // Map columns come back empty here and must fall through to the bounded
       // scan below. Caching [] under cacheKey would block that fallback.
@@ -1256,6 +1353,7 @@ export class Metadata {
             }),
           ]
         : []),
+      ...(conditionSql ? [chSql`(${{ UNSAFE_RAW_SQL: conditionSql }})`] : []),
     ];
     const where =
       whereConditions.length > 0
@@ -1305,7 +1403,7 @@ export class Metadata {
       `;
     }
 
-    return this.cache.getOrFetch<string[]>(cacheKey, async () => {
+    const fetchKeys = async () => {
       const keys = await this.clickhouseClient
         .query<'JSON'>({
           query: sql.sql,
@@ -1335,6 +1433,11 @@ export class Metadata {
           return output.filter(r => r);
         });
       return keys;
+    };
+    // A condition changes with variable selections; expire its entries so
+    // they don't pile up.
+    return this.cache.getOrFetch<string[]>(cacheKey, fetchKeys, {
+      ttlMs: conditionSql ? CONDITION_KEYS_CACHE_TTL_MS : undefined,
     });
   }
 
@@ -1828,9 +1931,11 @@ export class Metadata {
     metadataMVs,
     dateRange,
     timestampValueExpression,
+    condition,
   }: TableConnection & {
     dateRange?: [Date, Date];
     timestampValueExpression?: string;
+    condition?: FieldsCondition;
   }) {
     const fields: Field[] = [];
     const columns = await this.getColumns({
@@ -1851,6 +1956,21 @@ export class Metadata {
 
     const mapColumns =
       filterColumnMetaByType(columns, [JSDataType.Map, JSDataType.JSON]) ?? [];
+
+    const conditionSql =
+      condition?.where.trim() && mapColumns.length > 0
+        ? await renderWhereExpressionStr({
+            condition: condition.where,
+            language: condition.whereLanguage ?? 'sql',
+            metadata: this,
+            from: { databaseName, tableName },
+            implicitColumnExpression: condition.implicitColumnExpression,
+            bodyExpression: condition.bodyExpression,
+            useTextIndexForImplicitColumn:
+              condition.useTextIndexForImplicitColumn,
+            connectionId,
+          })
+        : undefined;
 
     await Promise.all(
       mapColumns.map(async column => {
@@ -1884,6 +2004,7 @@ export class Metadata {
           metadataMVs,
           dateRange,
           timestampValueExpression,
+          conditionSql,
         });
 
         const match = column.type.match(/Map\(.+,\s*(.+)\)/);
@@ -2152,6 +2273,53 @@ export class Metadata {
           }
 
           throw e;
+        }
+      },
+    );
+  }
+
+  /**
+   * Reads and caches MergeTree settings per connection; on Cloud,
+   * system.shared_merge_tree_settings overrides system.merge_tree_settings per
+   * key. Returns undefined on failure so the next call retries.
+   */
+  async getMergeTreeSettings({
+    connectionId,
+  }: {
+    connectionId: string;
+  }): Promise<Map<string, string> | undefined> {
+    const readSettings = (query: string) =>
+      this.clickhouseClient
+        .query<'JSON'>({
+          connectionId,
+          query,
+          query_params: undefined,
+          clickhouse_settings: this.getClickHouseSettings(),
+        })
+        .then(res => res.json<{ name: string; value: string }>())
+        .then(json => json.data);
+
+    return this.cache.getOrFetch(
+      `${connectionId}.mergeTreeSettings`,
+      async () => {
+        try {
+          // OSS has no shared_merge_tree_settings; querying it fails.
+          const isCloud = await this.isClickHouseCloud({ connectionId });
+          const [mergeTreeRows, sharedMergeTreeRows] = await Promise.all([
+            readSettings('SELECT name, value FROM system.merge_tree_settings'),
+            isCloud
+              ? readSettings(
+                  'SELECT name, value FROM system.shared_merge_tree_settings',
+                )
+              : [],
+          ]);
+
+          // Later rows win.
+          const rows = [...mergeTreeRows, ...sharedMergeTreeRows];
+          return new Map(rows.map(row => [row.name, row.value]));
+        } catch (e) {
+          console.warn('Error fetching MergeTree settings:', e);
+          return undefined;
         }
       },
     );
@@ -2603,50 +2771,74 @@ export class Metadata {
    * Fetches top values for one or more keys from the text index, metadataMV, or the raw table in a
    * single batched query. Falls back to getMapValues when no rollup is available.
    */
-  async getAllKeyValues({
+  async getAllKeyValues(query: AllKeyValuesQuery): Promise<KeyValues[]> {
+    const results = await Promise.all(
+      await this.dispatchAllKeyValueQueries(query),
+    );
+    return results.filter(v => v !== undefined).flat();
+  }
+
+  /**
+   * `getAllKeyValues`, yielding each query's values as soon as it finishes
+   * instead of waiting for the slowest. Every key is served by exactly one
+   * query, so its values arrive in a single yield.
+   */
+  async *streamAllKeyValues(
+    query: AllKeyValuesQuery,
+  ): AsyncGenerator<KeyValues[], void, undefined> {
+    const queries = await this.dispatchAllKeyValueQueries(query);
+    for await (const keyValues of inCompletionOrder(queries)) {
+      if (keyValues?.length) yield keyValues;
+    }
+  }
+
+  /** Starts every query the keys need, without waiting for any to finish. */
+  private async dispatchAllKeyValueQueries({
+    keyExpressions,
+    maxValuesPerKey = 20,
+    ...query
+  }: AllKeyValuesQuery): Promise<Array<Promise<KeyValues[] | undefined>>> {
+    if (keyExpressions.length === 0) return [];
+
+    if (keyExpressions.length <= GET_ALL_KEY_VALUES_CHUNK_SIZE) {
+      return this.dispatchKeyValueQueries({
+        ...query,
+        keyExpressions,
+        maxValuesPerKey,
+      });
+    }
+
+    // A batch that fails to plan is dropped; the others still answer.
+    const batches = await Promise.allSettled(
+      chunk(keyExpressions, GET_ALL_KEY_VALUES_CHUNK_SIZE).map(batch =>
+        this.dispatchKeyValueQueries({
+          ...query,
+          keyExpressions: batch,
+          maxValuesPerKey,
+        }),
+      ),
+    );
+    return batches.filter(v => v.status === 'fulfilled').flatMap(v => v.value);
+  }
+
+  /**
+   * Routes up to `GET_ALL_KEY_VALUES_CHUNK_SIZE` keys to their cheapest
+   * strategy and starts one query per strategy in use.
+   */
+  private async dispatchKeyValueQueries({
     databaseName,
     tableName,
     keyExpressions,
-    maxValuesPerKey = 20,
+    maxValuesPerKey,
     connectionId,
     metadataMVs,
     dateRange,
     timestampValueExpression,
     signal,
-  }: {
-    databaseName: string;
-    tableName: string;
-    keyExpressions: string[];
-    maxValuesPerKey?: number;
-    connectionId: string;
-    metadataMVs?: MetadataMaterializedViews;
-    dateRange: [Date, Date];
-    timestampValueExpression: string;
-    signal?: AbortSignal;
-  }): Promise<KeyValues[]> {
-    if (keyExpressions.length === 0) return [];
-
-    if (keyExpressions.length > GET_ALL_KEY_VALUES_CHUNK_SIZE) {
-      const batched = await Promise.allSettled(
-        chunk(keyExpressions, GET_ALL_KEY_VALUES_CHUNK_SIZE).map(batch =>
-          this.getAllKeyValues({
-            databaseName,
-            tableName,
-            keyExpressions: batch,
-            maxValuesPerKey,
-            connectionId,
-            metadataMVs,
-            dateRange,
-            timestampValueExpression,
-            signal,
-          }),
-        ),
-      );
-      return batched
-        .filter(v => v.status === 'fulfilled')
-        .flatMap(v => v.value);
-    }
-
+  }: AllKeyValuesQuery &
+    Required<Pick<AllKeyValuesQuery, 'maxValuesPerKey'>>): Promise<
+    Array<Promise<KeyValues[] | undefined>>
+  > {
     // Parse all keys into (rollupColumn, rollupKey) pairs
     const parsed = keyExpressions.map(keyExpr => {
       const path = parseKeyPath(keyExpr);
@@ -2795,9 +2987,8 @@ export class Metadata {
     if (rawQueryOptions.length > 0) {
       promises.push(
         // Isolate raw-table failures (timeout, abort, network) the same way
-        // the three sibling strategies do internally, so a single rejection
-        // here doesn't discard already-successful text-index / MV results
-        // when they're aggregated through `Promise.all` below.
+        // the three sibling strategies do internally, so the failure is
+        // logged rather than silently dropped below.
         this.getKeyValues({
           chartConfig: {
             from: {
@@ -2823,11 +3014,10 @@ export class Metadata {
         }),
       );
     }
-    return (await Promise.allSettled(promises))
-      .filter(res => res.status === 'fulfilled')
-      .map(v => v.value)
-      .filter(v => v !== undefined)
-      .flat();
+    // The strategies isolate their own failures; this catches anything that
+    // slips past them, so one rejection can neither discard the others'
+    // results nor go unhandled while sibling batches are still being planned.
+    return promises.map(promise => promise.catch(() => undefined));
   }
 
   async getKeyValues({
@@ -2873,6 +3063,7 @@ export class Metadata {
       keys,
       // Serialize rather than hashing the raw state: the selections are Sets.
       keyConditions: keyConditions?.map(s => s && serializeFilterState(s)),
+      limit,
       disableRowLimit,
     };
     return this.cache.getOrFetch(
@@ -3144,6 +3335,7 @@ export class Metadata {
       keys,
       // Serialize rather than hashing the raw state: the selections are Sets.
       keyConditions: keyConditions?.map(s => s && serializeFilterState(s)),
+      limit,
       disableRowLimit,
     };
     return this.cache.getOrFetch(
@@ -3243,6 +3435,16 @@ export type TableConnection = {
   // Bounds Map key discovery; without it Map keys are skipped. #3037
   timestampValueExpression?: string;
 };
+
+/** A SQL or Lucene condition on the rows a table's Map keys are read from. */
+export type FieldsCondition = Pick<
+  BuilderChartConfig,
+  | 'where'
+  | 'whereLanguage'
+  | 'implicitColumnExpression'
+  | 'bodyExpression'
+  | 'useTextIndexForImplicitColumn'
+>;
 
 export type TableConnectionChoice =
   | {

@@ -12,11 +12,21 @@ import { z } from 'zod';
 import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';
 import { getSource } from '@/controllers/sources';
-import type { ToolRegistrar, ToolResult } from '@/mcp/tools/types';
+import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
+import type { McpContext, ToolRegistrar, ToolResult } from '@/mcp/tools/types';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
+import { isHiddenSource } from '@/mcp/utils/promql';
+import {
+  MCP_QUERY_MAX_EXECUTION_SEC,
+  MCP_TIMEOUT_GRACE_MS,
+  MCP_TOOL_TIMEOUT_MS,
+  runWithTimeout,
+  type TimeoutOutcome,
+} from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 
+import { describePromqlSource } from './describePromqlSource';
 import {
   DISCOVERABLE_METRIC_KINDS,
   QUERYABLE_METRIC_KINDS,
@@ -33,15 +43,11 @@ import { extractSourceConfig } from './schemas';
 const VALUE_SAMPLE_LOOKBACK_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // When discovery's signal is aborted; it then returns what it has so far.
-// Matches the 30s budget of the other MCP query tools.
-export const DESCRIBE_TIMEOUT_MS = 30_000;
+export const DESCRIBE_TIMEOUT_MS = MCP_TOOL_TIMEOUT_MS;
 
 // Extra time after the abort before the handler stops waiting, in case a
-// ClickHouse call ignores the signal. 30s + 2s lines up with
-// MCP_REQUEST_TIMEOUT in query/helpers.ts.
-export const DESCRIBE_BACKSTOP_MS = 2_000;
-
-const BACKSTOP = Symbol('backstop');
+// ClickHouse call ignores the signal.
+export const DESCRIBE_BACKSTOP_MS = MCP_TIMEOUT_GRACE_MS;
 
 // Max sampled values per low-cardinality column / map attribute key.
 const MAX_LC_VALUES = 20;
@@ -83,13 +89,14 @@ type DescribeProgress = {
  * `signal` aborts, and the result is flagged partial.
  */
 async function describeSourceSchema(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   signal: AbortSignal,
   progress: DescribeProgress,
 ): Promise<ToolResult> {
+  const { teamId } = context;
   const source = await getSource(teamId, sourceId);
-  if (!source) {
+  if (!source || isHiddenSource(context, source)) {
     return mcpUserError(
       `Source "${sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,
     );
@@ -108,6 +115,10 @@ async function describeSourceSchema(
 
   if (source.section) {
     meta.section = source.section;
+  }
+
+  if (source.kind === SourceKind.Promql) {
+    return describePromqlSource({ teamId, source, meta, signal, progress });
   }
 
   if (
@@ -142,6 +153,8 @@ async function describeSourceSchema(
       body: source.bodyExpression,
       serviceName: source.serviceNameExpression,
       severityText: source.severityTextExpression,
+      severityNumber: source.severityNumberExpression,
+      eventName: source.eventNameExpression,
       traceId: source.traceIdExpression,
     };
   } else if (source.kind === SourceKind.Metric) {
@@ -501,7 +514,11 @@ function formatDescribeResult({
     ? `For more metric names than the sample above, call clickstack_list_metrics with sourceId "${sourceId}". For per-metric attribute keys + sampled values, call clickstack_describe_metric with sourceId and metricName.`
     : undefined;
 
-  const { data: output, isTrimmed } = trimToolResponse({
+  const {
+    data: output,
+    isTrimmed,
+    notes: trimNotes,
+  } = trimToolResponse({
     source,
     usage: {
       topLevelColumns:
@@ -529,6 +546,7 @@ function formatDescribeResult({
     ? {
         ...output,
         note: 'Result was trimmed for context size. Some columns or sampled values may be omitted.',
+        trimNotes,
       }
     : output;
 
@@ -552,7 +570,7 @@ export function registerDescribeSource({
     'clickstack_describe_source',
     {
       title: 'Describe Source Schema',
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY_TOOL,
       description:
         'CALL THIS BEFORE WRITING QUERIES — prevents unknown-column errors.\n\n' +
         'Returns the full column schema, map-attribute keys, and sampled low-cardinality ' +
@@ -566,7 +584,7 @@ export function registerDescribeSource({
         '(SeverityText, StatusCode, ServiceName, etc.) — use these in filters instead of guessing\n' +
         '- mapAttributeValues: sampled top values for the most common map attribute keys ' +
         "(e.g. ResourceAttributes['service.name'] top values) — requires rollup tables\n\n" +
-        `Value sampling stops after ${DESCRIBE_TIMEOUT_MS / 1000} seconds. If it is cut short, the result still includes ` +
+        `Value sampling stops after ${MCP_QUERY_MAX_EXECUTION_SEC} seconds. If it is cut short, the result still includes ` +
         'the columns and sets partial: true with skippedStages listing what is missing.\n\n' +
         'Cost: one describe call prevents 3–5 exploratory queries against non-existent columns.',
       inputSchema: z.object({
@@ -578,24 +596,7 @@ export function registerDescribeSource({
       }),
     },
     async ({ sourceId }) => {
-      const controller = new AbortController();
       const progress: DescribeProgress = {};
-
-      // At the deadline, abort so discovery skips its remaining stages and
-      // returns what it has. The backstop covers ClickHouse calls that
-      // ignore the signal: it answers from the latest snapshot instead of
-      // waiting on them.
-      const abortTimer = setTimeout(
-        () => controller.abort(),
-        DESCRIBE_TIMEOUT_MS,
-      );
-      let backstopTimer: ReturnType<typeof setTimeout> | undefined;
-      const backstop = new Promise<typeof BACKSTOP>(resolve => {
-        backstopTimer = setTimeout(
-          () => resolve(BACKSTOP),
-          DESCRIBE_TIMEOUT_MS + DESCRIBE_BACKSTOP_MS,
-        );
-      });
 
       const span = trace.getActiveSpan();
       const recordOutcome = (
@@ -622,36 +623,30 @@ export function registerDescribeSource({
         );
       };
 
+      // At the deadline, discovery skips its remaining stages and returns
+      // what it has. The grace window covers ClickHouse calls that ignore
+      // the signal: past it we answer from the latest snapshot instead.
+      let outcome: TimeoutOutcome<ToolResult>;
       try {
-        const result = await Promise.race([
-          describeSourceSchema(
-            teamId.toString(),
-            sourceId,
-            controller.signal,
-            progress,
-          ),
-          backstop,
-        ]);
-        if (result === BACKSTOP) {
-          return timedOutResult();
-        }
-        recordOutcome(
-          result.isError ? 'error' : progress.partial ? 'partial' : 'complete',
+        outcome = await runWithTimeout(
+          signal => describeSourceSchema(context, sourceId, signal, progress),
+          { timeoutMs: DESCRIBE_TIMEOUT_MS, graceMs: DESCRIBE_BACKSTOP_MS },
         );
-        return result;
       } catch (e) {
-        if (controller.signal.aborted) {
-          return timedOutResult();
-        }
         logger.warn(
           { teamId, sourceId, error: e },
           'Failed to describe source schema',
         );
         throw e;
-      } finally {
-        clearTimeout(abortTimer);
-        clearTimeout(backstopTimer);
       }
+      if (outcome.timedOut) {
+        return timedOutResult();
+      }
+      const result = outcome.value;
+      recordOutcome(
+        result.isError ? 'error' : progress.partial ? 'partial' : 'complete',
+      );
+      return result;
     },
   );
 }

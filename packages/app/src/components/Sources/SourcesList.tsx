@@ -1,14 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
   Alert,
-  Badge,
   Box,
   Button,
   Card,
-  Divider,
   Flex,
   Group,
   Loader,
@@ -206,9 +205,7 @@ export function SourcesList({
                     {s.name}
                   </Text>
                   {s.disabled && (
-                    <Badge size="xs" variant="light" color="gray">
-                      Disabled
-                    </Badge>
+                    <Badge size="sm" text="Disabled" state="neutral" />
                   )}
                 </Group>
                 <Text size={subtextSize} c="dimmed" mt={4}>
@@ -259,13 +256,13 @@ export function SourcesList({
                 />
               </Box>
             )}
-            {index < (sources?.length ?? 0) - 1 && <Divider />}
+            {index < (sources?.length ?? 0) - 1 && <Separator size="xs" />}
           </React.Fragment>
         ))}
 
         {isCreatingSource && (
           <>
-            {sources && sources.length > 0 && <Divider />}
+            {sources && sources.length > 0 && <Separator size="xs" />}
             <TableSourceForm
               isNew
               onCreate={() => setIsCreatingSource(false)}

@@ -1,9 +1,9 @@
-# HyperDX Architecture
+# ClickStack Architecture
 
 ## Core Services
 
-- **HyperDX UI (`packages/app`)**: Next.js frontend serving the user interface
-- **HyperDX API (`packages/api`)**: Node.js/Express backend handling queries and business logic
+- **ClickStack UI (`packages/app`)**: Next.js frontend serving the user interface
+- **ClickStack API (`packages/api`)**: Node.js/Express backend handling queries and business logic
 - **OpenTelemetry Collector**: Receives and processes telemetry data
 - **ClickHouse**: Primary data store for all telemetry (logs, metrics, traces)
 - **MongoDB**: Metadata storage (users, dashboards, alerts, saved searches)
@@ -87,6 +87,9 @@ Key, rate-limited to 600 req/min.
   tracing)
 - **Dev/debug**: `yarn dev:mcp` launches the MCP Inspector for interactive
   testing
+- **Response size**: each tool call records the UTF-8 bytes it returns
+  (`mcp.tool.response.size_bytes` span attribute,
+  `hyperdx.mcp.tool.response.size_bytes` histogram)
 
 See `MCP.md` in the repo root for user-facing setup instructions.
 

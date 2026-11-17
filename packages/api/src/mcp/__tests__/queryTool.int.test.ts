@@ -1,6 +1,7 @@
 import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/node';
 import { MetricsDataType, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { ObjectId } from 'mongodb';
 
 import * as config from '@/config';
 import {
@@ -17,9 +18,12 @@ import {
   getServer,
   seedExponentialHistogramMetric,
 } from '@/fixtures';
+import * as denoise from '@/mcp/tools/query/denoise';
+import * as patternDrilldown from '@/mcp/tools/query/patternDrilldown';
 import { McpContext } from '@/mcp/tools/types';
 import Connection from '@/models/connection';
-import { Source, type SourceDocument } from '@/models/source';
+import { LogSource, Source, type SourceDocument } from '@/models/source';
+import Team from '@/models/team';
 
 import { callTool, createTestClient, getFirstText } from './mcpTestUtils';
 
@@ -160,8 +164,21 @@ describe('MCP Query Tools', () => {
       expect(props).toContain('sql');
       expect(props).toContain('startTime');
       expect(props).toContain('endTime');
+      expect(props).toContain('queries');
       expect(tool!.inputSchema.required).toContain('connectionId');
-      expect(tool!.inputSchema.required).toContain('sql');
+      // sql and queries are alternatives, so neither is required by the schema.
+      expect(tool!.inputSchema.required).not.toContain('sql');
+      expect(tool!.inputSchema.required).not.toContain('queries');
+    });
+
+    it('exposes an optional sourceId on clickstack_sql', async () => {
+      const { tools } = await client.listTools();
+      const tool = tools.find(t => t.name === 'clickstack_sql')!;
+
+      expect(Object.keys(tool.inputSchema.properties ?? {})).toContain(
+        'sourceId',
+      );
+      expect(tool.inputSchema.required).not.toContain('sourceId');
     });
   });
 
@@ -349,6 +366,132 @@ describe('MCP Query Tools', () => {
       expect(result.isError).toBeFalsy();
       expect(result.content).toHaveLength(1);
     });
+
+    describe('having, limit and the default order', () => {
+      const now = Date.now();
+      const tableArgs = () => ({
+        sourceId: logSource._id.toString(),
+        select: [{ aggFn: 'count', alias: 'n' }],
+        groupBy: 'ServiceName',
+        startTime: new Date(now - 60 * 60 * 1000).toISOString(),
+        endTime: new Date(now + 60 * 1000).toISOString(),
+      });
+      const rows = (result: Awaited<ReturnType<typeof callTool>>) => {
+        const parsed: { result: { data: { ServiceName: string }[] } } =
+          JSON.parse(getFirstText(result));
+        return parsed.result.data;
+      };
+
+      beforeEach(async () => {
+        // a: 1 row, b: 5 rows, c: 3 rows
+        const logs: Parameters<typeof bulkInsertLogs>[0] = [];
+        for (const [service, count] of [
+          ['a', 1],
+          ['b', 5],
+          ['c', 3],
+        ] as const) {
+          for (let i = 0; i < count; i++) {
+            logs.push({
+              Body: `event ${i}`,
+              ServiceName: service,
+              SeverityText: 'INFO',
+              Timestamp: new Date(now - 60 * 1000 + i),
+            });
+          }
+        }
+        await bulkInsertLogs(logs);
+      });
+
+      it('orders by the first select item, descending, when orderBy is omitted', async () => {
+        const result = await callTool(client, 'clickstack_table', tableArgs());
+        expect(result.isError).toBeFalsy();
+        expect(rows(result).map(r => r.ServiceName)).toEqual(['b', 'c', 'a']);
+      });
+
+      it('orders by position when the first select item has no alias', async () => {
+        const result = await callTool(client, 'clickstack_table', {
+          ...tableArgs(),
+          select: [{ aggFn: 'count' }],
+        });
+        expect(result.isError).toBeFalsy();
+        expect(rows(result).map(r => r.ServiceName)).toEqual(['b', 'c', 'a']);
+      });
+
+      it('keeps an explicit orderBy', async () => {
+        const result = await callTool(client, 'clickstack_table', {
+          ...tableArgs(),
+          orderBy: 'ServiceName ASC',
+        });
+        expect(rows(result).map(r => r.ServiceName)).toEqual(['a', 'b', 'c']);
+      });
+
+      it('applies limit after ordering', async () => {
+        const result = await callTool(client, 'clickstack_table', {
+          ...tableArgs(),
+          limit: 2,
+        });
+        expect(rows(result).map(r => r.ServiceName)).toEqual(['b', 'c']);
+      });
+
+      it('applies having to the groups', async () => {
+        const result = await callTool(client, 'clickstack_table', {
+          ...tableArgs(),
+          having: 'n > 1',
+        });
+        expect(rows(result).map(r => r.ServiceName)).toEqual(['b', 'c']);
+      });
+
+      it('orders by a quoted alias with a space, by default and explicitly', async () => {
+        const select = [{ aggFn: 'count', alias: 'Line Count' }];
+        const byDefault = await callTool(client, 'clickstack_table', {
+          ...tableArgs(),
+          select,
+        });
+        expect(byDefault.isError).toBeFalsy();
+        expect(rows(byDefault).map(r => r.ServiceName)).toEqual([
+          'b',
+          'c',
+          'a',
+        ]);
+        const explicit = await callTool(client, 'clickstack_table', {
+          ...tableArgs(),
+          select,
+          orderBy: '"Line Count" ASC',
+        });
+        expect(explicit.isError).toBeFalsy();
+        expect(rows(explicit).map(r => r.ServiceName)).toEqual(['a', 'c', 'b']);
+      });
+
+      it.each(['pie', 'bar'] as const)(
+        'keeps the largest groups with limit on shape "%s"',
+        async shape => {
+          const result = await callTool(client, 'clickstack_table', {
+            ...tableArgs(),
+            shape,
+            limit: 2,
+          });
+          expect(result.isError).toBeFalsy();
+          expect(rows(result).map(r => r.ServiceName)).toEqual(['b', 'c']);
+        },
+      );
+
+      it.each(['pie', 'bar'] as const)(
+        'applies having on shape "%s"',
+        async shape => {
+          const result = await callTool(client, 'clickstack_table', {
+            ...tableArgs(),
+            shape,
+            having: 'n > 1',
+          });
+          expect(result.isError).toBeFalsy();
+          expect(
+            rows(result)
+              .map(r => r.ServiceName)
+              .sort(),
+          ).toEqual(['b', 'c']);
+        },
+      );
+    });
   });
 
   // ─── clickstack_search ─────────────────────────────────────────────────────────
@@ -425,7 +568,7 @@ describe('MCP Query Tools', () => {
       beforeEach(async () => {
         const logs: Parameters<typeof bulkInsertLogs>[0] = [];
 
-        // Noisy pattern: "Health check OK from <ip>" — 80 rows (>10% threshold)
+        // Noisy pattern: "Health check OK from <ip>" — 80 of 85 rows
         for (let i = 0; i < 80; i++) {
           logs.push({
             Body: `Health check OK from 10.0.${Math.floor(i / 256)}.${i % 256}`,
@@ -435,7 +578,7 @@ describe('MCP Query Tools', () => {
           });
         }
 
-        // Unique/rare events — 5 rows (well below 10% threshold)
+        // Rare events — 1 row each, well below the 5% threshold
         for (let i = 0; i < 5; i++) {
           logs.push({
             Body: `Rare event type ${String.fromCharCode(65 + i)} occurred in subsystem`,
@@ -498,11 +641,123 @@ describe('MCP Query Tools', () => {
         expect(output).not.toHaveProperty('denoised');
       });
     });
+
+    describe('denoise on a trimmed result', () => {
+      const now = new Date();
+
+      beforeEach(async () => {
+        const pad = ' payload'.repeat(150);
+        await bulkInsertLogs(
+          Array.from({ length: 120 }, (_, i) => ({
+            Body:
+              i < 110
+                ? `Health check OK from 10.0.0.${i}${pad}`
+                : `Rare event ${i} in subsystem${pad}`,
+            ServiceName: 'loadbalancer',
+            SeverityText: 'INFO',
+            Timestamp: new Date(now.getTime() - (i + 1) * 1000),
+          })),
+        );
+      });
+
+      const search = () =>
+        callTool(client, 'clickstack_search', {
+          sourceId: logSource._id.toString(),
+          denoise: true,
+          maxResults: 200,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+      it("keeps the first trim's row cut but not its stale size line", async () => {
+        const result = await search();
+
+        expect(result.isError).toBeFalsy();
+        const output = JSON.parse(getFirstText(result));
+        expect(output).toHaveProperty('denoised');
+        expect(output.note).toContain('trimmed');
+        const sizeLines = output.trimNotes.filter((n: string) =>
+          n.startsWith('Response trimmed from '),
+        );
+        expect(sizeLines).toHaveLength(0); // denoise didn't need a second trim
+        expect(output.trimNotes).toEqual(
+          expect.arrayContaining([
+            expect.stringMatching(/^result\.data: cut from 120 to \d+ items$/),
+          ]),
+        );
+      });
+
+      it('keeps the same notes when denoise fails', async () => {
+        const spy = jest
+          .spyOn(denoise, 'denoiseSearchResults')
+          .mockRejectedValueOnce(new Error('denoise down'));
+        try {
+          const result = await search();
+          expect(result.isError).toBeFalsy();
+          const output = JSON.parse(getFirstText(result));
+          expect(output.denoised.skipped).toBe('denoise_failed');
+          expect(output.trimNotes).toEqual([
+            `result.data: cut from 120 to ${output.result.data.length} items`,
+          ]);
+        } finally {
+          spy.mockRestore();
+        }
+      });
+    });
   });
 
   // ─── clickstack_event_patterns ─────────────────────────────────────────────────
 
   describe('clickstack_event_patterns', () => {
+    describe('when the response is over the size limit', () => {
+      const now = new Date();
+
+      beforeEach(async () => {
+        // 30 unrelated patterns of ~60 tokens, 4 rows each: the samples and
+        // drill-down predicates push the response well past 50,000 chars.
+        const logs: Parameters<typeof bulkInsertLogs>[0] = [];
+        for (let p = 0; p < 30; p++) {
+          const words = Array.from({ length: 60 }, (_, k) => `f${p}x${k}`);
+          for (let r = 0; r < 4; r++) {
+            logs.push({
+              Body: `Failure${p} ${words.join(' ')} id${p}_${r}`,
+              ServiceName: 'big-service',
+              SeverityText: 'ERROR',
+              Timestamp: new Date(now.getTime() - (p * 4 + r + 1) * 1000),
+            });
+          }
+        }
+        await bulkInsertLogs(logs);
+      });
+
+      it('keeps all topN patterns and drops, never cuts, whereSnippet', async () => {
+        const result = await callTool(client, 'clickstack_event_patterns', {
+          sourceId: logSource._id.toString(),
+          topN: 30,
+          startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+          endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        const text = getFirstText(result);
+        const output = JSON.parse(text);
+        expect(output.patterns).toHaveLength(30);
+        expect(text).not.toContain('__hdx_trimmed');
+        expect(output.trimNotes).toEqual(
+          expect.arrayContaining([
+            expect.stringMatching(/^Response trimmed from /),
+            expect.stringMatching(/^patterns\[\]\.samples: kept the first/),
+            expect.stringMatching(/^patterns\[\]\.whereSnippet: removed/),
+          ]),
+        );
+        expect(output.note).toContain('whereSnippet was removed');
+        for (const p of output.patterns) {
+          expect(p).not.toHaveProperty('whereSnippet');
+          expect(p.pattern).toMatch(/^Failure\d+ /);
+        }
+      });
+    });
+
     it('should execute an event_patterns query on a log source', async () => {
       const result = await callTool(client, 'clickstack_event_patterns', {
         sourceId: logSource._id.toString(),
@@ -675,6 +930,399 @@ describe('MCP Query Tools', () => {
         expect(hasNonZeroTrend).toBe(true);
       });
     });
+
+    describe('drill-down, extraction and sampling', () => {
+      const now = new Date();
+      const base = new Date(now.getTime() - 5 * 60 * 1000);
+      const window = {
+        startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+        endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+      };
+
+      const tricky = [
+        ...['k1', 'k2', 'k3'].map(
+          k =>
+            String.raw`Lookup "${k}" in C:\data\idx it's (a|b)*[c]+ $1 ^x {n} .?`,
+        ),
+        ...['a1', 'b2'].map(id => `Zahlung für ${id} fehlgeschlagen ✓ 日本`),
+        // Drain splits on these; RE2's \s alone would not.
+        ...['1', '2'].map(n => `\uFEFFReset ${n}\u00A0done`),
+        ...['1\u202F234', '5\u202F678'].map(n => `Paid ${n} EUR`),
+      ];
+
+      beforeEach(async () => {
+        let t = 0;
+        const at = () => new Date(base.getTime() + t++ * 1000);
+        const logs: Parameters<typeof bulkInsertLogs>[0] = [];
+        for (const n of [10, 20, 30, 40, 50, 60]) {
+          logs.push({
+            Body: `Sending ${n} rows`,
+            ServiceName: 'svc-a',
+            SeverityText: 'INFO',
+            Timestamp: at(),
+          });
+        }
+        for (const n of [1, 2, 3]) {
+          logs.push({
+            Body: `Sending ${n} more rows`,
+            ServiceName: 'svc-a',
+            SeverityText: 'INFO',
+            Timestamp: at(),
+          });
+        }
+        for (const n of [70, 80, 90, 100]) {
+          logs.push({
+            Body: `Sending ${n} rows`,
+            ServiceName: 'svc-b',
+            SeverityText: 'INFO',
+            Timestamp: at(),
+          });
+        }
+        for (const body of tricky) {
+          logs.push({
+            Body: body,
+            ServiceName: 'tricky',
+            SeverityText: 'WARN',
+            Timestamp: at(),
+          });
+        }
+        for (const s of [5, 15, 30]) {
+          logs.push({
+            Body: 'request failed',
+            ServiceName: 'attrs',
+            SeverityText: 'ERROR',
+            Timestamp: at(),
+            LogAttributes: { 'exception.message': `Timeout after ${s} s` },
+          });
+        }
+        logs.push({
+          Body: 'request failed',
+          ServiceName: 'attrs',
+          SeverityText: 'ERROR',
+          Timestamp: at(),
+        });
+        for (const id of [123, 456, 789]) {
+          logs.push({
+            Body: JSON.stringify({
+              level: 'error',
+              message: `Payment ${id} declined by issuer`,
+            }),
+            ServiceName: 'json',
+            SeverityText: 'ERROR',
+            Timestamp: at(),
+          });
+        }
+        for (const body of [
+          JSON.stringify({ message: 5 }),
+          JSON.stringify({ message: null }),
+          JSON.stringify({ message: { nested: 'x' } }),
+          JSON.stringify({ other: 'x' }),
+          JSON.stringify({ message: '' }),
+          'not json at all',
+        ]) {
+          logs.push({
+            Body: body,
+            ServiceName: 'json',
+            SeverityText: 'ERROR',
+            Timestamp: at(),
+          });
+        }
+        await bulkInsertLogs(logs);
+      });
+
+      type MinedPattern = {
+        pattern: string;
+        sampleCount: number;
+        estimatedCount: number;
+        whereSnippet: string;
+        whereLanguage: string;
+        drilldownUnavailable?: string;
+        samples: string[];
+        trend?: { time: string; count: number }[];
+      };
+      type MinedOutput = {
+        summary: {
+          totalCount: number;
+          sampledCount: number;
+          sampleCoverage: number;
+          sampleMultiplier: number;
+          bodyColumn: string;
+          timeRange: { start: string; end: string };
+          trend?: {
+            requestedBuckets: number;
+            bucketCount: number;
+            bucketInterval: string;
+            firstBucketStart: string;
+            lastBucketEnd: string;
+          };
+          drilldown: {
+            tool: string;
+            sourceId: string;
+            startTime: string;
+            endTime: string;
+            includesFilters: boolean;
+            warning?: string;
+          };
+        };
+        patterns: MinedPattern[];
+      };
+
+      const mine = async (
+        args: Record<string, unknown>,
+      ): Promise<MinedOutput> => {
+        const result = await callTool(client, 'clickstack_event_patterns', {
+          sourceId: logSource._id.toString(),
+          ...window,
+          ...args,
+        });
+        expect(result.isError).toBeFalsy();
+        return JSON.parse(getFirstText(result));
+      };
+
+      const drill = async (output: MinedOutput, pattern: MinedPattern) => {
+        expect(pattern.whereLanguage).toBe('sql');
+        expect(pattern.whereSnippet).not.toBe('');
+        const { drilldown } = output.summary;
+        expect(drilldown.tool).toBe('clickstack_search');
+        const result = await callTool(client, 'clickstack_search', {
+          sourceId: drilldown.sourceId,
+          startTime: drilldown.startTime,
+          endTime: drilldown.endTime,
+          where: pattern.whereSnippet,
+          whereLanguage: pattern.whereLanguage,
+          columns: 'Body, ServiceName',
+          maxResults: 200,
+        });
+        expect(result.isError).toBeFalsy();
+        const parsed: {
+          result: { data: { Body: string; ServiceName: string }[] };
+        } = JSON.parse(getFirstText(result));
+        return parsed.result.data;
+      };
+
+      const findPattern = (output: MinedOutput, template: string) => {
+        const p = output.patterns.find(x => x.pattern === template);
+        if (!p) throw new Error(`pattern not found: ${template}`);
+        return p;
+      };
+
+      it('drills into a template with a mid-message variable and keeps a Lucene filter', async () => {
+        const output = await mine({ where: 'ServiceName:svc-a' });
+        expect(output.summary.drilldown.sourceId).toBe(
+          logSource._id.toString(),
+        );
+
+        const rows = await drill(
+          output,
+          findPattern(output, 'Sending <*> rows'),
+        );
+        expect(rows).toHaveLength(6);
+        for (const r of rows) {
+          expect(r.Body).toMatch(/^Sending \d+ rows$/);
+          expect(r.ServiceName).toBe('svc-a');
+        }
+
+        const more = await drill(
+          output,
+          findPattern(output, 'Sending <*> more rows'),
+        );
+        expect(more).toHaveLength(3);
+        for (const r of more) expect(r.Body).toMatch(/^Sending \d more rows$/);
+      });
+
+      it('keeps a SQL filter in the drill-down', async () => {
+        const output = await mine({
+          where: "ServiceName = 'svc-b'",
+          whereLanguage: 'sql',
+        });
+        const rows = await drill(
+          output,
+          findPattern(output, 'Sending <*> rows'),
+        );
+        expect(rows).toHaveLength(4);
+        for (const r of rows) expect(r.ServiceName).toBe('svc-b');
+      });
+
+      it('builds predicates that parse and match messages with quotes, backslashes, regex characters and Unicode', async () => {
+        const output = await mine({ where: 'ServiceName:tricky' });
+        expect(output.summary.totalCount).toBe(tricky.length);
+        expect(output.patterns.length).toBeGreaterThan(0);
+
+        let drilled = 0;
+        for (const p of output.patterns) {
+          const rows = await drill(output, p);
+          // The sample covers every row and the fixture shapes do not overlap,
+          // so the drill-down must return exactly the cluster's members.
+          expect(rows).toHaveLength(p.sampleCount);
+          for (const r of rows) expect(tricky).toContain(r.Body);
+          drilled += rows.length;
+        }
+        expect(drilled).toBe(tricky.length);
+      });
+
+      it('mines a map attribute and drills into it with SQL, not Lucene bracket syntax', async () => {
+        const output = await mine({
+          bodyExpression: "LogAttributes['exception.message']",
+          where: "LogAttributes['exception.message'] != ''",
+          whereLanguage: 'sql',
+        });
+        expect(output.summary.totalCount).toBe(3);
+        const p = findPattern(output, 'Timeout after <*> s');
+        expect(p.whereSnippet).toContain(
+          "match(LogAttributes['exception.message'],",
+        );
+        expect(p.whereSnippet).not.toContain("']:");
+
+        const rows = await drill(output, p);
+        expect(rows).toHaveLength(3);
+        for (const r of rows) expect(r.ServiceName).toBe('attrs');
+      });
+
+      it('mines a field inside JSON bodies with JSONExtractString and drills with the same expression', async () => {
+        const expr = "JSONExtractString(Body, 'message')";
+        const output = await mine({
+          bodyExpression: expr,
+          where: `ServiceName = 'json' AND ${expr} != ''`,
+          whereLanguage: 'sql',
+        });
+        expect(output.summary.bodyColumn).toBe(expr);
+        // Non-JSON bodies and missing / null / empty values extract to '' and
+        // are filtered out. How numbers and objects extract varies by
+        // ClickHouse version, so only the payment strings are asserted.
+        expect(output.summary.totalCount).toBeGreaterThanOrEqual(3);
+        const allSamples = output.patterns.flatMap(x => x.samples);
+        expect(allSamples).not.toContain('');
+
+        const p = findPattern(output, 'Payment <*> declined by issuer');
+        expect(p.sampleCount).toBe(3);
+        expect(p.whereSnippet).toContain(`match(${expr},`);
+        const rows = await drill(output, p);
+        expect(rows).toHaveLength(3);
+        for (const r of rows) {
+          expect(JSON.parse(r.Body).message).toMatch(/^Payment \d+ declined/);
+        }
+      });
+
+      it('rejects function calls in bodyExpression other than JSONExtractString over a column', async () => {
+        for (const bodyExpression of [
+          'lower(Body)',
+          "JSONExtractString(lower(Body), 'message')",
+          "JSONExtractString(Body, 'message') OR (1=1",
+        ]) {
+          const result = await callTool(client, 'clickstack_event_patterns', {
+            sourceId: logSource._id.toString(),
+            bodyExpression,
+            ...window,
+          });
+          expect(result.isError).toBe(true);
+          expect(getFirstText(result)).toContain('bodyExpression');
+        }
+      });
+
+      it('applies the source table filter to mining and to the drill-down', async () => {
+        // The field lives on the Log discriminator; Source.updateOne drops it.
+        await LogSource.updateOne(
+          { _id: logSource._id },
+          { $set: { tableFilterExpression: "ServiceName != 'svc-b'" } },
+        );
+        const output = await mine({});
+        const p = findPattern(output, 'Sending <*> rows');
+        expect(p.sampleCount).toBe(6);
+        expect(p.whereSnippet).toContain("ServiceName != 'svc-b'");
+        const rows = await drill(output, p);
+        expect(rows).toHaveLength(6);
+        for (const r of rows) expect(r.ServiceName).toBe('svc-a');
+        expect(output.summary.drilldown.includesFilters).toBe(true);
+        expect(output.summary.drilldown.warning).toBeUndefined();
+      });
+
+      it('keeps the table filter and warns when the where filter cannot be rendered as SQL', async () => {
+        await LogSource.updateOne(
+          { _id: logSource._id },
+          { $set: { tableFilterExpression: "ServiceName != 'svc-b'" } },
+        );
+        const spy = jest
+          .spyOn(patternDrilldown, 'userWhereAsSql')
+          .mockRejectedValueOnce(new Error('cannot render'));
+        try {
+          const output = await mine({ where: 'SeverityText:INFO' });
+          expect(output.summary.drilldown.includesFilters).toBe(false);
+          expect(output.summary.drilldown.warning).toContain('table filter');
+          const p = findPattern(output, 'Sending <*> rows');
+          expect(p.whereSnippet).toContain("ServiceName != 'svc-b'");
+          const rows = await drill(output, p);
+          expect(rows).toHaveLength(6);
+          for (const r of rows) expect(r.ServiceName).toBe('svc-a');
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      it('marks templates too long for a predicate as drilldownUnavailable', async () => {
+        await bulkInsertLogs([
+          {
+            Body: 'x'.repeat(4001),
+            ServiceName: 'long',
+            SeverityText: 'INFO',
+            Timestamp: base,
+          },
+        ]);
+        const output = await mine({ where: 'ServiceName:long' });
+        expect(output.patterns).toHaveLength(1);
+        const [p] = output.patterns;
+        expect(p.whereSnippet).toBe('');
+        expect(p.drilldownUnavailable).toContain('longer than 4000');
+      });
+
+      it('separates sampled counts from estimates', async () => {
+        const output = await mine({
+          where: 'ServiceName:svc-a',
+          sampleSize: 3,
+        });
+        const { summary } = output;
+        expect(summary.totalCount).toBe(9);
+        expect(summary.sampledCount).toBe(3);
+        expect(summary.sampleCoverage).toBeCloseTo(3 / 9, 3);
+        expect(summary.sampleMultiplier).toBe(3);
+        const sampledTotal = output.patterns.reduce(
+          (n, p) => n + p.sampleCount,
+          0,
+        );
+        expect(sampledTotal).toBe(3);
+        for (const p of output.patterns) {
+          expect(p.estimatedCount).toBe(p.sampleCount * 3);
+        }
+      });
+
+      it('reports the effective trend buckets, and omits trends when trendBuckets is 0', async () => {
+        const withTrend = await mine({
+          where: 'ServiceName:svc-a',
+          trendBuckets: 24,
+        });
+        const { trend } = withTrend.summary;
+        if (!trend) throw new Error('summary.trend missing');
+        expect(trend.requestedBuckets).toBe(24);
+        expect(trend.bucketCount).toBeLessThanOrEqual(24);
+        expect(typeof trend.bucketInterval).toBe('string');
+        expect(new Date(trend.firstBucketStart).getTime()).toBeLessThanOrEqual(
+          new Date(withTrend.summary.timeRange.start).getTime(),
+        );
+        expect(new Date(trend.lastBucketEnd).getTime()).toBeGreaterThanOrEqual(
+          new Date(withTrend.summary.timeRange.end).getTime(),
+        );
+        for (const p of withTrend.patterns) {
+          expect(p.trend).toHaveLength(trend.bucketCount);
+        }
+
+        const noTrend = await mine({
+          where: 'ServiceName:svc-a',
+          trendBuckets: 0,
+        });
+        expect(noTrend.summary.trend).toBeUndefined();
+        for (const p of noTrend.patterns) expect(p.trend).toBeUndefined();
+        expect(noTrend.patterns.length).toBeGreaterThan(0);
+      });
+    });
   });
 
   // ─── clickstack_sql ────────────────────────────────────────────────────────────
@@ -754,6 +1402,346 @@ describe('MCP Query Tools', () => {
 
       expect(result.isError).toBeFalsy();
     });
+
+    // The tool description advertises these bucket-size parameters and
+    // macros, so each one has to resolve to a value rather than fail with
+    // "Substitution intervalSeconds is not set".
+    it('binds the interval parameters and $__interval_s to the same bucket size', async () => {
+      const result = await callTool(client, 'clickstack_sql', {
+        connectionId: connection._id.toString(),
+        sql:
+          'SELECT {intervalSeconds:Int64} AS s, ' +
+          '{intervalMilliseconds:Int64} AS ms, ' +
+          '$__interval_s AS macro_s',
+        startTime: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        endTime: new Date().toISOString(),
+      });
+
+      expect(result.isError).toBeFalsy();
+      const [row] = JSON.parse(getFirstText(result)).result.data;
+      const seconds = Number(row.s);
+      expect(seconds).toBeGreaterThan(0);
+      expect(Number(row.ms)).toBe(seconds * 1000);
+      expect(Number(row.macro_s)).toBe(seconds);
+    });
+
+    it.each(['$__timeInterval', '$__timeInterval_ms'])(
+      'runs a time-series query bucketed with %s',
+      async macro => {
+        const now = Date.now();
+        await bulkInsertLogs(
+          [5, 10, 15, 20].map(minutesAgo => ({
+            Body: 'bucketed',
+            ServiceName: 'sql-buckets',
+            SeverityText: 'INFO',
+            Timestamp: new Date(now - minutesAgo * 60 * 1000),
+          })),
+        );
+
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          sql:
+            `SELECT ${macro}(Timestamp) AS ts, ` +
+            'toUnixTimestamp(ts) % $__interval_s AS offset, count() AS cnt ' +
+            `FROM ${DEFAULT_DATABASE}.${DEFAULT_LOGS_TABLE} ` +
+            "WHERE $__timeFilter(Timestamp) AND ServiceName = 'sql-buckets' " +
+            'GROUP BY ts ORDER BY ts LIMIT 10',
+          startTime: new Date(now - 60 * 60 * 1000).toISOString(),
+          endTime: new Date(now).toISOString(),
+        });
+
+        expect(getFirstText(result)).not.toContain('Substitution');
+        expect(result.isError).toBeFalsy();
+        const rows: { offset: unknown; cnt: unknown }[] = JSON.parse(
+          getFirstText(result),
+        ).result.data;
+        expect(rows).toHaveLength(4);
+        expect(rows.map(row => Number(row.offset))).toEqual([0, 0, 0, 0]);
+        expect(rows.map(row => Number(row.cnt))).toEqual([1, 1, 1, 1]);
+      },
+    );
+
+    describe('sql parameter examples', () => {
+      const getDescription = async () => {
+        const { tools } = await client.listTools();
+        const sqlParam = tools.find(t => t.name === 'clickstack_sql')!
+          .inputSchema.properties?.sql;
+        return sqlParam &&
+          typeof sqlParam === 'object' &&
+          'description' in sqlParam
+          ? String(sqlParam.description)
+          : '';
+      };
+      const getExamples = async () =>
+        [
+          ...(await getDescription()).matchAll(/^Example \(.+\):\n {2}(.+)$/gm),
+        ].map(match => match[1]);
+
+      // timestampColumn can list several columns ("TimestampTime, Timestamp"),
+      // which breaks $__timeFilter if pasted whole. Metric sources return a
+      // database instead of a table.
+      it('say how to fill placeholders for multi-column timestamps and metric sources', async () => {
+        const description = await getDescription();
+
+        expect(description).toMatch(
+          /first expression in its `timestampColumn`/,
+        );
+        expect(description).toMatch(/metricTables.*`database`/);
+      });
+
+      // Agents copy examples literally. A concrete table or column in one
+      // becomes the guess, and it only exists on some schemas.
+      it('leave the table and timestamp column as placeholders', async () => {
+        const examples = await getExamples();
+
+        expect(examples).toHaveLength(2);
+        for (const sql of examples) {
+          expect(sql).toMatch(/FROM (<table>|\$__sourceTable) /);
+          expect(sql).toContain('<timestampColumn>');
+          expect(sql).not.toMatch(/otel_|TimestampTime/);
+        }
+      });
+
+      it('show $__sourceTable for a source and <table> for any other table', async () => {
+        const [timeSeries, table] = await getExamples();
+
+        expect(timeSeries).toContain('FROM $__sourceTable ');
+        expect(table).toContain('FROM <table> ');
+      });
+
+      it('run once the placeholders are filled from a source', async () => {
+        const examples = await getExamples();
+
+        expect(examples).toHaveLength(2);
+        for (const example of examples) {
+          const sql = example
+            .replaceAll('<table>', `${DEFAULT_DATABASE}.${DEFAULT_LOGS_TABLE}`)
+            .replaceAll('<timestampColumn>', 'Timestamp');
+          const result = await callTool(client, 'clickstack_sql', {
+            connectionId: connection._id.toString(),
+            sourceId: logSource._id.toString(),
+            sql,
+            startTime: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+            endTime: new Date().toISOString(),
+          });
+          expect({
+            sql,
+            error: result.isError ? getFirstText(result) : null,
+          }).toEqual({ sql, error: null });
+        }
+      });
+    });
+
+    describe('sourceId', () => {
+      const countSql =
+        'SELECT count() AS n FROM $__sourceTable WHERE $__timeFilter(Timestamp)';
+
+      it('resolves $__sourceTable to the table of the given source', async () => {
+        const now = Date.now();
+        await bulkInsertLogs(
+          [1, 2, 3].map(minutesAgo => ({
+            Body: 'from source',
+            ServiceName: 'sql-source',
+            SeverityText: 'INFO',
+            Timestamp: new Date(now - minutesAgo * 60 * 1000),
+          })),
+        );
+
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          sourceId: logSource._id.toString(),
+          sql: `${countSql} AND ServiceName = 'sql-source'`,
+          startTime: new Date(now - 60 * 60 * 1000).toISOString(),
+          endTime: new Date(now).toISOString(),
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(JSON.parse(getFirstText(result)).result.data).toEqual([
+          { n: '3' },
+        ]);
+      });
+
+      it('rejects $__sourceTable without a sourceId, saying to pass one', async () => {
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          sql: countSql,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toContain(
+          '$__sourceTable needs a sourceId',
+        );
+      });
+
+      it('rejects a sourceId that does not exist', async () => {
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          sourceId: new ObjectId().toString(),
+          sql: countSql,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toContain('Source not found');
+      });
+
+      it("rejects another team's sourceId as not found", async () => {
+        const otherTeam = await Team.create({ name: 'Other Team' });
+        const otherSource = await Source.create({
+          kind: SourceKind.Log,
+          team: otherTeam._id,
+          from: {
+            databaseName: DEFAULT_DATABASE,
+            tableName: DEFAULT_LOGS_TABLE,
+          },
+          timestampValueExpression: 'Timestamp',
+          connection: connection._id,
+          name: 'Other Logs',
+        });
+
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          sourceId: otherSource._id.toString(),
+          sql: countSql,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toContain('Source not found');
+      });
+
+      // $__sourceTable would otherwise expand to a table on another server.
+      it('rejects a sourceId whose connection differs from connectionId', async () => {
+        const otherConnection = await Connection.create({
+          team: team._id,
+          name: 'Other',
+          host: config.CLICKHOUSE_HOST,
+          username: config.CLICKHOUSE_USER,
+          password: config.CLICKHOUSE_PASSWORD,
+        });
+
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: otherConnection._id.toString(),
+          sourceId: logSource._id.toString(),
+          sql: countSql,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toContain('does not match the connection');
+      });
+    });
+
+    it('returns plain query rows unchanged', async () => {
+      const result = await callTool(client, 'clickstack_sql', {
+        connectionId: connection._id.toString(),
+        sql: "SELECT 1 AS value, 'a' AS label",
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(getFirstText(result)).result.data).toEqual([
+        { value: 1, label: 'a' },
+      ]);
+    });
+
+    describe('queries (batch mode)', () => {
+      it('runs each query and reports its own status', async () => {
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          queries: [
+            { id: 'one', sql: 'SELECT 1 AS value' },
+            { id: 'bad', sql: 'SELECTT 1' },
+            { id: 'two', sql: 'SELECT 2 AS value' },
+          ],
+        });
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse(getFirstText(result));
+        expect(parsed.summary).toEqual({
+          total: 3,
+          ok: 2,
+          error: 1,
+          timeout: 0,
+        });
+        const [one, bad, two] = parsed.results;
+        expect(one).toMatchObject({ index: 0, id: 'one', status: 'ok' });
+        expect(one.result.data).toEqual([{ value: 1 }]);
+        expect(bad).toMatchObject({ index: 1, id: 'bad', status: 'error' });
+        expect(bad.error).toMatch(/syntax/i);
+        expect(two.result.data).toEqual([{ value: 2 }]);
+      });
+
+      it("expands $__sourceTable per query from that query's sourceId", async () => {
+        const now = Date.now();
+        await bulkInsertLogs(
+          [1, 2].map(minutesAgo => ({
+            Body: 'batch source',
+            ServiceName: 'sql-batch-source',
+            SeverityText: 'INFO',
+            Timestamp: new Date(now - minutesAgo * 60 * 1000),
+          })),
+        );
+
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          queries: [
+            {
+              id: 'logs',
+              sourceId: logSource._id.toString(),
+              sql:
+                'SELECT count() AS n FROM $__sourceTable ' +
+                "WHERE $__timeFilter(Timestamp) AND ServiceName = 'sql-batch-source'",
+            },
+            { id: 'noSource', sql: 'SELECT count() FROM $__sourceTable' },
+          ],
+          startTime: new Date(now - 60 * 60 * 1000).toISOString(),
+          endTime: new Date(now).toISOString(),
+        });
+
+        const parsed = JSON.parse(getFirstText(result));
+        expect(parsed.results[0].result.data).toEqual([{ n: '2' }]);
+        expect(parsed.results[1].status).toBe('error');
+        expect(parsed.results[1].error).toContain(
+          '$__sourceTable needs a sourceId',
+        );
+      });
+
+      it('keeps readonly enforcement for every query', async () => {
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          queries: [
+            {
+              sql: `INSERT INTO ${DEFAULT_DATABASE}.${DEFAULT_LOGS_TABLE} (Body) VALUES ('x')`,
+            },
+          ],
+        });
+
+        expect(result.isError).toBe(true);
+        const parsed = JSON.parse(getFirstText(result));
+        expect(parsed.results[0].status).toBe('error');
+        expect(parsed.results[0].error).toMatch(/readonly/i);
+      });
+
+      it('rejects passing both sql and queries', async () => {
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          sql: 'SELECT 1',
+          queries: [{ sql: 'SELECT 2' }],
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toContain('exactly one of sql');
+      });
+
+      it('rejects more than 10 queries at the schema', async () => {
+        const result = await callTool(client, 'clickstack_sql', {
+          connectionId: connection._id.toString(),
+          queries: Array.from({ length: 11 }, (_, i) => ({
+            sql: `SELECT ${i}`,
+          })),
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toContain('Input validation error');
+      });
+    });
   });
 
   // ─── ClickHouse query errors ──────────────────────────────────────────────────
@@ -795,6 +1783,24 @@ describe('MCP Query Tools', () => {
           /UNKNOWN_TABLE|doesn.t exist|unknown/i,
         );
       });
+
+      it.each([
+        'nonexistent_table_xyz',
+        `${DEFAULT_DATABASE}.nonexistent_table_xyz`,
+      ])(
+        'hints that %s should come from clickstack_list_sources',
+        async table => {
+          const result = await callTool(client, 'clickstack_sql', {
+            connectionId: connection._id.toString(),
+            sql: `SELECT 1 FROM ${table} LIMIT 1`,
+          });
+
+          expect(result.isError).toBe(true);
+          expect(getFirstText(result)).toContain(
+            'HINT: Use the `table` of a source from clickstack_list_sources',
+          );
+        },
+      );
     });
 
     describe('clickstack_table errors', () => {
@@ -808,6 +1814,31 @@ describe('MCP Query Tools', () => {
         expect(getFirstText(result)).toMatch(
           /UNKNOWN_IDENTIFIER|Missing columns|unknown/i,
         );
+      });
+
+      it('does not send a source whose table is missing back to clickstack_list_sources', async () => {
+        const missing = await Source.create({
+          kind: SourceKind.Log,
+          team: team._id,
+          from: {
+            databaseName: DEFAULT_DATABASE,
+            tableName: 'nonexistent_table_xyz',
+          },
+          timestampValueExpression: 'Timestamp',
+          connection: connection._id,
+          name: 'Missing logs',
+        });
+
+        const result = await callTool(client, 'clickstack_table', {
+          sourceId: missing._id.toString(),
+          select: [{ aggFn: 'count' }],
+        });
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toMatch(
+          /UNKNOWN_TABLE|does(n.t| not) exist/i,
+        );
+        expect(getFirstText(result)).not.toContain('clickstack_list_sources');
       });
     });
 

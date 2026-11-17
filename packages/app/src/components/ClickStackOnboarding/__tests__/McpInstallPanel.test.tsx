@@ -22,22 +22,23 @@ function renderPanel() {
   );
 }
 
+describe('McpInstallPanel CLI installer', () => {
+  it('shows the npx command, which carries no access key', () => {
+    renderPanel();
+    expect(
+      screen.getByText(
+        'npx @hyperdx/cli mcp install --app-url https://app.example.com',
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
 function codeText(): string {
   // Every masked host renders its snippet in the shared code block.
   return screen.getByTestId('reveal-snippet-code').textContent ?? '';
 }
 
 describe('McpInstallPanel secret masking', () => {
-  it('masks the access key in the default (Claude Code) command snippet', () => {
-    renderPanel();
-
-    const text = codeText();
-    // The raw key must never appear in the rendered snippet...
-    expect(text).not.toContain(ACCESS_KEY);
-    // ...but the masked stand-in (visible prefix + dots) should.
-    expect(text).toContain(defaultRedact(ACCESS_KEY));
-  });
-
   it('masks the access key in the JSON fallback (Other) snippet', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -53,6 +54,7 @@ describe('McpInstallPanel secret masking', () => {
   it('reveals the raw key only after an explicit reveal action', async () => {
     const user = userEvent.setup();
     renderPanel();
+    await user.click(screen.getByRole('radio', { name: /other/i }));
 
     expect(codeText()).not.toContain(ACCESS_KEY);
 

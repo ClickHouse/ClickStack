@@ -1,4 +1,5 @@
 import { ColumnMetaType } from '@hyperdx/common-utils/dist/clickhouse';
+import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   ChartConfigWithOptTimestamp,
   NumberFormat,
@@ -14,10 +15,12 @@ import {
   getEventBody,
   getSourceValidationNotificationId,
   getTraceDurationNumberFormat,
+  inferTableSourceConfig,
   pickTimeSeriesTable,
   useChartNumberFormats,
   useSingleSeriesNumberFormat,
   useSources,
+  useUpdateSource,
 } from '@/source';
 
 jest.mock('../api', () => ({ hdxServer: jest.fn() }));
@@ -31,7 +34,7 @@ jest.mock('@tanstack/react-query', () => ({
   useQueryClient: jest.fn(),
 }));
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { hdxServer } from '@/api';
 
@@ -106,6 +109,65 @@ describe('pickTimeSeriesTable', () => {
 
   it('picks nothing from no tables', () => {
     expect(pickTimeSeriesTable([])).toBeUndefined();
+  });
+});
+
+describe('inferTableSourceConfig', () => {
+  const inferOtelLogConfig = (
+    severityNumberType: string,
+    extraColumns: ColumnMetaType[] = [],
+  ) => {
+    const columns = [
+      'Timestamp',
+      'Body',
+      'SeverityText',
+      'TraceId',
+      'SpanId',
+      'ServiceName',
+      'LogAttributes',
+      'ResourceAttributes',
+    ].map(name => ({ name, type: 'String' }));
+    columns.push({ name: 'SeverityNumber', type: severityNumberType });
+    columns.push(...extraColumns);
+
+    return inferTableSourceConfig({
+      databaseName: 'default',
+      tableName: 'otel_logs',
+      connectionId: 'test-connection',
+      kind: SourceKind.Log,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      metadata: {
+        getColumns: async () => columns,
+        getTableMetadata: async () => undefined,
+      } as unknown as Metadata,
+    });
+  };
+
+  it('sets severityNumberExpression only for an integer SeverityNumber column', async () => {
+    for (const type of ['UInt8', 'Int32', 'LowCardinality(Nullable(UInt8))']) {
+      expect(await inferOtelLogConfig(type)).toHaveProperty(
+        'severityNumberExpression',
+        'SeverityNumber',
+      );
+    }
+    expect(await inferOtelLogConfig('String')).not.toHaveProperty(
+      'severityNumberExpression',
+    );
+  });
+
+  it('sets eventNameExpression only for a string EventName column', async () => {
+    for (const type of [
+      'String',
+      'LowCardinality(String)',
+      'Nullable(String)',
+    ]) {
+      expect(
+        await inferOtelLogConfig('UInt8', [{ name: 'EventName', type }]),
+      ).toHaveProperty('eventNameExpression', 'EventName');
+    }
+    expect(
+      await inferOtelLogConfig('UInt8', [{ name: 'EventName', type: 'UInt8' }]),
+    ).not.toHaveProperty('eventNameExpression');
   });
 });
 
@@ -228,6 +290,30 @@ describe('getTraceDurationNumberFormat', () => {
         aggFn: 'avgIf',
       }),
     ).toEqual({ output: 'duration', factor: 1e-9 });
+  });
+});
+
+describe('useUpdateSource', () => {
+  it("drops the updated source's cached PromQL lookups", () => {
+    const invalidateQueries = jest.fn();
+    // @ts-expect-error return value type
+    jest.mocked(useQueryClient).mockReturnValue({ invalidateQueries });
+    let onSuccess: ((data: unknown, vars: unknown) => void) | undefined;
+    // @ts-expect-error param type
+    jest.mocked(useMutation).mockImplementation(options => {
+      // @ts-expect-error return value type
+      onSuccess = options.onSuccess;
+    });
+
+    useUpdateSource();
+    onSuccess?.(undefined, { source: { id: 'source-promql' } });
+
+    expect(invalidateQueries.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
+      ['sources'],
+      ['promql-metric-names', 'source-promql'],
+      ['promql-label-names', 'source-promql'],
+      ['dashboard-filter-promql-label-values', 'source-promql'],
+    ]);
   });
 });
 

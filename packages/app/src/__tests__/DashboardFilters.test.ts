@@ -1,10 +1,7 @@
 import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
 
-import {
-  getFilterEffect,
-  getPendingVariablesTooltip,
-  getRequiredFilterTooltip,
-} from '@/DashboardFilters';
+import { getPendingVariablesTooltip } from '@/components/DashboardFilterLabel';
+import { getFilterEffect, getRequiredFilterTooltip } from '@/DashboardFilters';
 
 const baseFilter: DashboardFilter = {
   id: 'filter1',
@@ -116,6 +113,23 @@ describe('getFilterEffect', () => {
         variableName: 'svc',
       }).tooltip,
     ).toEqual('Available as variable ($svc)');
+  });
+
+  it('counts the sources an ad hoc filter broadcasts to', () => {
+    expect(
+      getFilterEffect({
+        id: 'adhoc1',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['logs', 'traces'],
+        isVariableEnabled: true,
+        variableName: 'conds',
+      }),
+    ).toEqual({
+      hasEffect: true,
+      tooltip: 'Filters 2 sources, available as variable ($conds)',
+    });
   });
 });
 

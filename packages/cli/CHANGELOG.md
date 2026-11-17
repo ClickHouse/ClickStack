@@ -1,5 +1,47 @@
 # @hyperdx/cli
 
+## 0.9.0
+
+### Minor Changes
+
+- 7935c64bc: feat: add `hdx mcp install` to connect AI agents without pasting a key
+
+  `npx @hyperdx/cli mcp install` asks for a personal access key or an
+  organization API key with hidden input, checks it, and adds the ClickStack MCP
+  server to Claude Code, Codex, Cursor, and VS Code. Team Settings now leads with
+  this command, so the key no longer has to go into a copied command or an agent
+  chat. The per-agent snippets remain for setting up one agent by hand.
+
+### Patch Changes
+
+- d7df729e6: chore: GitHub links (changelog, support, package metadata) now point at `ClickHouse/ClickStack`, and `docker-compose.yml` pulls the app image as `clickhouse/clickstack`
+- e2754d203: fix: use SHA256 instead of MD5 for JSON row lookup WHERE clauses so row
+  details and drill-down work on FIPS-enabled ClickHouse deployments
+
+## 0.8.0
+
+### Minor Changes
+
+- 0b1e0784: Add dashboard and saved-search authoring commands to the CLI:
+
+  - `hdx dashboards list` (default subcommand) gains `--query` name filtering and `--format table|json|csv`
+  - `hdx dashboards export --id <id-or-name>` prints a dashboard definition as JSON, round-trip compatible with import
+  - `hdx dashboards create` accepts either a full definition (`--file <json>`) or inline charts (`--name` + repeatable `--chart` / `--chart-file`, with automatic grid layout), plus `--if-not-exists`
+  - `hdx dashboards import --file <json>` recreates an exported dashboard, with `--if-not-exists` and `--name-override`
+  - `hdx saved-searches` command group: `list` and `create` (`--name/--source/--where/--where-language/--select/--order-by/--tags`)
+
+  Definitions are validated locally against the shared schema before being sent, and missing tile ids are generated automatically. Also fixes `getSavedSearches()` to call the correct `/saved-search` API path (the previous `/saved-searches` path always returned 404).
+
+### Patch Changes
+
+- 5253b861: fix: Stop abbreviating values between 500 and 999 as "0.5k"/"0.8k" on chart axes and in large number format
+
+## 0.7.0
+
+### Minor Changes
+
+- 68082b67: feat: add stacked line (stacked area) time-series display type
+
 ## 0.6.4
 
 ### Patch Changes

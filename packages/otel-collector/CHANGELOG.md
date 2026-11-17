@@ -1,5 +1,74 @@
 # @hyperdx/otel-collector
 
+## 2.45.0
+
+## 2.44.0
+
+### Patch Changes
+
+- 5b0d07441: fix: let browsers cache the collector's CORS preflights for 10 minutes
+
+  The OTLP receiver now answers preflights with `Access-Control-Max-Age: 600`.
+  Without it, browsers cached a preflight for only 5 seconds, which is how often
+  the browser SDK exports, so about half of its requests were preflights.
+
+- 8384fe675: perf: compress the seed schemas with `ZSTD(3)` instead of `ZSTD(1)`
+
+  The seed schemas pinned `ZSTD(1)` on almost every column. Level 3 gives a better
+  compression ratio at a small insert-time CPU cost, without affecting reads, and
+  it is the default codec of ClickHouse since 26.9. It is pinned explicitly so
+  that older ClickHouse versions, whose default is `LZ4`, get it too. `Delta`
+  codecs drop their byte-size argument, which ClickHouse infers from the column
+  type. Only newly created tables are affected; existing tables keep their codecs.
+
+- 702181002: feat: session ID columns, `session.id` from `rum.sessionId`, severity text
+
+  The `hyperdx_sessions` seed adds materialized `rum.sessionId` and `session.id`
+  columns with skip indexes, and the `otel_logs` seed adds a materialized
+  `session.id` column with a skip index, so session queries no longer read the
+  attribute maps. Only newly created tables get them; existing tables need an
+  `ALTER TABLE ... ADD COLUMN` to benefit.
+
+  Spans, logs and session replay events from older `@hyperdx/browser` SDKs, which
+  carry the session id only in the `rum.sessionId` resource attribute, now also
+  get the OpenTelemetry `session.id` attribute. An existing `session.id` is never
+  overwritten and `rum.sessionId` is kept. If you override pipeline `processors:`
+  lists in `CUSTOM_OTELCOL_CONFIG_FILE`, add `transform/session_id` to keep this.
+
+  Logs that carry a severity number but no severity text, such as those from the
+  new browser SDK, now get the matching level text (`info`, `error`, ...) instead
+  of an empty level. Severity text set by the producer is never overwritten.
+
+## 2.43.1
+
+### Patch Changes
+
+- 7a9fe57d3: Disable Multipath TCP in the collector image by setting `GODEBUG=multipathtcp=0`
+  at startup, mitigating CVE-2026-98432. Go 1.24+ opens MPTCP listeners by
+  default. Any other `GODEBUG` settings you pass are kept, and an explicit
+  `multipathtcp=` value is left as is. This also applies to the all-in-one image.
+  Patching the host kernel is still the actual fix.
+
+## 2.43.0
+
+## 2.42.0
+
+### Patch Changes
+
+- ab563d28: Stop the collector logging a `ParseJSON` syntax error for every log body that
+  contains braces but isn't JSON (e.g. Go struct or Python dict dumps). JSON
+  extraction now only matches objects that start with a quoted key, and remaining
+  parse failures in that statement group are silenced.
+- ca8e3fda: fix: support https for the PromQL remote-write endpoint and ClickHouse scraping
+
+  `CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT` now accepts an `http://` or `https://` URL as well as a bare `host:port`. With `https://`, the collector's `prometheusremotewrite` exporter sends metrics over TLS and verifies the server certificate against the system CAs. Previously the exporter always used plain HTTP, so an HTTPS-only endpoint could not receive metrics. This applies to both standalone and OpAMP-managed collectors.
+
+  A bare `host:port` keeps plain HTTP, so existing setups are unchanged. The value must not include a path (`/write` is still appended automatically); the collector now exits at startup with a clear error if it does, or if the scheme is anything other than `http` or `https`.
+
+  The OpAMP-managed collector scraped the endpoint over plain HTTP regardless of its scheme. ClickHouse is now scraped in its own `clickhouse` job (previously the `otelcol` job) using the endpoint's scheme, with TLS verification on. The collector's own metrics endpoint stays on plain HTTP. A bare `host:port` or `http://` endpoint behaves as before. Scraped ClickHouse metrics now carry `job="clickhouse"` instead of `job="otelcol"`.
+
+## 2.41.0
+
 ## 2.40.0
 
 ### Minor Changes
