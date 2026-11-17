@@ -2320,6 +2320,7 @@ export const DashboardFilterType = z.enum([
   'STATIC_LIST',
   'PROMETHEUS_LABEL',
   'ADHOC',
+  'SQL_QUERY',
 ]);
 
 /** Allowed variable names for dashboard filters. Alphanumeric + underscore, must start with a letter. */
@@ -2429,6 +2430,21 @@ export const PromqlLabelDashboardFilterSchema =
   });
 
 /**
+ * A filter whose dropdown lists the first column returned by a free-form
+ * ClickHouse query. The query can use the time macros and other filters'
+ * variables, but not `$__sourceTable` or `$__filters`, as it has no source.
+ */
+export const SqlQueryDashboardFilterSchema = dashboardFilterBaseSchema.extend({
+  type: z.literal(DashboardFilterType.enum.SQL_QUERY),
+  /** ID of the ClickHouse connection the query runs on. */
+  connection: z.string().min(1),
+  sqlTemplate: z.string().min(1),
+  // Variable-only: there is no column to broadcast
+  isBroadcastEnabled: z.literal(false),
+  isVariableEnabled: z.literal(true),
+});
+
+/**
  * A filter whose conditions (`key operator value`) are picked freely from the
  * keys of its sources: columns and map keys for SQL sources, labels for PromQL
  * sources. Selection limits and requirements have no meaning for a list of
@@ -2464,6 +2480,7 @@ export const DashboardFilterSchema = z.discriminatedUnion('type', [
   StaticListDashboardFilterSchema,
   PromqlLabelDashboardFilterSchema,
   AdhocDashboardFilterSchema,
+  SqlQueryDashboardFilterSchema,
 ]);
 
 export type QueryExpressionDashboardFilter = z.infer<
@@ -2476,6 +2493,9 @@ export type PromqlLabelDashboardFilter = z.infer<
   typeof PromqlLabelDashboardFilterSchema
 >;
 export type AdhocDashboardFilter = z.infer<typeof AdhocDashboardFilterSchema>;
+export type SqlQueryDashboardFilter = z.infer<
+  typeof SqlQueryDashboardFilterSchema
+>;
 export type DashboardFilter = z.infer<typeof DashboardFilterSchema>;
 
 export enum PresetDashboard {
@@ -2757,6 +2777,11 @@ export const LogSourceSchema = BaseSourceSchema.extend({
   implicitColumnExpression: z.string().optional(),
   knownColumnsListExpression: z.string().optional(),
   /**
+   * Comma-separated expressions that together identify one row. When set, the
+   * row side panel looks rows up by these instead of table metadata.
+   */
+  rowKeyExpression: z.string().optional(),
+  /**
    * @deprecated Application-side SQL predicate AND'd into every query against
    * the source. Not a security boundary; bypassable by direct table SELECT.
    * For hard tenant isolation, use a ClickHouse ROW POLICY at the DB level:
@@ -2810,6 +2835,8 @@ export const TraceSourceSchema = BaseSourceSchema.extend({
   spanLinksValueExpression: z.string().optional(),
   implicitColumnExpression: z.string().optional(),
   knownColumnsListExpression: z.string().optional(),
+  /** See `rowKeyExpression` on `LogSourceSchema`. */
+  rowKeyExpression: z.string().optional(),
   displayedTimestampValueExpression: z.string().optional(),
   highlightedTraceAttributeExpressions:
     HighlightedAttributeExpressionsSchema.optional(),
@@ -2852,6 +2879,22 @@ export const MinAutoGranularitySchema = z.preprocess(
   SQLIntervalSchema.optional(),
 );
 
+/**
+ * How a PromQL source on a ClickHouse connection is evaluated: through the
+ * Prometheus HTTP API (`clickhouse-http`, which needs ClickHouse 26.6+ with the
+ * `prometheus_api_v1` handler configured) or through the `prometheusQuery`
+ * table functions (`table-function`). `auto`, which is also what an unset
+ * value means, probes the server on first use and prefers the HTTP API. A
+ * connection that is itself a Prometheus endpoint ignores it.
+ */
+export const PROMQL_SOURCE_BACKENDS = [
+  'auto',
+  'clickhouse-http',
+  'table-function',
+] as const;
+export const PromqlSourceBackendSchema = z.enum(PROMQL_SOURCE_BACKENDS);
+export type PromqlSourceBackend = z.infer<typeof PromqlSourceBackendSchema>;
+
 // Metric source form schema
 export const MetricSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Metric),
@@ -2879,6 +2922,7 @@ export const MetricSourceSchema = BaseSourceSchema.extend({
 export const PromqlSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Promql),
   minAutoGranularity: MinAutoGranularitySchema,
+  promqlBackend: PromqlSourceBackendSchema.optional(),
 });
 
 // Union of all source form schemas for validation

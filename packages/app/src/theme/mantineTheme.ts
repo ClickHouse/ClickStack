@@ -4,6 +4,7 @@ import {
   Button,
   Checkbox,
   Code,
+  Loader,
   MantineTheme,
   MantineThemeOverride,
   Radio,
@@ -86,6 +87,11 @@ const makeTheme = ({
           '--code-bg': 'var(--color-bg-code)',
         },
       }),
+    }),
+    Loader: Loader.extend({
+      defaultProps: {
+        color: 'var(--color-text-muted)',
+      },
     }),
     Tooltip: Tooltip.extend({
       styles: () => ({

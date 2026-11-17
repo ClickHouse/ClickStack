@@ -37,9 +37,9 @@ const TIMEOUT_SUFFIX =
 const DESCRIPTION =
   'One-call health report for every service on a trace source: throughput, ' +
   'error rate, p50/p95/p99 latency and top error groups, compared with the ' +
-  'same window yesterday and ranked worst first. Each service gets a status ' +
-  '(critical / degraded / healthy), flags, and a one-line summary of which ' +
-  'changes crossed a threshold. New or growing error groups come first, ' +
+  'same window yesterday and ranked by how far each moved the wrong way. ' +
+  'Each service gets flags for changes that crossed a fixed threshold and ' +
+  'a one-line factual summary. New or growing error groups come first, ' +
   'with first/last-seen times; operations with no prior traffic are listed ' +
   'as likely rollouts.\n\n' +
   'USE THIS FIRST for status checks, "is X healthy", post-deploy checks, and ' +
@@ -53,8 +53,10 @@ const DESCRIPTION =
   'use clickstack_event_deltas and ' +
   'clickstack_trace_top_time_consuming_operations.\n\n' +
   'CALIBRATION: flags fire only past fixed thresholds (see `usage` in the ' +
-  'response). Small swings on a healthy service are normal variance. An ' +
-  'all-healthy report is a valid answer.\n\n' +
+  'response); smaller swings are usually normal variance, and no flags is ' +
+  'a valid result for a routine check. Thresholds apply to service-wide ' +
+  'totals, so an unflagged service can still hide a regression in one ' +
+  'endpoint, pod or segment. Weigh the numbers against the question.\n\n' +
   PREFER_BUILDER_OVER_SQL_NUDGE;
 
 export function registerServiceHealth({
@@ -172,10 +174,7 @@ export function registerServiceHealth({
           'mcp.service_health.window_ms':
             current.end.getTime() - current.start.getTime(),
           'mcp.service_health.services_assessed': ranked.length,
-          'mcp.service_health.critical_count':
-            report.summary.statusCounts.critical,
-          'mcp.service_health.degraded_count':
-            report.summary.statusCounts.degraded,
+          'mcp.service_health.flagged_count': report.summary.servicesFlagged,
         });
 
         const { data, isTrimmed, notes: trimNotes } = trimToolResponse(report);

@@ -23,6 +23,7 @@ import {
   IconPencil,
   IconRefresh,
   IconSearch,
+  IconSql,
   IconTrash,
 } from '@tabler/icons-react';
 
@@ -90,6 +91,12 @@ function getValuesAttribute(
         icon: <IconFilter size={14} />,
         tooltip: 'Sources the condition keys and values come from',
         label: getSourceNames(filter.sources, sources),
+      };
+    case 'SQL_QUERY':
+      return {
+        icon: <IconSql size={14} />,
+        tooltip: 'The dropdown values come from a SQL query',
+        label: 'SQL query',
       };
     default:
       filter satisfies never; // exhaustive check

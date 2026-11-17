@@ -9,6 +9,7 @@ export { default as objectHash } from 'object-hash';
 import {
   isAdhocFilter,
   isQueryExpressionFilter,
+  isSqlQueryFilter,
   isStaticListFilter,
 } from '@/filters';
 import {
@@ -944,11 +945,18 @@ export function convertToDashboardTemplate(
   const convertToFilterTemplate = (
     input: DashboardFilter,
     sources: TSource[],
+    connections: Connection[],
   ): DashboardFilter => {
     const filter = DashboardFilterSchema.parse(structuredClone(input));
 
     // A static filter references nothing in the workspace
     if (isStaticListFilter(filter)) return filter;
+
+    if (isSqlQueryFilter(filter)) {
+      filter.connection =
+        connections.find(conn => conn.id === filter.connection)?.name ?? '';
+      return filter;
+    }
 
     const getSourceName = (id: string) =>
       sources.find(source => source.id === id)?.name ?? '';
@@ -975,7 +983,9 @@ export function convertToDashboardTemplate(
   if (input.filters) {
     output.filters = [];
     for (const filter of input.filters ?? []) {
-      output.filters.push(convertToFilterTemplate(filter, sources));
+      output.filters.push(
+        convertToFilterTemplate(filter, sources, connections),
+      );
     }
   }
 

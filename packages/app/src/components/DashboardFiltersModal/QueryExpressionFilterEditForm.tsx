@@ -5,6 +5,7 @@ import {
   UseFormTrigger,
   useWatch,
 } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { TableConnection } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   hasFilterEffect,
@@ -16,7 +17,7 @@ import {
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { Alert, Box, Divider, Group, Radio } from '@mantine/core';
+import { Alert, Box, Group, Radio } from '@mantine/core';
 import { IconAlertTriangle } from '@tabler/icons-react';
 
 import { CheckBoxControlled } from '@/components/InputControlled';
@@ -208,7 +209,7 @@ export const QueryExpressionFilterEditForm = ({
 
       {showVariableOptions && (
         <>
-          <Divider />
+          <Separator size="xs" />
           <CheckBoxControlled
             control={control}
             name="isBroadcastEnabled"
@@ -242,7 +243,7 @@ export const QueryExpressionFilterEditForm = ({
       )}
       {showVariableOptions && (
         <>
-          <Divider />
+          <Separator size="xs" />
           <CheckBoxControlled
             control={control}
             name="isVariableEnabled"

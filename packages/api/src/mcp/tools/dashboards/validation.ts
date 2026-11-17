@@ -5,6 +5,7 @@ import {
   getDashboardVariableDeclarations,
   getFilterVariableName,
   isFilterVariableEnabled,
+  validateSqlQueryFilterTemplate,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
@@ -21,6 +22,7 @@ import {
   DisplayType,
   QueryExpressionDashboardFilter,
   SavedChartConfig,
+  SqlQueryDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import {
   getVariableReferences,
@@ -154,11 +156,13 @@ export function getRawSqlTileMacroWarnings(
 }
 
 /**
- * Minimal projection needed to check a filter's dropdown-values query. Static
- * list filters have no dropdown query, so `where` / `whereLanguage` are optional.
+ * Minimal projection needed to check a filter's dropdown-values query: a
+ * queried filter's `where`, or a SQL query filter's `sqlTemplate`. Static list
+ * filters have no dropdown query, so all of these are optional.
  */
 export type FilterForVariableValidation = FilterForVariableDeclaration &
-  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>>;
+  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>> &
+  Partial<Pick<SqlQueryDashboardFilter, 'sqlTemplate'>>;
 
 /**
  * Non-blocking checks on the dashboard variables references in a filter's `where`.
@@ -202,17 +206,24 @@ export function getFilterVariableWarnings(
 
   const warnings: string[] = [];
   filters.forEach((filter, index) => {
-    const where = filter.where?.trim();
+    const sqlTemplate = filter.sqlTemplate?.trim();
+    const where = sqlTemplate || filter.where?.trim();
     if (!where) return;
 
     const label = filter.name?.trim() || `filter #${index + 1}`;
-    const language = filter.whereLanguage ?? 'sql';
+    const language = sqlTemplate ? 'sql' : (filter.whereLanguage ?? 'sql');
 
     const result = validateVariableReferencesInTemplate(where, variables, {
       subject: 'The dropdown values query',
       language,
     });
     const issues = [...result.errors, ...result.warnings];
+
+    if (sqlTemplate) {
+      // Also reports variable macro errors, which `result` already holds.
+      const detail = validateSqlQueryFilterTemplate(sqlTemplate, variables);
+      if (detail && !issues.includes(detail)) issues.push(detail);
+    }
 
     const referencedNames = new Set(
       getVariableReferences(where).map(reference => reference.name),

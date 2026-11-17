@@ -1,4 +1,7 @@
-import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import {
+  PromqlSourceBackendSchema,
+  SourceKind,
+} from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
 
 import { sanitizeMetricTables } from './metricKinds';
@@ -251,6 +254,15 @@ const mcpSaveSourceSchema = z.object({
         'targets, used instead of SELECT * when fetching full rows. Column ' +
         'names only, no expressions or aliases. Omit to select all columns.',
     ),
+  rowKeyExpression: z
+    .string()
+    .optional()
+    .describe(
+      'Log and trace sources. Comma-separated expressions that together ' +
+        'identify one row, e.g. the partition key, primary key, _block_number ' +
+        'and _block_offset. When set, the row side panel looks rows up by ' +
+        'these only. Omit to detect keys from table metadata.',
+    ),
   orderByExpression: z
     .string()
     .optional()
@@ -439,6 +451,16 @@ const mcpSaveSourceSchema = z.object({
         'sources also use it as the scrape interval for $__rate_interval. Omit ' +
         'for no minimum.',
     ),
+
+  // ── PromQL ──
+  promqlBackend: PromqlSourceBackendSchema.optional().describe(
+    'Promql sources on a ClickHouse connection. How PromQL is evaluated: ' +
+      '"clickhouse-http" uses ClickHouse\'s Prometheus HTTP API (ClickHouse ' +
+      '26.6+ with the prometheus_api_v1 handler configured), "table-function" ' +
+      'uses the prometheusQuery table functions, and "auto" (the default when ' +
+      'omitted) probes the server and prefers the HTTP API. Ignored when the ' +
+      'connection is a Prometheus endpoint.',
+  ),
 
   // ── Materialized views (advanced; granularities use "<n> <unit>" form) ──
   materializedViews: materializedViewsSchema

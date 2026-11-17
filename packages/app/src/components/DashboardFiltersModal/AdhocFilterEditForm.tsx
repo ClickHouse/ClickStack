@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Controller, UseFormSetValue, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { getAdhocFilterSourceKinds } from '@hyperdx/common-utils/dist/filters';
 import {
@@ -7,7 +8,7 @@ import {
   DashboardFilter,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
-import { Box, Divider, SegmentedControl } from '@mantine/core';
+import { Box, SegmentedControl } from '@mantine/core';
 
 import { CheckBoxControlled } from '@/components/InputControlled';
 import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
@@ -137,7 +138,7 @@ export const AdhocFilterEditForm = ({
         </CustomInputWrapper>
       )}
 
-      <Divider />
+      <Separator size="xs" />
       <CheckBoxControlled
         control={control}
         name="isBroadcastEnabled"
@@ -168,7 +169,7 @@ export const AdhocFilterEditForm = ({
           </CustomInputWrapper>
         </Box>
       )}
-      <Divider />
+      <Separator size="xs" />
       <VariableNameInput control={control} otherFilters={otherFilters} />
     </>
   );

@@ -1,5 +1,6 @@
 import {
   buildPrometheusRequest,
+  CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
   PROMETHEUS_MAX_RESPONSE_BYTES,
   runPromqlQuery,
 } from '@/controllers/promql';
@@ -125,6 +126,60 @@ describe('runPromqlQuery', () => {
     expect(mockFetch.mock.calls[0][1]?.headers).toMatchObject({
       'X-ClickHouse-User': 'default',
       'X-ClickHouse-Key': 'pw',
+    });
+  });
+
+  describe('when ClickHouse does not serve the Prometheus HTTP API', () => {
+    it('names the missing handler when the server answers a plain-text 404', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('There is no handle /prometheus/api/v1/query', {
+          status: 404,
+        }),
+      );
+
+      await expect(
+        runPromqlQuery(clickhouseHttp, instant),
+      ).rejects.toMatchObject({
+        message: CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
+        category: 'user',
+      });
+    });
+
+    it("reports the handler's own failure by its message", async () => {
+      respond(400, {
+        status: 'error',
+        errorType: 'bad_data',
+        error: 'table default.metrics does not exist',
+      });
+
+      await expect(
+        runPromqlQuery(clickhouseHttp, instant),
+      ).rejects.toMatchObject({
+        message: 'table default.metrics does not exist',
+        category: 'user',
+      });
+    });
+
+    it('reports a 404 as a missing handler whatever its body', async () => {
+      respond(404, { status: 'error', errorType: 'not_found', error: 'nope' });
+
+      await expect(
+        runPromqlQuery(clickhouseHttp, instant),
+      ).rejects.toMatchObject({
+        message: CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
+        category: 'user',
+      });
+    });
+
+    it('leaves a 404 from a Prometheus endpoint to its status', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('page not found', { status: 404 }),
+      );
+
+      await expect(runPromqlQuery(prometheus, instant)).rejects.toMatchObject({
+        message:
+          'Prometheus at http://prom:9090/api/v1/query returned HTTP 404',
+      });
     });
   });
 

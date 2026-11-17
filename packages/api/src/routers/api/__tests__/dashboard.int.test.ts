@@ -17,6 +17,7 @@ import {
   makeTile,
 } from '@/fixtures';
 import Alert, { AlertSource } from '@/models/alert';
+import Connection from '@/models/connection';
 import Dashboard from '@/models/dashboard';
 import PresetDashboardFilter from '@/models/presetDashboardFilter';
 import { Source } from '@/models/source';
@@ -1844,6 +1845,126 @@ describe('dashboard router', () => {
           ],
         })
         .expect(400);
+    });
+  });
+
+  describe('SQL query filters', () => {
+    let connectionId: string;
+    beforeEach(async () => {
+      const connection = await Connection.create({
+        team: team._id,
+        name: 'Test Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+      connectionId = connection._id.toString();
+    });
+
+    const makeSqlFilter = (overrides = {}) => ({
+      id: new Types.ObjectId().toString(),
+      type: 'SQL_QUERY' as const,
+      name: 'Environment',
+      connection: connectionId,
+      sqlTemplate: 'SELECT DISTINCT env FROM envs',
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'env',
+      ...overrides,
+    });
+
+    it('persists a SQL query filter on create', async () => {
+      const filter = makeSqlFilter();
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([filter]);
+    });
+
+    it('rejects a connection that does not exist', async () => {
+      const connection = new Types.ObjectId().toString();
+
+      const response = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [makeSqlFilter({ connection })] })
+        .expect(400);
+
+      expect(response.body.message).toContain(connection);
+    });
+
+    it("rejects another team's connection", async () => {
+      const otherTeamConnection = await Connection.create({
+        team: new Types.ObjectId(),
+        name: 'Other Team Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+
+      await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [
+            makeSqlFilter({ connection: otherTeamConnection._id.toString() }),
+          ],
+        })
+        .expect(400);
+    });
+
+    // Same as PromQL sources: an accepted reference that later dangles must
+    // not block unrelated edits.
+    it("lets unrelated edits through after the filter's connection is deleted", async () => {
+      const filter = makeSqlFilter();
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      await Connection.findByIdAndDelete(connectionId);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ name: 'Renamed', filters: [filter] })
+        .expect(200);
+    });
+
+    it('rejects a connection that PATCH introduces', async () => {
+      const filter = makeSqlFilter();
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          filters: [{ ...filter, connection: new Types.ObjectId().toString() }],
+        })
+        .expect(400);
+    });
+
+    it('accepts a PATCH that moves the filter to another team connection', async () => {
+      const filter = makeSqlFilter();
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+      const moved = { ...filter, connection: otherConnection._id.toString() };
+
+      const updated = await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ filters: [moved] })
+        .expect(200);
+
+      expect(updated.body.filters).toEqual([moved]);
     });
   });
 

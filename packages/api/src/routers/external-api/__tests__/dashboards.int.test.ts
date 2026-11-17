@@ -6285,6 +6285,60 @@ describe('External API v2 Dashboards - new format', () => {
       });
     });
 
+    describe('SQL query filters', () => {
+      const sqlFilterInput = (overrides = {}) => ({
+        id: new ObjectId().toString(),
+        type: 'SQL_QUERY' as const,
+        name: 'Environment',
+        connectionId: connection._id.toString(),
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+        variableName: 'env',
+        ...overrides,
+      });
+
+      it('accepts a SQL query filter and round-trips it through GET', async () => {
+        const response = await sendFilters([sqlFilterInput()]);
+        expect(response.status).toBe(200);
+
+        const [filter] = response.body.data.filters;
+        expect(filter).toMatchObject({
+          type: 'SQL_QUERY',
+          name: 'Environment',
+          connectionId: connection._id.toString(),
+          sqlTemplate: 'SELECT DISTINCT env FROM envs',
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+          variableName: 'env',
+        });
+        expect(filter).not.toHaveProperty('connection');
+
+        const getResponse = await authRequest(
+          'get',
+          `${BASE_URL}/${response.body.data.id}`,
+        ).expect(200);
+        expect(getResponse.body.data.filters).toEqual(
+          response.body.data.filters,
+        );
+      });
+
+      it('rejects a connection that does not belong to the team', async () => {
+        const connectionId = new ObjectId().toString();
+        const response = await sendFilters([sqlFilterInput({ connectionId })]);
+
+        expect(response.status).toBe(400);
+        expect(response.body.message).toContain(connectionId);
+      });
+
+      it.each([
+        ['broadcast enabled', { isBroadcastEnabled: true }],
+        ['not variable-enabled', { isVariableEnabled: false }],
+        ['no SQL', { sqlTemplate: '' }],
+        ['a source', { sourceId: new ObjectId().toString() }],
+      ])('rejects a SQL query filter with %s', async (_label, overrides) => {
+        await expectFilters([sqlFilterInput(overrides)], 400);
+      });
+    });
+
     describe('static-list filters', () => {
       it('accepts a static-list filter and round-trips it through GET', async () => {
         const response = await sendFilters([staticFilterInput()]);
