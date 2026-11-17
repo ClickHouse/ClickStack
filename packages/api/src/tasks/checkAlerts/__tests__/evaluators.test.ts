@@ -325,7 +325,7 @@ describe('alert evaluators', () => {
         .mockResolvedValue([
           { createdAt: new Date(), state: AlertState.ALERT, group: '' },
         ]),
-    } as any);
+    } as unknown as ReturnType<typeof AlertHistory.find>);
 
     try {
       const map = await getConsecutiveWindowHistories(
