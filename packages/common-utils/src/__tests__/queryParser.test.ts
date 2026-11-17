@@ -362,7 +362,7 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
     },
     {
       lucene: 'foo:[1 TO 5]',
-      sql: '((foo BETWEEN 1 AND 5))',
+      sql: '((ifNull(toFloat64OrNull(foo) BETWEEN 1 AND 5, 0)))',
       english: 'foo is between 1 and 5',
     },
     {
@@ -763,6 +763,119 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
         "((hasToken(lower(Body), lower('user')) AND hasToken(lower(Body), lower('service')) AND (lower(Body) LIKE lower('%user\\\\_service%'))))",
       );
     });
+  });
+});
+
+describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => {
+  const metadata = getMetadata(
+    new ClickhouseClient({ host: 'http://localhost:8123' }),
+  );
+  // The OTel schema's attribute maps hold every value as a String.
+  metadata.getColumn = jest.fn().mockImplementation(async ({ column }) => {
+    if (column === 'LogAttributes') {
+      return {
+        name: 'LogAttributes',
+        type: 'Map(LowCardinality(String), String)',
+      };
+    } else if (column === 'Duration') {
+      return { name: 'Duration', type: 'UInt64' };
+    } else if (column === 'ServiceName') {
+      return { name: 'ServiceName', type: 'LowCardinality(String)' };
+    }
+    return undefined;
+  });
+  metadata.getMaterializedColumnsLookupTable = jest
+    .fn()
+    .mockImplementation(async () => new Map());
+
+  const serializer = new CustomSchemaSQLSerializerV2({
+    metadata,
+    databaseName: 'testName',
+    tableName: 'testTable',
+    connectionId: 'testId',
+    implicitColumnExpression: 'Body',
+  });
+
+  const attr = "toFloat64OrNull(`LogAttributes`['gc_pause_ms'])";
+  const hint = "indexHint(mapContains(`LogAttributes`, 'gc_pause_ms'))";
+
+  it.each([
+    {
+      lucene: 'LogAttributes.gc_pause_ms:>100',
+      sql: `((ifNull(${attr} > 100, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:>=100',
+      sql: `((ifNull(${attr} >= 100, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:<100',
+      sql: `((ifNull(${attr} < 100, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:<=100',
+      sql: `((ifNull(${attr} <= 100, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:>-2.5',
+      sql: `((ifNull(${attr} > -2.5, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:>1e3',
+      sql: `((ifNull(${attr} > 1000, 0) AND ${hint}))`,
+    },
+    {
+      lucene: '-LogAttributes.gc_pause_ms:>100',
+      sql: `((ifNull(${attr} <= 100, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:[10 TO 20]',
+      sql: `((ifNull(${attr} BETWEEN 10 AND 20, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:{10 TO 20}',
+      sql: `((ifNull(${attr} > 10, 0) AND ifNull(${attr} < 20, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:[10 TO *]',
+      sql: `((ifNull(${attr} >= 10, 0) AND ${hint}))`,
+    },
+    {
+      lucene: '-LogAttributes.gc_pause_ms:[10 TO 20]',
+      sql: `((NOT ifNull(${attr} BETWEEN 10 AND 20, 0)))`,
+    },
+    {
+      lucene: 'ServiceName:[1 TO 5]',
+      sql: '((ifNull(toFloat64OrNull(ServiceName) BETWEEN 1 AND 5, 0)))',
+    },
+  ])('compares "$lucene" as numbers', async ({ lucene, sql }) => {
+    const builder = new SearchQueryBuilder(lucene, serializer);
+    expect(await builder.build()).toBe(sql);
+  });
+
+  it.each([
+    {
+      // A non-numeric bound keeps the string comparison.
+      lucene: 'LogAttributes.version:>abc',
+      sql: "((`LogAttributes`['version'] > 'abc' AND indexHint(mapContains(`LogAttributes`, 'version'))))",
+    },
+    {
+      // Hex is not a numeric literal here.
+      lucene: 'LogAttributes.version:>0x10',
+      sql: "((`LogAttributes`['version'] > '0x10' AND indexHint(mapContains(`LogAttributes`, 'version'))))",
+    },
+    {
+      // Numeric columns are compared by ClickHouse already.
+      lucene: 'Duration:>100',
+      sql: "((Duration > '100'))",
+    },
+    {
+      lucene: 'Duration:[10 TO 20]',
+      sql: '((Duration BETWEEN 10 AND 20))',
+    },
+  ])('leaves "$lucene" unchanged', async ({ lucene, sql }) => {
+    const builder = new SearchQueryBuilder(lucene, serializer);
+    expect(await builder.build()).toBe(sql);
   });
 });
 
