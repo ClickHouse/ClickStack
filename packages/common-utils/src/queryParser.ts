@@ -15,6 +15,7 @@ import {
   isClickHouseVersionAtLeast,
   supportsDirectReadMap,
 } from '@/core/clickhouseVersion';
+import { stripTypeWrappers } from '@/core/eventDeltas';
 import {
   Metadata,
   parseKeyPath,
@@ -139,32 +140,58 @@ const isNumericLiteral = (term: string) =>
  * Map attributes (and other String columns) hold numbers as text. Compared as
  * strings, `'17.25' > '100'` is true, and BETWEEN with numeric bounds fails
  * with "no supertype for types String, UInt8", so numeric bounds on a String
- * field need a numeric comparison.
+ * field need a numeric comparison. Enum, UUID and IP columns also map to
+ * JSDataType.String but toFloat64OrNull rejects them, so check the type.
  */
 function isStringComparedToNumbers(
-  propertyType: JSDataType | undefined,
+  columnType: string | undefined,
   terms: string[],
 ) {
+  const baseType = columnType ? stripTypeWrappers(columnType) : '';
   return (
-    propertyType === JSDataType.String &&
+    (baseType === 'String' || baseType.startsWith('FixedString(')) &&
     terms.length > 0 &&
     terms.every(isNumericLiteral)
   );
 }
 
 /**
- * Values that aren't numbers convert to NULL. ifNull makes them a non-match
- * rather than NULL, so a NOT around the search still matches them.
+ * Values that aren't numbers convert to NULL. ifNull makes them a plain match
+ * or non-match rather than NULL, so a NOT around the search still works.
  */
 function numericComparison(
   column: string | undefined,
   comparison: string,
   values: number[],
+  matchNonNumeric = false,
 ) {
   return SqlString.format(
-    `ifNull(toFloat64OrNull(${column}) ${comparison}, 0)`,
+    `ifNull(toFloat64OrNull(${column}) ${comparison}, ${matchNonNumeric ? 1 : 0})`,
     values,
   );
+}
+
+/**
+ * `-field:>x` reaches gt/gte/lt/lte as the opposite operator (`field:<=x`),
+ * so missing and non-numeric values must match it, as they do for
+ * `-field:[a TO b]`. The map-key index hint would skip rows without the key,
+ * so negated comparisons leave it off, as range() does.
+ */
+function numericBound(
+  column: string | undefined,
+  operator: string,
+  term: string,
+  context: SerializerContext,
+  expressionPostfix: string,
+) {
+  const negated = context.isNegatedComparison === true;
+  const comparison = numericComparison(
+    column,
+    `${operator} ?`,
+    [Number(term)],
+    negated,
+  );
+  return `(${comparison}${negated ? '' : expressionPostfix})`;
 }
 
 // Type guards for lucene AST types
@@ -262,6 +289,8 @@ interface SerializerContext {
    */
   bodyExpression?: string;
   isNegatedAndParenthesized?: boolean;
+  /** Set when the visitor turned `-field:>x` into the opposite operator. */
+  isNegatedComparison?: boolean;
 }
 
 interface Serializer {
@@ -522,6 +551,8 @@ export abstract class SQLSerializer implements Serializer {
     column?: string;
     columnJSON?: { string: string; number: string };
     propertyType?: JSDataType;
+    /** The ClickHouse type of the resolved column or map value. */
+    columnType?: string;
     /**
      * The resolved column is FixedString. Token functions (hasToken,
      * hasAllTokens) reject that haystack and need CAST(... AS String).
@@ -697,6 +728,7 @@ export abstract class SQLSerializer implements Serializer {
       columnJSON,
       found,
       propertyType,
+      columnType,
       isArray,
       mapKeyIndexExpression,
     } = await this.getColumnForField(field, context);
@@ -715,8 +747,8 @@ export abstract class SQLSerializer implements Serializer {
         [term],
       );
     }
-    if (isStringComparedToNumbers(propertyType, [term])) {
-      return `(${numericComparison(column, '>= ?', [Number(term)])}${expressionPostfix})`;
+    if (isStringComparedToNumbers(columnType, [term])) {
+      return numericBound(column, '>=', term, context, expressionPostfix);
     }
     return SqlString.format(`(${column} >= ?${expressionPostfix})`, [term]);
   }
@@ -727,6 +759,7 @@ export abstract class SQLSerializer implements Serializer {
       columnJSON,
       found,
       propertyType,
+      columnType,
       isArray,
       mapKeyIndexExpression,
     } = await this.getColumnForField(field, context);
@@ -745,8 +778,8 @@ export abstract class SQLSerializer implements Serializer {
         [term],
       );
     }
-    if (isStringComparedToNumbers(propertyType, [term])) {
-      return `(${numericComparison(column, '<= ?', [Number(term)])}${expressionPostfix})`;
+    if (isStringComparedToNumbers(columnType, [term])) {
+      return numericBound(column, '<=', term, context, expressionPostfix);
     }
     return SqlString.format(`(${column} <= ?${expressionPostfix})`, [term]);
   }
@@ -757,6 +790,7 @@ export abstract class SQLSerializer implements Serializer {
       columnJSON,
       found,
       propertyType,
+      columnType,
       isArray,
       mapKeyIndexExpression,
     } = await this.getColumnForField(field, context);
@@ -775,8 +809,8 @@ export abstract class SQLSerializer implements Serializer {
         [term],
       );
     }
-    if (isStringComparedToNumbers(propertyType, [term])) {
-      return `(${numericComparison(column, '< ?', [Number(term)])}${expressionPostfix})`;
+    if (isStringComparedToNumbers(columnType, [term])) {
+      return numericBound(column, '<', term, context, expressionPostfix);
     }
     return SqlString.format(`(${column} < ?${expressionPostfix})`, [term]);
   }
@@ -787,6 +821,7 @@ export abstract class SQLSerializer implements Serializer {
       columnJSON,
       found,
       propertyType,
+      columnType,
       isArray,
       mapKeyIndexExpression,
     } = await this.getColumnForField(field, context);
@@ -805,8 +840,8 @@ export abstract class SQLSerializer implements Serializer {
         [term],
       );
     }
-    if (isStringComparedToNumbers(propertyType, [term])) {
-      return `(${numericComparison(column, '> ?', [Number(term)])}${expressionPostfix})`;
+    if (isStringComparedToNumbers(columnType, [term])) {
+      return numericBound(column, '>', term, context, expressionPostfix);
     }
     return SqlString.format(`(${column} > ?${expressionPostfix})`, [term]);
   }
@@ -847,7 +882,7 @@ export abstract class SQLSerializer implements Serializer {
     context: SerializerContext,
     inclusive: lucene.NodeRangedTerm['inclusive'] = 'both',
   ) {
-    const { column, found, mapKeyIndexExpression, isArray, propertyType } =
+    const { column, found, mapKeyIndexExpression, isArray, columnType } =
       await this.getColumnForField(field, context);
     if (!found) {
       return this.NOT_FOUND_QUERY;
@@ -868,7 +903,7 @@ export abstract class SQLSerializer implements Serializer {
       return this.isNotNull(field, isNegatedField, context);
     }
     const compareAsNumbers = isStringComparedToNumbers(
-      propertyType,
+      columnType,
       [start, end].filter(bound => bound !== RANGE_UNBOUNDED),
     );
     if (!isStartUnbounded && !isEndUnbounded && inclusive === 'both') {
@@ -2085,6 +2120,7 @@ export class CustomSchemaSQLSerializerV2 extends SQLSerializer {
       column: expression.columnExpression,
       columnJSON: expression?.columnExpressionJSON,
       propertyType: type ?? undefined,
+      columnType: expression.columnType,
       isArray,
       found: expression.found,
       mapKey: expression.mapKey,
@@ -2135,27 +2171,28 @@ async function nodeTerm(
       return serializer.isNotNull(field, isNegatedField, context);
     }
 
+    const negatedContext = { ...context, isNegatedComparison: true };
     if (!nodeTerm.quoted && term.substring(0, 2) === '>=') {
       if (isNegatedField) {
-        return serializer.lt(field, term.slice(2), context);
+        return serializer.lt(field, term.slice(2), negatedContext);
       }
       return serializer.gte(field, term.slice(2), context);
     }
     if (!nodeTerm.quoted && term.substring(0, 2) === '<=') {
       if (isNegatedField) {
-        return serializer.gt(field, term.slice(2), context);
+        return serializer.gt(field, term.slice(2), negatedContext);
       }
       return serializer.lte(field, term.slice(2), context);
     }
     if (!nodeTerm.quoted && term[0] === '>') {
       if (isNegatedField) {
-        return serializer.lte(field, term.slice(1), context);
+        return serializer.lte(field, term.slice(1), negatedContext);
       }
       return serializer.gt(field, term.slice(1), context);
     }
     if (!nodeTerm.quoted && term[0] === '<') {
       if (isNegatedField) {
-        return serializer.gte(field, term.slice(1), context);
+        return serializer.gte(field, term.slice(1), negatedContext);
       }
       return serializer.lt(field, term.slice(1), context);
     }

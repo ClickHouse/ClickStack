@@ -91,6 +91,7 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
       },
       found: true,
       propertyType: 'json',
+      columnType: 'JSON',
       isArray: false,
     });
     const field2 = 'ResourceAttributesJSON.test.nest';
@@ -104,6 +105,7 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
       },
       found: true,
       propertyType: 'json',
+      columnType: 'JSON',
       isArray: false,
     });
   });
@@ -781,6 +783,10 @@ describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => 
       return { name: 'Duration', type: 'UInt64' };
     } else if (column === 'ServiceName') {
       return { name: 'ServiceName', type: 'LowCardinality(String)' };
+    } else if (column === 'Severity') {
+      return { name: 'Severity', type: "Enum8('debug' = 1, 'info' = 5)" };
+    } else if (column === 'SrcIp') {
+      return { name: 'SrcIp', type: 'IPv4' };
     }
     return undefined;
   });
@@ -825,8 +831,13 @@ describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => 
       sql: `((ifNull(${attr} > 1000, 0) AND ${hint}))`,
     },
     {
+      // Missing and non-numeric values match, as for NOT and -field:[a TO b].
       lucene: '-LogAttributes.gc_pause_ms:>100',
-      sql: `((ifNull(${attr} <= 100, 0) AND ${hint}))`,
+      sql: `((ifNull(${attr} <= 100, 1)))`,
+    },
+    {
+      lucene: '-LogAttributes.gc_pause_ms:<10',
+      sql: `((ifNull(${attr} >= 10, 1)))`,
     },
     {
       lucene: 'LogAttributes.gc_pause_ms:[10 TO 20]',
@@ -872,6 +883,15 @@ describe('CustomSchemaSQLSerializerV2 - numeric bounds on String values', () => 
     {
       lucene: 'Duration:[10 TO 20]',
       sql: '((Duration BETWEEN 10 AND 20))',
+    },
+    {
+      // Enum compares to numbers already; toFloat64OrNull would reject it.
+      lucene: 'Severity:[1 TO 5]',
+      sql: '((Severity BETWEEN 1 AND 5))',
+    },
+    {
+      lucene: 'SrcIp:>100',
+      sql: "((SrcIp > '100'))",
     },
   ])('leaves "$lucene" unchanged', async ({ lucene, sql }) => {
     const builder = new SearchQueryBuilder(lucene, serializer);
@@ -2546,6 +2566,7 @@ describe('CustomSchemaSQLSerializerV2 - Array and Nested Fields', () => {
       column: 'Events.Name',
       found: true,
       propertyType: JSDataType.String,
+      columnType: 'Array(String)',
       isArray: true,
     });
 
@@ -2555,6 +2576,7 @@ describe('CustomSchemaSQLSerializerV2 - Array and Nested Fields', () => {
       column: 'Events.Count',
       found: true,
       propertyType: JSDataType.Number,
+      columnType: 'Array(UInt64)',
       isArray: true,
     });
 
@@ -2564,6 +2586,7 @@ describe('CustomSchemaSQLSerializerV2 - Array and Nested Fields', () => {
       column: 'Events.IsAvailable',
       found: true,
       propertyType: JSDataType.Bool,
+      columnType: 'Array(Bool)',
       isArray: true,
     });
   });
