@@ -16,6 +16,7 @@ import {
 import { getVariableReferences } from '@hyperdx/common-utils/dist/variables';
 import {
   ActionIcon,
+  Button,
   CloseButton,
   Group,
   Popover,
@@ -38,6 +39,9 @@ import {
   notifyAdhocConditionTooLong,
   notifyAdhocFilterFull,
 } from './notifications';
+
+// Series with many labels (common in PromQL) would otherwise grow the input tall.
+const MAX_COLLAPSED_CONDITIONS = 3;
 
 type AdhocDashboardFilterProps = {
   filter: AdhocDashboardFilterType;
@@ -62,7 +66,12 @@ export function AdhocDashboardFilter({
   unsatisfiedRequiredFilters,
 }: AdhocDashboardFilterProps) {
   const [isAdding, setIsAdding] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const isAtLimit = conditions.length >= ADHOC_FILTER_MAX_CONDITIONS;
+  const hiddenCount = isExpanded
+    ? 0
+    : Math.max(0, conditions.length - MAX_COLLAPSED_CONDITIONS);
+  const languageName = filter.sourceType === 'promql' ? 'PromQL' : 'SQL';
 
   // The `where` narrowing the suggestions, and what it is still waiting on.
   // Blocked only by the required filters it references: a global requirement
@@ -153,45 +162,57 @@ export function AdhocDashboardFilter({
           borderRadius: 'var(--mantine-radius-sm)',
         }}
       >
-        {conditions.map((condition, index) => {
-          const operator = getFilterOperatorDisplay(
-            filter.sourceType,
-            condition.operator,
-          );
-          return (
-            <FilterPill
-              key={JSON.stringify(condition)}
-              field={condition.key}
-              operator={operator.label}
-              value={condition.value}
-              isExcluded={operator.isExcluded}
-              isInvalid={
-                !isAdhocConditionSupported(filter.sourceType, condition)
-              }
-              invalidReason={`Filter not applied: PromQL has no ${condition.operator} operator. Remove this condition and add it again with a supported operator.`}
-              onRemove={() => remove(index)}
-              // Editing would look up suggestions; removing still works.
-              renderPopover={
-                isDisabled
-                  ? undefined
-                  : close => (
-                      <AdhocConditionEditor
-                        filter={filter}
-                        dateRange={dateRange}
-                        suggestionsWhere={suggestionsWhere}
-                        initial={condition}
-                        onSubmit={next => {
-                          if (!isStorable(next)) return;
-                          replace(index, next);
-                          close();
-                        }}
-                      />
-                    )
-              }
-              data-testid="adhoc-condition-pill"
-            />
-          );
-        })}
+        {conditions
+          .slice(0, conditions.length - hiddenCount)
+          .map((condition, index) => {
+            const operator = getFilterOperatorDisplay(
+              filter.sourceType,
+              condition.operator,
+            );
+            return (
+              <FilterPill
+                key={JSON.stringify(condition)}
+                field={condition.key}
+                operator={operator.label}
+                value={condition.value}
+                isExcluded={operator.isExcluded}
+                isInvalid={
+                  !isAdhocConditionSupported(filter.sourceType, condition)
+                }
+                invalidReason={`Filter not applied: ${languageName} has no ${condition.operator} operator. Remove this condition and add it again with a supported operator.`}
+                onRemove={() => remove(index)}
+                // Editing would look up suggestions; removing still works.
+                renderPopover={
+                  isDisabled
+                    ? undefined
+                    : close => (
+                        <AdhocConditionEditor
+                          filter={filter}
+                          dateRange={dateRange}
+                          suggestionsWhere={suggestionsWhere}
+                          initial={condition}
+                          onSubmit={next => {
+                            if (!isStorable(next)) return;
+                            replace(index, next);
+                            close();
+                          }}
+                        />
+                      )
+                }
+                data-testid="adhoc-condition-pill"
+              />
+            );
+          })}
+        {conditions.length > MAX_COLLAPSED_CONDITIONS && (
+          <Button
+            variant="subtle"
+            size="compact-xs"
+            onClick={() => setIsExpanded(!isExpanded)}
+            data-testid={`adhoc-filter-toggle-more-${filter.name}`}
+          >
+            {isExpanded ? 'Show less' : `+${hiddenCount} more`}
+          </Button>
+        )}
         {conditions.length === 0 && (
           <Text
             size="xs"

@@ -20,6 +20,7 @@ import {
   isAdhocConditionSupported,
   isFilterBroadcastEnabled,
   isFilterGlobalRequirement,
+  isFilterReferenceableVariable,
   isFilterRequired,
   isFilterVariableEnabled,
   isQueryExpressionFilter,
@@ -44,6 +45,7 @@ import type {
   Filter,
   PromqlConditionFilter,
   QueryExpressionDashboardFilter,
+  SqlQueryDashboardFilter,
   StaticListDashboardFilter,
 } from '@/types';
 import {
@@ -740,6 +742,74 @@ describe('filters', () => {
       ).toEqual([]);
     });
 
+    describe('SQL query filters', () => {
+      const sqlFilter = (sqlTemplate: string): SqlQueryDashboardFilter => ({
+        id: 'sql',
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        connection: 'conn-1',
+        sqlTemplate,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      });
+      const cloud = filter({
+        id: 'cloud',
+        name: 'cloud',
+        isVariableEnabled: true,
+      });
+
+      it('accepts time macros and references to other variables', () => {
+        expect(
+          validateDashboardFilterQueries([
+            cloud,
+            sqlFilter(
+              'SELECT env FROM envs WHERE $__timeFilter(ts) AND $__filter(cloud, $cloud) AND region IN ($cloud)',
+            ),
+          ]),
+        ).toEqual([]);
+      });
+
+      // Running it is the only reliable check of ClickHouse syntax.
+      it('does not parse the SQL itself', () => {
+        expect(
+          validateDashboardFilterQueries([sqlFilter('SELEC env FRM')]),
+        ).toEqual([]);
+      });
+
+      it.each([
+        ['$__sourceTable', 'SELECT env FROM $__sourceTable'],
+        ['$__filters', 'SELECT env FROM envs WHERE $__filters'],
+      ])(
+        'flags %s, which needs a source the filter does not have',
+        (macro, sql) => {
+          expect(validateDashboardFilterQueries([sqlFilter(sql)])).toEqual([
+            {
+              filterId: 'sql',
+              filterName: 'Environment',
+              language: 'sql',
+              where: sql,
+              detail: `SQL query filters have no source, so ${macro} cannot be used`,
+            },
+          ]);
+        },
+      );
+
+      it.each([
+        ['an undeclared variable macro', 'WHERE $__filter(env, $missing)'],
+        ['an unterminated macro', 'WHERE $__timeFilter(ts'],
+        ['an unknown variable format', 'WHERE env IN (${cloud:bogus})'],
+      ])('flags %s', (_label, sql) => {
+        const issues = validateDashboardFilterQueries([cloud, sqlFilter(sql)]);
+
+        expect(issues).toHaveLength(1);
+        expect(issues[0]).toMatchObject({
+          filterId: 'sql',
+          where: sql,
+          detail: expect.any(String),
+        });
+      });
+    });
+
     it('accepts a valid lucene where clause', () => {
       expect(
         validateDashboardFilterQueries([
@@ -802,6 +872,7 @@ describe('filters', () => {
           {
             id: 'conds',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Conditions',
             sourceType: 'sql',
             sources: ['logs'],
@@ -826,6 +897,7 @@ describe('filters', () => {
           {
             id: 'conds',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Conditions',
             sourceType: 'promql',
             sources: ['metrics'],
@@ -1680,14 +1752,12 @@ describe('filters', () => {
         name: 'Conditions',
         sourceType: 'sql',
         sources: ['logs', 'traces'],
+        isBroadcastEnabled: true,
         isVariableEnabled: true,
       };
       expect(getFilterBroadcastTarget(adhoc)).toEqual({
         appliesToSourceIds: ['logs', 'traces'],
       });
-      expect(
-        getFilterBroadcastTarget({ ...adhoc, isBroadcastEnabled: false }),
-      ).toBeUndefined();
     });
 
     it('returns undefined when broadcasting is off', () => {
@@ -1738,6 +1808,22 @@ describe('filters', () => {
       expect(isFilterVariableEnabled({ isVariableEnabled: true })).toBe(true);
       expect(isFilterVariableEnabled({ isVariableEnabled: false })).toBe(false);
     });
+  });
+
+  describe('isFilterReferenceableVariable', () => {
+    it.each([
+      ['QUERY_EXPRESSION', true, true],
+      ['STATIC_LIST', true, true],
+      ['QUERY_EXPRESSION', false, false],
+      ['ADHOC', true, false],
+    ] as const)(
+      '%s with variables %s: %s',
+      (type, isVariableEnabled, expected) => {
+        expect(isFilterReferenceableVariable({ type, isVariableEnabled })).toBe(
+          expected,
+        );
+      },
+    );
   });
 
   describe('isFilterRequired', () => {
@@ -1825,8 +1911,26 @@ describe('filters', () => {
       ['!~', "NOT match(toString(ServiceName), 'api')"],
       ['LIKE', "toString(ServiceName) LIKE 'api'"],
       ['NOT LIKE', "toString(ServiceName) NOT LIKE 'api'"],
+      ['IN', "toString(ServiceName) IN ('api')"],
     ])('renders %s', (operator, condition) => {
       expect(conditionFor(operator)).toEqual([{ type: 'sql', condition }]);
+    });
+
+    it('ORs IN conditions sharing a key, at the first one', () => {
+      expect(
+        adhocConditionsToFilters([
+          { key: 'SeverityText', operator: '=', value: 'error' },
+          { key: 'ServiceName', operator: 'IN', value: 'api' },
+          { key: 'Env', operator: 'IN', value: 'prod' },
+          { key: 'ServiceName', operator: 'IN', value: "it's" },
+          { key: 'ServiceName', operator: '!=', value: 'web' },
+        ]).map(filter => filter.condition),
+      ).toEqual([
+        "toString(SeverityText) = 'error'",
+        "toString(ServiceName) IN ('api', 'it''s')",
+        "toString(Env) IN ('prod')",
+        "toString(ServiceName) != 'web'",
+      ]);
     });
 
     it('passes LIKE patterns through as written', () => {
@@ -2004,8 +2108,19 @@ describe('filters', () => {
       ['!=', 'service!="api"'],
       ['=~', 'service=~"api"'],
       ['!~', 'service!~"api"'],
+      ['IN', 'service=~"api"'],
     ])('renders %s', (operator, matcher) => {
       expect(matcherFor(operator)).toEqual([matcher]);
+    });
+
+    it('ORs IN conditions sharing a label into one escaped regex', () => {
+      expect(
+        adhocConditionsToPromqlFilters([
+          { key: 'service', operator: 'IN', value: 'api' },
+          { key: 'job', operator: 'IN', value: 'node' },
+          { key: 'service', operator: 'IN', value: 'a.b\\c' },
+        ]).map(filter => filter.condition),
+      ).toEqual(['service=~"(api|a\\\\.b\\\\\\\\c)"', 'job=~"node"']);
     });
 
     it.each<AdhocFilterOperator>(['LIKE', 'NOT LIKE'])(
@@ -2059,6 +2174,8 @@ describe('filters', () => {
       ['promql', 'NOT LIKE', false],
       ['promql', '=~', true],
       ['promql', '!=', true],
+      ['sql', 'IN', true],
+      ['promql', 'IN', true],
     ])('%s supports %s: %s', (sourceType, operator, expected) => {
       expect(
         isAdhocConditionSupported(sourceType, {
@@ -2223,6 +2340,19 @@ describe('filters', () => {
           filter({ id: 'unset', name: 'Env', expression: 'Env' }),
         ]),
       ).toEqual([]);
+    });
+
+    it('skips ad hoc filters, whose name is not referenceable', () => {
+      const adhoc: AdhocDashboardFilter = {
+        id: 'a1',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['logs'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      };
+      expect(getDashboardVariableFilters([adhoc])).toEqual([]);
     });
 
     it('skips a filter whose display name derives nothing usable', () => {
@@ -2463,6 +2593,18 @@ describe('filters', () => {
         }),
       ).toBe(
         'This variable name is used by another filter on this dashboard (Env)',
+      );
+    });
+
+    it('names the field by the given noun', () => {
+      const other = [variableFilter({ name: 'Env', variableName: 'env' })];
+      const validate = (value: string) =>
+        validateVariableName({ value, otherFilters: other, noun: 'name' });
+
+      expect(validate('')).toBe('Name is required');
+      expect(validate('1env')).toMatch(/^Names must start with a letter/);
+      expect(validate('env')).toBe(
+        'This name is used by another filter on this dashboard (Env)',
       );
     });
 
