@@ -6,6 +6,109 @@ PR — keep the `hyperdx-release-notes` comment marker intact when editing so yo
 edits survive regeneration. Per-package detail lives in each
 `packages/*/CHANGELOG.md`.
 
+## v2.45.0 — 2026-11-13
+
+<!-- hyperdx-release-notes version=2.45.0 inputs=8861d0a1698f -->
+
+**PromQL evaluation choice and ClickHouse 26.10**
+
+You can now choose how a PromQL source on ClickHouse is evaluated — through the
+Prometheus HTTP API or the `prometheusQuery` table functions — instead of
+leaving HyperDX to probe the server on every query. The service map can also now
+be split by up to three extra group-by expressions, so a single slow or failing
+pod no longer disappears into its service average. This release also moves the
+all-in-one image and the Docker Compose files to ClickHouse 26.10.3.7. Two
+things change underneath you: TimeSeries tables created from now on default to
+schema version 8, which keeps each series' time range in a separate inner table,
+and ClickHouse's own `system.metric_log` switches to the bucketed schema. Your
+existing TimeSeries tables keep the layout they already have, but metric_log
+rows written before the upgrade are left behind in `system.metric_log_0`, so
+check anything that reads that table before you upgrade.
+
+### 💥 Breaking Changes
+
+- **`system.metric_log` moves to the bucketed schema**: ClickHouse now writes
+  `system.metric_log` in its bucketed form, and the rows recorded before the
+  upgrade move to `system.metric_log_0`. A dashboard, alert or saved query
+  reading ClickHouse's own metrics from `system.metric_log` will see only
+  post-upgrade rows until you point it at both tables.
+- **New TimeSeries tables default to schema version 8**: TimeSeries tables
+  created after the upgrade keep each series' time range in a separate inner
+  table. Existing tables are untouched and keep their current layout, so a table
+  created after the upgrade no longer matches the shape of one created before
+  it.
+- **`clickstack_service_health` no longer returns a verdict**: the MCP tool has
+  stopped labelling services critical, degraded or healthy, and no longer tells
+  an agent a service needs "no action" — each service keeps its threshold flags,
+  score and a factual summary, so agents reason from the numbers rather than a
+  verdict that service-wide totals can get wrong. `summary.statusCounts` is
+  replaced by `summary.servicesFlagged`, and the span attributes
+  `mcp.service_health.critical_count` and `mcp.service_health.degraded_count`
+  are replaced by `mcp.service_health.flagged_count`, so update anything that
+  reads those fields.
+
+### ✨ New Features
+
+- **Choose how a PromQL source is evaluated**: a PromQL source on ClickHouse can
+  now be set to use either the Prometheus HTTP API or the `prometheusQuery`
+  table functions, rather than having HyperDX work it out for itself. A source
+  pinned to the HTTP API against a server that does not serve it now fails with
+  a clear error instead of an obscure one, and onboarding pins a PromQL source
+  it detects to the HTTP API when the server serves it.
+- **Split the service map by extra dimensions**: you can now add up to three
+  extra group-by SQL expressions to the service map — for example
+  `ResourceAttributes['k8s.pod.name']` — so a node becomes a service plus those
+  values and a slow or failing pod stands on its own instead of being averaged
+  into its service.
+
+### 🔧 Improvements
+
+- **PromQL label lookups go through ClickHouse's Prometheus HTTP API**: on
+  ClickHouse 26.9+ with the `prometheus_api_v1` handler, label and label-value
+  lookups for a ClickHouse-backed PromQL source now proxy to the handler instead
+  of querying the TimeSeries tags table with SQL. Older servers, servers without
+  the handler, and sources set to `table-function` keep the SQL path, so a
+  source that runs queries over HTTP on 26.6-26.8 still gets label
+  autocomplete.
+- **The MCP `describe_source` tool reads its label catalogue the same way**:
+  asked about a ClickHouse-backed PromQL source, `describe_source` now lists
+  label and metric names through the `prometheus_api_v1` handler on ClickHouse
+  26.9+, so an agent sees the same catalogue the app does. It falls back to SQL
+  on older servers, servers without the handler, and sources set to
+  `table-function`.
+- **Fewer probes for sources without an explicit choice**: a PromQL source that
+  does not say how it should be evaluated is still probed, but the answer is now
+  kept for 5 minutes instead of being worked out again on every query.
+
+### 🐛 Bug Fixes
+
+- **`{{note}}` is filled in when an alert actually fires**: a webhook body using
+  `{{note}}` now carries the alert's note on real alert notifications, not only
+  on "Send test", so the context you wrote on the alert reaches the people
+  paged by it.
+- **MCP webhook and alert tools are declared open-world**: saving a webhook or
+  an alert sends HTTP requests to third-party endpoints, so
+  `clickstack_save_webhook` and `clickstack_save_alert` now carry
+  `openWorldHint: true`. MCP clients that treat open-world tools differently —
+  by asking you to confirm before they run, for instance — will now do so for
+  these two.
+
+### 📦 Build / Packaging
+
+- **Bundled ClickHouse is now 26.10.3.7**: the all-in-one image and the Docker
+  Compose files use `clickhouse/clickhouse-server:26.10.3.7-alpine`.
+
+<!-- hyperdx-package-list -->
+
+### 📦 Package changelogs
+
+- `@hyperdx/api` 2.44.0 → 2.45.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/api/CHANGELOG.md#2450)
+- `@hyperdx/app` 2.44.0 → 2.45.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/app/CHANGELOG.md#2450)
+- `@hyperdx/common-utils` 0.34.0 → 0.35.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/common-utils/CHANGELOG.md#0350)
+- `@hyperdx/otel-collector` 2.44.0 → 2.45.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/otel-collector/CHANGELOG.md#2450)
+
+<!-- /hyperdx-package-list -->
+
 ## v2.44.0 — 2026-11-11
 
 <!-- hyperdx-release-notes version=2.44.0 inputs=99e8264954db -->

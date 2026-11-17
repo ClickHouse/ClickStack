@@ -296,6 +296,8 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
           'implicitColumnExpression' in source
             ? source.implicitColumnExpression
             : undefined,
+        bodyExpression:
+          source.kind === SourceKind.Log ? source.bodyExpression : undefined,
         orderBy: stableSampleExpr,
         limit: { limit: sampleSize },
         dateRange: [startDate, endDate],

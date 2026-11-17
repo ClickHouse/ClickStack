@@ -1,5 +1,17 @@
 # @hyperdx/common-utils
 
+## 0.35.0
+
+### Minor Changes
+
+- 2d17de5d7: feat: serve PromQL label lookups from ClickHouse's Prometheus HTTP API
+
+  On ClickHouse 26.9+ with the `prometheus_api_v1` handler, `/labels` and `/label/:name/values` for a ClickHouse-backed PromQL source now proxy to the handler instead of querying the TimeSeries tags table with SQL. Older servers, servers without the handler, and sources set to `table-function` keep the SQL path, so a source that runs queries over HTTP on 26.6-26.8 still gets label autocomplete.
+
+### Patch Changes
+
+- ac913ceb3: feat: Choose how a PromQL source on ClickHouse is evaluated (the Prometheus HTTP API or the `prometheusQuery` table functions) instead of probing the server on every query. Without a choice the server is still probed, but the answer is now kept for 5 minutes. A source set to the HTTP API against a server that does not serve it fails with a clear error. Onboarding pins a PromQL source it detects to the HTTP API when the server serves it.
+
 ## 0.34.0
 
 ### Minor Changes
