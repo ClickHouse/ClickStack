@@ -17,18 +17,50 @@ describe('numeric search bounds on String attributes', () => {
   const DATABASE = 'default';
   const TABLE_NAME = 'numeric_string_comparisons_int_test';
 
+  // Code mirrors gc_pause_ms in a FixedString, padded with zero bytes.
   const ROWS: Array<{
     Id: number;
     Severity: string;
     LogAttributes: Record<string, string>;
+    Code: string;
   }> = [
-    { Id: 1, Severity: 'debug', LogAttributes: { gc_pause_ms: '5' } },
-    { Id: 2, Severity: 'info', LogAttributes: { gc_pause_ms: '10' } },
-    { Id: 3, Severity: 'error', LogAttributes: { gc_pause_ms: '17.25' } },
-    { Id: 4, Severity: 'info', LogAttributes: { gc_pause_ms: '100' } },
-    { Id: 5, Severity: 'info', LogAttributes: { gc_pause_ms: '150' } },
-    { Id: 6, Severity: 'info', LogAttributes: { gc_pause_ms: 'abc' } },
-    { Id: 7, Severity: 'info', LogAttributes: { other: 'x' } },
+    {
+      Id: 1,
+      Severity: 'debug',
+      LogAttributes: { gc_pause_ms: '5' },
+      Code: '5',
+    },
+    {
+      Id: 2,
+      Severity: 'info',
+      LogAttributes: { gc_pause_ms: '10' },
+      Code: '10',
+    },
+    {
+      Id: 3,
+      Severity: 'error',
+      LogAttributes: { gc_pause_ms: '17.25' },
+      Code: '17.25',
+    },
+    {
+      Id: 4,
+      Severity: 'info',
+      LogAttributes: { gc_pause_ms: '100' },
+      Code: '100',
+    },
+    {
+      Id: 5,
+      Severity: 'info',
+      LogAttributes: { gc_pause_ms: '150' },
+      Code: '150',
+    },
+    {
+      Id: 6,
+      Severity: 'info',
+      LogAttributes: { gc_pause_ms: 'abc' },
+      Code: 'abc',
+    },
+    { Id: 7, Severity: 'info', LogAttributes: { other: 'x' }, Code: '' },
   ];
 
   const queryIds = async (where: string) => {
@@ -63,7 +95,9 @@ describe('numeric search bounds on String attributes', () => {
         Timestamp DateTime64(9),
         Id UInt32,
         Severity Enum8('debug' = 1, 'info' = 5, 'error' = 9),
-        LogAttributes Map(LowCardinality(String), String)
+        LogAttributes Map(LowCardinality(String), String),
+        GcPause String MATERIALIZED LogAttributes['gc_pause_ms'],
+        Code FixedString(8)
       )
       ENGINE = MergeTree
       ORDER BY (Timestamp)`,
@@ -101,6 +135,13 @@ describe('numeric search bounds on String attributes', () => {
     ['NOT LogAttributes.gc_pause_ms:>100', [1, 2, 3, 4, 6, 7]],
     ['-LogAttributes.gc_pause_ms:<10', [2, 3, 4, 5, 6, 7]],
     ['-LogAttributes.gc_pause_ms:[10 TO 100]', [1, 5, 6, 7]],
+    // A materialized String column and a FixedString compare the same way.
+    ['GcPause:>100', [5]],
+    ['GcPause:[10 TO 100]', [2, 3, 4]],
+    ['-GcPause:>100', [1, 2, 3, 4, 6, 7]],
+    ['Code:>100', [5]],
+    ['Code:[10 TO 100]', [2, 3, 4]],
+    ['-Code:>100', [1, 2, 3, 4, 6, 7]],
     // Enum columns keep comparing by their numeric value.
     ['Severity:[1 TO 5]', [1, 2, 4, 5, 6, 7]],
   ])('%s returns the matching rows', async (where, ids) => {
