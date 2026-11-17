@@ -1,4 +1,5 @@
 import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/node';
+import { isRawSqlChartConfig } from '@hyperdx/common-utils/dist/guards';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
@@ -126,7 +127,44 @@ describe('log body fallback for bare-text MCP filters', () => {
     ]);
   });
 
-  it('hydrates a raw SQL tile with its log source body expression', async () => {
+  it('rejects bare-text search without an implicit column or body expression', async () => {
+    await LogSource.updateOne(
+      { _id: source._id },
+      { $unset: { implicitColumnExpression: '', bodyExpression: '' } },
+    );
+    const result = await callTool(client, 'clickstack_search', {
+      sourceId: source._id.toString(),
+      where: 'needle',
+      ...currentWindow(),
+    });
+    expect(result.isError).toBe(true);
+    expect(getFirstText(result)).toContain(
+      'Can not search bare text without an implicit column set.',
+    );
+  });
+
+  it('does not introduce a body fallback for MCP trace searches', async () => {
+    const traceSource = await Source.create({
+      kind: SourceKind.Trace,
+      team: source.team,
+      connection: source.connection,
+      name: 'Traces',
+      from: { databaseName: 'default', tableName: 'otel_traces' },
+      timestampValueExpression: 'Timestamp',
+      spanNameExpression: 'SpanName',
+    });
+    const result = await callTool(client, 'clickstack_search', {
+      sourceId: traceSource._id.toString(),
+      where: 'needle',
+      ...currentWindow(),
+    });
+    expect(result.isError).toBe(true);
+    expect(getFirstText(result)).toContain(
+      'Can not search bare text without an implicit column set.',
+    );
+  });
+
+  it('uses raw SQL tile hydration to filter by the log body expression', async () => {
     const saved = await callTool(client, 'clickstack_save_dashboard', {
       name: 'Body fallback',
       tiles: [
@@ -153,11 +191,25 @@ describe('log body fallback for bare-text MCP filters', () => {
         ...currentWindow(),
       });
       expect(result.isError).toBeFalsy();
-      expect(query).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({ bodyExpression: 'Body' }),
-        }),
-      );
+      expect(query).toHaveBeenCalledTimes(1);
+      const [queryOptions] = query.mock.calls[0];
+      if (!isRawSqlChartConfig(queryOptions.config)) {
+        throw new Error('Expected a raw SQL tile query');
+      }
+      const clickhouseClient = new ClickhouseClient({
+        host: config.CLICKHOUSE_HOST,
+        username: config.CLICKHOUSE_USER,
+        password: config.CLICKHOUSE_PASSWORD,
+      });
+      // query_tile exposes variables but not runtime dashboard filters.
+      const filtered = await clickhouseClient.queryChartConfig({
+        ...queryOptions,
+        config: {
+          ...queryOptions.config,
+          filters: [{ type: 'lucene', condition: 'needle' }],
+        },
+      });
+      expect(filtered.data).toEqual([{ Body: 'needle in body' }]);
     } finally {
       query.mockRestore();
     }
