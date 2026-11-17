@@ -44,6 +44,7 @@ import type {
   Filter,
   PromqlConditionFilter,
   QueryExpressionDashboardFilter,
+  SqlQueryDashboardFilter,
   StaticListDashboardFilter,
 } from '@/types';
 import {
@@ -738,6 +739,74 @@ describe('filters', () => {
           },
         ]),
       ).toEqual([]);
+    });
+
+    describe('SQL query filters', () => {
+      const sqlFilter = (sqlTemplate: string): SqlQueryDashboardFilter => ({
+        id: 'sql',
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        connection: 'conn-1',
+        sqlTemplate,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      });
+      const cloud = filter({
+        id: 'cloud',
+        name: 'cloud',
+        isVariableEnabled: true,
+      });
+
+      it('accepts time macros and references to other variables', () => {
+        expect(
+          validateDashboardFilterQueries([
+            cloud,
+            sqlFilter(
+              'SELECT env FROM envs WHERE $__timeFilter(ts) AND $__filter(cloud, $cloud) AND region IN ($cloud)',
+            ),
+          ]),
+        ).toEqual([]);
+      });
+
+      // Running it is the only reliable check of ClickHouse syntax.
+      it('does not parse the SQL itself', () => {
+        expect(
+          validateDashboardFilterQueries([sqlFilter('SELEC env FRM')]),
+        ).toEqual([]);
+      });
+
+      it.each([
+        ['$__sourceTable', 'SELECT env FROM $__sourceTable'],
+        ['$__filters', 'SELECT env FROM envs WHERE $__filters'],
+      ])(
+        'flags %s, which needs a source the filter does not have',
+        (macro, sql) => {
+          expect(validateDashboardFilterQueries([sqlFilter(sql)])).toEqual([
+            {
+              filterId: 'sql',
+              filterName: 'Environment',
+              language: 'sql',
+              where: sql,
+              detail: `SQL query filters have no source, so ${macro} cannot be used`,
+            },
+          ]);
+        },
+      );
+
+      it.each([
+        ['an undeclared variable macro', 'WHERE $__filter(env, $missing)'],
+        ['an unterminated macro', 'WHERE $__timeFilter(ts'],
+        ['an unknown variable format', 'WHERE env IN (${cloud:bogus})'],
+      ])('flags %s', (_label, sql) => {
+        const issues = validateDashboardFilterQueries([cloud, sqlFilter(sql)]);
+
+        expect(issues).toHaveLength(1);
+        expect(issues[0]).toMatchObject({
+          filterId: 'sql',
+          where: sql,
+          detail: expect.any(String),
+        });
+      });
     });
 
     it('accepts a valid lucene where clause', () => {

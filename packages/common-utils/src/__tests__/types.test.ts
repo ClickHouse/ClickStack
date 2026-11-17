@@ -678,6 +678,48 @@ describe('DashboardFilterSchema static-list variant', () => {
   });
 });
 
+describe('DashboardFilterSchema SQL query variant', () => {
+  const sqlFilter = {
+    id: 'f1',
+    type: 'SQL_QUERY' as const,
+    name: 'Environment',
+    connection: 'conn-1',
+    sqlTemplate: 'SELECT DISTINCT env FROM envs',
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'env',
+  };
+
+  it('parses a SQL query filter', () => {
+    expect(DashboardFilterSchema.parse(sqlFilter)).toEqual(sqlFilter);
+  });
+
+  it.each(['connection', 'sqlTemplate'] as const)(
+    'requires a non-empty %s',
+    field => {
+      for (const value of [undefined, '']) {
+        expect(
+          DashboardFilterSchema.safeParse({ ...sqlFilter, [field]: value })
+            .success,
+        ).toBe(false);
+      }
+    },
+  );
+
+  it.each([
+    ['broadcast enabled', { isBroadcastEnabled: true }],
+    ['variables disabled', { isVariableEnabled: false }],
+  ])('rejects a SQL query filter with %s', (_label, overrides) => {
+    const result = DashboardFilterSchema.safeParse({
+      ...sqlFilter,
+      ...overrides,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].path).toEqual([Object.keys(overrides)[0]]);
+  });
+});
+
 describe('DashboardFilterSchema query-expression variant', () => {
   const queryFilter = {
     id: 'f1',

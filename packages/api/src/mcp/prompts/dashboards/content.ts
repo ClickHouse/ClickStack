@@ -196,7 +196,7 @@ Dashboards open with a 15-minute default window. There is no dashboard-level fie
 - Using $__filter or $__conditionalAll in a Lucene where (they are matched as literal text; switch to whereLanguage: "sql", or write ServiceName:$var).
 - Chaining a filter's where off a filter that is not variable-enabled. Only isVariableEnabled: true publishes the $variableName token; without it the reference resolves to nothing and the downstream dropdown is unscoped or empty.
 - Referencing a filter's OWN variable in its where. That narrows its dropdown to the values already picked, so the rest of the options vanish from a multi-select. Reference a sibling filter's variable instead.
-- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters.
+- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters, connectionId/sqlTemplate to SQL_QUERY filters.
 - Expecting a STATIC_LIST filter to broadcast. It cannot; a tile must reference its $variableName (via $__filter with the column passed explicitly) or nothing changes when the user picks a value.`;
 }
 
@@ -1168,7 +1168,7 @@ Rules:
 
 Optional dashboard-level filter declarations. Each entry adds a dropdown to the dashboard header. Use this for focused per-dimension dashboards (per-service, per-tenant, per-endpoint) instead of hardcoding the dimension into every tile's where clause.
 
-Two filter types: QUERY_EXPRESSION queries its dropdown values from a source column, while STATIC_LIST declares them inline as a hand-authored options list and is always variable-only (see the static filter shape below).
+Filter types: QUERY_EXPRESSION queries its dropdown values from a source column. STATIC_LIST declares them inline as a hand-authored options list, and SQL_QUERY reads them from a ClickHouse query; both are always variable-only (see their shapes below).
 
 A QUERY_EXPRESSION filter does one of two things with the value the user picks, or both:
 
@@ -1205,6 +1205,19 @@ Static filter shape:
 Example (static list):
   filters: [
     { type: "STATIC_LIST", name: "Environment", options: ["prod", "staging", "dev"], variableName: "env" }
+  ]
+
+SQL query filter shape:
+  { type: "SQL_QUERY", name, connectionId, sqlTemplate, variableName? }
+
+  connectionId         ClickHouse connection the query runs on (from clickstack_list_sources).
+  sqlTemplate          SELECT whose FIRST column becomes the dropdown values, cast to string with nulls and duplicates dropped, in row order (add ORDER BY). May use the time macros and other filters' variables; cannot use $__sourceTable or $__filters, because the filter has no source.
+
+  Use it when the values live in a lookup table, dictionary, or join that no single source column covers; otherwise prefer QUERY_EXPRESSION. Like a static filter it is variable-only, so tiles pass the column explicitly: $__filter(<expression>, $<variableName>).
+
+Example (SQL query, narrowed by another filter's variable):
+  filters: [
+    { type: "SQL_QUERY", name: "Environment", connectionId: "<connection-id>", sqlTemplate: "SELECT DISTINCT env FROM default.envs WHERE $__filter(cloud, $cloud) ORDER BY env", variableName: "env" }
   ]
 
 Example (broadcast to every tile, the common case):

@@ -7,6 +7,7 @@ import {
   getAdhocFilterSourceKinds,
   isAdhocFilter,
   isPrometheusLabelFilter,
+  isSqlQueryFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   DashboardFilter,
@@ -23,6 +24,7 @@ import _ from 'lodash';
 import { z } from 'zod';
 import { validateRequest } from 'zod-express-middleware';
 
+import { getConnectionsByTeam } from '@/controllers/connection';
 import {
   createDashboard,
   deleteDashboard,
@@ -123,6 +125,49 @@ async function validateFilterSources(
 }
 
 /**
+ * Rejects SQL_QUERY filters whose connection doesn't belong to the team. As in
+ * `validateFilterSources`, a connection the stored filter with the same ID
+ * already used is skipped. Returns an error message, or null.
+ */
+async function validateFilterConnections(
+  teamId: ObjectId,
+  filters: DashboardFilter[] = [],
+  existingFilters: DashboardFilter[] = [],
+): Promise<string | null> {
+  const existingConnectionById = new Map(
+    existingFilters
+      .filter(isSqlQueryFilter)
+      .map(filter => [filter.id, filter.connection]),
+  );
+  const connectionIds = new Set(
+    filters
+      .filter(isSqlQueryFilter)
+      .filter(
+        filter => existingConnectionById.get(filter.id) !== filter.connection,
+      )
+      .map(filter => filter.connection),
+  );
+  if (connectionIds.size === 0) return null;
+
+  const connections = await getConnectionsByTeam(teamId.toString());
+  const knownIds = new Set(connections.map(c => c._id.toString()));
+  const missing = [...connectionIds].filter(id => !knownIds.has(id));
+  if (missing.length === 0) return null;
+  return `The following filter connection IDs do not exist: ${missing.join(', ')}`;
+}
+
+async function validateFilterReferences(
+  teamId: ObjectId,
+  filters?: DashboardFilter[],
+  existingFilters?: DashboardFilter[],
+): Promise<string | null> {
+  return (
+    (await validateFilterSources(teamId, filters, existingFilters)) ??
+    (await validateFilterConnections(teamId, filters, existingFilters))
+  );
+}
+
+/**
  * Heal legacy `chart-1`..`chart-10` tile colors from #2265 on the request
  * body *before* `validateRequest` runs `ChartPaletteTokenSchema`. Keeps the
  * schema strict (so `z.input` == `z.output` and `req.body` infers cleanly)
@@ -178,9 +223,12 @@ router.post(
       // dashboard to the provisioner.
       const dashboard = _.omit(req.body, 'provisioned');
 
-      const sourceError = await validateFilterSources(teamId, req.body.filters);
-      if (sourceError != null) {
-        return res.status(400).json({ message: sourceError });
+      const filterError = await validateFilterReferences(
+        teamId,
+        req.body.filters,
+      );
+      if (filterError != null) {
+        return res.status(400).json({ message: filterError });
       }
 
       const newDashboard = await createDashboard(teamId, dashboard, userId);
@@ -223,13 +271,13 @@ router.patch(
       // null still signals field removal downstream.
       const updates = DashboardWithoutIdSchema.partial().parse(req.body);
 
-      const sourceError = await validateFilterSources(
+      const filterError = await validateFilterReferences(
         teamId,
         req.body.filters,
         dashboard.filters,
       );
-      if (sourceError != null) {
-        return res.status(400).json({ message: sourceError });
+      if (filterError != null) {
+        return res.status(400).json({ message: filterError });
       }
 
       const updatedDashboard = await updateDashboard(
