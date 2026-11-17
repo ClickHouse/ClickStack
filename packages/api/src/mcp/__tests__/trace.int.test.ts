@@ -159,6 +159,13 @@ describe('MCP Trace Tools', () => {
   // ─── Schema serialization ──────────────────────────────────────────────────
 
   describe('schema serialization', () => {
+    // Some MCP clients cap tool name length, often after prefixing the server name.
+    it('should keep every tool name within 40 characters', async () => {
+      const { tools } = await client.listTools();
+      const tooLong = tools.map(t => t.name).filter(name => name.length > 40);
+      expect(tooLong).toEqual([]);
+    });
+
     it('should expose clickstack_trace_waterfall with expected properties', async () => {
       const { tools } = await client.listTools();
       const tool = tools.find(t => t.name === 'clickstack_trace_waterfall');
