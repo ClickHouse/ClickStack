@@ -1134,6 +1134,32 @@ export function scanYAxisValueRange(
   return { min, max };
 }
 
+// Mirrors Recharts' stackOffset="none": each series sits on the running sum
+// of the ones before it, starting from a zero baseline, and the axis must
+// cover every one of those running sums.
+export function scanStackedYAxisValueRange(
+  graphResults: any[],
+  lineData: LineData[],
+): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  graphResults.forEach(dataPoint => {
+    let sum = 0;
+    lineData.forEach(ld => {
+      const value = dataPoint[ld.dataKey];
+      if (typeof value === 'number' && !isNaN(value)) {
+        sum += value;
+        min = Math.min(min, sum);
+        max = Math.max(max, sum);
+      }
+    });
+  });
+  if (max === -Infinity) {
+    return { min, max };
+  }
+  return { min: Math.min(min, 0), max: Math.max(max, 0) };
+}
+
 export interface YAxisBounds {
   domain: AxisDomain;
   ticks: number[] | undefined;
@@ -1168,8 +1194,6 @@ export function getLineCurveType(
   ];
 }
 
-// A stacked bar's rendered height sums its series at each timestamp - leave
-// that entirely to Recharts, regardless of selection/fit-to-data state.
 export function computeYAxisBounds(
   graphResults: any[],
   visibleLineData: LineData[],
@@ -1179,21 +1203,22 @@ export function computeYAxisBounds(
   referenceLineValues: number[],
   axisNumberFormat?: NumberFormat,
 ): YAxisBounds {
-  if (
+  const isStacked =
     displayType === DisplayType.StackedBar ||
-    displayType === DisplayType.StackedLine
-  ) {
-    return DEFAULT_Y_AXIS_BOUNDS;
-  }
+    displayType === DisplayType.StackedLine;
   const shouldFitYAxis = fitYAxisToData;
 
-  if (!hasSelection && !shouldFitYAxis) {
+  // Stacked charts always stay zero-pinned: fit-to-data is line-only, and a
+  // selection already narrows visibleLineData, so it changes the stack sums.
+  if (isStacked || (!hasSelection && !shouldFitYAxis)) {
     // A fully numeric domain skips Recharts' own nice rounding, and a
     // reference line can extend it further - defer to Recharts entirely.
     if (referenceLineValues.length > 0) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }
-    const { min, max } = scanYAxisValueRange(graphResults, visibleLineData);
+    const { min, max } = isStacked
+      ? scanStackedYAxisValueRange(graphResults, visibleLineData)
+      : scanYAxisValueRange(graphResults, visibleLineData);
     if (max === -Infinity) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }

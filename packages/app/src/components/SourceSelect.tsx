@@ -28,6 +28,7 @@ import {
   useSourceKindMap,
   useWithSourceVariableItems,
 } from '@/components/sourceSelectUtils';
+import { useSelectAllOnFocus } from '@/hooks/useSelectAllOnFocus';
 import { useSources } from '@/source';
 
 import styles from '@styles/SourceSelectControlled.module.scss';
@@ -198,6 +199,8 @@ function SourceSelectControlledComponent({
     <IconStack size={16} />
   );
 
+  const selectAllOnFocus = useSelectAllOnFocus();
+
   // Mantine passes `checked` to renderOption for the currently selected
   // option; render a trailing check so the active source is obvious in the
   // dropdown (the closed input only shows the kind icon + label).
@@ -259,6 +262,7 @@ function SourceSelectControlledComponent({
         renderOption={renderOption}
         filter={sourceSelectFilter}
         searchable
+        {...selectAllOnFocus}
         placeholder="Data Source"
         leftSection={leftIcon}
         maxDropdownHeight={280}
