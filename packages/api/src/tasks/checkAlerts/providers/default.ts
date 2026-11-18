@@ -495,25 +495,41 @@ async function loadAlerts(): Promise<AlertTask[]> {
   }
 
   // A grouped alert whose latest row is older than its scan window gets no
-  // rows back. Seed that row so the evaluation still starts from it and
-  // catches up on the missed windows. When the scan did return rows, the
-  // latest one is among them and its key is already set.
-  for (const alert of dueGroupedAlerts) {
-    const latest = latestHistories.get(alert.id);
-    if (!latest) {
-      continue;
-    }
-    const key = computeHistoryMapKey(alert.id, latest.group || '');
-    if (!previousAlerts.has(key)) {
-      previousAlerts.set(key, {
-        _id: new mongoose.Types.ObjectId(alert.id),
-        createdAt: latest.createdAt,
-        state: latest.state,
-        group: latest.group,
-        fired: latest.fired,
+  // rows back. Read the rows of that last evaluation instead (one per group,
+  // all sharing its createdAt), so the evaluation still starts from it and
+  // every group keeps its previous state.
+  await Promise.all(
+    dueGroupedAlerts.map(alert => {
+      const latest = latestHistories.get(alert.id);
+      if (
+        !latest ||
+        previousAlerts.has(computeHistoryMapKey(alert.id, latest.group || ''))
+      ) {
+        return undefined;
+      }
+      return historyQueryQueue.add(async () => {
+        const alertObjectId = new mongoose.Types.ObjectId(alert.id);
+        const rows = await AlertHistory.find(
+          {
+            alert: alertObjectId,
+            createdAt: latest.createdAt,
+            state: { $ne: AlertState.ERROR },
+          },
+          { group: 1, state: 1, createdAt: 1, fired: 1, groupValues: 1 },
+        ).lean();
+        for (const row of rows) {
+          previousAlerts.set(computeHistoryMapKey(alert.id, row.group || ''), {
+            _id: alertObjectId,
+            createdAt: row.createdAt,
+            state: row.state,
+            group: row.group,
+            fired: row.fired,
+            groupValues: row.groupValues,
+          });
+        }
       });
-    }
-  }
+    }),
+  );
 
   // Seed a sentinel entry for each gated alert so processAlert's
   // shouldSkipAlertCheck sees a history row in the current window and skips

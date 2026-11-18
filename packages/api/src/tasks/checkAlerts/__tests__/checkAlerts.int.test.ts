@@ -7063,6 +7063,65 @@ describe('checkAlerts', () => {
       });
     });
 
+    it('skips a grouped alert already evaluated this window, from the loaded sentinel alone', async () => {
+      const {
+        team,
+        webhook,
+        connection,
+        source,
+        savedSearch,
+        teamWebhooksById,
+        clickhouseClient,
+      } = await setupSavedSearchAlertTest();
+      // 1d interval so the current window cannot roll over mid-test.
+      const { alert } = await createAlertDetails(
+        team,
+        source,
+        {
+          source: AlertSource.SAVED_SEARCH,
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+          interval: '1d',
+          thresholdType: AlertThresholdType.ABOVE,
+          threshold: 1,
+          savedSearchId: savedSearch.id,
+          groupBy: 'ServiceName',
+        },
+        { taskType: AlertTaskType.SAVED_SEARCH, savedSearch },
+      );
+      const windowStart = getScheduledWindowStart(new Date(), 1440, 0);
+      for (const group of ['ServiceName:a', 'ServiceName:b']) {
+        await AlertHistory.create({
+          alert: alert.id,
+          createdAt: windowStart,
+          state: AlertState.ALERT,
+          group,
+          fired: true,
+          counts: 1,
+          lastValues: [],
+        });
+      }
+
+      const [task] = partitionPreviousMapsByAlert(
+        await alertProvider.getAlertTasks(),
+      );
+      const loaded = task.alerts[0];
+      // No per-group rows were loaded, only the sentinel.
+      expect([...loaded.previousMap.keys()]).toEqual([alert.id]);
+
+      const querySpy = jest.spyOn(clickhouseClient, 'queryChartConfig');
+      await processAlert(
+        task.now,
+        loaded,
+        clickhouseClient,
+        connection.id,
+        alertProvider,
+        teamWebhooksById,
+      );
+
+      expect(querySpy).not.toHaveBeenCalled();
+      expect(await AlertHistory.countDocuments({ alert: alert.id })).toBe(2);
+    });
+
     // The sample rows quoted in the message body carry no group predicate, so
     // every group's notification used to re-run the identical query.
     it('fetches the message body sample rows once for all groups in a window', async () => {

@@ -884,13 +884,13 @@ describe('DefaultAlertProvider', () => {
         expect(details.previousMap.get(alert.id)).toBeUndefined();
       });
 
-      it('seeds a grouped alert from its latest row when that row is older than the scan window', async () => {
+      it('reads the last evaluation for a grouped alert whose latest rows are older than the scan window', async () => {
         const { alert } = await createValidSavedSearchAlert(
           await createConnectionAndSource(),
           { groupBy: 'ServiceName' },
         );
-        // 5m interval: the per-group scan covers 1 day, so a 2-day-old row is
-        // outside it but inside the 7-day latest-row lookup.
+        // 5m interval: the per-group scan covers 1 day, so a 2-day-old
+        // evaluation is outside it but inside the 7-day latest-row lookup.
         const twoDaysAgo = new Date(
           currentWindowStart().getTime() - 2 * 24 * 60 * 60_000,
         );
@@ -898,29 +898,61 @@ describe('DefaultAlertProvider', () => {
           alert: alert._id,
           createdAt: twoDaysAgo,
           state: AlertState.ALERT,
-          group: 'group-a',
+          group: 'ServiceName:a',
           fired: true,
+          groupValues: [{ key: 'ServiceName', value: 'a' }],
+        });
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: twoDaysAgo,
+          state: AlertState.OK,
+          group: 'ServiceName:b',
+        });
+        // An earlier evaluation and a failed one must not be picked up.
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: new Date(twoDaysAgo.getTime() - 5 * 60_000),
+          state: AlertState.ALERT,
+          group: 'ServiceName:c',
+        });
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: twoDaysAgo,
+          state: AlertState.ERROR,
         });
 
         const result = await provider.getAlertTasks();
 
         expect(result).toHaveLength(1);
         const { previousMap } = result[0].alerts[0];
-        expect(previousMap.size).toBe(1);
-        const groupA = previousMap.get(`${alert.id}||group-a`);
+        expect([...previousMap.keys()].sort()).toEqual([
+          `${alert.id}||ServiceName:a`,
+          `${alert.id}||ServiceName:b`,
+        ]);
+        const groupA = previousMap.get(`${alert.id}||ServiceName:a`);
         expect(groupA?.createdAt).toEqual(twoDaysAgo);
         expect(groupA?.state).toBe(AlertState.ALERT);
         expect(groupA?.fired).toBe(true);
+        expect(groupA?.groupValues).toEqual([
+          { key: 'ServiceName', value: 'a' },
+        ]);
+        expect(previousMap.get(`${alert.id}||ServiceName:b`)?.state).toBe(
+          AlertState.OK,
+        );
       });
 
       it('treats an alert as due when its window start cannot be computed', async () => {
         const { alert } = await createValidSavedSearchAlert(
           await createConnectionAndSource(),
         );
+        // 1d interval and a row at the current window start: without the
+        // failure this alert would be skipped, with only a sentinel entry.
+        await Alert.updateOne({ _id: alert._id }, { $set: { interval: '1d' } });
         await AlertHistory.create({
           alert: alert._id,
-          createdAt: new Date(currentWindowStart().getTime() - 5 * 60_000),
+          createdAt: getScheduledWindowStart(new Date(), 1440, 0),
           state: AlertState.ALERT,
+          fired: true,
         });
         const windowStartSpy = jest
           .spyOn(checkAlertTasks, 'getAlertWindowStart')
@@ -932,9 +964,10 @@ describe('DefaultAlertProvider', () => {
 
         expect(windowStartSpy).toHaveBeenCalled();
         expect(result).toHaveLength(1);
-        expect(result[0].alerts[0].previousMap.get(alert.id)?.state).toBe(
-          AlertState.ALERT,
-        );
+        // The sentinel carries no `fired`; the real previous row does.
+        const previous = result[0].alerts[0].previousMap.get(alert.id);
+        expect(previous?.state).toBe(AlertState.ALERT);
+        expect(previous?.fired).toBe(true);
       });
 
       let team: Awaited<ReturnType<typeof createTeam>>;
