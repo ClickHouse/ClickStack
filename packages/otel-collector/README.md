@@ -572,7 +572,8 @@ args:
 ### Files you do NOT need to change
 
 - `packages/otel-collector/builder-config.yaml` — uses placeholders, substituted
-  at build time
+  at build time. The exception is stable (v1.x) components such as
+  `k8sattributesprocessor`: copy their version from the upstream manifest
 - `docker-compose.dev.yml` — reads from `.env` automatically
 - `docker-compose.ci.yml` — reads from `.env` automatically
 
