@@ -244,7 +244,7 @@ function FileSelection({
         details: (
           <Stack gap={0}>
             {referenceIssues.map(issue => (
-              <Text key={issue} c="red">
+              <Text key={issue} variant="danger">
                 {issue}
               </Text>
             ))}
