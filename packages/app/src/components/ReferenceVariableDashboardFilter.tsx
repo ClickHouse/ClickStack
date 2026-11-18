@@ -1,5 +1,9 @@
 import { useCallback, useMemo } from 'react';
-import { DataSourceDashboardFilter as DataSourceFilter } from '@hyperdx/common-utils/dist/types';
+import { isSourceOfferedByVariable } from '@hyperdx/common-utils/dist/referenceVariables';
+import {
+  DataSourceDashboardFilter as DataSourceFilter,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 import {
   Center,
   CheckIcon,
@@ -132,10 +136,13 @@ export const DataSourceDashboardFilter = ({
 }) => {
   const { data: sources } = useSources();
   const sourceKindMap = useSourceKindMap(sources);
+  const isSourceAllowed = useCallback(
+    (source: TSource) => isSourceOfferedByVariable(source, filter),
+    [filter],
+  );
   const items = useFilteredSortedSourceItems({
     sources,
-    allowedSourceKinds: filter.allowedSourceKinds,
-    connectionId: filter.connection,
+    isSourceAllowed,
     groupBySection: true,
   });
   const renderIcon = useCallback(
