@@ -1929,12 +1929,10 @@ const SUM_BUCKETED_COLUMNS = [
  * join the bucket GROUP BY instead of `any()`, so rows with different values
  * stay apart; AttributesHash is left alone because the sum windows use it.
  *
- * The raw time column is not carried by default: Bucketed has one row per
- * series and time bucket. A group-by over it, such as `toStartOfHour(TimeUnix)`
- * in a table, would not resolve, so when one is present the time column joins
- * the bucket GROUP BY too and Bucketed keeps one row per point.
- * `timeColumn` is its projection for Bucketed SELECTs that list columns
- * explicitly, and is empty otherwise.
+ * Bucketed has one row per series and time bucket, so it has no raw time
+ * column. `timeColumn` is the time column's name when the group-by references
+ * it (e.g. `toStartOfHour(TimeUnix)`), and empty otherwise; Bucketed then
+ * exposes its bucket start under that name.
  */
 async function getComputedMetricColumns(
   metadata: Metadata,
@@ -2019,19 +2017,32 @@ async function getComputedMetricColumns(
   const rawTimeColumn = getFirstTimestampValueExpression(
     timestampValueExpression || DEFAULT_METRIC_TABLE_TIME_COLUMN,
   );
-  const timeColumn = referenced.has(rawTimeColumn)
-    ? `, ${escape(rawTimeColumn)}`
-    : '';
   return {
     select: columnNames.map(c => `, ${escape(c)}`).join(''),
-    aggregate: extra.map(c => `, ${project(c)}`).join('') + timeColumn,
-    groupBy: [...grouped].map(c => `, ${escape(c)}`).join('') + timeColumn,
-    timeColumn,
+    aggregate: extra.map(c => `, ${project(c)}`).join(''),
+    groupBy: [...grouped].map(c => `, ${escape(c)}`).join(''),
+    timeColumn: referenced.has(rawTimeColumn) ? escape(rawTimeColumn) : '',
     // Names come from the fixed OTel lists, so they need no quoting.
     project: (c: string) => ({
       UNSAFE_RAW_SQL: grouped.has(c) ? c : `any(${c}) AS ${c}`,
     }),
   };
+}
+
+/**
+ * Exposes the gauge Bucketed query's bucket start under the time column's
+ * name, so a group-by such as `toStartOfHour(TimeUnix)` resolves while Bucketed
+ * keeps one row per series and bucket. The wrapper avoids an alias cycle: the
+ * bucket expression itself reads the raw time column.
+ */
+function withBucketStartAsTime(
+  timeColumn: string,
+  timeBucketCol: string,
+  bucketed: ChSql,
+): ChSql {
+  return timeColumn
+    ? chSql`SELECT *, ${timeBucketCol} AS ${timeColumn} FROM (${bucketed})`
+    : bucketed;
 }
 
 /**
@@ -2177,7 +2188,10 @@ async function translateMetricChartConfig(
         },
         {
           name: 'Bucketed',
-          sql: chSql`
+          sql: withBucketStartAsTime(
+            computedColumns.timeColumn,
+            timeBucketCol,
+            chSql`
             SELECT
               ${timeExpr},
               AttributesHash,
@@ -2199,6 +2213,7 @@ async function translateMetricChartConfig(
             GROUP BY AttributesHash, ${timeBucketCol}${{ UNSAFE_RAW_SQL: computedColumns.groupBy }}
             ORDER BY AttributesHash, ${timeBucketCol}
           `,
+          ),
         },
       ],
       select: [
@@ -2341,7 +2356,7 @@ async function translateMetricChartConfig(
               StartTimeUnix,
               Flags,
               AggregationTemporality,
-              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}${{ UNSAFE_RAW_SQL: computedColumns.timeColumn }}
+              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}${{ UNSAFE_RAW_SQL: computedColumns.timeColumn ? `, \`${timeBucketCol}\` AS ${computedColumns.timeColumn}` : '' }}
             FROM (
               SELECT
                 ${timeExpr},
