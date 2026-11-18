@@ -1014,11 +1014,12 @@ export function errorHint(
       (getClickHouseErrorType(error) === 'BAD_ARGUMENTS' ||
         /BAD_ARGUMENTS|Code: 36\b/.test(msg)))
   ) {
-    // hasAllTokens alone matches the tokens in any order; position() pins the
-    // exact term without LIKE's '_' wildcard.
+    // position() works on every ClickHouse version and, unlike LIKE, has no '_'
+    // wildcard. hasAllTokens() is newer and only worth adding with a text index.
     const sqlAlternatives =
-      "hasAllTokens(col, 'payment_failed') AND position(col, 'payment_failed') > 0 " +
-      'for the exact term (hasAllTokens lets a text index skip granules).';
+      "position(col, 'payment_failed') > 0 for the exact term. If the column " +
+      "has a text index, prefix it with hasAllTokens(col, 'payment_failed') AND " +
+      'so the index can skip granules.';
     return (
       'hasToken() takes a single token of letters and digits; "_", "-", ".", ' +
       '"@", ":" and spaces all split tokens, so a needle like payment_failed, ' +

@@ -359,9 +359,8 @@ describe('errorHint', () => {
       undefined,
       { rawSql: true },
     );
-    expect(hint).toContain(
-      "hasAllTokens(col, 'payment_failed') AND position(col, 'payment_failed') > 0",
-    );
+    expect(hint).toContain("Use position(col, 'payment_failed') > 0");
+    expect(hint).toContain('If the column has a text index');
     expect(hint).not.toContain('whereLanguage');
   });
 
