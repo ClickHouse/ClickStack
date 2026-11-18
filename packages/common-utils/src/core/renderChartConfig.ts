@@ -525,18 +525,62 @@ export const rewriteSqlFilterWithKvItems = (
   }
 };
 
+/**
+ * Whether a min/max should aggregate `valueExpression` as-is instead of casting
+ * it to Float64. The cast turns a Date/DateTime into 0 (its string form doesn't
+ * parse as a float), so skip it when the expression is a bare date/time column.
+ * Only tables and number tiles, which can show a date value, skip it. Charts
+ * plot values on a numeric axis and drop non-numeric columns, and in a
+ * time-bucketed result a second date column would be mistaken for the bucket.
+ */
+async function isMinMaxOnDateTimeColumn(
+  aggFn: string,
+  valueExpression: string,
+  chartConfig: BuilderChartConfigWithOptDateRangeEx,
+  metadata: Metadata,
+): Promise<boolean> {
+  const { databaseName, tableName } = chartConfig.from;
+  const { displayType } = chartConfig;
+  if (
+    (aggFn !== 'min' && aggFn !== 'max') ||
+    (displayType != null &&
+      displayType !== DisplayType.Table &&
+      displayType !== DisplayType.Number) ||
+    isUsingGranularity(chartConfig) ||
+    hasSubqueryCte(chartConfig.with) ||
+    !databaseName ||
+    !tableName
+  ) {
+    return false;
+  }
+  try {
+    const column = await metadata.getColumn({
+      databaseName,
+      tableName,
+      column: unquoteIdentifier(valueExpression.trim()),
+      connectionId: chartConfig.connection,
+    });
+    return classifyTimestampType(column?.type) != null;
+  } catch {
+    return false;
+  }
+}
+
 const aggFnExpr = ({
   fn,
   expr,
   level,
   where,
   sampleWeightExpression,
+  keepValueType = false,
 }: {
   fn: AggregateFunction | AggregateFunctionWithCombinators;
   expr?: string;
   level?: number;
   where?: string;
   sampleWeightExpression?: string;
+  /** Aggregate `expr` as-is instead of casting it to Float64. */
+  keepValueType?: boolean;
 }) => {
   const isAny = fn === 'any';
   const isNone = fn === 'none';
@@ -545,7 +589,9 @@ const aggFnExpr = ({
   // Cast to float64 because the expr might not be a number
   const unsafeExpr = {
     UNSAFE_RAW_SQL:
-      isAny || isNone ? `${expr}` : `toFloat64OrDefault(toString(${expr}))`,
+      isAny || isNone || keepValueType
+        ? `${expr}`
+        : `toFloat64OrDefault(toString(${expr}))`,
   };
   const whereWithExtraNullCheck = `${where} AND ${unsafeExpr.UNSAFE_RAW_SQL} IS NOT NULL`;
 
@@ -806,6 +852,12 @@ async function renderSelectList(
           expr: select.valueExpression,
           where: whereClause.sql,
           sampleWeightExpression: chartConfig.sampleWeightExpression,
+          keepValueType: await isMinMaxOnDateTimeColumn(
+            select.aggFn,
+            select.valueExpression,
+            chartConfig,
+            metadata,
+          ),
         });
       }
 
