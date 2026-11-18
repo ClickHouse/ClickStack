@@ -105,7 +105,7 @@ const EXCEPTION_MARKER = '__exception__';
 export function findTrailingException(
   tail: Buffer,
   exceptionTag?: string,
-): { code?: number; message: string } | undefined {
+): { code?: number; type?: string } | undefined {
   if (exceptionTag) {
     const trailer = `${exceptionTag}\r\n${EXCEPTION_MARKER}\r\n`;
     if (!tail.toString('latin1').endsWith(trailer)) return undefined;
@@ -116,12 +116,11 @@ export function findTrailingException(
   return toException(parseError(lastLine));
 }
 
-function toException(err: Error): { code?: number; message: string } {
-  const code = isClickHouseError(err) ? Number(err.code) : NaN;
-  return {
-    code: Number.isFinite(code) ? code : undefined,
-    message: err.message,
-  };
+// The message is left out: ClickHouse quotes the query and its literals in it.
+function toException(err: Error): { code?: number; type?: string } {
+  if (!isClickHouseError(err)) return {};
+  const code = Number(err.code);
+  return { code: Number.isFinite(code) ? code : undefined, type: err.type };
 }
 
 // Enough to hold a ClickHouse exception, which is all the tail is read for.
@@ -236,15 +235,18 @@ function finishProxyOutcome(res: ServerResponse, state: ProxyState) {
     responseStatus: res.statusCode,
   });
 
+  // Only bodies without a ClickHouse code, such as an endpoint's 503 page.
   const message =
-    exception?.message ??
     state.transportError?.message ??
-    (isErrorStatus ? state.tail?.toString('utf8') : undefined);
+    (isErrorStatus && clickhouseErrorCode == null
+      ? state.tail?.toString('utf8')
+      : undefined);
 
   state.span?.setAttributes({
     'hyperdx.clickhouse_proxy.error.category': category,
     'hyperdx.clickhouse_proxy.upstream.status_code': state.upstreamStatus,
     'hyperdx.clickhouse_proxy.clickhouse.error_code': clickhouseErrorCode,
+    'hyperdx.clickhouse_proxy.clickhouse.error_type': exception?.type,
     'hyperdx.clickhouse_proxy.error.message': category
       ? message?.slice(0, MAX_MESSAGE_LENGTH)
       : undefined,

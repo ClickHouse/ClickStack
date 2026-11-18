@@ -155,6 +155,8 @@ describe('clickhouse-proxy outcome', () => {
     expect(span.setAttributes).toHaveBeenCalledWith(
       expect.objectContaining({
         'hyperdx.clickhouse_proxy.clickhouse.error_code': 159,
+        'hyperdx.clickhouse_proxy.clickhouse.error_type': 'TIMEOUT_EXCEEDED',
+        'hyperdx.clickhouse_proxy.error.message': undefined,
         'hyperdx.clickhouse_proxy.upstream.status_code': 200,
       }),
     );
@@ -175,6 +177,13 @@ describe('clickhouse-proxy outcome', () => {
       outcome: 'error',
       attributes: { error_category: 'service_overloaded' },
     });
+    expect(span.setAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'hyperdx.clickhouse_proxy.clickhouse.error_type':
+          'TOO_MANY_SIMULTANEOUS_QUERIES',
+        'hyperdx.clickhouse_proxy.error.message': undefined,
+      }),
+    );
   });
 
   it('records the body of an upstream 5xx', async () => {

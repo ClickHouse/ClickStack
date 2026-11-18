@@ -82,7 +82,7 @@ describe('findTrailingException', () => {
     const body = Buffer.from(`{"a":1}\n{"a":2}\n${timeout}\n`);
     expect(findTrailingException(body)).toEqual({
       code: 159,
-      message: expect.stringContaining('Timeout exceeded'),
+      type: 'TIMEOUT_EXCEEDED',
     });
   });
 
