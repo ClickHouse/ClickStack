@@ -19,6 +19,7 @@ import {
   Divider,
   Group,
   Modal,
+  Select,
   Stack,
   TextInput,
 } from '@mantine/core';
@@ -26,7 +27,6 @@ import { IconAlertTriangle } from '@tabler/icons-react';
 
 import { ErrorBoundary } from '@/components/Error/ErrorBoundary';
 import { CheckBoxControlled } from '@/components/InputControlled';
-import SelectControlled from '@/components/SelectControlled';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
 import { IS_ADHOC_FILTERS_ENABLED, IS_PROMQL_ENABLED } from '@/config';
 import { useConfirm } from '@/useConfirm';
@@ -123,9 +123,27 @@ export const DashboardFilterEditForm = ({
     setValue,
     setError,
     trigger,
+    getValues,
   } = useForm<FilterFormValues>({
     defaultValues: toFormValues(filter, presetSource?.id),
   });
+
+  // react-hook-form keeps a field's rules after its input unmounts, and merges
+  // the next input's rules over them. Without this, the previous editor's rules
+  // (say, PromQL's required source) would still apply to the next editor's
+  // input for the same field. Runs on the type change itself, before the next
+  // editor registers its own rules.
+  const changeType = (type: FilterFormValues['type']) => {
+    const values = getValues();
+    if (type === values.type) return;
+    const fields = Object.keys(values).filter(
+      (key): key is keyof FilterFormValues => key in values,
+    );
+    for (const field of fields) {
+      register(field, { required: false, validate: undefined });
+    }
+    setValue('type', type, { shouldDirty: true });
+  };
 
   const confirm = useConfirm();
   // Read during render so react-hook-form subscribes this component to it.
@@ -246,9 +264,11 @@ export const DashboardFilterEditForm = ({
         <Stack>
           {showTypeInput && (
             <CustomInputWrapper label="Type">
-              <SelectControlled
-                control={control}
-                name="type"
+              <Select
+                value={formFilterType}
+                onChange={value =>
+                  value && changeType(DashboardFilterType.parse(value))
+                }
                 data={FILTER_TYPE_OPTIONS}
                 data-testid="filter-type-picker"
                 allowDeselect={false}
