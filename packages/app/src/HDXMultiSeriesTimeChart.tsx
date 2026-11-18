@@ -69,6 +69,7 @@ import {
 import { useChartSyncId } from './chartSync';
 import {
   findNearestSeriesKey,
+  getLineStrokeDasharray,
   getSeriesColorForGroup,
   LineData,
   MAX_TIME_CHART_SERIES,
@@ -390,7 +391,7 @@ const LegendRenderer = memo<{
         dataKey: ld.dataKey,
         value: ld.displayName || ld.dataKey,
         color: ld.color,
-        payload: { strokeDasharray: ld.isDashed ? '4 3' : '0' },
+        payload: { strokeDasharray: getLineStrokeDasharray(ld) },
       }));
     }
     return payload ?? [];
@@ -1546,7 +1547,7 @@ export const MemoChart = memo(function MemoChart({
     return visibleLineData.map(ld => {
       const key = ld.dataKey;
       const color = ld.color;
-      const strokeDasharray = ld.isDashed ? '4 3' : '0';
+      const strokeDasharray = getLineStrokeDasharray(ld);
       const seriesName = getSeriesDisplayName(ld);
 
       return displayType === 'stacked_bar' ? (

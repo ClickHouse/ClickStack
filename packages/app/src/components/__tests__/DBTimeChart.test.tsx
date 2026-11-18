@@ -4,7 +4,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import api from '@/api';
-import { ChartKeyJoiner } from '@/ChartUtils';
+import { ChartKeyJoiner, formatResponseForTimeChart } from '@/ChartUtils';
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import {
   DBTimeChart,
@@ -21,6 +21,14 @@ import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanati
 import { useSource } from '@/source';
 
 // Mock dependencies
+jest.mock('@/ChartUtils', () => {
+  const actual = jest.requireActual('@/ChartUtils');
+  return {
+    ...actual,
+    formatResponseForTimeChart: jest.fn(actual.formatResponseForTimeChart),
+  };
+});
+
 jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
   getMinGranularitySeconds: jest.fn().mockReturnValue(undefined),
@@ -880,5 +888,47 @@ describe('DBTimeChart', () => {
 
     // Verify DateRangeIndicator was not called
     expect(jest.mocked(DateRangeIndicator)).not.toHaveBeenCalled();
+  });
+  it('styles a saved tile with its select items, keyed by result column', () => {
+    mockUseQueriedChartConfig.mockReturnValue({
+      data: {
+        data: [{ 'count()': 3, __hdx_time_bucket: '2024-01-01T00:00:00Z' }],
+        meta: [
+          { name: 'count()', type: 'UInt64' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+        rows: 1,
+        isComplete: true,
+      },
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      isPlaceholderData: false,
+    });
+
+    renderWithMantine(
+      <DBTimeChart
+        config={{
+          ...baseTestConfig,
+          displayType: DisplayType.Line,
+          select: [
+            {
+              aggFn: 'count',
+              aggCondition: '',
+              valueExpression: '',
+              color: 'chart-purple',
+              lineStyle: 'dashed',
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(jest.mocked(formatResponseForTimeChart)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        seriesColors: { 'count()': 'chart-purple' },
+        seriesLineStyles: { 'count()': 'dashed' },
+      }),
+    );
   });
 });

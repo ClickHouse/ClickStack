@@ -19,7 +19,8 @@ import {
   findNearestSeriesKey,
   formatResponseForCategoricalChart,
   formatResponseForTimeChart,
-  getSelectSeriesColors,
+  getLineStrokeDasharray,
+  getSelectSeriesStyles,
   getSeriesColorForGroup,
   type LineData,
 } from '@/ChartUtils';
@@ -260,6 +261,67 @@ describe('ChartUtils', () => {
       const plain = actual.lineData.find(l => l.dataKey === 'seriesLo');
       expect(pinned?.color).toBe(getColorFromCSSToken('chart-purple'));
       expect(plain?.color).toBe(COLORS[0]);
+    });
+
+    it('applies a series line style to the current period only', () => {
+      const res = {
+        data: [{ p99: 100, __hdx_time_bucket: '2025-11-26T11:12:00Z' }],
+        meta: [
+          { name: 'p99', type: 'Float64' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+      };
+
+      const actual = formatResponseForTimeChart({
+        currentPeriodResponse: res,
+        previousPeriodResponse: res,
+        previousPeriodOffsetSeconds: 60,
+        dateRange: [new Date(), new Date()],
+        granularity: '1 minute',
+        generateEmptyBuckets: false,
+        seriesLineStyles: { p99: 'dotted' },
+      });
+
+      const current = actual.lineData.find(l => !l.isDashed);
+      const previous = actual.lineData.find(l => l.isDashed);
+      expect(current?.lineStyle).toBe('dotted');
+      expect(previous?.lineStyle).toBeUndefined();
+    });
+
+    // A select item's style would paint every group of that series the same,
+    // which erases the distinction the group by exists to show.
+    it('ignores series colors and line styles on grouped series', () => {
+      const res = {
+        data: [
+          {
+            count: 1,
+            ServiceName: 'api',
+            __hdx_time_bucket: '2025-11-26T11:12:00Z',
+          },
+          {
+            count: 2,
+            ServiceName: 'web',
+            __hdx_time_bucket: '2025-11-26T11:12:00Z',
+          },
+        ],
+        meta: [
+          { name: 'count', type: 'UInt64' },
+          { name: 'ServiceName', type: 'String' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+      };
+
+      const actual = formatResponseForTimeChart({
+        currentPeriodResponse: res,
+        dateRange: [new Date(), new Date()],
+        granularity: '1 minute',
+        generateEmptyBuckets: false,
+        seriesColors: { count: 'chart-purple' },
+        seriesLineStyles: { count: 'dashed' },
+      });
+
+      expect(actual.lineData.map(l => l.color)).toEqual([COLORS[0], COLORS[1]]);
+      expect(actual.lineData.every(l => l.lineStyle == null)).toBe(true);
     });
 
     it('should format a response with multiple value columns and a group by', () => {
@@ -2026,9 +2088,10 @@ describe('getSeriesColorForGroup', () => {
   });
 });
 
-describe('getSelectSeriesColors', () => {
+describe('getSelectSeriesStyles', () => {
   const config = (
     select: BuilderChartConfigWithDateRange['select'],
+    extra: Partial<BuilderChartConfigWithDateRange> = {},
   ): BuilderChartConfigWithDateRange => ({
     connection: 'conn',
     from: { databaseName: 'default', tableName: 'otel_traces' },
@@ -2036,11 +2099,18 @@ describe('getSelectSeriesColors', () => {
     select,
     where: '',
     dateRange: [new Date(0), new Date(60_000)],
+    ...extra,
   });
+
+  const countSeries = {
+    aggFn: 'count' as const,
+    aggCondition: '',
+    valueExpression: '',
+  };
 
   it('keys each aliased select item that sets a color by its alias', () => {
     expect(
-      getSelectSeriesColors(
+      getSelectSeriesStyles(
         config([
           {
             alias: 'Avg',
@@ -2064,13 +2134,13 @@ describe('getSelectSeriesColors', () => {
             valueExpression: '',
           },
         ]),
-      ),
+      ).seriesColors,
     ).toEqual({ Avg: 'chart-blue', P99: 'chart-purple' });
   });
 
   it('maps a legacy numeric token to its hue', () => {
     expect(
-      getSelectSeriesColors(
+      getSelectSeriesStyles(
         config([
           {
             alias: 'Total',
@@ -2081,15 +2151,15 @@ describe('getSelectSeriesColors', () => {
             color: 'chart-1',
           },
         ]),
-      ),
+      ).seriesColors,
     ).toEqual({ Total: 'chart-green' });
   });
 
   // An unknown token would make the CSS resolver throw and fail the whole
   // chart, so the series falls back to the positional palette instead.
-  it('skips unrecognized tokens and items without an alias', () => {
+  it('skips unrecognized tokens, and items without an alias when meta is unknown', () => {
     expect(
-      getSelectSeriesColors(
+      getSelectSeriesStyles(
         config([
           {
             alias: 'Total',
@@ -2107,11 +2177,110 @@ describe('getSelectSeriesColors', () => {
           },
         ]),
       ),
-    ).toBeUndefined();
+    ).toEqual({});
   });
 
-  it('returns undefined for a SQL select string', () => {
-    expect(getSelectSeriesColors(config('count() AS Total'))).toBeUndefined();
+  it('returns no styles for a SQL select string', () => {
+    expect(getSelectSeriesStyles(config('count() AS Total'))).toEqual({});
+  });
+
+  it('keys styles by result column position when meta is known, so unaliased series work', () => {
+    const meta = [
+      { name: 'count()', type: 'UInt64' },
+      { name: 'Errors', type: 'UInt64' },
+      { name: '__hdx_time_bucket', type: 'DateTime' },
+    ];
+    expect(
+      getSelectSeriesStyles(
+        config([
+          { ...countSeries, color: 'chart-purple', lineStyle: 'dashed' },
+          { ...countSeries, alias: 'Errors', lineStyle: 'dotted' },
+        ]),
+        meta,
+      ),
+    ).toEqual({
+      seriesColors: { 'count()': 'chart-purple' },
+      seriesLineStyles: { 'count()': 'dashed', Errors: 'dotted' },
+    });
+  });
+
+  it('omits solid line styles since solid is the default', () => {
+    expect(
+      getSelectSeriesStyles(
+        config([{ ...countSeries, alias: 'Total', lineStyle: 'solid' }]),
+      ),
+    ).toEqual({});
+  });
+
+  // Ratio mode merges both series into one result column, so neither item's
+  // style describes the line that is drawn.
+  it('returns no styles for a ratio chart', () => {
+    expect(
+      getSelectSeriesStyles(
+        config(
+          [
+            { ...countSeries, alias: 'A', color: 'chart-blue' },
+            { ...countSeries, alias: 'B', color: 'chart-red' },
+          ],
+          { seriesReturnType: 'ratio' },
+        ),
+        [
+          { name: 'A/B', type: 'Float64' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+      ),
+    ).toEqual({});
+  });
+
+  // With operands hidden only the formula columns are in the result, so
+  // positional keys would put an operand's style on a formula line.
+  it('returns no styles when formula operands are hidden', () => {
+    expect(
+      getSelectSeriesStyles(
+        config([{ ...countSeries, alias: 'A', color: 'chart-blue' }], {
+          formulas: [{ expression: 'A * 2', alias: 'Doubled' }],
+          showOperandSeries: false,
+        }),
+        [
+          { name: 'Doubled', type: 'Float64' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+      ),
+    ).toEqual({});
+  });
+});
+
+describe('getLineStrokeDasharray', () => {
+  const line = (overrides: Partial<LineData> = {}): LineData => ({
+    dataKey: 'count',
+    currentPeriodKey: 'count',
+    previousPeriodKey: 'count (previous)',
+    displayName: 'count',
+    valueColumnName: 'count',
+    groupValues: [],
+    color: '#000',
+    ...overrides,
+  });
+
+  it('draws a solid line by default', () => {
+    expect(getLineStrokeDasharray(line())).toBe('0');
+    expect(getLineStrokeDasharray(line({ lineStyle: 'solid' }))).toBe('0');
+  });
+
+  it('draws the series line style', () => {
+    const dashed = getLineStrokeDasharray(line({ lineStyle: 'dashed' }));
+    const dotted = getLineStrokeDasharray(line({ lineStyle: 'dotted' }));
+    expect(dashed).not.toBe('0');
+    expect(dotted).not.toBe('0');
+    expect(dashed).not.toBe(dotted);
+  });
+
+  it('keeps previous-period lines on their own dash pattern', () => {
+    const previous = getLineStrokeDasharray(line({ isDashed: true }));
+    expect(previous).toBe('4 3');
+    expect(getLineStrokeDasharray(line({ lineStyle: 'dashed' }))).not.toBe(
+      previous,
+    );
   });
 });
 

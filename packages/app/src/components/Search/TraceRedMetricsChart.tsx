@@ -218,13 +218,10 @@ export function TraceRedMetricsChart({
           </ChartCard>
         )}
         <ChartCard style={RED_TILE_STYLE}>
-          {/* The duration series pin their colors on their select items (set
-              in durationConfig); applySelectColors opts this chart into them. */}
           <DBTimeChart
             title="Duration"
             config={duration}
             showLegend
-            applySelectColors
             {...commonProps}
           />
         </ChartCard>

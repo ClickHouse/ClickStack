@@ -20,6 +20,7 @@ import {
   computeDbTimeChartConfig,
   displayTypeToActiveTab,
   getPreviewBlockingFilters,
+  getSeriesStyleMode,
   isQueryReady,
   resolvePreviewVariables,
   resolveTilePreviewFilters,
@@ -1351,5 +1352,76 @@ describe('buildGroupByConnectionProps', () => {
     });
 
     expect(result).toEqual({ tableConnection });
+  });
+});
+
+describe('getSeriesStyleMode', () => {
+  const base = {
+    displayType: DisplayType.Line,
+    groupBy: undefined,
+    seriesReturnType: undefined,
+    formulas: undefined,
+    showOperandSeries: undefined,
+  };
+
+  it('styles table columns with a color and rules, grouped or not', () => {
+    expect(
+      getSeriesStyleMode({ ...base, displayType: DisplayType.Table }),
+    ).toBe('column');
+    expect(
+      getSeriesStyleMode({
+        ...base,
+        displayType: DisplayType.Table,
+        groupBy: 'ServiceName',
+      }),
+    ).toBe('column');
+  });
+
+  it.each([DisplayType.Line, DisplayType.StackedLine])(
+    'styles %s series with a color and line style',
+    displayType => {
+      expect(getSeriesStyleMode({ ...base, displayType })).toBe('line');
+    },
+  );
+
+  it('styles stacked bar series with a color only', () => {
+    expect(
+      getSeriesStyleMode({ ...base, displayType: DisplayType.StackedBar }),
+    ).toBe('bar');
+  });
+
+  it.each([
+    DisplayType.Number,
+    DisplayType.Pie,
+    DisplayType.Heatmap,
+    DisplayType.Search,
+    DisplayType.Markdown,
+  ])('offers no series style on %s tiles', displayType => {
+    expect(getSeriesStyleMode({ ...base, displayType })).toBeUndefined();
+  });
+
+  it.each(['ServiceName', [{ valueExpression: 'ServiceName' }]])(
+    'offers no series style on a grouped time chart (%j)',
+    groupBy => {
+      expect(getSeriesStyleMode({ ...base, groupBy })).toBeUndefined();
+    },
+  );
+
+  it('treats a blank group by as ungrouped', () => {
+    expect(getSeriesStyleMode({ ...base, groupBy: '  ' })).toBe('line');
+  });
+
+  it('offers no series style on a ratio time chart', () => {
+    expect(
+      getSeriesStyleMode({ ...base, seriesReturnType: 'ratio' }),
+    ).toBeUndefined();
+  });
+
+  it('offers no series style when formula operands are hidden', () => {
+    const formulas = [{ expression: 'A * 2' }];
+    expect(
+      getSeriesStyleMode({ ...base, formulas, showOperandSeries: false }),
+    ).toBeUndefined();
+    expect(getSeriesStyleMode({ ...base, formulas })).toBe('line');
   });
 });

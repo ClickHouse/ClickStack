@@ -47,7 +47,7 @@ import { ChartFormulaEditor } from './ChartFormulaEditor';
 import { ChartSeriesEditor } from './ChartSeriesEditor';
 import { HeatmapSeriesEditor } from './HeatmapSeriesEditor';
 import { TileAlertEditor } from './TileAlertEditor';
-import { buildGroupByConnectionProps } from './utils';
+import { buildGroupByConnectionProps, getSeriesStyleMode } from './utils';
 
 type ChartEditorControlsProps = {
   control: Control<ChartEditorFormState>;
@@ -186,6 +186,15 @@ export function ChartEditorControls({
   const chartName = useWatch({ control, name: 'name' });
   const hasGroupBy = typeof groupBy === 'string' && groupBy.trim().length > 0;
 
+  const formulas = useWatch({ control, name: 'formulas' });
+  const seriesStyleMode = getSeriesStyleMode({
+    displayType,
+    groupBy,
+    seriesReturnType,
+    formulas,
+    showOperandSeries,
+  });
+
   const showAlertButton =
     (alert != null && !isRawSqlInput) ||
     (displayTypeSupportsBuilderAlerts(displayType) &&
@@ -315,7 +324,7 @@ export function ChartEditorControls({
                 fields.length === 1 && displayType === DisplayType.Table
               }
               showDuplicate={canAddSeries}
-              showColor={displayType === DisplayType.Table}
+              seriesStyleMode={seriesStyleMode}
               tableName={tableName ?? ''}
               tableSource={tableSource}
               errors={

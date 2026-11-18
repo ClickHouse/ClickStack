@@ -55,6 +55,7 @@ import {
   tryExpandConfigVariables,
 } from '@/ChartUtils';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
+import type { SeriesStyleMode } from '@/components/SeriesColorDrawer';
 import {
   buildHeatmapSeriesConfig,
   resolveHeatmapGranularity,
@@ -609,4 +610,43 @@ export function buildGroupByConnectionProps({
   return connections.length > 0
     ? { tableConnections: connections, intersectFields: true }
     : { tableConnection };
+}
+
+/**
+ * Which style control the series editor offers for each select item, or
+ * undefined for none. Table columns take a color and conditional rules. Time
+ * chart series take a color (and a line style on line charts), but only when
+ * each select item draws exactly one series: a group by splits it into many,
+ * ratio mode merges two into one, and hidden formula operands are not drawn.
+ */
+export function getSeriesStyleMode({
+  displayType,
+  groupBy,
+  seriesReturnType,
+  formulas,
+  showOperandSeries,
+}: Pick<
+  ChartEditorFormState,
+  | 'displayType'
+  | 'groupBy'
+  | 'seriesReturnType'
+  | 'formulas'
+  | 'showOperandSeries'
+>): SeriesStyleMode | undefined {
+  if (displayType === DisplayType.Table) {
+    return 'column';
+  }
+  if (!isTimeSeriesDisplayType(displayType)) {
+    return undefined;
+  }
+  const isGrouped =
+    typeof groupBy === 'string'
+      ? groupBy.trim() !== ''
+      : (groupBy?.length ?? 0) > 0;
+  const operandsHidden =
+    (formulas?.length ?? 0) > 0 && showOperandSeries === false;
+  if (isGrouped || seriesReturnType === 'ratio' || operandsHidden) {
+    return undefined;
+  }
+  return displayType === DisplayType.StackedBar ? 'bar' : 'line';
 }

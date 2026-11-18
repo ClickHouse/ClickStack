@@ -82,7 +82,6 @@ export function HeatmapSeriesEditor({
           showGroupBy
           showHaving={false}
           showDuplicate={false}
-          showColor={false}
           showSeriesNumberFormat={false}
           tableName={tableSource?.from.tableName ?? ''}
           tableSource={tableSource}

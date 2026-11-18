@@ -454,6 +454,49 @@ describe('DerivedColumnSchema color fields', () => {
   });
 });
 
+describe('DerivedColumnSchema lineStyle', () => {
+  const baseColumn = {
+    aggFn: 'count' as const,
+    aggCondition: '',
+    valueExpression: '',
+  };
+
+  it.each(['solid', 'dashed', 'dotted'] as const)(
+    'round-trips lineStyle %s',
+    lineStyle => {
+      const result = DerivedColumnSchema.safeParse({
+        ...baseColumn,
+        lineStyle,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.lineStyle).toBe(lineStyle);
+      }
+    },
+  );
+
+  it('rejects an unknown lineStyle', () => {
+    expect(
+      DerivedColumnSchema.safeParse({ ...baseColumn, lineStyle: 'wavy' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('keeps lineStyle on a saved dashboard tile select item', () => {
+    const parsed = SavedChartConfigSchema.parse({
+      source: 'test-source',
+      timestampValueExpression: 'Timestamp',
+      displayType: 'line',
+      select: [{ ...baseColumn, color: 'chart-purple', lineStyle: 'dashed' }],
+      where: '',
+    });
+
+    expect(parsed).toMatchObject({
+      select: [{ color: 'chart-purple', lineStyle: 'dashed' }],
+    });
+  });
+});
+
 describe('alternateRowBackground on saved chart configs', () => {
   // The field lives on SharedChartSettingsSchema, so both builder and raw SQL
   // saved configs carry it (the zebra striping is purely presentational and

@@ -40,7 +40,9 @@ import {
 } from '@/components/MetricExplorer/MetricExplorerModal';
 import { MetricNameSelect } from '@/components/MetricNameSelect';
 import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
-import SeriesColorDrawer from '@/components/SeriesColorDrawer';
+import SeriesColorDrawer, {
+  type SeriesStyleMode,
+} from '@/components/SeriesColorDrawer';
 import SeriesNumberFormatDrawer from '@/components/SeriesNumberFormatDrawer';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { useFetchMetricMetadata } from '@/hooks/useFetchMetricMetadata';
@@ -53,6 +55,12 @@ import { getColorFromCSSToken, getMetricTableName } from '@/utils';
 type SeriesItem = NonNullable<
   SavedChartConfigWithSelectArray['select']
 >[number];
+
+const STYLE_BUTTON_LABEL: Record<SeriesStyleMode, string> = {
+  column: 'Edit column color',
+  line: 'Edit series style',
+  bar: 'Edit series color',
+};
 
 type ChartSeriesEditorProps = {
   control: Control<ChartEditorFormState>;
@@ -70,7 +78,7 @@ type ChartSeriesEditorProps = {
   showGroupBy: boolean;
   showHaving: boolean;
   showDuplicate: boolean;
-  showColor: boolean;
+  seriesStyleMode?: SeriesStyleMode;
   showSeriesNumberFormat?: boolean;
   tableName: string;
   length: number;
@@ -94,7 +102,7 @@ export function ChartSeriesEditor({
   showGroupBy,
   showHaving,
   showDuplicate,
-  showColor,
+  seriesStyleMode,
   showSeriesNumberFormat = true,
   tableName: _tableName,
   parentRef,
@@ -284,6 +292,10 @@ export function ChartSeriesEditor({
     control,
     name: `${namePrefix}colorRules`,
   });
+  const seriesLineStyle = useWatch({
+    control,
+    name: `${namePrefix}lineStyle`,
+  });
 
   const [
     isSeriesColorOpen,
@@ -319,14 +331,14 @@ export function ChartSeriesEditor({
           ) : undefined
         }
         trailingSection={
-          showColor ? (
-            <Tooltip label="Edit column color">
+          seriesStyleMode ? (
+            <Tooltip label={STYLE_BUTTON_LABEL[seriesStyleMode]}>
               <ActionIcon
                 variant="subtle"
                 color="gray"
                 size="xs"
                 onClick={openSeriesColor}
-                aria-label="Edit column color"
+                aria-label={STYLE_BUTTON_LABEL[seriesStyleMode]}
                 data-testid="series-color-button"
               >
                 <IconPalette
@@ -545,14 +557,17 @@ export function ChartSeriesEditor({
           closeSeriesNumberFormat();
         }}
       />
-      {showColor && (
+      {seriesStyleMode && (
         <SeriesColorDrawer
           opened={isSeriesColorOpen}
+          mode={seriesStyleMode}
           color={seriesColor}
           colorRules={seriesColorRules}
+          lineStyle={seriesLineStyle}
           onChange={next => {
             setValue(`${namePrefix}color`, next.color);
             setValue(`${namePrefix}colorRules`, next.colorRules);
+            setValue(`${namePrefix}lineStyle`, next.lineStyle);
             onSubmit();
           }}
           onClose={closeSeriesColor}
