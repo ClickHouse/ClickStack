@@ -1,4 +1,5 @@
 import {
+  ACCESS_KEY_ENV_VAR,
   buildAllSnippets,
   type DeploymentShape,
   SERVER_NAME,
@@ -8,6 +9,43 @@ const DEPLOYMENT: DeploymentShape = {
   apiUrl: 'https://hyperdx.example.com/api',
   accessKey: 'k_abcdef123456',
 };
+
+describe('buildAllSnippets > Claude Code', () => {
+  it('reads the key from a hidden prompt into the header', () => {
+    const { claudeCode } = buildAllSnippets(DEPLOYMENT);
+
+    expect(claudeCode).toBe(
+      `read -rs ${ACCESS_KEY_ENV_VAR} && claude mcp add --scope user --transport http ${SERVER_NAME} https://hyperdx.example.com/api/mcp --header "Authorization: Bearer $${ACCESS_KEY_ENV_VAR}"`,
+    );
+  });
+});
+
+describe('buildAllSnippets > Codex CLI', () => {
+  it('reads the key from a hidden prompt into the bearer-token env var', () => {
+    const { codexCli } = buildAllSnippets(DEPLOYMENT);
+
+    expect(codexCli).toBe(
+      `read -rs ${ACCESS_KEY_ENV_VAR} && export ${ACCESS_KEY_ENV_VAR} && ` +
+        `codex mcp add ${SERVER_NAME} --url https://hyperdx.example.com/api/mcp --bearer-token-env-var ${ACCESS_KEY_ENV_VAR}`,
+    );
+  });
+
+  it('does NOT use the deprecated --transport or --header flags', () => {
+    const { codexCli } = buildAllSnippets(DEPLOYMENT);
+
+    expect(codexCli).not.toContain('--transport');
+    expect(codexCli).not.toContain('--header');
+  });
+});
+
+describe('buildAllSnippets > shell commands', () => {
+  it('keep the access key out of the command', () => {
+    const { claudeCode, codexCli } = buildAllSnippets(DEPLOYMENT);
+
+    expect(claudeCode).not.toContain(DEPLOYMENT.accessKey);
+    expect(codexCli).not.toContain(DEPLOYMENT.accessKey);
+  });
+});
 
 describe('buildAllSnippets > Cursor', () => {
   it('emits a cursor:// URL with a URL-safe base64-encoded config that round-trips', () => {
@@ -134,8 +172,10 @@ describe('buildAllSnippets > host coverage', () => {
     const all = buildAllSnippets(DEPLOYMENT);
 
     expect(all).toMatchObject({
+      claudeCode: expect.stringContaining('claude mcp add'),
       cursor: expect.stringContaining('cursor://'),
       vscode: expect.stringContaining('vscode:mcp/install'),
+      codexCli: expect.stringContaining(`codex mcp add ${SERVER_NAME}`),
       openCode: expect.stringContaining(`"${SERVER_NAME}"`),
       jsonBlock: expect.stringContaining(`"${SERVER_NAME}"`),
     });
@@ -144,6 +184,8 @@ describe('buildAllSnippets > host coverage', () => {
   it('keys the JSON block on the same fixed server name in every output', () => {
     const all = buildAllSnippets(DEPLOYMENT);
 
+    expect(all.claudeCode).toContain(SERVER_NAME);
+    expect(all.codexCli).toContain(SERVER_NAME);
     expect(all.cursor).toContain(`name=${SERVER_NAME}`);
     expect(all.vscode).toContain(SERVER_NAME);
     expect(all.openCode).toContain(`"${SERVER_NAME}"`);

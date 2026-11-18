@@ -1,9 +1,7 @@
 // Per-host snippet builders for the "Connect your AI assistant"
 // section. Each builder takes a `DeploymentShape` (URL + access
-// key) and returns the install primitive for one host: a deep link
-// or a JSON config block. Nothing here emits a shell command with the
-// key in it, since that lands in shell history; `hdx mcp install`
-// covers the CLI-configured hosts instead.
+// key) and returns the install primitive for one host: a shell
+// command, a deep link, or a JSON config block.
 //
 // Pure functions only. Component-level state (host picker) lives
 // in `McpInstallPanel.tsx`. Keeping the builders here makes unit
@@ -22,6 +20,12 @@
  */
 export const SERVER_NAME = 'clickstack';
 
+/**
+ * Variable the shell snippets read the key into. `read -rs` takes it from a
+ * hidden prompt, so the key never appears in the command or shell history.
+ */
+export const ACCESS_KEY_ENV_VAR = 'CLICKSTACK_ACCESS_KEY';
+
 export interface DeploymentShape {
   /** Origin used to build the MCP URL, e.g. `https://example.com/api`. */
   apiUrl: string;
@@ -30,10 +34,14 @@ export interface DeploymentShape {
 }
 
 export interface BuiltSnippets {
+  /** Claude Code `mcp add` command; prompts for the key. */
+  claudeCode: string;
   /** Cursor `cursor://` deep link. */
   cursor: string;
   /** VS Code + Copilot `vscode:mcp/install` deep link. */
   vscode: string;
+  /** OpenAI Codex CLI `mcp add` command; prompts for the key. */
+  codexCli: string;
   /** OpenCode JSON config under an `mcp` block (uses `type: "remote"`). */
   openCode: string;
   /** Canonical `mcpServers` JSON block for any other host. */
@@ -102,6 +110,19 @@ function buildUrl(deployment: DeploymentShape): string {
     ? deployment.apiUrl.slice(0, -1)
     : deployment.apiUrl;
   return `${base}/mcp`;
+}
+
+// One line, so `read` waits for the keyboard instead of consuming the next
+// pasted line in shells without bracketed paste.
+const READ_KEY = `read -rs ${ACCESS_KEY_ENV_VAR}`;
+
+function buildClaudeCommand(deployment: DeploymentShape): string {
+  return `${READ_KEY} && claude mcp add --scope user --transport http ${SERVER_NAME} ${buildUrl(deployment)} --header "Authorization: Bearer $${ACCESS_KEY_ENV_VAR}"`;
+}
+
+/** Codex has no `--header` flag; it reads the token from the named env var. */
+function buildCodexCommand(deployment: DeploymentShape): string {
+  return `${READ_KEY} && export ${ACCESS_KEY_ENV_VAR} && codex mcp add ${SERVER_NAME} --url ${buildUrl(deployment)} --bearer-token-env-var ${ACCESS_KEY_ENV_VAR}`;
 }
 
 /**
@@ -202,8 +223,10 @@ export function buildCliInstallCommand(deployment: DeploymentShape): string {
  */
 export function buildAllSnippets(deployment: DeploymentShape): BuiltSnippets {
   return {
+    claudeCode: buildClaudeCommand(deployment),
     cursor: buildCursorDeeplink(deployment),
     vscode: buildVSCodeDeeplink(deployment),
+    codexCli: buildCodexCommand(deployment),
     openCode: buildOpenCodeJsonBlock(deployment),
     jsonBlock: buildMcpJsonBlock(deployment),
   };

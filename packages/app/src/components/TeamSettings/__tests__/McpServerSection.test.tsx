@@ -67,16 +67,15 @@ describe('McpServerSection', () => {
     expect(screen.queryByTestId('mcp-server-section')).not.toBeInTheDocument();
   });
 
-  it('offers only file and deep-link hosts for manual setup', () => {
+  it('renders all six host options when the deployment shape is valid', () => {
     renderSection();
 
+    expect(screen.getByText('Claude Code')).toBeInTheDocument();
     expect(screen.getByText('Cursor')).toBeInTheDocument();
     expect(screen.getByText('VS Code')).toBeInTheDocument();
+    expect(screen.getByText('Codex CLI')).toBeInTheDocument();
     expect(screen.getByText('OpenCode')).toBeInTheDocument();
     expect(screen.getByText('Other')).toBeInTheDocument();
-    // Their setup is a shell command with the key in it; the CLI covers them.
-    expect(screen.queryByText('Claude Code')).not.toBeInTheDocument();
-    expect(screen.queryByText('Codex CLI')).not.toBeInTheDocument();
   });
 
   // Auth-gate parity with `ApiKeysSection`: when `me` resolves to
@@ -98,6 +97,14 @@ describe('McpServerSection', () => {
     ).toBeInTheDocument();
   });
 
+  it('renders the fixed clickstack server name in the install snippet', () => {
+    renderSection();
+
+    expect(
+      screen.getByText(/claude mcp add .* clickstack /),
+    ).toBeInTheDocument();
+  });
+
   // `MeApiResponseSchema.accessKey` is `z.string()` non-nullable
   // and the User model generates one at account creation, so an
   // empty access key isn't reachable from the API in practice.
@@ -109,6 +116,20 @@ describe('McpServerSection', () => {
     renderSection();
 
     expect(screen.queryByTestId('mcp-server-section')).not.toBeInTheDocument();
+  });
+
+  it('switches to the Codex CLI snippet when the host picker selects Codex CLI', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(screen.getByText('Codex CLI'));
+
+    expect(
+      screen.getByText(
+        /codex mcp add clickstack --url .*--bearer-token-env-var/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/claude mcp add/)).not.toBeInTheDocument();
   });
 
   it('renders the Cursor deeplink button with a cursor:// href when Cursor is selected', async () => {

@@ -22,6 +22,16 @@ function renderPanel() {
   );
 }
 
+describe('McpInstallPanel shell commands', () => {
+  it('defaults to the Claude Code command, which prompts for the key', () => {
+    renderPanel();
+    expect(
+      screen.getByText(/^read -rs CLICKSTACK_ACCESS_KEY && claude mcp add/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(ACCESS_KEY))).not.toBeInTheDocument();
+  });
+});
+
 describe('McpInstallPanel CLI installer', () => {
   it('shows the npx command, which carries no access key', () => {
     renderPanel();
