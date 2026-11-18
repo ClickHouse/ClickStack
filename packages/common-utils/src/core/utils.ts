@@ -8,7 +8,10 @@ export { default as objectHash } from 'object-hash';
 
 import {
   isAdhocFilter,
+  isConnectionFilter,
+  isDataSourceFilter,
   isQueryExpressionFilter,
+  isSqlQueryFilter,
   isStaticListFilter,
 } from '@/filters';
 import {
@@ -26,6 +29,11 @@ import {
   replaceMacros,
 } from '@/macros';
 import { QUERY_PARAMS, RawSqlQueryParam } from '@/rawSqlParams';
+import {
+  configUsesReferenceVariable,
+  getObjectName,
+  getReferenceVariableFilters,
+} from '@/referenceVariables';
 import {
   BuilderChartConfig,
   BuilderChartConfigWithDateRange,
@@ -54,6 +62,18 @@ import { SkipIndexMetadata, TableMetadata } from './metadata';
 
 /** The default maximum number of buckets setting when determining a bucket duration for 'auto' granularity */
 export const DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS = 60;
+
+/** The bucket count a time chart sizes an 'auto' granularity for. */
+export const TIME_CHART_AUTO_GRANULARITY_BUCKETS = 80;
+
+/** The bucket count a heatmap sizes an 'auto' granularity for. */
+export const HEATMAP_AUTO_GRANULARITY_BUCKETS = 245;
+
+/**
+ * The most rows a table tile shows. Arbitrary limit to prevent OOM crashes for
+ * very large result sets. Most result sets should be paginated anyway.
+ */
+export const MAX_TABLE_ROWS = 10_000;
 
 /** Code-point limit for row-lookup string hashes (matches ClickHouse leftUTF8). */
 export const LEFT_UTF8_HASH_CODE_POINTS = 1000;
@@ -615,6 +635,22 @@ export function hashCode(str: string) {
   return hash;
 }
 
+/** A chart's granularity, with 'auto' (or none) resolved for its date range. */
+export function getTimeChartGranularity<T extends string>(
+  granularity: T | 'auto' | undefined,
+  dateRange: [Date, Date],
+  minGranularitySeconds?: number,
+  maxBuckets = TIME_CHART_AUTO_GRANULARITY_BUCKETS,
+) {
+  return granularity === 'auto' || granularity == null
+    ? convertDateRangeToGranularityString(
+        dateRange,
+        maxBuckets,
+        minGranularitySeconds,
+      )
+    : granularity;
+}
+
 export function convertDateRangeToGranularityString(
   dateRange: [Date, Date],
   maxNumBuckets: number = DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS,
@@ -886,44 +922,44 @@ export function convertToDashboardTemplate(
     };
   };
 
+  // A variable reference is portable as written; '' marks a missing object
+  const getSourceName = (id: string) => getObjectName(id, sources) ?? '';
+  const getConnectionName = (id: string) =>
+    getObjectName(id, connections) ?? '';
+
   const convertToTileTemplate = (
     input: Dashboard['tiles'][0],
-    sources: TSource[],
-    connections: Connection[],
   ): TileTemplate => {
     const tile = TileTemplateSchema.strip().parse(structuredClone(input));
     // Extract name from source/connection or default to '' if not found
     const tileConfig = tile.config;
     if (isBuilderSavedChartConfig(tileConfig)) {
-      tileConfig.source = (
-        sources.find(source => source.id === tileConfig.source) ?? { name: '' }
-      ).name;
+      tileConfig.source = getSourceName(tileConfig.source);
     } else if (isRawSqlSavedChartConfig(tileConfig)) {
-      tileConfig.connection = (
-        connections.find(conn => conn.id === tileConfig.connection) ?? {
-          name: '',
-        }
-      ).name;
+      tileConfig.connection = getConnectionName(tileConfig.connection);
       if (tileConfig.source) {
-        tileConfig.source =
-          sources.find(source => source.id === tileConfig.source)?.name ?? '';
+        tileConfig.source = getSourceName(tileConfig.source);
       }
     }
     convertOnClickTargetIdToName(tileConfig);
     return tile;
   };
 
-  const convertToFilterTemplate = (
-    input: DashboardFilter,
-    sources: TSource[],
-  ): DashboardFilter => {
+  const convertToFilterTemplate = (input: DashboardFilter): DashboardFilter => {
     const filter = DashboardFilterSchema.parse(structuredClone(input));
 
-    // A static filter references nothing in the workspace
-    if (isStaticListFilter(filter)) return filter;
-
-    const getSourceName = (id: string) =>
-      sources.find(source => source.id === id)?.name ?? '';
+    // These reference nothing in the workspace
+    if (isStaticListFilter(filter) || isConnectionFilter(filter)) return filter;
+    if (isSqlQueryFilter(filter)) {
+      filter.connection = getConnectionName(filter.connection);
+      return filter;
+    }
+    if (isDataSourceFilter(filter)) {
+      if (filter.connection) {
+        filter.connection = getConnectionName(filter.connection) || undefined;
+      }
+      return filter;
+    }
 
     if (isAdhocFilter(filter)) {
       filter.sources = filter.sources.map(getSourceName);
@@ -941,13 +977,13 @@ export function convertToDashboardTemplate(
   };
 
   for (const tile of input.tiles) {
-    output.tiles.push(convertToTileTemplate(tile, sources, connections));
+    output.tiles.push(convertToTileTemplate(tile));
   }
 
   if (input.filters) {
     output.filters = [];
     for (const filter of input.filters ?? []) {
-      output.filters.push(convertToFilterTemplate(filter, sources));
+      output.filters.push(convertToFilterTemplate(filter));
     }
   }
 
@@ -960,8 +996,16 @@ export function convertToDashboardTemplate(
     output.savedQueryLanguage = input.savedQueryLanguage ?? null;
   }
 
-  if (input.savedFilterValues && input.savedFilterValues.length > 0) {
-    output.savedFilterValues = structuredClone(input.savedFilterValues);
+  // A reference variable's saved value is an ID from this workspace
+  const referenceVariableNames = new Set(
+    getReferenceVariableFilters(input.filters).map(({ name }) => name),
+  );
+  const savedFilterValues = (input.savedFilterValues ?? []).filter(
+    value =>
+      !(value.type === 'variable' && referenceVariableNames.has(value.name)),
+  );
+  if (savedFilterValues.length > 0) {
+    output.savedFilterValues = structuredClone(savedFilterValues);
   }
 
   return output;
@@ -1700,6 +1744,8 @@ export function displayTypeSupportsPromQLAlerts(
 export function savedChartConfigSupportsAlerts(
   config: SavedChartConfig,
 ): boolean {
+  // An alert must query one fixed source, not the viewer's current selection.
+  if (configUsesReferenceVariable(config)) return false;
   if (isPromqlSavedChartConfig(config)) {
     return displayTypeSupportsPromQLAlerts(config.displayType);
   }

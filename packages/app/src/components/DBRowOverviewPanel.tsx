@@ -24,6 +24,7 @@ import { BrowserEventSubpanel } from './BrowserEventSubpanel';
 import {
   getJSONColumnNames,
   getMapColumnNames,
+  RowPanelLoader,
   useRowData,
 } from './DBRowDataPanel';
 import { DBRowJsonViewer } from './DBRowJsonViewer';
@@ -64,7 +65,12 @@ export function RowOverviewPanel({
   'data-testid'?: string;
 }) {
   const contentPx = flush ? 0 : 'md';
-  const { data } = useRowData({ source, rowId, aliasWith, dateRange });
+  const { data, isLoading } = useRowData({
+    source,
+    rowId,
+    aliasWith,
+    dateRange,
+  });
   const { onPropertyAddClick, generateSearchUrl, onOpenLinkedTrace } =
     use(RowSidePanelContext);
 
@@ -291,6 +297,10 @@ export function RowOverviewPanel({
     : firstRow?.['__hdx_body'] !== undefined
       ? JSON.stringify(firstRow['__hdx_body'])
       : undefined;
+
+  if (isLoading) {
+    return <RowPanelLoader data-testid={dataTestId} />;
+  }
 
   return (
     <div className="flex-grow-1 overflow-auto" data-testid={dataTestId}>

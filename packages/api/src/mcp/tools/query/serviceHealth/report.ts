@@ -3,11 +3,10 @@ import { MAX_NEW_OPERATIONS, type NewOperation } from './operations';
 import {
   assessService,
   compareAssessments,
+  crossedThreshold,
   HEALTH_THRESHOLDS,
   type HealthFlag,
-  type HealthStatus,
   type ServiceAssessment,
-  STATUS_ORDER,
   type WindowStats,
 } from './rank';
 import type { Window } from './schema';
@@ -142,21 +141,25 @@ const iso = (w: Window) => ({
 });
 
 const USAGE =
-  'Services are sorted by status (critical, degraded, healthy), then score. ' +
+  'Services with a threshold flag come first, then the rest. Within each ' +
+  'group, services with new or growing errors (new_errors) come first, ' +
+  'then by score (how far error rate, p95 and traffic moved the wrong way, ' +
+  'weighted by volume). Threshold flags: ' +
   `error_rate_up: error rate >= ${HEALTH_THRESHOLDS.errorRateRatio}x the comparison AND ` +
   `>= ${HEALTH_THRESHOLDS.errorRateMinDeltaPp} percentage point higher. ` +
-  `high_error_rate: error rate >= ${HEALTH_THRESHOLDS.highErrorRate * 100}%. ` +
-  'critical = error_rate_up together with high_error_rate. ' +
+  `high_error_rate: error rate >= ${HEALTH_THRESHOLDS.highErrorRate * 100}% (may be chronic; check comparison). ` +
   `latency_up: p95 >= ${HEALTH_THRESHOLDS.latencyRatio}x AND >= ${HEALTH_THRESHOLDS.latencyMinDeltaMs}ms slower. ` +
   `traffic_drop: requests <= ${HEALTH_THRESHOLDS.trafficDropRatio * 100}% of the comparison. ` +
   'missing_service: served requests in the comparison window but none now. ' +
-  'Any of those makes a service degraded. traffic_spike, new_service and ' +
-  'low_volume (under minRequests in both windows, never flagged) and ' +
-  'new_errors (a listed error group is new or growing; such services sort ' +
-  'first within their status) are context only. Healthy services are not ' +
-  'regressions: report them as steady, and treat moves below these ' +
-  "thresholds as normal variance. Each service's " +
-  '`summary` states which moves crossed one. topErrors carry firstSeen / ' +
+  'Context flags: traffic_spike, new_service, low_volume (under ' +
+  'minRequests in both windows, never threshold-flagged) and new_errors. ' +
+  'Moves below the thresholds are usually normal variance. The tool sees ' +
+  'service-wide totals only: a regression confined to one endpoint, pod, ' +
+  'version or attribute segment can stay under every threshold, so break ' +
+  'down with clickstack_table before ruling a service out of an ' +
+  "investigation. Each service's `summary` states the facts: which moves " +
+  'crossed a threshold, or the current vs comparison values when none did. ' +
+  'topErrors carry firstSeen / ' +
   'lastSeen and a pattern: ongoing (still firing), spread (most of the ' +
   'window, quiet now; not proven resolved) or burst (short, so transient). topErrors lists new and ' +
   'growing error groups first (largest gain first), then the largest steady ' +
@@ -192,12 +195,9 @@ export function buildReport(args: {
     );
   const windowMinutes =
     (args.current.end.getTime() - args.current.start.getTime()) / 60_000;
-  const counts: Record<HealthStatus, number> = {
-    critical: 0,
-    degraded: 0,
-    healthy: 0,
-  };
-  for (const r of args.ranked) counts[r.assessment.status]++;
+  const servicesFlagged = args.ranked.filter(r =>
+    crossedThreshold(r.assessment.flags),
+  ).length;
 
   const prior = (g: ErrorGroup) =>
     args.comparisonErrorCounts?.get(errorGroupKey(g)) ?? 0;
@@ -208,14 +208,20 @@ export function buildReport(args: {
         )
       : [];
   const hasNewErrors = (r: RankedService) => changedErrors(r).length > 0;
-  // Within a status, a service with a new or growing error group goes first:
-  // its aggregate rates may be flat, but it has the most novel signal.
+  // Within the flagged and unflagged groups, a service with a new or growing
+  // error group goes first: its aggregate rates may be flat, but it has the
+  // most novel signal. Flagged services stay ahead so topN never drops one
+  // that servicesFlagged counts.
   const shown = args.ranked
-    .map((r, i) => ({ r, i, novel: hasNewErrors(r) }))
+    .map((r, i) => ({
+      r,
+      i,
+      novel: hasNewErrors(r),
+      flagged: crossedThreshold(r.assessment.flags),
+    }))
     .sort(
       (a, b) =>
-        STATUS_ORDER[a.r.assessment.status] -
-          STATUS_ORDER[b.r.assessment.status] ||
+        Number(b.flagged) - Number(a.flagged) ||
         Number(b.novel) - Number(a.novel) ||
         a.i - b.i,
     )
@@ -224,7 +230,6 @@ export function buildReport(args: {
   const services = shown.map(({ r, novel }, i) => ({
     rank: i + 1,
     service: r.service,
-    status: r.assessment.status,
     flags: novel
       ? [...r.assessment.flags, 'new_errors' satisfies HealthFlag]
       : r.assessment.flags,
@@ -281,7 +286,7 @@ export function buildReport(args: {
       errorGroupBy: args.errorGroupBy,
       servicesAssessed: args.ranked.length,
       servicesReturned: services.length,
-      statusCounts: counts,
+      servicesFlagged,
       ...(args.ranked.length === 0 && {
         warning:
           'No spans matched in either window. Check the time window, the ' +

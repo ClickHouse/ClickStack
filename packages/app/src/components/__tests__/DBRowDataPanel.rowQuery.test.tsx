@@ -155,6 +155,21 @@ describe('row lookup', () => {
     ).toEqual(['logs', 'logs_v2']);
   });
 
+  it('shows a loader instead of an empty row while the row loads', async () => {
+    mockQueryChartConfig.mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MantineProvider>
+        <QueryClientProvider client={queryClient}>
+          <RowDataPanel source={source} rowId="id='a'" />
+        </QueryClientProvider>
+      </MantineProvider>,
+    );
+
+    expect(await screen.findByLabelText('Loading row')).toBeInTheDocument();
+    expect(mockJsonViewerData).not.toHaveBeenCalled();
+  });
+
   it('runs again for a row it did not find', async () => {
     mockQueryChartConfig.mockResolvedValue({ data: [], meta: [], rows: 0 });
 

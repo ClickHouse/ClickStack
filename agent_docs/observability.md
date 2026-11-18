@@ -305,9 +305,10 @@ calls `/api/v1/prometheus/query{,_range}`, and `/labels` and
 (`QUERY_ATTRIBUTION_HEADER`), and the router parses it with `parseLogComment`
 into a `withQueryAttribution` scope layered over the auth middleware's `api`
 scope. The browser's surface and ids win; `trace` and `label` stay the
-server's. Queries the route runs through a ClickHouse client (label lookups,
-and the `prometheusQuery()`/`prometheusQueryRange()` fallback) pick the scope
-up as usual. Requests proxied to ClickHouse's Prometheus HTTP API on 26.6+ are tagged
+server's. Queries the route runs through a ClickHouse client (label lookups
+before 26.9, and the `prometheusQuery()`/`prometheusQueryRange()` fallback)
+pick the scope up as usual. Requests proxied to ClickHouse's Prometheus HTTP
+API (queries on 26.6+, label lookups on 26.9+) are tagged
 by `clickhousePrometheusRequest`: `log_comment` as a URL setting, `query_id` as
 the `X-ClickHouse-Query-Id` header, because the handler rejects `query_id` as an
 unknown setting in the URL.

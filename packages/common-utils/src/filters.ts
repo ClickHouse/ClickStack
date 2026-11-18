@@ -1,6 +1,7 @@
 import * as SQLParser from 'node-sql-parser';
 
 import { escapeSqlString, replaceJsonExpressions } from '@/core/utils';
+import { getSourceDependentMacrosUsed, replaceMacros } from '@/macros';
 import { parse } from '@/queryParser';
 import {
   AdhocDashboardFilter,
@@ -23,6 +24,7 @@ import {
 } from '@/types';
 import {
   escapePromqlStringValue,
+  formatVariableValues,
   getVariableReferences,
   substituteVariables,
 } from '@/variables';
@@ -770,7 +772,7 @@ export type DashboardFilterQueryIssue = {
   filterName: string;
   /** Query language of the filter's `where` clause */
   language: 'lucene' | 'sql';
-  /** The raw `where` clause that failed to parse */
+  /** The raw `where` clause, or a SQL query filter's template, that failed to validate */
   where: string;
   /** Why it failed, when the clause itself parses but its variables don't resolve. */
   detail?: string;
@@ -778,7 +780,8 @@ export type DashboardFilterQueryIssue = {
 
 /**
  * Validate the `where` clause of each dashboard filter *definition* (the query
- * that scopes which values populate the filter's dropdown).
+ * that scopes which values populate the filter's dropdown, or which keys and
+ * values an ad hoc filter suggests).
  *
  * Useful at import time, where no values query is actually run: a filter whose
  * `where` clause is malformed would otherwise only surface as a failed query
@@ -802,8 +805,27 @@ export function validateDashboardFilterQueries(
   ).map(declaration => ({ ...declaration, values: [] }));
 
   for (const filter of filters) {
+    if (isSqlQueryFilter(filter)) {
+      const detail = validateSqlQueryFilterTemplate(
+        filter.sqlTemplate,
+        variables,
+      );
+      if (detail) {
+        issues.push({
+          filterId: filter.id,
+          filterName: filter.name,
+          language: 'sql',
+          where: filter.sqlTemplate,
+          detail,
+        });
+      }
+      continue;
+    }
+
     // Only ClickHouse-queried filters carry a values query to validate.
-    if (!isQueryExpressionFilter(filter)) continue;
+    // A PromQL ad hoc filter may store a `where`, but nothing reads it.
+    const isSqlAdhoc = isAdhocFilter(filter) && filter.sourceType === 'sql';
+    if (!isQueryExpressionFilter(filter) && !isSqlAdhoc) continue;
     const where = filter.where ?? '';
     if (!where.trim()) continue;
     const language = filter.whereLanguage ?? 'sql';
@@ -827,6 +849,28 @@ export function validateDashboardFilterQueries(
     }
   }
   return issues;
+}
+
+/**
+ * Why a SQL query filter's template can't expand, or undefined when it can.
+ * The SQL itself is not parsed: ClickHouse syntax is only checked when it runs.
+ */
+export function validateSqlQueryFilterTemplate(
+  sqlTemplate: string,
+  variables: ChartVariable[],
+): string | undefined {
+  try {
+    const sourceMacros = getSourceDependentMacrosUsed(sqlTemplate);
+    if (sourceMacros.length > 0) {
+      return `SQL query filters have no source, so ${sourceMacros
+        .map(macro => `$__${macro}`)
+        .join(' and ')} cannot be used`;
+    }
+    replaceMacros({ sqlTemplate, variables });
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }
 
 /** Derive the default `variableName` for a filter from its display name. */
@@ -859,6 +903,18 @@ export function isFilterVariableEnabled(filter: {
   isVariableEnabled?: boolean;
 }): boolean {
   return filter.isVariableEnabled === true;
+}
+
+/**
+ * Whether tiles can reference a filter's selection as `$variableName`. An ad
+ * hoc filter is variable-enabled only so its name stays unique; the name just
+ * keys its conditions.
+ */
+export function isFilterReferenceableVariable(filter: {
+  type?: DashboardFilterKind;
+  isVariableEnabled?: boolean;
+}): boolean {
+  return isFilterVariableEnabled(filter) && filter.type !== 'ADHOC';
 }
 
 /**
@@ -935,6 +991,44 @@ export function isAdhocFilter<T extends { type: DashboardFilterKind }>(
   return filter.type === 'ADHOC';
 }
 
+/** Type guard for SQL_QUERY type filters. */
+export function isSqlQueryFilter<T extends { type: DashboardFilterKind }>(
+  filter: T,
+): filter is Extract<T, { type: 'SQL_QUERY' }> {
+  return filter.type === 'SQL_QUERY';
+}
+
+/** Type guard for DATA_SOURCE type filters. */
+export function isDataSourceFilter<T extends { type: DashboardFilterKind }>(
+  filter: T,
+): filter is Extract<T, { type: 'DATA_SOURCE' }> {
+  return filter.type === 'DATA_SOURCE';
+}
+
+/** Type guard for CONNECTION type filters. */
+export function isConnectionFilter<T extends { type: DashboardFilterKind }>(
+  filter: T,
+): filter is Extract<T, { type: 'CONNECTION' }> {
+  return filter.type === 'CONNECTION';
+}
+
+/**
+ * Whether a filter type is a reference variable: a data source or connection
+ * variable, whose value is an ID that tiles and filters use in place of one.
+ */
+export function isReferenceVariableFilterType(
+  type: DashboardFilterKind | undefined,
+): type is 'DATA_SOURCE' | 'CONNECTION' {
+  return type === 'DATA_SOURCE' || type === 'CONNECTION';
+}
+
+/** Type guard for reference variable filters; see `isReferenceVariableFilterType`. */
+export function isReferenceVariableFilter<
+  T extends { type: DashboardFilterKind },
+>(filter: T): filter is Extract<T, { type: 'DATA_SOURCE' | 'CONNECTION' }> {
+  return isReferenceVariableFilterType(filter.type);
+}
+
 /**
  * The sources an ADHOC filter broadcasts its conditions to: its
  * `appliesToSourceIds`, or its own `sources` when that is unset or empty.
@@ -963,11 +1057,39 @@ export function isAdhocFilterValue(
 export const isAdhocComparableDataType = (type: string): boolean =>
   !/\bDateTime/.test(type);
 
+/** A condition with the values of every condition it was merged with. */
+type GroupedAdhocCondition = {
+  condition: AdhocFilterCondition;
+  values: string[];
+};
+
+/**
+ * Merge the `IN` conditions that share a key into the first of them, so their
+ * values can be OR'd. Other conditions keep one value each.
+ */
+const groupAdhocConditionsByKey = (
+  conditions: AdhocFilterCondition[],
+): GroupedAdhocCondition[] => {
+  const valuesByKey = new Map<string, string[]>();
+  const grouped: GroupedAdhocCondition[] = [];
+  for (const condition of conditions) {
+    const isIn = condition.operator === 'IN';
+    const existing = isIn ? valuesByKey.get(condition.key) : undefined;
+    if (existing) {
+      existing.push(condition.value);
+      continue;
+    }
+    const values = [condition.value];
+    if (isIn) valuesByKey.set(condition.key, values);
+    grouped.push({ condition, values });
+  }
+  return grouped;
+};
+
 const renderAdhocConditionSql = ({
-  key,
-  operator,
-  value,
-}: AdhocFilterCondition): string => {
+  condition: { key, operator, value },
+  values,
+}: GroupedAdhocCondition): string => {
   // Stringified like broadcast filter selections, so Map/JSON/Dynamic values
   // compare as strings.
   const target = `toString(${key})`;
@@ -982,6 +1104,8 @@ const renderAdhocConditionSql = ({
       return `match(${target}, ${literal})`;
     case '!~':
       return `NOT match(${target}, ${literal})`;
+    case 'IN':
+      return `${target} IN (${formatVariableValues({ values }, 'sqlstring')})`;
     default:
       operator satisfies never;
       throw new Error(`Unknown ad hoc filter operator '${operator}'`);
@@ -989,16 +1113,17 @@ const renderAdhocConditionSql = ({
 };
 
 /**
- * Render the conditions of a SQL ad hoc filter as filters, one per condition.
- * Keys are SQL expressions and are used verbatim.
+ * Render the conditions of a SQL ad hoc filter as filters, one per condition,
+ * except that `IN` conditions sharing a key become one. Keys are SQL
+ * expressions and are used verbatim.
  */
 export function adhocConditionsToFilters(
   conditions: AdhocFilterCondition[],
 ): ConditionFilter[] {
-  return conditions.map(
-    (condition): ConditionFilter => ({
+  return groupAdhocConditionsByKey(conditions).map(
+    (grouped): ConditionFilter => ({
       type: 'sql',
-      condition: renderAdhocConditionSql(condition),
+      condition: renderAdhocConditionSql(grouped),
     }),
   );
 }
@@ -1059,10 +1184,9 @@ export function mergeAdhocConditions(
 const LEGACY_LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 const renderAdhocMatcherPromql = ({
-  key,
-  operator,
-  value,
-}: AdhocFilterCondition): string => {
+  condition: { key, operator, value },
+  values,
+}: GroupedAdhocCondition): string => {
   // Label names outside the legacy charset must be quoted (Prometheus 3).
   const label = LEGACY_LABEL_NAME.test(key)
     ? key
@@ -1073,6 +1197,10 @@ const renderAdhocMatcherPromql = ({
     case '=~':
     case '!~':
       return `${label}${operator}"${escapePromqlStringValue(value)}"`;
+    case 'IN': {
+      const pattern = formatVariableValues({ values }, 'regex');
+      return `${label}=~"${escapePromqlStringValue(pattern)}"`;
+    }
     case 'LIKE':
     case 'NOT LIKE':
       throw new Error(
@@ -1105,20 +1233,22 @@ export function isAdhocConditionSupported(
 
 /**
  * Render the conditions of a PromQL ad hoc filter as label matchers, one per
- * condition. Conditions PromQL can't express are skipped; callers report them
+ * condition, except that `IN` conditions sharing a label become one regex
+ * matcher. Conditions PromQL can't express are skipped; callers report them
  * using `isAdhocConditionSupported`.
  */
 export function adhocConditionsToPromqlFilters(
   conditions: AdhocFilterCondition[],
 ): PromqlConditionFilter[] {
-  return conditions
-    .filter(condition => isAdhocConditionSupported('promql', condition))
-    .map(
-      (condition): PromqlConditionFilter => ({
-        type: 'promql',
-        condition: renderAdhocMatcherPromql(condition),
-      }),
-    );
+  const supported = conditions.filter(condition =>
+    isAdhocConditionSupported('promql', condition),
+  );
+  return groupAdhocConditionsByKey(supported).map(
+    (grouped): PromqlConditionFilter => ({
+      type: 'promql',
+      condition: renderAdhocMatcherPromql(grouped),
+    }),
+  );
 }
 
 function isPromqlFilter(
@@ -1208,6 +1338,7 @@ export type DashboardVariableDeclaration = Pick<
 
 /** Minimal projection of fields necessary to extract the variables a dashboard declares. */
 export type FilterForVariableDeclaration = {
+  type?: DashboardFilterKind;
   name: string;
   expression?: string;
   variableName?: string;
@@ -1217,17 +1348,33 @@ export type FilterForVariableDeclaration = {
 
 /**
  * The variable-enabled filters a dashboard declares, paired with the name each
- * one answers to, in filter order.
+ * one answers to, in filter order. Data source variables are left out: their
+ * value selects a tile's source or connection and is never substituted into
+ * query text.
  */
 export function getDashboardVariableFilters<
   T extends FilterForVariableDeclaration,
 >(filters: T[] | undefined): { filter: T; name: string }[] {
+  return pairWithVariableNames(
+    (filters ?? []).filter(
+      filter =>
+        isFilterReferenceableVariable(filter) &&
+        !isReferenceVariableFilterType(filter.type),
+    ),
+  );
+}
+
+/**
+ * Each filter paired with the name it answers to, skipping filters with no
+ * usable name.
+ */
+export function pairWithVariableNames<
+  T extends { name: string; variableName?: string },
+>(filters: T[]): { filter: T; name: string }[] {
   const results: { filter: T; name: string }[] = [];
   const takenNames = new Set<string>();
 
-  for (const filter of filters ?? []) {
-    if (!isFilterVariableEnabled(filter)) continue;
-
+  for (const filter of filters) {
     // There shouldn't be any duplicate names, but if there are then the first one wins.
     const name = getFilterVariableName(filter);
     if (!name || takenNames.has(name)) continue;
@@ -1373,6 +1520,7 @@ export function getPendingFilterValuesVariables(
 export function validateVariableName({
   value,
   otherFilters,
+  noun = 'variable name',
 }: {
   value: string | undefined;
   otherFilters: {
@@ -1380,16 +1528,19 @@ export function validateVariableName({
     variableName?: string;
     isVariableEnabled?: boolean;
   }[];
+  /** What the messages call the field, for filters whose name isn't a variable. */
+  noun?: string;
 }): string | undefined {
+  const capitalized = noun.charAt(0).toUpperCase() + noun.slice(1);
   const trimmed = (value ?? '').trim();
   if (!trimmed) {
-    return 'Variable name is required';
+    return `${capitalized} is required`;
   }
   if (trimmed.length > DASHBOARD_VARIABLE_NAME_MAX_LENGTH) {
-    return `Variable name must be ${DASHBOARD_VARIABLE_NAME_MAX_LENGTH} characters or fewer`;
+    return `${capitalized} must be ${DASHBOARD_VARIABLE_NAME_MAX_LENGTH} characters or fewer`;
   }
   if (!DASHBOARD_VARIABLE_NAME_PATTERN_ANCHORED.test(trimmed)) {
-    return 'Variable names must start with a letter and may contain only letters, numbers, and underscores';
+    return `${capitalized}s must start with a letter and may contain only letters, numbers, and underscores`;
   }
   const clash = otherFilters.find(
     other =>
@@ -1397,7 +1548,7 @@ export function validateVariableName({
       getFilterVariableName(other) === trimmed,
   );
   if (clash) {
-    return `This variable name is used by another filter on this dashboard (${clash.name})`;
+    return `This ${noun} is used by another filter on this dashboard (${clash.name})`;
   }
   return undefined;
 }

@@ -1,4 +1,4 @@
-import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
+import { DashboardFilter, SourceKind } from '@hyperdx/common-utils/dist/types';
 
 import {
   FilterFormValues,
@@ -89,7 +89,7 @@ describe('toFormValues', () => {
       sourceType: 'promql',
       sources: ['prom'],
       appliesToSourceIds: ['prom-2'],
-      isBroadcastEnabled: false,
+      isBroadcastEnabled: true,
       isVariableEnabled: true,
       variableName: 'conds',
     });
@@ -100,12 +100,31 @@ describe('toFormValues', () => {
       sources: ['prom'],
       appliesToSourceIds: ['prom-2'],
       variableName: 'conds',
-      isBroadcastEnabled: false,
+      isBroadcastEnabled: true,
     });
   });
 
   it('defaults a new filter to SQL ad hoc sources', () => {
     expect(toFormValues()).toMatchObject({ sourceType: 'sql', sources: [] });
+  });
+
+  it("seeds the shared where fields from a stored ad hoc filter's condition", () => {
+    const values = toFormValues({
+      id: 'a',
+      type: 'ADHOC',
+      name: 'Conditions',
+      sourceType: 'sql',
+      sources: ['logs'],
+      where: 'Namespace:$namespace',
+      whereLanguage: 'lucene',
+      isBroadcastEnabled: true,
+      isVariableEnabled: true,
+    });
+
+    expect(values).toMatchObject({
+      where: 'Namespace:$namespace',
+      whereLanguage: 'lucene',
+    });
   });
 });
 
@@ -243,7 +262,40 @@ describe('toSavedFilter', () => {
     });
   });
 
-  it('drops the ad hoc broadcast scope when broadcast is off', () => {
+  it('keeps the trimmed condition narrowing a SQL ad hoc filter', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['logs'],
+        where: '  Namespace IN ($namespace)  ',
+        whereLanguage: 'sql',
+      }),
+    );
+
+    expect(saved).toMatchObject({
+      where: 'Namespace IN ($namespace)',
+      whereLanguage: 'sql',
+    });
+  });
+
+  it('drops the condition from a PromQL ad hoc filter, which has no input for it', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'promql',
+        sources: ['prom'],
+        where: 'Namespace IN ($namespace)',
+      }),
+    );
+
+    expect(saved).not.toHaveProperty('where');
+    expect(saved).not.toHaveProperty('whereLanguage');
+  });
+
+  it('always broadcasts an ad hoc filter, even when switched from a non-broadcasting type', () => {
     const saved = toSavedFilter(
       formValues({
         type: 'ADHOC',
@@ -255,14 +307,82 @@ describe('toSavedFilter', () => {
     );
 
     expect(saved).toMatchObject({
-      isBroadcastEnabled: false,
-      appliesToSourceIds: undefined,
+      isBroadcastEnabled: true,
+      appliesToSourceIds: ['logs'],
     });
   });
 
   it('rejects an ad hoc filter without sources', () => {
     expect(() =>
       toSavedFilter(formValues({ type: 'ADHOC', name: 'Conditions' })),
+    ).toThrow();
+  });
+
+  it('saves a data source filter as single-select and required', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'DATA_SOURCE',
+        name: 'Logs source',
+        allowedSourceKinds: [SourceKind.Log],
+        isRequired: false,
+        isSingleSelect: false,
+        expression: 'ignored',
+        source: 'ignored',
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: expect.any(String),
+      type: 'DATA_SOURCE',
+      name: 'Logs source',
+      variableName: 'Logs_source',
+      allowedSourceKinds: [SourceKind.Log],
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    });
+    expect(toFormValues(saved).allowedSourceKinds).toEqual([SourceKind.Log]);
+  });
+
+  it('saves a data source filter limited to a connection variable', () => {
+    expect(
+      toSavedFilter(
+        formValues({
+          type: 'DATA_SOURCE',
+          name: 'Logs source',
+          allowedSourceKinds: [SourceKind.Log],
+          connection: '$conn',
+        }),
+      ),
+    ).toMatchObject({ connection: '$conn' });
+  });
+
+  it('saves a connection filter as single-select and required', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'CONNECTION',
+        name: 'Cluster',
+        isSingleSelect: false,
+        source: 'ignored',
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: expect.any(String),
+      type: 'CONNECTION',
+      name: 'Cluster',
+      variableName: 'Cluster',
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    });
+  });
+
+  it('rejects a data source filter without source kinds', () => {
+    expect(() =>
+      toSavedFilter(formValues({ type: 'DATA_SOURCE', name: 'Source' })),
     ).toThrow();
   });
 
@@ -273,9 +393,15 @@ describe('toSavedFilter', () => {
   });
 });
 
-/** The minimum a form needs to save, per filter type the form supports. */
+/**
+ * The minimum a form needs to save, per filter type with configurable
+ * selection limits.
+ */
 const byType: Record<
-  Exclude<DashboardFilter['type'], 'ADHOC'>,
+  Exclude<
+    DashboardFilter['type'],
+    'ADHOC' | 'SQL_QUERY' | 'DATA_SOURCE' | 'CONNECTION'
+  >,
   Partial<FilterFormValues>
 > = {
   QUERY_EXPRESSION: {
@@ -380,6 +506,36 @@ describe('isGlobalRequirement', () => {
       ).not.toHaveProperty('isGlobalRequirement');
     },
   );
+
+  // Reference variables are always required, so the form has no "Required"
+  // checkbox for them to gate the requirement's scope.
+  it('round-trips a dashboard-wide data source requirement without isRequired', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'DATA_SOURCE',
+        name: 'Source',
+        allowedSourceKinds: [SourceKind.Log],
+        isRequired: false,
+        isGlobalRequirement: true,
+      }),
+    );
+
+    expect(saved).toMatchObject({ isGlobalRequirement: true });
+    expect(toFormValues(saved).isGlobalRequirement).toBe(true);
+  });
+
+  it('emits no key for a data source filter that blocks only its own tiles', () => {
+    expect(
+      toSavedFilter(
+        formValues({
+          type: 'DATA_SOURCE',
+          name: 'Source',
+          allowedSourceKinds: [SourceKind.Log],
+          isGlobalRequirement: false,
+        }),
+      ),
+    ).not.toHaveProperty('isGlobalRequirement');
+  });
 });
 
 describe('maxSelections', () => {

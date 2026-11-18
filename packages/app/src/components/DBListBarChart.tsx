@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import Link from 'next/link';
-import cx from 'classnames';
 import { omit } from 'lodash';
 import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import type { FloatingPosition } from '@mantine/core';
@@ -14,6 +13,7 @@ import type { NumberFormat } from '@/types';
 import { formatNumber, semanticKeyedColor } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -278,20 +278,11 @@ export default function DBListBarChart({
       disableReactiveContainer
     >
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <div className={isPlaceholderData ? 'effect-pulse' : undefined}>
           <ListBar

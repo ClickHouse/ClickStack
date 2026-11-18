@@ -3,11 +3,11 @@ import { add, Duration, sub } from 'date-fns';
 import { useAtom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { Separator } from '@clickhouse/click-ui';
 import {
   Button,
   Card,
   CloseButton,
-  Divider,
   getDefaultZIndex,
   Group,
   Popover,
@@ -407,7 +407,7 @@ const TimePickerComponent = ({
               <Stack gap={0} p="xs">
                 {relativeTimeOptions.map((item, index) => {
                   if (item === 'divider') {
-                    return <Divider key={index} my={4} />;
+                    return <Separator key={index} size="sm" />;
                   }
                   const isDisabledForLiveTail =
                     isRelative && !item[2] && item[0] !== LIVE_TAIL_TIME_QUERY;

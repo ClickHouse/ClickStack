@@ -1,6 +1,6 @@
 {
   "name": "@hyperdx/app",
-  "version": "2.43.1",
+  "version": "2.45.0",
   "private": true,
   "license": "MIT",
   "engines": {
@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@clickhouse/click-ui": "^0.12.0",
-    "@clickhouse/clickstack-browser": "^1.2.0",
+    "@clickhouse/clickstack-browser": "^1.2.1",
     "@clickhouse/clickstack-node": "^1.0.2",
     "@codemirror/autocomplete": "^6.0.0",
     "@codemirror/lang-json": "^6.0.1",
@@ -40,7 +40,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^3.9.0",
     "@hyperdx/api": "workspace:*",
-    "@hyperdx/common-utils": "^0.33.0",
+    "@hyperdx/common-utils": "^0.35.0",
     "@mantine/core": "^9.0.0",
     "@mantine/dates": "^9.0.0",
     "@mantine/dropzone": "^9.0.0",
@@ -74,7 +74,7 @@
     "ky-universal": "^0.10.1",
     "lodash": "^4.18.1",
     "ms": "^2.1.3",
-    "next": "^16.4.3",
+    "next": "^16.4.5",
     "next-runtime-env": "1",
     "next-seo": "^4.28.1",
     "numbro": "^2.4.0",
@@ -100,7 +100,7 @@
     "store2": "^2.14.3",
     "strip-ansi": "^6.0.1",
     "timestamp-nano": "^1.0.1",
-    "uplot": "^1.6.31",
+    "uplot": "patch:uplot@npm%3A1.6.32#~/.yarn/patches/uplot-npm-1.6.32-350d2da00d.patch",
     "uplot-react": "^1.2.2",
     "zod": "3.25"
   },

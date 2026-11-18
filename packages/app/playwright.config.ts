@@ -75,6 +75,9 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     /* Record video on failure */
     video: 'retain-on-failure',
+    // Otherwise Chromium takes navigator.language from the host locale, so
+    // number and date formatting would vary between machines.
+    locale: 'en-US',
   },
 
   /* Global test timeout - CI needs more time than local */

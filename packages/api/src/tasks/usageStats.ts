@@ -23,6 +23,7 @@ import os from 'os';
 
 import { ClickhouseClient } from '@/clickhouse';
 import * as config from '@/config';
+import { NOT_VIRTUAL } from '@/controllers/user';
 import Connection from '@/models/connection';
 import { Source, SourceDocument } from '@/models/source';
 import Team from '@/models/team';
@@ -150,7 +151,7 @@ function extractTableNames(source: SourceDocument): string[] {
 
 const getClickhouseTableSize = async () => {
   // fetch mongo data
-  const connections = await Connection.find();
+  const connections = await Connection.find().select('+password');
   const sources = await Source.find();
 
   // build map for each db instance
@@ -227,7 +228,7 @@ async function getUsageStats() {
   try {
     const nowInMs = Date.now();
     const [userCounts, team, chTables] = await Promise.all([
-      User.countDocuments(),
+      User.countDocuments(NOT_VIRTUAL),
       Team.find(
         {},
         {
