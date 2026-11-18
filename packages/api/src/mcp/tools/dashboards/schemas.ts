@@ -1798,13 +1798,13 @@ const mcpSqlQueryFilterSchema = z
       'ClickHouse connection the query runs on: a connection ID from ' +
         'clickstack_list_sources, or `$name` of a CONNECTION filter on this dashboard.',
     ),
-    sourceId: objectIdSchema
+    sourceId: objectIdOrVariableReferenceSchema
       .optional()
       .describe(
         'Optional log, trace, session, or metric source on the same connection. ' +
-          'Lets sqlTemplate use $__sourceTable and $__filters. Requires a ' +
-          'connection ID in connectionId, not a connection variable. Get IDs ' +
-          'from clickstack_list_sources.',
+          'Lets sqlTemplate use $__sourceTable and $__filters. Get IDs from ' +
+          'clickstack_list_sources. ' +
+          SOURCE_VARIABLE_REFERENCE_NOTE,
       ),
     sqlTemplate: SqlQueryDashboardFilterSchema.shape.sqlTemplate.describe(
       'ClickHouse SELECT whose FIRST column becomes the dropdown values (cast to ' +

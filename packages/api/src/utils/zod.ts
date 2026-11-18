@@ -214,7 +214,7 @@ const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
   source: true,
 }).extend({
   connectionId: objectIdOrVariableReferenceSchema,
-  sourceId: objectIdSchema.optional(),
+  sourceId: objectIdOrVariableReferenceSchema.optional(),
   isBroadcastEnabled: z.literal(false).default(false),
   isVariableEnabled: z.literal(true).default(true),
 });

@@ -2274,27 +2274,51 @@ describe('dashboard router', () => {
       expect(response.body.message).toContain(source._id.toString());
     });
 
-    it('rejects a source with a connection variable', async () => {
+    it('accepts a source with a connection variable', async () => {
       const source = await createSqlFilterSource(SourceKind.Log);
+      const filter = makeSqlFilter({
+        connection: '$conn',
+        source: source._id.toString(),
+      });
 
-      const response = await agent
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [connectionFilter, filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([connectionFilter, filter]);
+    });
+
+    it('accepts a data source variable', async () => {
+      const dataSourceFilter = {
+        id: new Types.ObjectId().toString(),
+        type: 'DATA_SOURCE' as const,
+        name: 'Logs source',
+        variableName: 'logs',
+        allowedSourceKinds: [SourceKind.Log],
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      };
+      const filter = makeSqlFilter({ connection: '$conn', source: '$logs' });
+
+      const created = await agent
         .post('/dashboards')
         .send({
           ...MOCK_DASHBOARD,
-          filters: [
-            connectionFilter,
-            makeSqlFilter({
-              connection: '$conn',
-              source: source._id.toString(),
-            }),
-          ],
+          filters: [connectionFilter, dataSourceFilter, filter],
         })
-        .expect(400);
+        .expect(200);
 
-      expect(response.body.message).toContain('not variables');
+      expect(created.body.filters).toEqual([
+        connectionFilter,
+        dataSourceFilter,
+        filter,
+      ]);
     });
 
-    it('rejects a source variable', async () => {
+    it('rejects a reference to an unknown data source variable', async () => {
       const response = await agent
         .post('/dashboards')
         .send({
@@ -2303,7 +2327,9 @@ describe('dashboard router', () => {
         })
         .expect(400);
 
-      expect(response.body.message).toContain('not variables');
+      expect(JSON.stringify(response.body)).toMatch(
+        /does not name a data source variable/,
+      );
     });
   });
 

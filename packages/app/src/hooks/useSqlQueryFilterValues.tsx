@@ -88,6 +88,14 @@ export function useSqlQueryFilterValues({
         }
         continue;
       }
+      // Variables can pair a source with a connection it isn't on.
+      if (source && source.connection !== filter.connection) {
+        errors.set(
+          filter.id,
+          `Source ${source.name} is not on the filter's connection`,
+        );
+        continue;
+      }
       try {
         const rendered = renderSqlQueryFilterValuesQuery({
           sqlTemplate: filter.sqlTemplate,

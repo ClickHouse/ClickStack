@@ -486,20 +486,34 @@ describe('Dashboard import - SQL query filter connection', () => {
     });
   });
 
-  it('maps neither the connection variable nor a source paired with it', () => {
-    const result = buildMappingFormSchema(
-      sqlQueryFilterTemplate('$conn', 'Logs'),
-      mockSources,
-    ).safeParse({
+  const parseSqlQueryFilterMappings = (
+    template: ReturnType<typeof sqlQueryFilterTemplate>,
+    filterSourceMapping: string,
+    filterConnectionMapping: string,
+  ) =>
+    buildMappingFormSchema(template, mockSources).safeParse({
       dashboardName: 'SQL Query Filter',
       tags: [],
       tileSourceMappings: ['src-metrics'],
       connectionMappings: [''],
-      filterSourceMappings: [''],
-      filterConnectionMappings: [''],
+      filterSourceMappings: [filterSourceMapping],
+      filterConnectionMappings: [filterConnectionMapping],
     });
 
-    expect(result.success).toBe(true);
+  it('maps a source paired with a connection variable, on any connection', () => {
+    const template = sqlQueryFilterTemplate('$conn', 'Logs');
+
+    expect(parseSqlQueryFilterMappings(template, '', '').success).toBe(false);
+    expect(
+      parseSqlQueryFilterMappings(template, 'src-other-logs', '').success,
+    ).toBe(true);
+  });
+
+  it('maps neither connection nor source variables', () => {
+    expect(
+      parseSqlQueryFilterMappings(sqlQueryFilterTemplate('$conn', '$logs'), '', '')
+        .success,
+    ).toBe(true);
   });
 
   it('rejects a PromQL source for a filter with a source', () => {

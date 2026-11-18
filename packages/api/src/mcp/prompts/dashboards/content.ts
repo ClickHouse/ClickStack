@@ -1216,7 +1216,7 @@ SQL query filter shape:
   { type: "SQL_QUERY", name, connectionId, sourceId?, sqlTemplate, variableName? }
 
   connectionId         ClickHouse connection the query runs on (from clickstack_list_sources), or a CONNECTION filter's "$variableName".
-  sourceId             Optional log, trace, session, or metric source on that connection. Requires a connection ID, not a connection variable. Needed for $__sourceTable and $__filters; $__filters expands to the dashboard's broadcast filter selections for that source.
+  sourceId             Optional log, trace, session, or metric source on that connection, or a DATA_SOURCE filter's "$variableName". Needed for $__sourceTable and $__filters; $__filters expands to the dashboard's broadcast filter selections for that source.
   sqlTemplate          SELECT whose FIRST column becomes the dropdown values, cast to string with nulls and duplicates dropped, in row order (add ORDER BY). May use the time macros and other filters' variables, plus $__sourceTable and $__filters when sourceId is set.
 
   Use it when the values live in a lookup table, dictionary, or join that no single source column covers; otherwise prefer QUERY_EXPRESSION. Like a static filter it is variable-only, so tiles pass the column explicitly: $__filter(<expression>, $<variableName>).
