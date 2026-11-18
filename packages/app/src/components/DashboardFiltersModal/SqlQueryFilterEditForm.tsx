@@ -25,6 +25,7 @@ import { NOW } from '@/config';
 import { useSqlQueryFilterValues } from '@/hooks/useSqlQueryFilterValues';
 import { truncateText } from '@/utils';
 
+import { TOOLTIP_PORTAL_TARGET } from './constants';
 import { CustomInputWrapper } from './CustomInputWrapper';
 import { FilterFormControl } from './filterFormState';
 import { VariableNameInput } from './VariableNameInput';
@@ -130,6 +131,7 @@ export const SqlQueryFilterEditForm = ({
             placeholder={PLACEHOLDER_SQL}
             additionalCompletions={completions}
             onSubmit={runPreview}
+            parentRef={TOOLTIP_PORTAL_TARGET}
           />
           <Group justify="flex-end">
             <Button
