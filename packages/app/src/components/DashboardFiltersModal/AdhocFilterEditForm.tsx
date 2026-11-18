@@ -8,6 +8,11 @@ import {
   isAdhocFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
+  isSourceVariableReferenceAccepted,
+  parseVariableReference,
+  resolveVariableReference,
+} from '@hyperdx/common-utils/dist/referenceVariables';
+import {
   AdhocFilterSourceType,
   DashboardFilter,
   SourceKind,
@@ -17,6 +22,10 @@ import { IconAlertTriangle } from '@tabler/icons-react';
 
 import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
 import { SourceMultiSelectControlled } from '@/components/SourceMultiSelect';
+import {
+  useReferenceVariableValues,
+  useSourceVariableDeclarations,
+} from '@/components/sourceSelectUtils';
 import { IS_PROMQL_ENABLED } from '@/config';
 import { useSources } from '@/source';
 
@@ -44,6 +53,7 @@ export const AdhocFilterEditForm = ({
   otherFilters,
 }: AdhocFilterEditFormProps) => {
   const { data: allSources } = useSources();
+  const sourceVariables = useSourceVariableDeclarations();
   const [sourceType, sourceIds, appliesToSourceIds] = useWatch({
     control,
     name: ['sourceType', 'sources', 'appliesToSourceIds'],
@@ -64,14 +74,26 @@ export const AdhocFilterEditForm = ({
           ),
       );
   }, [otherFilters, sourceType, sourceIds, appliesToSourceIds]);
-  const allowedSourceKinds = getAdhocFilterSourceKinds(sourceType);
-  const tableConnections = useMemo(
-    () =>
-      (allSources ?? [])
-        .filter(source => sourceIds?.includes(source.id))
-        .map(tcFromSource),
-    [allSources, sourceIds],
+  const allowedSourceKinds = useMemo(
+    () => getAdhocFilterSourceKinds(sourceType),
+    [sourceType],
   );
+  const referenceVariableValues = useReferenceVariableValues();
+  const tableConnections = useMemo(() => {
+    const resolvedIds = new Set(
+      sourceIds?.map(id =>
+        resolveVariableReference(id, referenceVariableValues),
+      ),
+    );
+    // A data source variable can select a source of a kind this filter can't use
+    return (allSources ?? [])
+      .filter(
+        source =>
+          resolvedIds.has(source.id) &&
+          allowedSourceKinds.includes(source.kind),
+      )
+      .map(tcFromSource);
+  }, [allSources, sourceIds, referenceVariableValues, allowedSourceKinds]);
   // Kept visible for a saved PromQL filter so its source type can be changed
   const showSourceType =
     sourceType === 'promql' ||
@@ -82,6 +104,13 @@ export const AdhocFilterEditForm = ({
   // hold after switching from another filter type.
   const validateSourceKinds = (ids: string[] | undefined) => {
     const hasOtherKind = ids?.some(id => {
+      if (parseVariableReference(id) != null) {
+        return !isSourceVariableReferenceAccepted(
+          id,
+          sourceVariables,
+          allowedSourceKinds,
+        );
+      }
       const source = allSources?.find(s => s.id === id);
       return source && !allowedSourceKinds.includes(source.kind);
     });
@@ -131,6 +160,7 @@ export const AdhocFilterEditForm = ({
           comboboxProps={{ withinPortal: true }}
           placeholder="Select sources"
           allowedSourceKinds={allowedSourceKinds}
+          allowSourceVariables
           rules={{
             validate: (value: string[] | undefined) =>
               !value?.length
@@ -173,6 +203,7 @@ export const AdhocFilterEditForm = ({
           comboboxProps={{ withinPortal: true }}
           placeholder="Same as data sources"
           allowedSourceKinds={allowedSourceKinds}
+          allowSourceVariables
           rules={{ validate: validateSourceKinds }}
         />
       </CustomInputWrapper>

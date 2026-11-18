@@ -2309,6 +2309,19 @@ export const DashboardContainerSchema = z.object({
 
 export type DashboardContainer = z.infer<typeof DashboardContainerSchema>;
 
+export enum SourceKind {
+  Log = 'log',
+  Trace = 'trace',
+  Session = 'session',
+  Metric = 'metric',
+  Promql = 'promql',
+}
+
+/** The source kinds builder and raw SQL charts can query. */
+export const NON_PROMQL_SOURCE_KINDS: readonly SourceKind[] = Object.values(
+  SourceKind,
+).filter(kind => kind !== SourceKind.Promql);
+
 /** Type of dashboard filter, determining how its dropdown values are populated. */
 export const DashboardFilterType = z.enum([
   'QUERY_EXPRESSION',
@@ -2316,6 +2329,8 @@ export const DashboardFilterType = z.enum([
   'PROMETHEUS_LABEL',
   'ADHOC',
   'SQL_QUERY',
+  'DATA_SOURCE',
+  'CONNECTION',
 ]);
 
 /** Allowed variable names for dashboard filters. Alphanumeric + underscore, must start with a letter. */
@@ -2474,12 +2489,51 @@ export const AdhocDashboardFilterSchema = dashboardFilterBaseSchema
   })
   .strict();
 
+/**
+ * A variable whose single selected value is a source ID. Tiles and other
+ * filters reference it as `$variableName` in place of a source ID. Always
+ * single-select and required, since a tile cannot query without a source.
+ */
+export const DataSourceDashboardFilterSchema = dashboardFilterBaseSchema
+  .extend({
+    type: z.literal(DashboardFilterType.enum.DATA_SOURCE),
+    /** The kinds of sources offered as values. */
+    allowedSourceKinds: z.array(z.nativeEnum(SourceKind)).min(1),
+    /**
+     * Limits the offered sources to one connection: a connection ID, or a
+     * `$name` reference to a connection variable.
+     */
+    connection: z.string().min(1).optional(),
+    minSelections: z.literal(1),
+    maxSelections: z.literal(1),
+    isBroadcastEnabled: z.literal(false),
+    isVariableEnabled: z.literal(true),
+  })
+  .strict();
+
+/**
+ * A variable whose single selected value is a connection ID. Raw SQL tiles
+ * and data source variables reference it as `$variableName` in place of a
+ * connection ID.
+ */
+export const ConnectionDashboardFilterSchema = dashboardFilterBaseSchema
+  .extend({
+    type: z.literal(DashboardFilterType.enum.CONNECTION),
+    minSelections: z.literal(1),
+    maxSelections: z.literal(1),
+    isBroadcastEnabled: z.literal(false),
+    isVariableEnabled: z.literal(true),
+  })
+  .strict();
+
 export const DashboardFilterSchema = z.discriminatedUnion('type', [
   QueryExpressionDashboardFilterSchema,
   StaticListDashboardFilterSchema,
   PromqlLabelDashboardFilterSchema,
   AdhocDashboardFilterSchema,
   SqlQueryDashboardFilterSchema,
+  DataSourceDashboardFilterSchema,
+  ConnectionDashboardFilterSchema,
 ]);
 
 export type QueryExpressionDashboardFilter = z.infer<
@@ -2494,6 +2548,12 @@ export type PromqlLabelDashboardFilter = z.infer<
 export type AdhocDashboardFilter = z.infer<typeof AdhocDashboardFilterSchema>;
 export type SqlQueryDashboardFilter = z.infer<
   typeof SqlQueryDashboardFilterSchema
+>;
+export type DataSourceDashboardFilter = z.infer<
+  typeof DataSourceDashboardFilterSchema
+>;
+export type ConnectionDashboardFilter = z.infer<
+  typeof ConnectionDashboardFilterSchema
 >;
 export type DashboardFilter = z.infer<typeof DashboardFilterSchema>;
 
@@ -2650,13 +2710,6 @@ export type Team = z.infer<typeof TeamSchema>;
 // --------------------------
 // TABLE SOURCES
 // --------------------------
-export enum SourceKind {
-  Log = 'log',
-  Trace = 'trace',
-  Session = 'session',
-  Metric = 'metric',
-  Promql = 'promql',
-}
 
 // --------------------------
 // TABLE SOURCE FORM VALIDATION
