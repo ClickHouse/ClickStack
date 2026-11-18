@@ -171,6 +171,7 @@ import {
   TraceRedMetricsChart,
 } from './components/Search/TraceRedMetricsChart';
 import { useHeatmapLiveTailGuard } from './components/Search/useHeatmapLiveTailGuard';
+import { useTraceChartModeReset } from './components/Search/useTraceChartModeReset';
 import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from './components/SourceSchemaPreview';
@@ -1519,13 +1520,14 @@ function DBSearchPageContent() {
   // Same, for the histogram group by. Also set when a saved search switches the
   // source, since the group by isn't part of the saved search.
   const pendingGroupByReconcileRef = useRef<string | null>(null);
-  // Same, for the trace RED/Heatmap choice, which was made for the previous
-  // source: a source the user picks opens in the default RED view, so coming
-  // back to a trace source doesn't silently reopen the heatmap (and turn live
-  // tail off again). The reset waits until the URL points at the new source,
-  // so it lands on the new history entry and leaves the previous one intact;
-  // Back/Forward never set this, so they keep the mode the URL restores.
-  const pendingTraceChartModeResetRef = useRef<string | null>(null);
+  // Same, for the trace RED/Heatmap choice: a source the user picks opens in
+  // the default RED view once the URL points at it (see
+  // useTraceChartModeReset).
+  const { arm: armTraceChartModeReset, disarm: disarmTraceChartModeReset } =
+    useTraceChartModeReset({
+      searchedSourceId: searchedSource?.id,
+      setTraceChartMode,
+    });
 
   const watchedSourceObj = useMemo(
     () => inputSourceObjs?.find(s => s.id === watchedSource),
@@ -1594,10 +1596,10 @@ function DBSearchPageContent() {
         !!watchedSource && watchedSource === searchedSource?.id;
 
       // Re-selecting the searched source before a pick's search ran undoes that
-      // pick, so drop the trace chart mode reset it armed. Left set, it would
+      // pick, so drop the trace chart mode reset it armed. Left armed, it would
       // fire on a later navigation to the abandoned source.
       if (isCatchingUpToConfig) {
-        pendingTraceChartModeResetRef.current = null;
+        disarmTraceChartModeReset();
       }
 
       if (isCatchingUpToConfig && savedSearchId == null) {
@@ -1625,7 +1627,7 @@ function DBSearchPageContent() {
         // a freshly loaded page pushes its defaults into the search config.
         if (!isCatchingUpToConfig) {
           pendingGroupByReconcileRef.current = watchedSource ?? null;
-          pendingTraceChartModeResetRef.current = watchedSource ?? null;
+          armTraceChartModeReset(watchedSource ?? null);
           // If the user isn't in a saved search (or the source is different from the saved search source), reset fields
           if (savedSearchId == null || savedSearch?.source !== watchedSource) {
             setValue('select', '');
@@ -1656,19 +1658,9 @@ function DBSearchPageContent() {
     searchedSource?.id,
     rawSearchedConfig.source,
     setSearchedConfig,
+    armTraceChartModeReset,
+    disarmTraceChartModeReset,
   ]);
-
-  useEffect(() => {
-    if (
-      pendingTraceChartModeResetRef.current != null &&
-      pendingTraceChartModeResetRef.current === searchedSource?.id
-    ) {
-      pendingTraceChartModeResetRef.current = null;
-      // Cleared rather than set to 'red': nuqs 1.x writes an explicit default
-      // into the URL.
-      setTraceChartMode(null);
-    }
-  }, [searchedSource?.id, setTraceChartMode]);
 
   const retainCompatibleFiltersAndGroupBy = useStableCallback(
     (columns: ColumnMeta[]) => {
