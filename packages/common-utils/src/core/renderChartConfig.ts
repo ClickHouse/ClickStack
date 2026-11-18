@@ -1928,6 +1928,13 @@ const SUM_BUCKETED_COLUMNS = [
  * Names the CTE already defines are skipped to avoid a clash. Grouped-by ones
  * join the bucket GROUP BY instead of `any()`, so rows with different values
  * stay apart; AttributesHash is left alone because the sum windows use it.
+ *
+ * The raw time column is not carried by default: Bucketed has one row per
+ * series and time bucket. A group-by over it, such as `toStartOfHour(TimeUnix)`
+ * in a table, would not resolve, so when one is present the time column joins
+ * the bucket GROUP BY too and Bucketed keeps one row per point.
+ * `timeColumn` is its projection for Bucketed SELECTs that list columns
+ * explicitly, and is empty otherwise.
  */
 async function getComputedMetricColumns(
   metadata: Metadata,
@@ -1938,6 +1945,7 @@ async function getComputedMetricColumns(
     reservedNames,
     bucketedColumns,
     groupBy,
+    timestampValueExpression,
   }: {
     databaseName: string;
     tableName: string;
@@ -1945,11 +1953,13 @@ async function getComputedMetricColumns(
     reservedNames: string[];
     bucketedColumns: string[];
     groupBy: BuilderChartConfigWithOptDateRangeEx['groupBy'];
+    timestampValueExpression: string | undefined;
   },
 ): Promise<{
   select: string;
   aggregate: string;
   groupBy: string;
+  timeColumn: string;
   project: (c: string) => { UNSAFE_RAW_SQL: string };
 }> {
   let columnNames: string[] = [];
@@ -2006,10 +2016,17 @@ async function getComputedMetricColumns(
   const extra = columnNames.filter(c => !bucketedColumns.includes(c));
   const project = (c: string) =>
     grouped.has(c) ? escape(c) : `any(${escape(c)}) AS ${escape(c)}`;
+  const rawTimeColumn = getFirstTimestampValueExpression(
+    timestampValueExpression || DEFAULT_METRIC_TABLE_TIME_COLUMN,
+  );
+  const timeColumn = referenced.has(rawTimeColumn)
+    ? `, ${escape(rawTimeColumn)}`
+    : '';
   return {
     select: columnNames.map(c => `, ${escape(c)}`).join(''),
-    aggregate: extra.map(c => `, ${project(c)}`).join(''),
-    groupBy: [...grouped].map(c => `, ${escape(c)}`).join(''),
+    aggregate: extra.map(c => `, ${project(c)}`).join('') + timeColumn,
+    groupBy: [...grouped].map(c => `, ${escape(c)}`).join('') + timeColumn,
+    timeColumn,
     // Names come from the fixed OTel lists, so they need no quoting.
     project: (c: string) => ({
       UNSAFE_RAW_SQL: grouped.has(c) ? c : `any(${c}) AS ${c}`,
@@ -2142,6 +2159,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'LastValue', timeBucketCol],
       bucketedColumns: GAUGE_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     return {
@@ -2254,6 +2272,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'Rate', 'Sum', timeBucketCol],
       bucketedColumns: SUM_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     /**
@@ -2322,7 +2341,7 @@ async function translateMetricChartConfig(
               StartTimeUnix,
               Flags,
               AggregationTemporality,
-              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}
+              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}${{ UNSAFE_RAW_SQL: computedColumns.timeColumn }}
             FROM (
               SELECT
                 ${timeExpr},
@@ -2374,18 +2393,23 @@ async function translateMetricChartConfig(
       // these expressions go inside tuple(...) in the ranking CTE and the
       // outer IN predicate, where an `AS "alias"` suffix is a syntax error
       // (mirrors the strip in renderSeriesLimitCte).
-      const groupByForRank = await renderSelectList(
+      // A string groupBy is split per column, as in renderSeriesLimitCte, so
+      // the empty filter below tests each column rather than the whole list.
+      const groupByForRank =
         typeof chartConfig.groupBy === 'string'
-          ? chartConfig.groupBy
-          : chartConfig.groupBy!.map(col => ({ ...col, alias: undefined })),
-        {
-          ...chartConfig,
-          from: { databaseName: '', tableName: 'Bucketed' },
-          with: sumWith,
-        } as BuilderChartConfigWithOptDateRangeEx,
-        metadata,
-        { mergeRatio: false },
-      );
+          ? splitAndTrimWithBracket(chartConfig.groupBy).map(
+              col => chSql`${{ UNSAFE_RAW_SQL: col }}`,
+            )
+          : await renderSelectList(
+              chartConfig.groupBy!.map(col => ({ ...col, alias: undefined })),
+              {
+                ...chartConfig,
+                from: { databaseName: '', tableName: 'Bucketed' },
+                with: sumWith,
+              } as BuilderChartConfigWithOptDateRangeEx,
+              metadata,
+              { mergeRatio: false },
+            );
       const groupBySql = concatChSql(',', groupByForRank);
 
       // Exclude rows where any groupBy column is NULL/empty so they don't
