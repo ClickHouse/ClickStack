@@ -15,7 +15,6 @@ ARG OTEL_COLLECTOR_CORE_VERSION=1.71.0
 # base #############################################################################################
 # == Otel Collector Image ==
 FROM otel/opentelemetry-collector-opampsupervisor:${OTEL_COLLECTOR_VERSION} AS otel_collector_opampsupervisor_base
-FROM kukymbr/goose-docker@sha256:0cd025636df126e7f66472861ca4db3683bc649be46cd1f6ef1a316209058e23 AS goose
 
 # Build the custom HyperDX collector binary using OCB (OpenTelemetry Collector Builder).
 # This replaces the pre-built otel/opentelemetry-collector-contrib image so we can
@@ -152,7 +151,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 ENTRYPOINT ["sh", "/etc/local/entry.sh"]
 
 # all-in-one base ############################################################################################
-FROM hairyhenderson/gomplate:v4.3.3-alpine AS gomplate
+FROM hairyhenderson/gomplate:v5.3.1-alpine AS gomplate
 FROM clickhouse/clickhouse-server:${CLICKHOUSE_VERSION}-alpine AS all-in-one-base
 
 ARG CODE_VERSION
@@ -193,9 +192,6 @@ COPY --from=otel-collector --chmod=755 ./entrypoint.sh /otel-entrypoint.sh
 
 # Copy gomplate binary from the gomplate image
 COPY --from=gomplate /bin/gomplate /usr/local/bin/gomplate
-
-# Copy goose binary from the goose image
-COPY --from=goose /bin/goose /usr/local/bin/goose
 
 # Copy migrate binary (Go-based goose migration tool with full TLS support)
 COPY --from=migrate-builder /migrate /usr/local/bin/migrate
