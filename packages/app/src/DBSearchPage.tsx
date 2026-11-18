@@ -2217,13 +2217,16 @@ function DBSearchPageContent() {
   // Base config for the trace heatmap tile, mirroring the delta-mode heatmap:
   // the search's chart config over the searched range, carrying the source's
   // select-alias definitions. Memoized so the tile's query stays stable across
-  // re-renders.
+  // re-renders. The results table's sort is dropped, as for the histogram: the
+  // heatmap's own queries don't use it, but the chart keys its uPlot instance on
+  // the config, so sorting a column would otherwise rebuild the heatmap.
   const traceHeatmapChartConfig = useMemo(
     () =>
       chartConfig == null
         ? undefined
         : ({
             ...chartConfig,
+            orderBy: undefined,
             dateRange: searchedTimeRange,
             with: aliasWith,
           } satisfies BuilderChartConfigWithDateRange),
