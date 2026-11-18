@@ -20,6 +20,8 @@ interface DashboardFiltersEditModalProps {
   showRequiredFilterOptions: boolean;
   /** The dashboard's variables, if any */
   variables?: ChartVariable[];
+  /** The dashboard's date range, which filter previews run over */
+  dateRange?: [Date, Date];
   onClose: () => void;
   onSaveFilter: (filter: DashboardFilter) => void;
   onRemoveFilter: (id: string) => void;
@@ -33,6 +35,7 @@ const DashboardFiltersModal = ({
   showVariableOptions,
   showRequiredFilterOptions,
   variables,
+  dateRange,
   onClose,
   onSaveFilter,
   onRemoveFilter,
@@ -74,6 +77,7 @@ const DashboardFiltersModal = ({
         showVariableOptions={showVariableOptions}
         showRequiredFilterOptions={showRequiredFilterOptions}
         variables={variables}
+        dateRange={dateRange}
         onSave={handleSaveFilter}
         onCancel={stopEditing}
         onClose={onClose}

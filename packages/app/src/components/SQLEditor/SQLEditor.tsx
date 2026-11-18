@@ -9,6 +9,7 @@ import CodeMirror, {
   keymap,
   Prec,
   ReactCodeMirrorRef,
+  tooltips,
 } from '@uiw/react-codemirror';
 
 import { useMultipleAllFields } from '@/hooks/useMetadata';
@@ -32,6 +33,8 @@ type SQLEditorProps = {
   dateRange?: [Date, Date];
   timestampValueExpression?: string;
   onSubmit?: () => void;
+  /** Where to render the autocomplete popup, so a scrolling modal can't clip it */
+  parentRef?: HTMLElement | null;
 };
 
 export const createRunQueryKeyBinding = (onSubmit: () => void) => ({
@@ -53,6 +56,7 @@ export default function SQLEditor({
   dateRange,
   timestampValueExpression,
   onSubmit,
+  parentRef,
 }: SQLEditorProps) {
   const { colorScheme } = useMantineColorScheme();
   const ref = useRef<ReactCodeMirrorRef>(null);
@@ -64,6 +68,11 @@ export default function SQLEditor({
         ? []
         : [Prec.highest(keymap.of([createRunQueryKeyBinding(onSubmit)]))],
     [onSubmit],
+  );
+
+  const tooltipExt = useMemo(
+    () => (parentRef ? [tooltips({ parent: parentRef })] : []),
+    [parentRef],
   );
 
   const { data: fields } = useMultipleAllFields(tableConnections ?? [], {
@@ -123,6 +132,7 @@ export default function SQLEditor({
         height={height}
         minHeight={'100px'}
         extensions={[
+          ...tooltipExt,
           createCodeMirrorStyleTheme(),
           // eslint-disable-next-line react-hooks/refs
           compartmentRef.current.of(

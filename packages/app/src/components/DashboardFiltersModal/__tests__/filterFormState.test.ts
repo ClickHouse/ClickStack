@@ -386,6 +386,49 @@ describe('toSavedFilter', () => {
     ).toThrow();
   });
 
+  it('keeps only the SQL query fields on a SQL query filter', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'SQL_QUERY',
+        name: 'Region',
+        connection: 'conn1',
+        sqlTemplate: '  SELECT region FROM regions  ',
+        // Left behind by the other editors before the type was switched.
+        expression: 'Env',
+        source: 'logs',
+        where: 'x = 1',
+        options: ['prod'],
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: 'a',
+      type: 'SQL_QUERY',
+      name: 'Region',
+      connection: 'conn1',
+      sqlTemplate: 'SELECT region FROM regions',
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'Region',
+    });
+    expect(toFormValues(saved)).toMatchObject({
+      connection: 'conn1',
+      sqlTemplate: 'SELECT region FROM regions',
+    });
+  });
+
+  it('rejects a SQL query filter without a connection', () => {
+    expect(() =>
+      toSavedFilter(
+        formValues({
+          type: 'SQL_QUERY',
+          name: 'Region',
+          sqlTemplate: 'SELECT region FROM regions',
+        }),
+      ),
+    ).toThrow();
+  });
+
   it('rejects values the schema cannot accept', () => {
     expect(() =>
       toSavedFilter(formValues({ type: 'STATIC_LIST', options: [] })),
@@ -398,10 +441,7 @@ describe('toSavedFilter', () => {
  * selection limits.
  */
 const byType: Record<
-  Exclude<
-    DashboardFilter['type'],
-    'ADHOC' | 'SQL_QUERY' | 'DATA_SOURCE' | 'CONNECTION'
-  >,
+  Exclude<DashboardFilter['type'], 'ADHOC' | 'DATA_SOURCE' | 'CONNECTION'>,
   Partial<FilterFormValues>
 > = {
   QUERY_EXPRESSION: {
@@ -420,6 +460,12 @@ const byType: Record<
     name: 'Job',
     source: 'prom',
     label: 'job',
+  },
+  SQL_QUERY: {
+    type: 'SQL_QUERY',
+    name: 'Region',
+    connection: 'conn1',
+    sqlTemplate: 'SELECT region FROM regions',
   },
 };
 const variants = Object.entries(byType);
