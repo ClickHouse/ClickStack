@@ -446,6 +446,48 @@ describe('clickstack_search partial results', () => {
     expect(body.partial.incompleteRange).toBeUndefined();
   });
 
+  it('returns a timeout error when the newest window stalls past the backstop', async () => {
+    jest.useFakeTimers({ now: END, doNotFake: ['nextTick', 'queueMicrotask'] });
+    mockQueryChartConfig.mockImplementation(() => new Promise(() => {}));
+
+    const pending = getHandler()({
+      sourceId,
+      startTime: minutesBefore(10).toISOString(),
+      endTime: END.toISOString(),
+    });
+    await jest.advanceTimersByTimeAsync(
+      SEARCH_TIME_BUDGET_MS + MCP_TIMEOUT_GRACE_MS,
+    );
+    const result = await pending;
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Timeout exceeded');
+    expect(result.content[0].text).toContain('execution-time limit');
+  });
+
+  it('reports a socket timeout on an older window as a query error, not the time budget', async () => {
+    mockQueryChartConfig.mockImplementation(({ config }: QueryArgs) => {
+      const [start] = config.dateRange;
+      return start >= minutesBefore(15)
+        ? Promise.resolve(chResult(rowsAt(1)))
+        : Promise.reject(
+            Object.assign(new Error('connect ETIMEDOUT'), {
+              code: 'ETIMEDOUT',
+            }),
+          );
+    });
+
+    const result = await getHandler()({
+      sourceId,
+      startTime: minutesBefore(24 * 60).toISOString(),
+      endTime: END.toISOString(),
+    });
+
+    const body = parse(result);
+    expect(body.result.data).toHaveLength(1);
+    expect(body.partial.reason).toBe('query_error');
+  });
+
   it('keeps the partial block through denoise and samples only the scanned range', async () => {
     mockQueryChartConfig.mockImplementation(slowPastFifteenMinutes);
     mockDenoise.mockImplementation(

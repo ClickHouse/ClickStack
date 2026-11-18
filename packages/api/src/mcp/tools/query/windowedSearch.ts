@@ -20,9 +20,12 @@ import {
   runWithTimeout,
   type TimeoutOutcome,
 } from '@/mcp/utils/timeout';
-import { isQueryTimeoutError } from '@/tasks/checkAlerts/errors';
 import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
+
+// helpers.ts imports this module too; the cycle is safe because
+// isQueryOutOfTime is only called at query time, not at module load.
+import { isQueryOutOfTime } from './helpers';
 
 /**
  * Wall-clock budget for the whole scan. Under MCP_TOOL_TIMEOUT_MS because the
@@ -155,7 +158,8 @@ export async function runWindowedSearch({
       // Older windows are wider, so they are likelier to hit memory or
       // network errors; keep the rows the newer windows already found.
       if (results.length === 0) throw e;
-      stopReason = isQueryTimeoutError(e) ? 'time_budget' : 'query_error';
+      // Socket timeouts are network failures, not the time budget.
+      stopReason = isQueryOutOfTime(e) ? 'time_budget' : 'query_error';
       logger.warn(
         {
           err: e,
@@ -170,6 +174,15 @@ export async function runWindowedSearch({
     // A failed or stalled window returned nothing, so it is not reported as
     // incompleteRange: that field marks rows that came from a cut-off window.
     if (outcome.timedOut) {
+      // Same contract as a failed newest window: nothing was read, so error.
+      if (results.length === 0) {
+        throw Object.assign(
+          new Error(
+            'Timeout exceeded: ClickHouse did not respond within the search time budget',
+          ),
+          { code: 'ETIMEDOUT' },
+        );
+      }
       stopReason = 'time_budget';
       break;
     }
