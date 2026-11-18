@@ -23,6 +23,8 @@ export type ChartQueryResult = Pick<
   'data' | 'meta' | 'rows'
 > & {
   isComplete: boolean;
+  /** PromQL time series only: each series' labels, by series name. */
+  promqlSeriesLabels?: Record<string, Record<string, string>>;
 };
 
 /**
@@ -56,8 +58,8 @@ export type StacktraceFrame = {
   filename: string;
   function: string;
   module?: string;
-  lineno: number;
-  colno: number;
+  lineno?: number;
+  colno?: number;
   in_app: boolean;
   context_line?: string;
   pre_context?: string[];

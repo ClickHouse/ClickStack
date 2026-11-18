@@ -17,6 +17,15 @@ jest.mock('@/mcp/tools/query/helpers', () => {
   };
 });
 
+jest.mock('@/mcp/tools/dashboards/variables', () => {
+  const actual = jest.requireActual('@/mcp/tools/dashboards/variables');
+  return {
+    ...actual,
+    getReferenceTargets: () =>
+      Promise.resolve({ sources: [], connectionIds: new Set() }),
+  };
+});
+
 jest.mock('@/models/dashboard', () => ({
   __esModule: true,
   default: { findOne: (...args: unknown[]) => mockFindOne(...args) },

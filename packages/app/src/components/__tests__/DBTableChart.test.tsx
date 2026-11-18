@@ -54,6 +54,10 @@ jest.mock('@/hooks/useOnClickLinkBuilder', () => ({
   useOnClickLinkBuilder: jest.fn().mockReturnValue(null),
 }));
 
+jest.mock('@/hooks/useResultColumnFilterKeys', () => ({
+  useResultColumnFilterKeys: jest.fn(() => new Map()),
+}));
+
 jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
   jest.fn(() => null),
 );
@@ -204,7 +208,7 @@ describe('DBTableChart', () => {
       ).toBeUndefined();
     });
 
-    it('pulses the empty state while a refetch is running', () => {
+    it('shows loading instead of the stale empty result during a refetch', () => {
       const current = jest.mocked(useOffsetPaginatedQuery)(baseTestConfig);
       jest.mocked(useOffsetPaginatedQuery).mockReturnValue({
         ...current,
@@ -212,12 +216,11 @@ describe('DBTableChart', () => {
         isPlaceholderData: true,
       });
 
-      const { getByText } = renderWithMantine(
+      const { getByText, queryByText } = renderWithMantine(
         <DBTableChart config={baseTestConfig} />,
       );
-      expect(getByText('No data found within time range.')).toHaveClass(
-        'effect-pulse',
-      );
+      expect(getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(queryByText('No data found within time range.')).toBeNull();
     });
 
     describe('row links', () => {

@@ -165,4 +165,16 @@ describe('HeatmapPlot', () => {
       'Count Value: 7',
     );
   });
+
+  it('hides the tooltip when anything scrolls, until the next hover', () => {
+    renderPlot();
+    fireEvent.mouseMove(screen.getByTestId('heatmap-plot'));
+    act(() => onPointHighlight(point));
+
+    fireEvent.scroll(document.body);
+    expect(screen.queryByText('Count Value:')).not.toBeInTheDocument();
+
+    act(() => onPointHighlight(point));
+    expect(screen.getByText('Count Value:')).toBeInTheDocument();
+  });
 });

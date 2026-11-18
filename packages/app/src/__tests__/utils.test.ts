@@ -20,6 +20,7 @@ import {
   formatNumber,
   getAllMetricTables,
   getColorFromCSSToken,
+  getLogSeverityLevel,
   getMetricTableName,
   isColumnInSelect,
   mapKeyBy,
@@ -506,6 +507,36 @@ describe('formatNumber', () => {
         average: true,
       };
       expect(formatNumber(1234567, format)).toBe('1m');
+    });
+
+    it('only abbreviates from 1000, not from 500', () => {
+      const format: NumberFormat = {
+        output: 'number',
+        average: true,
+        mantissa: 1,
+      };
+      expect(formatNumber(750, format)).toBe('750.0');
+      expect(formatNumber(1500, format)).toBe('1.5k');
+      expect(formatNumber(600000, format)).toBe('600.0k');
+    });
+
+    it('moves to the next unit when rounding reaches 1000 of the current one', () => {
+      const format: NumberFormat = { output: 'number', average: true };
+      expect(formatNumber(999700, format)).toBe('1m');
+      expect(formatNumber(-999700, format)).toBe('-1m');
+      expect(formatNumber(999.6e6, format)).toBe('1b');
+      expect(formatNumber(999.6, format)).toBe('1k');
+      expect(formatNumber(999960, { ...format, mantissa: 1 })).toBe('1.0m');
+      expect(formatNumber(999940, { ...format, mantissa: 1 })).toBe('999.9k');
+      expect(formatNumber(9.9999, { output: 'percent', average: true })).toBe(
+        '1k%',
+      );
+    });
+
+    it('still formats byte output when average is set', () => {
+      expect(
+        formatNumber(268435456, { output: 'byte', average: true, mantissa: 1 }),
+      ).toBe('256.0 MB');
     });
   });
 
@@ -1342,6 +1373,40 @@ describe('mergePath', () => {
         'BodyJson.`service`.`name`',
       );
     });
+
+    // Without array positions a numeric segment is a JSON object key, as
+    // before: facet keys come from the JSON schema, where `1` is a real key.
+    it('keeps a numeric segment as a quoted key when no array positions are given', () => {
+      expect(mergePath(['Body', 'events', '0', 'id'], ['Body'])).toBe(
+        'Body.`events`.`0`.`id`',
+      );
+    });
+
+    // The row viewer knows which segments index into an array. A JSON array
+    // element is addressed with a 1-based subscript; the quoted key
+    // (`.`0``) matches nothing, so the filter silently returns no rows.
+    it('emits a 1-based subscript for segments marked as array positions', () => {
+      expect(
+        mergePath(
+          ['message', 'events', '0', 'detail', 'parameters', '1', 'value'],
+          ['message'],
+          [],
+          new Set([2, 5]),
+        ),
+      ).toBe('message.`events`[1].`detail`.`parameters`[2].`value`');
+    });
+
+    it('chains subscripts for nested arrays', () => {
+      expect(
+        mergePath(['m', 'grid', '0', '1', 'x'], ['m'], [], new Set([2, 3])),
+      ).toBe('m.`grid`[1][2].`x`');
+    });
+
+    it('keeps a numeric object key quoted when it is not marked as an array position', () => {
+      expect(mergePath(['m', 'counts', '200', 'n'], ['m'], [], new Set())).toBe(
+        'm.`counts`.`200`.`n`',
+      );
+    });
   });
 
   describe('Map column (HDX-4369)', () => {
@@ -1533,6 +1598,51 @@ describe('orderByAfterRemovingSelectItem', () => {
       orderByAfterRemovingSelectItem('Body', 'Body DESC', 'Timestamp DESC'),
     ).toBe('Body DESC');
   });
+
+  it('drops only the removed alias from a multi-field sort', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        item,
+        '"service.name" ASC, Timestamp DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        item,
+        '"http.method" DESC, "service.name" ASC',
+        'Timestamp DESC',
+      ),
+    ).toBe('"http.method" DESC');
+  });
+
+  it('keeps a comma inside a backtick-quoted sort name', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS "message"',
+        '"message" ASC, `a,b` DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('`a,b` DESC');
+  });
+});
+
+describe('getLogSeverityLevel', () => {
+  it.each([
+    [12, 'error', undefined],
+    [13, undefined, 'warn'],
+    [16, 'error', 'warn'],
+    [17, 'info', 'error'],
+    ['17', undefined, 'error'],
+    [0, 'ERROR', 'error'],
+    [undefined, 'Warning', 'warn'],
+    ['', 'fatal', 'error'],
+    [undefined, 'info', undefined],
+  ])('maps %p and %p to %p', (severityNumber, severityText, expected) => {
+    expect(getLogSeverityLevel({ severityNumber, severityText })).toBe(
+      expected,
+    );
+  });
 });
 
 describe('getColorFromCSSToken', () => {
@@ -1569,8 +1679,7 @@ describe('getColorFromCSSToken', () => {
       throw new Error('getComputedStyle unavailable');
     });
 
-    // Defaults to HyperDX in jsdom because the document has no
-    // theme-clickstack class.
+    // Falls back to the semantic palette when the CSS var cannot be read.
     expect(getColorFromCSSToken('chart-success')).toBe('#3ca951');
     expect(getColorFromCSSToken('chart-warning')).toBe('#efb118');
     expect(getColorFromCSSToken('chart-error')).toBe('#ff725c');

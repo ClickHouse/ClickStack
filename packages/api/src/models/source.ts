@@ -3,6 +3,7 @@ import {
   LogSourceSchema,
   MetricsDataType,
   MetricSourceSchema,
+  PROMQL_SOURCE_BACKENDS,
   PromqlSourceSchema,
   QuerySettings,
   SessionSourceSchema,
@@ -157,7 +158,9 @@ export const LogSource = Source.discriminator<ILogSource>(
     serviceNameExpression: String,
     serviceVersionExpression: String,
     severityTextExpression: String,
+    severityNumberExpression: String,
     bodyExpression: String,
+    eventNameExpression: String,
     eventAttributesExpression: String,
     resourceAttributesExpression: String,
     displayedTimestampValueExpression: String,
@@ -167,6 +170,7 @@ export const LogSource = Source.discriminator<ILogSource>(
     spanIdExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
@@ -219,6 +223,7 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     spanLinksValueExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
@@ -305,5 +310,6 @@ export const PromqlSource = Source.discriminator<IPromqlSource>(
   SourceKind.Promql,
   new Schema<Extract<ISource, { kind: SourceKind.Promql }>>({
     minAutoGranularity: minAutoGranularityField,
+    promqlBackend: { type: String, enum: PROMQL_SOURCE_BACKENDS },
   }),
 );

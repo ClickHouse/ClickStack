@@ -433,13 +433,13 @@ processors:
 service:
   pipelines:
     traces:
-      processors: [memory_limiter/custom, batch]
+      processors: [memory_limiter/custom, transform/session_id, batch]
     metrics:
       processors: [memory_limiter/custom, batch]
     logs/out-default:
-      processors: [memory_limiter/custom, transform, batch]
+      processors: [memory_limiter/custom, transform, transform/session_id, batch]
     logs/out-rrweb:
-      processors: [memory_limiter/custom, batch]
+      processors: [memory_limiter/custom, transform/session_id, batch]
 ```
 
 After restart, the collector instantiates `memory_limiter/custom` (and not
@@ -466,9 +466,9 @@ processors:
 service:
   pipelines:
     traces:
-      processors: [memory_limiter, batch/lowlatency]
+      processors: [memory_limiter, transform/session_id, batch/lowlatency]
     logs/out-default:
-      processors: [memory_limiter, transform, batch/lowlatency]
+      processors: [memory_limiter, transform, transform/session_id, batch/lowlatency]
 ```
 
 Notes:
@@ -572,7 +572,8 @@ args:
 ### Files you do NOT need to change
 
 - `packages/otel-collector/builder-config.yaml` — uses placeholders, substituted
-  at build time
+  at build time. The exception is stable (v1.x) components such as
+  `k8sattributesprocessor`: copy their version from the upstream manifest
 - `docker-compose.dev.yml` — reads from `.env` automatically
 - `docker-compose.ci.yml` — reads from `.env` automatically
 
@@ -606,7 +607,7 @@ codebase without needing to publish a Go module tag on every change.
    ```yaml
    receivers:
      - gomod:
-         github.com/hyperdxio/hyperdx/packages/otel-collector/receiver/myreceiver
+         github.com/ClickHouse/ClickStack/packages/otel-collector/receiver/myreceiver
          v0.0.0
        path: ./receiver/myreceiver
    ```

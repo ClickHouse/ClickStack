@@ -1,13 +1,22 @@
-import { useState } from 'react';
-import { isAdhocConditionSupported } from '@hyperdx/common-utils/dist/filters';
+import { useMemo, useState } from 'react';
+import {
+  getDashboardVariableFilters,
+  getPendingFilterValuesVariables,
+  isAdhocConditionSupported,
+  resolveFilterValuesWhere,
+} from '@hyperdx/common-utils/dist/filters';
 import {
   ADHOC_FILTER_MAX_CONDITIONS,
   AdhocDashboardFilter as AdhocDashboardFilterType,
   AdhocFilterCondition,
   AdhocFilterConditionSchema,
+  ChartVariable,
+  DashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
+import { getVariableReferences } from '@hyperdx/common-utils/dist/variables';
 import {
   ActionIcon,
+  Button,
   CloseButton,
   Group,
   Popover,
@@ -19,7 +28,10 @@ import { IconPlus } from '@tabler/icons-react';
 
 import {
   DashboardFilterLabel,
+  FilterCaution,
   FilterEffect,
+  getIncompatibleVariablesTooltip,
+  getPendingVariablesTooltip,
 } from '@/components/DashboardFilterLabel';
 import { FilterPill, getFilterOperatorDisplay } from '@/components/FilterPill';
 
@@ -29,13 +41,29 @@ import {
   notifyAdhocFilterFull,
 } from './notifications';
 
+// Series with many labels (common in PromQL) would otherwise grow the input tall.
+const MAX_COLLAPSED_CONDITIONS = 3;
+
 type AdhocDashboardFilterProps = {
   filter: AdhocDashboardFilterType;
   conditions: AdhocFilterCondition[];
   onChange: (conditions: AdhocFilterCondition[]) => void;
   dateRange: [Date, Date];
   effect: FilterEffect;
+  /** The dashboard's variables, which the filter's `where` may reference. */
+  variables?: ChartVariable[];
+  /** Required filters with nothing selected. */
+  unsatisfiedRequiredFilters?: DashboardFilter[];
+  /**
+   * Unselected data source variables the filter's sources reference. Until
+   * they have a selection the filter has no sources to suggest keys from.
+   */
+  unresolvedVariables?: string[];
+  /** Those of `unresolvedVariables` selecting a source the filter can't use. */
+  incompatibleVariables?: string[];
 };
+
+const NO_VARIABLES: string[] = [];
 
 /** A dashboard filter bar control holding one ad hoc filter's conditions. */
 export function AdhocDashboardFilter({
@@ -44,11 +72,59 @@ export function AdhocDashboardFilter({
   onChange,
   dateRange,
   effect,
+  variables,
+  unsatisfiedRequiredFilters,
+  unresolvedVariables = NO_VARIABLES,
+  incompatibleVariables = NO_VARIABLES,
 }: AdhocDashboardFilterProps) {
   const [isAdding, setIsAdding] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const isAtLimit = conditions.length >= ADHOC_FILTER_MAX_CONDITIONS;
+  const hiddenCount = isExpanded
+    ? 0
+    : Math.max(0, conditions.length - MAX_COLLAPSED_CONDITIONS);
+  const languageName = filter.sourceType === 'promql' ? 'PromQL' : 'SQL';
+
+  // The `where` narrowing the suggestions, and what it is still waiting on.
+  // Blocked only by the required filters it references: a global requirement
+  // blocks tiles, not the filter bar, same as queried dropdown filters.
+  const { suggestionsWhere, pendingVariables, blockingFilterNames } =
+    useMemo(() => {
+      const where = filter.sourceType === 'sql' ? filter.where : undefined;
+      const query = { where, whereLanguage: filter.whereLanguage };
+      const referencedNames = new Set(
+        getVariableReferences(where ?? '').map(reference => reference.name),
+      );
+      return {
+        suggestionsWhere: resolveFilterValuesWhere(query, variables),
+        pendingVariables: getPendingFilterValuesVariables(query, variables),
+        blockingFilterNames: getDashboardVariableFilters(
+          unsatisfiedRequiredFilters,
+        )
+          .filter(({ name }) => referencedNames.has(name))
+          .map(({ filter: blocking }) => blocking.name),
+      };
+    }, [
+      filter.sourceType,
+      filter.where,
+      filter.whereLanguage,
+      variables,
+      unsatisfiedRequiredFilters,
+    ]);
+  const dependsOn = blockingFilterNames.length
+    ? `This filter depends on: ${blockingFilterNames.join(', ')}`
+    : undefined;
+  const disabledReason = dependsOn ?? suggestionsWhere.error;
+  const isDisabled = !!disabledReason || unresolvedVariables.length > 0;
+  const allPendingVariables = [
+    ...unresolvedVariables.filter(
+      name => !incompatibleVariables.includes(name),
+    ),
+    ...pendingVariables,
+  ];
 
   const toggleAdding = () => {
+    if (isDisabled) return;
     if (isAtLimit) {
       notifyAdhocFilterFull(filter);
       return;
@@ -71,7 +147,30 @@ export function AdhocDashboardFilter({
 
   return (
     <Stack gap={2} data-testid={`adhoc-filter-${filter.name}`}>
-      <DashboardFilterLabel name={filter.name} effect={effect} />
+      <DashboardFilterLabel name={filter.name} effect={effect}>
+        {dependsOn && (
+          <FilterCaution
+            label={dependsOn}
+            testId={`dashboard-filter-blocked-${filter.name}`}
+          />
+        )}
+        {!disabledReason && allPendingVariables.length > 0 && (
+          <FilterCaution
+            label={getPendingVariablesTooltip(allPendingVariables)}
+            testId={`dashboard-filter-pending-variable-${filter.name}`}
+          />
+        )}
+        {(suggestionsWhere.error || incompatibleVariables.length > 0) && (
+          <FilterCaution
+            label={
+              suggestionsWhere.error ??
+              getIncompatibleVariablesTooltip(incompatibleVariables)
+            }
+            testId={`dashboard-filter-error-${filter.name}`}
+            variant="danger"
+          />
+        )}
+      </DashboardFilterLabel>
       <Group
         gap={4}
         w={250}
@@ -84,45 +183,63 @@ export function AdhocDashboardFilter({
           borderRadius: 'var(--mantine-radius-sm)',
         }}
       >
-        {conditions.map((condition, index) => {
-          const operator = getFilterOperatorDisplay(
-            filter.sourceType,
-            condition.operator,
-          );
-          return (
-            <FilterPill
-              key={JSON.stringify(condition)}
-              field={condition.key}
-              operator={operator.label}
-              value={condition.value}
-              isExcluded={operator.isExcluded}
-              isInvalid={
-                !isAdhocConditionSupported(filter.sourceType, condition)
-              }
-              invalidReason={`Filter not applied: PromQL has no ${condition.operator} operator. Remove this condition and add it again with a supported operator.`}
-              onRemove={() => remove(index)}
-              renderPopover={close => (
-                <AdhocConditionEditor
-                  filter={filter}
-                  dateRange={dateRange}
-                  initial={condition}
-                  onSubmit={next => {
-                    if (!isStorable(next)) return;
-                    replace(index, next);
-                    close();
-                  }}
-                />
-              )}
-              data-testid="adhoc-condition-pill"
-            />
-          );
-        })}
+        {conditions
+          .slice(0, conditions.length - hiddenCount)
+          .map((condition, index) => {
+            const operator = getFilterOperatorDisplay(
+              filter.sourceType,
+              condition.operator,
+            );
+            return (
+              <FilterPill
+                key={JSON.stringify(condition)}
+                field={condition.key}
+                operator={operator.label}
+                value={condition.value}
+                isExcluded={operator.isExcluded}
+                isInvalid={
+                  !isAdhocConditionSupported(filter.sourceType, condition)
+                }
+                invalidReason={`Filter not applied: ${languageName} has no ${condition.operator} operator. Remove this condition and add it again with a supported operator.`}
+                onRemove={() => remove(index)}
+                // Editing would look up suggestions; removing still works.
+                renderPopover={
+                  isDisabled
+                    ? undefined
+                    : close => (
+                        <AdhocConditionEditor
+                          filter={filter}
+                          dateRange={dateRange}
+                          suggestionsWhere={suggestionsWhere}
+                          initial={condition}
+                          onSubmit={next => {
+                            if (!isStorable(next)) return;
+                            replace(index, next);
+                            close();
+                          }}
+                        />
+                      )
+                }
+                data-testid="adhoc-condition-pill"
+              />
+            );
+          })}
+        {conditions.length > MAX_COLLAPSED_CONDITIONS && (
+          <Button
+            variant="subtle"
+            size="compact-xs"
+            onClick={() => setIsExpanded(!isExpanded)}
+            data-testid={`adhoc-filter-toggle-more-${filter.name}`}
+          >
+            {isExpanded ? 'Show less' : `+${hiddenCount} more`}
+          </Button>
+        )}
         {conditions.length === 0 && (
           <Text
             size="xs"
             c="dimmed"
-            onClick={() => setIsAdding(true)}
-            style={{ cursor: 'pointer', flex: 1 }}
+            onClick={isDisabled ? undefined : () => setIsAdding(true)}
+            style={{ cursor: isDisabled ? 'default' : 'pointer', flex: 1 }}
           >
             {filter.name}
           </Text>
@@ -137,7 +254,7 @@ export function AdhocDashboardFilter({
             />
           )}
           <Popover
-            opened={isAdding}
+            opened={isAdding && !isDisabled}
             onChange={setIsAdding}
             position="bottom-start"
             withArrow
@@ -146,16 +263,21 @@ export function AdhocDashboardFilter({
           >
             <Popover.Target>
               <Tooltip
-                label={`Up to ${ADHOC_FILTER_MAX_CONDITIONS} conditions`}
-                disabled={!isAtLimit}
+                label={
+                  disabledReason ??
+                  `Up to ${ADHOC_FILTER_MAX_CONDITIONS} conditions`
+                }
+                disabled={!isDisabled && !isAtLimit}
                 withinPortal
+                multiline
+                maw={400}
               >
                 <ActionIcon
                   variant="subtle"
                   size="sm"
                   aria-label={`Add ${filter.name} condition`}
-                  aria-disabled={isAtLimit}
-                  data-disabled={isAtLimit || undefined}
+                  aria-disabled={isDisabled || isAtLimit}
+                  data-disabled={isDisabled || isAtLimit || undefined}
                   onClick={toggleAdding}
                   data-testid={`adhoc-filter-add-${filter.name}`}
                 >
@@ -167,6 +289,7 @@ export function AdhocDashboardFilter({
               <AdhocConditionEditor
                 filter={filter}
                 dateRange={dateRange}
+                suggestionsWhere={suggestionsWhere}
                 onSubmit={condition => {
                   if (!isStorable(condition)) return;
                   onChange([...conditions, condition]);

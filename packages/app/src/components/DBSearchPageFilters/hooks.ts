@@ -30,7 +30,11 @@ import { escapeFilterStateKeys, usePinnedFilters } from '@/searchFilters';
 import { useSource } from '@/source';
 import { mergePath } from '@/utils';
 
-import { listRequestedFacets, toQuotedClickHouseKeyExpression } from './utils';
+import {
+  listRequestedFacets,
+  sortLowCardinalityFirst,
+  toQuotedClickHouseKeyExpression,
+} from './utils';
 
 const INITIAL_LOAD_LIMIT = 20;
 
@@ -99,6 +103,10 @@ function useFacets({
     [columns],
   );
   const { data: jsonColumns } = useJsonColumns(tableConnection);
+  const jsonColumnSet = useMemo(
+    () => new Set(jsonColumns ?? []),
+    [jsonColumns],
+  );
   const { data: mapColumns } = useMapColumns(tableConnection);
 
   const {
@@ -120,16 +128,7 @@ function useFacets({
       return [];
     }
 
-    const strings = allFields
-      .sort((a, b) => {
-        // First show low cardinality fields
-        const isLowCardinality = (type: string) =>
-          type.includes('LowCardinality');
-        return (
-          (isLowCardinality(b.type) ? 1 : 0) -
-          (isLowCardinality(a.type) ? 1 : 0)
-        );
-      })
+    const strings = sortLowCardinalityFirst(allFields)
       .filter(
         field => field.jsType && ['string'].includes(field.jsType),
         // todo: add number type with sliders :D
@@ -175,12 +174,16 @@ function useFacets({
 
     const sqlKeyToUiKey = new Map<string, string>();
     const escapedKeysToFetch = keysToFetch.map(key => {
-      const sqlKey = toQuotedClickHouseKeyExpression(key, knownColumns);
+      const sqlKey = toQuotedClickHouseKeyExpression(
+        key,
+        knownColumns,
+        jsonColumnSet,
+      );
       sqlKeyToUiKey.set(sqlKey, key);
       return sqlKey;
     });
     return { escapedKeysToFetch, sqlKeyToUiKey };
-  }, [isColumnsLoading, keysToFetch, knownColumns]);
+  }, [isColumnsLoading, keysToFetch, knownColumns, jsonColumnSet]);
 
   const facetsChartConfig = useMemo(
     () =>
@@ -221,7 +224,11 @@ function useFacets({
   const loadMoreFacetsForKey = useCallback(
     async (key: string): Promise<Facet | undefined> => {
       try {
-        const sqlKey = toQuotedClickHouseKeyExpression(key, knownColumns);
+        const sqlKey = toQuotedClickHouseKeyExpression(
+          key,
+          knownColumns,
+          jsonColumnSet,
+        );
         if (mode === 'exact') {
           const strippedFilterState: FilterState = { ...filterState };
           delete strippedFilterState[key];
@@ -231,7 +238,11 @@ function useFacets({
               ...chartConfig,
               dateRange,
               filters: filtersToQuery(
-                escapeFilterStateKeys(strippedFilterState, knownColumns),
+                escapeFilterStateKeys(
+                  strippedFilterState,
+                  knownColumns,
+                  jsonColumnSet,
+                ),
                 { dateTimeColumns },
               ),
             },
@@ -287,6 +298,7 @@ function useFacets({
       chartConfig,
       dateRange,
       knownColumns,
+      jsonColumnSet,
       source,
       filterState,
       dateTimeColumns,

@@ -1,5 +1,4 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import cx from 'classnames';
 import { ErrorBoundary } from 'react-error-boundary';
 import {
   filterColumnMetaByType,
@@ -34,6 +33,7 @@ import {
 } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -382,22 +382,13 @@ export default function DBNumberChart({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : resultError ? (
         <ChartErrorState error={resultError} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <div
           className={isLoading || isPlaceholderData ? 'effect-pulse' : ''}

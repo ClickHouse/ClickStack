@@ -9,6 +9,7 @@ import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import {
   DBTimeChart,
   decodeSeriesGroupFilters,
+  getSeriesFilterEntries,
 } from '@/components/DBTimeChart';
 import MVOptimizationIndicator from '@/components/MaterializedViews/MVOptimizationIndicator';
 import { MAX_LOADABLE_TIME_CHART_SERIES } from '@/defaults';
@@ -23,6 +24,10 @@ import { useSource } from '@/source';
 jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
   getMinGranularitySeconds: jest.fn().mockReturnValue(undefined),
+}));
+
+jest.mock('@/hooks/useResultColumnFilterKeys', () => ({
+  useResultColumnFilterKeys: jest.fn(() => new Map()),
 }));
 
 jest.mock('@/hooks/useMVOptimizationExplanation', () => ({
@@ -154,6 +159,68 @@ describe('DBTimeChart', () => {
     // Verify that enabled is false even when compareToPreviousPeriod is true
     // because the enabled prop is false
     expect(secondCallOptions.enabled).toBe(false);
+  });
+
+  describe('empty state', () => {
+    const emptyResult = {
+      data: {
+        data: [],
+        meta: [
+          { name: 'timestamp', type: 'DateTime' },
+          { name: 'value', type: 'UInt64' },
+        ],
+        rows: 0,
+        isComplete: true,
+      },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      isPlaceholderData: false,
+    };
+    // Zero-filled buckets would otherwise render an empty line, not the empty state.
+    const emptyConfig = { ...baseTestConfig, fillNulls: false as const };
+    const isPreviousPeriod = (config: { dateRange: [Date, Date] }) =>
+      config.dateRange[0] < baseTestConfig.dateRange[0];
+
+    it('shows loading while the query is still fetching', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        ...emptyResult,
+        data: { ...emptyResult.data, isComplete: false },
+        isFetching: true,
+      });
+
+      renderWithMantine(<DBTimeChart config={emptyConfig} />);
+
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+    });
+
+    it('shows no data when the previous-period query fails', () => {
+      mockUseQueriedChartConfig.mockImplementation(config =>
+        isPreviousPeriod(config)
+          ? {
+              data: undefined,
+              isLoading: false,
+              isFetching: false,
+              isError: true,
+              error: new Error('previous period failed'),
+              isSuccess: false,
+              isPlaceholderData: false,
+            }
+          : emptyResult,
+      );
+
+      renderWithMantine(
+        <DBTimeChart
+          config={{ ...emptyConfig, compareToPreviousPeriod: true }}
+        />,
+      );
+
+      expect(
+        screen.getByText('No data found within time range.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading Chart Data...')).toBeNull();
+    });
   });
 
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
@@ -668,6 +735,74 @@ describe('DBTimeChart', () => {
       expect(() =>
         renderWithMantine(<DBTimeChart config={rawSqlConfig} />),
       ).not.toThrow();
+    });
+  });
+
+  describe('getSeriesFilterEntries', () => {
+    const filterKeyByColumn = new Map([
+      ['svc', 'ServiceName'],
+      ['SeverityText', 'SeverityText'],
+      ['attrs', 'LogAttributes'],
+    ]);
+    const entries = (groupValues: unknown[], groupColumns: string[]) =>
+      getSeriesFilterEntries({
+        line: { groupValues },
+        groupColumns,
+        filterKeyByColumn,
+      });
+
+    it('keys each group value by its column filter key', () => {
+      expect(entries(['api', 'error'], ['svc', 'SeverityText'])).toEqual([
+        { key: 'ServiceName', value: 'api' },
+        { key: 'SeverityText', value: 'error' },
+      ]);
+    });
+
+    it('stringifies a number group value', () => {
+      expect(entries([200], ['svc'])).toEqual([
+        { key: 'ServiceName', value: '200' },
+      ]);
+    });
+
+    it('returns nothing when a group column has no filter key', () => {
+      expect(entries(['api', 'x'], ['svc', 'unknown'])).toBeUndefined();
+    });
+
+    it('returns nothing for a null group value', () => {
+      expect(entries(['api', null], ['svc', 'SeverityText'])).toBeUndefined();
+    });
+
+    it('returns nothing for an object or array group value', () => {
+      expect(entries([{ a: '1' }], ['attrs'])).toBeUndefined();
+      expect(entries([['a', 1]], ['attrs'])).toBeUndefined();
+    });
+
+    it('returns nothing without a series or group columns', () => {
+      expect(
+        getSeriesFilterEntries({
+          line: undefined,
+          groupColumns: ['svc'],
+          filterKeyByColumn,
+        }),
+      ).toBeUndefined();
+      expect(entries([], [])).toBeUndefined();
+    });
+
+    it('returns the labels of a PromQL series, except __name__', () => {
+      const seriesName = 'up{job="api"}';
+      expect(
+        getSeriesFilterEntries({
+          line: { groupValues: [seriesName] },
+          groupColumns: ['series_name'],
+          filterKeyByColumn: new Map(),
+          promqlSeriesLabels: {
+            [seriesName]: { __name__: 'up', job: 'api', pod: 'a' },
+          },
+        }),
+      ).toEqual([
+        { key: 'job', value: 'api' },
+        { key: 'pod', value: 'a' },
+      ]);
     });
   });
 

@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from 'react';
-import cx from 'classnames';
 import { inferNumericColumn } from '@hyperdx/common-utils/dist/clickhouse';
 import { isRatioChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
@@ -25,17 +24,21 @@ import { getMinGranularitySeconds } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import useOffsetPaginatedQuery from '@/hooks/useOffsetPaginatedQuery';
 import { useOnClickLinkBuilder } from '@/hooks/useOnClickLinkBuilder';
+import { useResultColumnFilterKeys } from '@/hooks/useResultColumnFilterKeys';
 import {
   getBuilderValueColumnCount,
   useChartNumberFormats,
   useSource,
 } from '@/source';
+import type { TileFilterHandler } from '@/types';
 import { useIntersectionObserver } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
+import type { CellFilterHandler } from './DBTable/DBRowTableFieldWithPopover';
 import { getClientSideSortingFn } from './DBTable/sorting';
 import MVOptimizationIndicator from './MaterializedViews/MVOptimizationIndicator';
 
@@ -53,6 +56,7 @@ export default function DBTableChart({
   showMVOptimizationIndicator = true,
   variant,
   errorVariant,
+  onFilter,
 }: {
   config: ChartConfigWithOptTimestamp;
   getRowSearchLink?: (row: any) => string | null;
@@ -67,6 +71,8 @@ export default function DBTableChart({
   showMVOptimizationIndicator?: boolean;
   variant?: TableVariant;
   errorVariant?: ChartErrorStateVariant;
+  /** When set, group-by cells offer filter / exclude actions for their value. */
+  onFilter?: TileFilterHandler;
 }) {
   const [sort, setSort] = useState<SortingState>([]);
 
@@ -194,6 +200,16 @@ export default function DBTableChart({
     return { colorByColumn, rulesByColumn };
   }, [data?.meta, queriedConfig]);
 
+  const filterKeyByColumn = useResultColumnFilterKeys({
+    config: queriedConfig,
+    meta: data?.meta,
+    enabled: !!onFilter,
+  });
+  const onCellFilter = useCallback<CellFilterHandler>(
+    (key, value, action) => onFilter?.([{ key, value }], action),
+    [onFilter],
+  );
+
   const columns = useMemo(() => {
     const rows = data?.data ?? [];
     if (rows.length === 0) {
@@ -253,11 +269,13 @@ export default function DBTableChart({
           ? undefined
           : rulesByColumn.get(key),
         sortingFn: getClientSideSortingFn(data?.meta, key),
+        filterKey: filterKeyByColumn.get(key),
       }));
   }, [
     data,
     queriedConfig,
     hiddenColumns,
+    filterKeyByColumn,
     aliasMap,
     formatByColumn,
     colorByColumn,
@@ -317,20 +335,11 @@ export default function DBTableChart({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Table
           data={data?.data ?? []}
@@ -349,6 +358,10 @@ export default function DBTableChart({
           }
           onSortingChange={handleSortingChange}
           variant={variant}
+          // Placeholder rows belong to the previous query's columns
+          onCellFilter={
+            onFilter && !isPlaceholderData ? onCellFilter : undefined
+          }
           alternateRowBackground={!!queriedConfig.alternateRowBackground}
           className={isPlaceholderData ? 'effect-pulse' : undefined}
           tableBottom={

@@ -1,5 +1,4 @@
 import { memo } from 'react';
-import cx from 'classnames';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { Box, Flex, ScrollArea, Text } from '@mantine/core';
 
@@ -11,6 +10,7 @@ import {
   useCategoricalChart,
 } from './charts/CategoricalChart';
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState from './charts/ChartErrorState';
 import { ChartTooltipContainer, ChartTooltipItem } from './charts/ChartTooltip';
 
@@ -105,22 +105,13 @@ export const DBPieChart = (props: CategoricalChartProps) => {
   return (
     <ChartContainer title={title} toolbarItems={toolbarItems}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : responseFormatError ? (
         <ChartErrorState error={responseFormatError} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Flex
           data-testid="pie-chart-container"
