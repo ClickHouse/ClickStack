@@ -4027,4 +4027,232 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       expect(getFirstText(patchResult)).toContain('savedFilterValues');
     });
   });
+
+  describe('ad hoc filters', () => {
+    const adhocFilter = () => ({
+      type: 'ADHOC' as const,
+      name: 'Conditions',
+      sourceType: 'sql' as const,
+      sources: [ctx.traceSource._id.toString()],
+      variableName: 'conditions',
+    });
+    const adhocValue = {
+      type: 'adhoc' as const,
+      name: 'conditions',
+      conditions: [
+        { key: 'ServiceName', operator: 'IN' as const, value: 'api' },
+        { key: 'ServiceName', operator: 'IN' as const, value: 'web' },
+      ],
+    };
+    const parse = (result: Awaited<ReturnType<typeof callTool>>) =>
+      JSON.parse(getFirstText(result));
+
+    it('round-trips an ad hoc filter and its saved conditions through save, get and save', async () => {
+      const created = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Ad hoc',
+        tiles: [],
+        filters: [adhocFilter()],
+        savedFilterValues: [adhocValue],
+      });
+      expect(created.isError).toBeFalsy();
+      const { id, warnings } = parse(created);
+      expect(warnings ?? []).toEqual([]);
+
+      const read = parse(
+        await callTool(ctx.client!, 'clickstack_get_dashboard', { id }),
+      );
+      expect(read.filters).toEqual([
+        {
+          ...adhocFilter(),
+          id: expect.any(String),
+          isBroadcastEnabled: true,
+          isVariableEnabled: true,
+        },
+      ]);
+      expect(read.savedFilterValues).toEqual([adhocValue]);
+
+      const storedBefore = await Dashboard.findById(id).lean();
+      const saved = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id,
+        name: 'Ad hoc',
+        tiles: [],
+        filters: read.filters,
+        savedFilterValues: read.savedFilterValues,
+      });
+      expect(saved.isError).toBeFalsy();
+      const storedAfter = await Dashboard.findById(id).lean();
+      expect(storedAfter?.filters).toEqual(storedBefore?.filters);
+      expect(storedAfter?.savedFilterValues).toEqual([adhocValue]);
+    });
+
+    it('saves back a filter whose source was deleted since it was stored', async () => {
+      const dashboard = await new Dashboard({
+        name: 'Deleted source',
+        tiles: [],
+        team: ctx.team._id,
+        filters: [
+          {
+            ...adhocFilter(),
+            id: 'adhoc-1',
+            sources: [
+              ctx.traceSource._id.toString(),
+              '65f5e4a3b9e77c001a999999',
+            ],
+            isBroadcastEnabled: true,
+            isVariableEnabled: true,
+          },
+        ],
+      }).save();
+      const id = dashboard._id.toString();
+      const read = parse(
+        await callTool(ctx.client!, 'clickstack_get_dashboard', { id }),
+      );
+
+      const saved = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id,
+        name: 'Renamed',
+        tiles: [],
+        filters: read.filters,
+      });
+
+      expect(saved.isError).toBeFalsy();
+    });
+
+    it('warns about saved conditions that no ad hoc filter matches', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Bad defaults',
+        tiles: [],
+        filters: [adhocFilter()],
+        savedFilterValues: [{ ...adhocValue, name: 'conditons' }],
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parse(result).warnings).toEqual([
+        expect.stringContaining('"conditons"'),
+      ]);
+    });
+  });
+
+  describe('reference variables', () => {
+    const filters = [
+      {
+        type: 'CONNECTION',
+        name: 'Connection',
+        variableName: 'conn',
+        isGlobalRequirement: true,
+      },
+      {
+        type: 'DATA_SOURCE',
+        name: 'Traces source',
+        variableName: 'traces',
+        allowedSourceKinds: [SourceKind.Trace],
+        connectionId: '$conn',
+      },
+    ];
+
+    it('saves and returns variables and tiles that reference them', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            name: 'Builder',
+            config: {
+              displayType: 'line',
+              sourceId: '$traces',
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Raw SQL',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId: '$conn',
+              sqlTemplate: 'SELECT 1',
+            },
+          },
+        ],
+        filters,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(result));
+      expect(output.filters).toEqual([
+        expect.objectContaining(filters[0]),
+        expect.objectContaining(filters[1]),
+      ]);
+      expect(
+        output.tiles.map((t: ExternalDashboardTileWithId) => t.config),
+      ).toEqual([
+        expect.objectContaining({ sourceId: '$traces' }),
+        expect.objectContaining({ connectionId: '$conn' }),
+      ]);
+    });
+
+    it('saves a SQL query filter that runs on a connection variable', async () => {
+      const sqlFilter = {
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        variableName: 'env',
+        connectionId: '$conn',
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+      };
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [],
+        filters: [filters[0], sqlFilter],
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(getFirstText(result)).filters[1]).toMatchObject(
+        sqlFilter,
+      );
+    });
+
+    it('rejects a tile referencing an undeclared variable', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            name: 'Builder',
+            config: {
+              displayType: 'line',
+              sourceId: '$traces',
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain(
+        'does not name a data source variable',
+      );
+    });
+
+    it('checks an update without filters against the stored variables', async () => {
+      const builderTile = (sourceId: string) => ({
+        name: 'Builder',
+        config: {
+          displayType: 'line',
+          sourceId,
+          select: [{ aggFn: 'count' }],
+        },
+      });
+      const created = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [builderTile(ctx.traceSource._id.toString())],
+        filters,
+      });
+      expect(created.isError).toBeFalsy();
+
+      const updated = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id: JSON.parse(getFirstText(created)).id,
+        name: 'Variable dashboard',
+        tiles: [builderTile('$traces')],
+      });
+
+      expect(updated.isError).toBeFalsy();
+    });
+  });
 });

@@ -1159,14 +1159,17 @@ describe('Metadata Integration Tests', () => {
         clickhouse_settings: { allow_experimental_time_series_table: 1 },
       });
 
+    // Pinned to version 7: from version 8 (the default since ClickHouse 26.10)
+    // min_time/max_time live in a separate time ranges table, and
+    // store_min_time_and_max_time is rejected.
     beforeAll(async () => {
       await timeSeriesCommand(`DROP TABLE IF EXISTS default.${boundedTable}`);
       await timeSeriesCommand(`DROP TABLE IF EXISTS default.${unboundedTable}`);
       await timeSeriesCommand(
-        `CREATE TABLE default.${boundedTable} ENGINE = TimeSeries`,
+        `CREATE TABLE default.${boundedTable} ENGINE = TimeSeries SETTINGS version = 7`,
       );
       await timeSeriesCommand(
-        `CREATE TABLE default.${unboundedTable} ENGINE = TimeSeries SETTINGS store_min_time_and_max_time = 0`,
+        `CREATE TABLE default.${unboundedTable} ENGINE = TimeSeries SETTINGS store_min_time_and_max_time = 0, version = 7`,
       );
     });
 
@@ -1219,7 +1222,7 @@ describe('Metadata Integration Tests', () => {
     });
 
     it.each([
-      ['Metrics', ['metric_family_name', 'type', 'unit', 'help']],
+      ['Metrics', ['metric_family', 'type', 'unit', 'help']],
       ['Data', ['id', 'timestamp', 'value']],
     ] as const)(
       'describes the %s inner table',
@@ -1304,6 +1307,50 @@ describe('Metadata Integration Tests', () => {
       expect(querySpy).toHaveBeenCalledTimes(3);
 
       querySpy.mockRestore();
+    });
+  });
+
+  // The version decides which samples column a query reads (`samples` from
+  // version 3, `time_series` before), so a version read as 0 silently breaks
+  // queries on new tables.
+  describe('getTimeSeriesTableVersion', () => {
+    const defaultTable = 'test_ts_version_default';
+    const v7Table = 'test_ts_version_7';
+
+    const timeSeriesCommand = (query: string) =>
+      client.command({
+        query,
+        clickhouse_settings: { allow_experimental_time_series_table: 1 },
+      });
+
+    const version = (tableName: string) =>
+      new Metadata(hdxClient, new MetadataCache()).getTimeSeriesTableVersion({
+        connectionId: 'test_connection',
+        databaseName: 'default',
+        tableName,
+      });
+
+    beforeAll(async () => {
+      await timeSeriesCommand(
+        `CREATE OR REPLACE TABLE default.${defaultTable} ENGINE = TimeSeries`,
+      );
+      await timeSeriesCommand(
+        `CREATE OR REPLACE TABLE default.${v7Table} ENGINE = TimeSeries SETTINGS version = 7`,
+      );
+    });
+
+    afterAll(async () => {
+      await timeSeriesCommand(`DROP TABLE IF EXISTS default.${defaultTable}`);
+      await timeSeriesCommand(`DROP TABLE IF EXISTS default.${v7Table}`);
+    });
+
+    it('reads the version from the table definition', async () => {
+      expect(await version(defaultTable)).toBe(8);
+      expect(await version(v7Table)).toBe(7);
+    });
+
+    it('answers 0 for a table that does not exist', async () => {
+      expect(await version('test_ts_version_missing')).toBe(0);
     });
   });
 

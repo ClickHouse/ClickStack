@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
-import { mcpUserError } from '@/mcp/utils/errors';
+import { mcpUnion, mcpUserError } from '@/mcp/utils/errors';
 import { objectIdSchema } from '@/utils/zod';
 
 import { buildTile, parseTimeRange, runConfigTile } from './helpers';
@@ -33,8 +33,7 @@ const promqlSchema = z.object({
       'startTime and endTime and returns time series rows. "instant" evaluates ' +
       'it once at endTime and returns one row per series with a column per label.',
   ),
-  granularity: z
-    .union([SQLIntervalSchema, z.literal('auto')])
+  granularity: mcpUnion([SQLIntervalSchema, z.literal('auto')])
     .optional()
     .describe(
       'Step between points of a range query, and the value of $__interval in ' +

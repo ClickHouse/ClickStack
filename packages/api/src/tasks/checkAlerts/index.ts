@@ -187,6 +187,8 @@ export async function computeAliasWithClauses(
       source.kind === SourceKind.Log || source.kind === SourceKind.Trace
         ? source.implicitColumnExpression
         : undefined,
+    bodyExpression:
+      source.kind === SourceKind.Log ? source.bodyExpression : undefined,
     useTextIndexForImplicitColumn:
       source.kind === SourceKind.Log || source.kind === SourceKind.Trace
         ? source.useTextIndexForImplicitColumn
@@ -552,6 +554,7 @@ const fireChannelEvent = async ({
       message: alert.message,
       name: alert.name,
       displayName: alert.displayName,
+      note: alert.note,
       tags: alert.tags,
       savedSearchId: savedSearch?.id,
       silenced: alert.silenced,
@@ -625,6 +628,48 @@ const extractGroupKeyFromMapKey = (mapKey: string, alertId: string): string => {
   return mapKey.startsWith(alertIdPrefix)
     ? mapKey.substring(alertIdPrefix.length)
     : '';
+};
+
+/**
+ * Give each alert a history map holding only its own entries. Providers may
+ * hand every alert one map shared across the tick, and every reader scans the
+ * map, so a shared map makes tick CPU grow with alerts times total groups.
+ */
+export const partitionPreviousMapsByAlert = (
+  alertTasks: AlertTask[],
+): AlertTask[] => {
+  const bucketsBySharedMap = new Map<
+    Map<string, AggregatedAlertHistory>,
+    Map<string, Map<string, AggregatedAlertHistory>>
+  >();
+  const getBuckets = (previousMap: Map<string, AggregatedAlertHistory>) => {
+    let buckets = bucketsBySharedMap.get(previousMap);
+    if (buckets == null) {
+      buckets = new Map();
+      for (const [key, history] of previousMap) {
+        const delimiterIndex = key.indexOf(ALERT_GROUP_DELIMITER);
+        const alertId =
+          delimiterIndex === -1 ? key : key.substring(0, delimiterIndex);
+        let bucket = buckets.get(alertId);
+        if (bucket == null) {
+          bucket = new Map();
+          buckets.set(alertId, bucket);
+        }
+        bucket.set(key, history);
+      }
+      bucketsBySharedMap.set(previousMap, buckets);
+    }
+    return buckets;
+  };
+
+  return alertTasks.map(task => ({
+    ...task,
+    alerts: task.alerts.map(details => ({
+      ...details,
+      previousMap:
+        getBuckets(details.previousMap).get(details.alert.id) ?? new Map(),
+    })),
+  }));
 };
 
 /** Determine if we should skip the alert check based on how recently it was last evaluated. */
@@ -2220,7 +2265,9 @@ export default class CheckAlertTask implements HdxTask {
       'finished provider initialization',
     );
 
-    const alertTasks = await this.provider.getAlertTasks();
+    const alertTasks = partitionPreviousMapsByAlert(
+      await this.provider.getAlertTasks(),
+    );
     const taskCount = alertTasks.length;
     logger.debug(
       {

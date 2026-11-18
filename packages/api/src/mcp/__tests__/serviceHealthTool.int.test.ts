@@ -32,7 +32,6 @@ type Span = {
 
 type ServiceReport = {
   service: string;
-  status: string;
   flags: string[];
   current: {
     requests: number;
@@ -218,23 +217,21 @@ describe('MCP Service Health Tool', () => {
       ]);
     });
 
-    it('ranks regressions first and leaves steady services healthy', async () => {
+    it('ranks regressions first and leaves steady services unflagged', async () => {
       const { summary, services } = parse(await call());
-      expect(services.map(s => [s.service, s.status])).toEqual([
-        [svc('erroring'), 'critical'],
-        [svc('slow'), 'degraded'],
-        [svc('steady'), 'healthy'],
+      expect(services.map(s => s.service)).toEqual([
+        svc('erroring'),
+        svc('slow'),
+        svc('steady'),
       ]);
+      expect(services[0]).not.toHaveProperty('status');
+      expect(services[2].flags).toEqual([]);
       expect(services[0].flags).toEqual(
         expect.arrayContaining(['error_rate_up', 'high_error_rate']),
       );
       expect(services[1].flags).toContain('latency_up');
       expect(services[1].current.p95Ms).toBeCloseTo(600, -1);
-      expect(summary.statusCounts).toEqual({
-        critical: 1,
-        degraded: 1,
-        healthy: 1,
-      });
+      expect(summary.servicesFlagged).toBe(2);
     });
 
     it('counts server spans only by default', async () => {

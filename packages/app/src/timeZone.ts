@@ -3,6 +3,13 @@ import { UTC_TIME_ZONE } from '@hyperdx/common-utils/dist/core/utils';
 /** Time zone setting value that follows the browser's zone. */
 export const LOCAL_TIME_ZONE = 'local';
 
+// For code that needs the time right now, such as a ticking clock or parsing
+// "yesterday", rather than the stable NOW from config.
+export function currentDate(): Date {
+  // eslint-disable-next-line no-restricted-syntax
+  return new Date();
+}
+
 export function isValidTimeZone(timeZone: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone });

@@ -96,6 +96,7 @@ export const useSearchPageFilterState = ({
   onFilterChange,
   dateTimeColumns,
   knownColumns,
+  isPreservedFilter,
 }: {
   searchQuery?: Filter[];
   onFilterChange: (filters: Filter[]) => void;
@@ -106,6 +107,15 @@ export const useSearchPageFilterState = ({
    * (eg. service-name --> `service-name`).
    **/
   knownColumns: Set<string>;
+  /**
+   * Filters this state can't represent (e.g. pattern filters) that should
+   * survive its updates instead of being dropped. "Clear all" and
+   * retainFiltersByColumns (a source change) still drop them, since they
+   * can't be checked against the new source's columns. Match only filters
+   * the facet state drops (not IN, NOT IN or BETWEEN), or they'd be emitted
+   * twice.
+   */
+  isPreservedFilter?: (filter: Filter) => boolean;
 }) => {
   // Access knownColumns through a ref so the returned mutators (which depend on
   // updateFilterQuery) keep stable identities across knownColumns reference
@@ -115,6 +125,14 @@ export const useSearchPageFilterState = ({
   useEffect(() => {
     knownColumnsRef.current = knownColumns;
   }, [knownColumns]);
+
+  // Same reason as knownColumnsRef.
+  const preservedFiltersRef = useRef<Filter[]>([]);
+  useEffect(() => {
+    preservedFiltersRef.current = isPreservedFilter
+      ? searchQuery.filter(isPreservedFilter)
+      : [];
+  }, [searchQuery, isPreservedFilter]);
 
   // Persisted filters carry canonical (escaped) keys; convert back to the clean
   // keys the sidebar/comparisons use as they enter in-memory FilterState.
@@ -140,14 +158,17 @@ export const useSearchPageFilterState = ({
   }, [parsedQuery.filters]);
 
   const updateFilterQuery = useCallback(
-    (newFilters: FilterState) => {
+    (newFilters: FilterState, { keepPreserved = true } = {}) => {
       // Escape filter keys here prior to saving so the URL / saved
       // search holds valid-SQL keys while FilterState stays clean.
       const escapedFilters = escapeFilterStateKeys(
         newFilters,
         knownColumnsRef.current,
       );
-      onFilterChange(filtersToQuery(escapedFilters, { dateTimeColumns }));
+      onFilterChange([
+        ...filtersToQuery(escapedFilters, { dateTimeColumns }),
+        ...(keepPreserved ? preservedFiltersRef.current : []),
+      ]);
     },
     [onFilterChange, dateTimeColumns],
   );
@@ -285,12 +306,13 @@ export const useSearchPageFilterState = ({
 
   const clearAllFilters = useCallback(() => {
     setFilters(() => ({}));
-    updateFilterQuery({});
+    updateFilterQuery({}, { keepPreserved: false });
   }, [updateFilterQuery]);
 
-  // Keep only filters whose root column appears in `allowedColumnNames`.
-  // Returns the keys of the filters that were dropped so callers can surface
-  // a notice when filter state was thrown away (e.g. on source change).
+  // Keep only filters whose root column appears in `allowedColumnNames`, and
+  // drop preserved filters. Returns the keys (or conditions) of the filters
+  // that were dropped so callers can surface a notice when filter state was
+  // thrown away (e.g. on source change).
   const retainFiltersByColumns = useCallback(
     (allowedColumnNames: Set<string>): string[] => {
       const dropped: string[] = [];
@@ -302,9 +324,14 @@ export const useSearchPageFilterState = ({
           dropped.push(key);
         }
       }
+      for (const filter of preservedFiltersRef.current) {
+        dropped.push(
+          filter.type === 'sql_ast' ? filter.left : filter.condition,
+        );
+      }
       if (dropped.length > 0) {
         setFilters(kept);
-        updateFilterQuery(kept);
+        updateFilterQuery(kept, { keepPreserved: false });
       }
       return dropped;
     },
@@ -444,6 +471,55 @@ function usePersonalPinnedFilters(sourceId: string | null) {
   );
 
   return { filters, fields, setFilters, setFields };
+}
+
+/**
+ * Pinned fields the user collapsed, per source, so they stay collapsed on the
+ * next load instead of always opening. Personal (localStorage), like the
+ * other expanded/collapsed states of the filters sidebar.
+ */
+export function useCollapsedPinnedFields(sourceId: string | null) {
+  const [collapsed, setCollapsed] = useLocalStorage<{
+    [sourceId: string]: string[];
+  }>('hdx-collapsed-pinned-fields', {});
+
+  const isPinnedFieldCollapsed = useCallback(
+    (field: string) =>
+      sourceId != null && (collapsed[sourceId] ?? []).includes(field),
+    [collapsed, sourceId],
+  );
+
+  const setPinnedFieldCollapsed = useCallback(
+    (field: string, isCollapsed: boolean) => {
+      if (!sourceId) return;
+      setCollapsed(prev => {
+        const fields = (prev[sourceId] ?? []).filter(f => f !== field);
+        return {
+          ...prev,
+          [sourceId]: isCollapsed ? [...fields, field] : fields,
+        };
+      });
+    },
+    [sourceId, setCollapsed],
+  );
+
+  /** Keep only the collapsed fields for which `keep` is true (e.g. after a pin reset). */
+  const pruneCollapsedPinnedFields = useCallback(
+    (keep: (field: string) => boolean) => {
+      if (!sourceId) return;
+      setCollapsed(prev => ({
+        ...prev,
+        [sourceId]: (prev[sourceId] ?? []).filter(keep),
+      }));
+    },
+    [sourceId, setCollapsed],
+  );
+
+  return {
+    isPinnedFieldCollapsed,
+    setPinnedFieldCollapsed,
+    pruneCollapsedPinnedFields,
+  };
 }
 
 export function usePinnedFilters(sourceId: string | null) {

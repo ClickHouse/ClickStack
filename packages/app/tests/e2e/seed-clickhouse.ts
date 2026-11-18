@@ -424,8 +424,11 @@ function generateTraceData(
         Math.floor(Math.random() * 500000000) +
         (spansPerTrace - spanIdx) * 100000000;
 
+      // Two pods per service so the service map can be split by pod.
+      const podName = `${service}-pod-${traceIdx % 2}`;
+
       rows.push(
-        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
+        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test','k8s.pod.name':'${podName}'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
       );
 
       // Stop if we've generated enough spans
@@ -1175,7 +1178,7 @@ async function insertPromqlMetric(
     .join('\n    UNION ALL\n    ');
 
   await client.query(`
-    INSERT INTO ${table} (metric_name, tags, time_series)
+    INSERT INTO ${table} (metric_name, tags, samples)
     ${rows}
   `);
 }

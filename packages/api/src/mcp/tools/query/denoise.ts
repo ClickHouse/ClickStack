@@ -1,10 +1,10 @@
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { getFirstTimestampValueExpression } from '@hyperdx/common-utils/dist/core/utils';
 import {
-  DENOISE_NOISE_THRESHOLD,
+  buildNoisyBodyMatcher,
   DENOISE_SAMPLE_SIZE,
-  flattenBody,
   minePatterns,
+  selectNoisyPatterns,
 } from '@hyperdx/common-utils/dist/drain';
 import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
@@ -15,8 +15,6 @@ import { getSource } from '@/controllers/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 
 import { resolveBodyExpression } from './helpers';
-
-const PATTERN_WILDCARD = '<*>';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -40,7 +38,7 @@ export interface DenoiseResult {
 
 /**
  * Denoise search results by mining patterns from a random sample, identifying
- * "noisy" patterns (those accounting for >10% of the sample), and filtering
+ * "noisy" patterns (those accounting for >5% of the sample), and filtering
  * them out of the result rows.
  *
  * This mirrors the web app's "Denoise Results" feature
@@ -203,21 +201,17 @@ export async function denoiseSearchResults(
     return { rows, removedPatterns: [] };
   }
 
-  // ── Identify noisy patterns (>10% of sampled events) ──
-  const sampledRowCount = sampleRows.length;
-  const noisyTemplates = new Set<string>();
-  const removedPatterns: DenoiseResult['removedPatterns'] = [];
-
-  for (const p of patterns) {
-    if (p.sampleCount / sampledRowCount > DENOISE_NOISE_THRESHOLD) {
-      noisyTemplates.add(p.pattern);
-      removedPatterns.push({
-        pattern: p.pattern,
-        estimatedCount: p.estimatedCount,
-        sampleCount: p.sampleCount,
-      });
-    }
-  }
+  const noisy = selectNoisyPatterns(
+    patterns,
+    p => p.sampleCount,
+    sampleRows.length,
+  );
+  const noisyTemplates = new Set(noisy.map(p => p.pattern));
+  const removedPatterns: DenoiseResult['removedPatterns'] = noisy.map(p => ({
+    pattern: p.pattern,
+    estimatedCount: p.estimatedCount,
+    sampleCount: p.sampleCount,
+  }));
 
   if (noisyTemplates.size === 0) {
     return { rows, removedPatterns: [] };
@@ -249,54 +243,6 @@ export async function denoiseSearchResults(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Return a predicate that is true when the most specific template a body
- * fits (fewest <*>) is noisy. Fitting means same token count, same literal
- * tokens, any token at each <*>. Taking the most specific fit keeps rows of
- * a rare `user login` cluster when a broad `<*> <*>` cluster is noisy; ties
- * go to the noisy template. Re-running Drain's `match` instead can land a
- * member on a different same-length cluster than the one it was counted in.
- */
-export function buildNoisyBodyMatcher(
-  templates: string[],
-  noisyTemplates: Set<string>,
-): (body: string) => boolean {
-  const candidates = templates.map(template => {
-    const tokens = tokenize(template);
-    return {
-      tokens,
-      wildcards: tokens.filter(t => t === PATTERN_WILDCARD).length,
-      noisy: noisyTemplates.has(template),
-    };
-  });
-  return body => {
-    const tokens = tokenize(flattenBody(body));
-    let best: (typeof candidates)[number] | undefined;
-    for (const c of candidates) {
-      const fits =
-        c.tokens.length === tokens.length &&
-        c.tokens.every(
-          (tok, i) => tok === PATTERN_WILDCARD || tok === tokens.at(i),
-        );
-      if (!fits) continue;
-      if (
-        best == null ||
-        c.wildcards < best.wildcards ||
-        (c.wildcards === best.wildcards && c.noisy)
-      ) {
-        best = c;
-      }
-    }
-    return best?.noisy ?? false;
-  };
-}
-
-// Drain tokenizes with trim + split(/\s+/).
-function tokenize(text: string): string[] {
-  const trimmed = text.trim();
-  return trimmed === '' ? [] : trimmed.split(/\s+/);
-}
 
 /**
  * Find the key in a result row that corresponds to the body column expression.

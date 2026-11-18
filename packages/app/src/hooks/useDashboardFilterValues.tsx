@@ -3,6 +3,7 @@ import { FilterSelection } from '@hyperdx/common-utils/dist/dashboardFilterValue
 import {
   isPrometheusLabelFilter,
   isQueryExpressionFilter,
+  isSqlQueryFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
@@ -12,6 +13,7 @@ import {
 
 import { usePromqlLabelFilterValues } from './usePromqlLabelFilterValues';
 import { useQueriedDashboardFilterValues } from './useQueriedDashboardFilterValues';
+import { useSqlQueryFilterValues } from './useSqlQueryFilterValues';
 import { useStaticDashboardFilterValues } from './useStaticDashboardFilterValues';
 
 export type DashboardFilterValuesResult = {
@@ -40,14 +42,16 @@ export function useDashboardFilterValues({
   /** The dashboard's variables and their current selections, if any */
   variables?: ChartVariable[];
 }): DashboardFilterValuesResult {
-  const [queriedFilters, staticFilters, promqlLabelFilters] = useMemo(
-    () => [
-      filters.filter(isQueryExpressionFilter),
-      filters.filter(isStaticListFilter),
-      filters.filter(isPrometheusLabelFilter),
-    ],
-    [filters],
-  );
+  const [queriedFilters, staticFilters, promqlLabelFilters, sqlQueryFilters] =
+    useMemo(
+      () => [
+        filters.filter(isQueryExpressionFilter),
+        filters.filter(isStaticListFilter),
+        filters.filter(isPrometheusLabelFilter),
+        filters.filter(isSqlQueryFilter),
+      ],
+      [filters],
+    );
 
   const queriedValues = useQueriedDashboardFilterValues({
     filters: queriedFilters,
@@ -66,14 +70,26 @@ export function useDashboardFilterValues({
     variables,
   });
 
+  const sqlQueryValues = useSqlQueryFilterValues({
+    filters: sqlQueryFilters,
+    dateRange,
+    variables,
+  });
+
   const data = useMemo(
     () =>
       new Map([
         ...queriedValues.data,
         ...staticValues.data,
         ...promqlLabelValues.data,
+        ...sqlQueryValues.data,
       ]),
-    [queriedValues.data, staticValues.data, promqlLabelValues.data],
+    [
+      queriedValues.data,
+      staticValues.data,
+      promqlLabelValues.data,
+      sqlQueryValues.data,
+    ],
   );
 
   // The queried hook reports isLoading/isFetching true while sources load even
@@ -87,8 +103,13 @@ export function useDashboardFilterValues({
       new Set([
         ...queriedValues.erroredFilterIds,
         ...promqlLabelValues.erroredFilterIds,
+        ...sqlQueryValues.erroredFilterIds,
       ]),
-    [queriedValues.erroredFilterIds, promqlLabelValues.erroredFilterIds],
+    [
+      queriedValues.erroredFilterIds,
+      promqlLabelValues.erroredFilterIds,
+      sqlQueryValues.erroredFilterIds,
+    ],
   );
 
   const filterErrorMessages = useMemo(
@@ -96,8 +117,13 @@ export function useDashboardFilterValues({
       new Map([
         ...queriedValues.filterErrorMessages,
         ...promqlLabelValues.filterErrorMessages,
+        ...sqlQueryValues.filterErrorMessages,
       ]),
-    [queriedValues.filterErrorMessages, promqlLabelValues.filterErrorMessages],
+    [
+      queriedValues.filterErrorMessages,
+      promqlLabelValues.filterErrorMessages,
+      sqlQueryValues.filterErrorMessages,
+    ],
   );
 
   return {
@@ -106,10 +132,15 @@ export function useDashboardFilterValues({
     filterErrorMessages,
     isLoading:
       (hasQueriedFilters && queriedValues.isLoading) ||
-      (hasPromqlLabelFilters && promqlLabelValues.isLoading),
+      (hasPromqlLabelFilters && promqlLabelValues.isLoading) ||
+      sqlQueryValues.isLoading,
     isFetching:
       (hasQueriedFilters && queriedValues.isFetching) ||
-      (hasPromqlLabelFilters && promqlLabelValues.isFetching),
-    isError: queriedValues.isError || promqlLabelValues.isError,
+      (hasPromqlLabelFilters && promqlLabelValues.isFetching) ||
+      sqlQueryValues.isFetching,
+    isError:
+      queriedValues.isError ||
+      promqlLabelValues.isError ||
+      sqlQueryValues.isError,
   };
 }

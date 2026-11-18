@@ -1,7 +1,40 @@
+import { ClickHouseError } from '@clickhouse/client-common';
+import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
+
 import {
   formatMatrixResponse,
   formatVectorResponse,
+  isNoTimeRangesTableError,
 } from '@/controllers/timeseriesEngine';
+
+describe('isNoTimeRangesTableError', () => {
+  // The shape ClickhouseClient throws: the server's error wrapped as `cause`.
+  const queryError = (type: string) =>
+    Object.assign(new ClickHouseQueryError('query failed', 'DESCRIBE ...'), {
+      cause: new ClickHouseError({ message: 'failed', code: '0', type }),
+    });
+
+  it.each([
+    ['UNKNOWN_FUNCTION', 'servers before 26.10'],
+    ['UNKNOWN_TABLE', '26.10 and later'],
+  ])('accepts %s (%s)', type => {
+    expect(isNoTimeRangesTableError(queryError(type))).toBe(true);
+  });
+
+  it('rejects any other ClickHouse error', () => {
+    expect(isNoTimeRangesTableError(queryError('TIMEOUT_EXCEEDED'))).toBe(
+      false,
+    );
+  });
+
+  it('rejects an error without a ClickHouse type, whatever its message', () => {
+    expect(
+      isNoTimeRangesTableError(
+        new Error('Unknown table function timeSeriesTimeRanges'),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe('formatMatrixResponse', () => {
   it('converts prometheusQueryRange rows into Prometheus matrix shape', () => {

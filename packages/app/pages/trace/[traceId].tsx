@@ -28,7 +28,7 @@ export function TraceRedirectPage() {
   }, [isReady, replace, traceIdParam]);
 
   return (
-    <Center h="100vh">
+    <Center h="var(--app-viewport-height)">
       <Text size="sm" c="dimmed">
         Redirecting to search...
       </Text>

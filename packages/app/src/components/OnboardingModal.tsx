@@ -22,6 +22,7 @@ import {
   IS_PROMQL_ENABLED,
 } from '@/config';
 import {
+  fetchPrometheusHttpApiSupport,
   useConnections,
   useCreateConnection,
   useUpdateConnection,
@@ -536,13 +537,20 @@ function OnboardingModalComponent({
         // Create PromQL Source if a TimeSeries table is available
         if (timeSeriesTable) {
           try {
+            // Pin the source to the HTTP API only when the server answers it
+            // now. Otherwise leave it on Auto, which keeps checking.
+            const servesHttpApi =
+              await fetchPrometheusHttpApiSupport(connectionId);
             const promqlSource = await createSourceMutation.mutateAsync({
               source: {
                 kind: SourceKind.Promql,
-                name: 'PromQL',
+                name: 'Time Series',
                 connection: connectionId,
                 from: timeSeriesTable,
                 timestampValueExpression: PROMQL_TIMESTAMP_EXPRESSION,
+                ...(servesHttpApi
+                  ? { promqlBackend: 'clickhouse-http' as const }
+                  : {}),
               },
             });
             createdSources.push(promqlSource);
