@@ -83,13 +83,16 @@ describe('useSqlQueryFilterValues', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const [args] = mockQuery.mock.calls[0];
     expect(args.connectionId).toBe('conn1');
-    expect(args.query).toMatch(/^SELECT toString\(tupleElement\(tuple\(\*\)/);
+    expect(args.query).toMatch(
+      /^SELECT DISTINCT toString\(tupleElement\(tuple\(\*\)/,
+    );
     expect(args.query).toContain('{startDateMilliseconds:Int64}');
     expect(args.query_params).toEqual({
       startDateMilliseconds: 1000,
       endDateMilliseconds: 2000,
     });
     expect(args.clickhouse_settings.max_execution_time).toBeGreaterThan(0);
+    expect(args.clickhouse_settings.timeout_overflow_mode).toBe('break');
   });
 
   it('does not re-run a query that ignores the time range when it changes', async () => {

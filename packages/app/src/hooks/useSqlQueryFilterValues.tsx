@@ -95,6 +95,8 @@ export function useSqlQueryFilterValues({
             connectionId: call.connection,
             clickhouse_settings: {
               max_execution_time: MAX_EXECUTION_SECONDS,
+              // On timeout, list the values read so far instead of failing.
+              timeout_overflow_mode: 'break',
             },
           })
           .then(res => res.json())) as ResponseJSON<{ value: string | null }>;

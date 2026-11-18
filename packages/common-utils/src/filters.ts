@@ -903,9 +903,10 @@ function expandSqlQueryFilterTemplate(
 export const SQL_QUERY_FILTER_VALUES_LIMIT = 10_000;
 
 /**
- * The query that lists a SQL query filter's dropdown values: the first column
- * of the filter's SQL as strings, in the order the SQL returns them, capped at
- * `SQL_QUERY_FILTER_VALUES_LIMIT` rows. Each row has a single `value` column.
+ * The query that lists a SQL query filter's dropdown values: the distinct
+ * values of the first column of the filter's SQL as strings, in the order the
+ * SQL returns them, capped at `SQL_QUERY_FILTER_VALUES_LIMIT` values. Each row
+ * has a single `value` column.
  *
  * Throws when the template can't expand.
  */
@@ -928,7 +929,8 @@ export function renderSqlQueryFilterValuesQuery({
     [RawSqlQueryParam.endDateMilliseconds]: dateRange[1].getTime(),
   };
   return {
-    sql: `SELECT toString(tupleElement(tuple(*), 1)) AS value FROM (\n${sql}\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
+    // DISTINCT before the LIMIT, so repeated rows can't crowd out values.
+    sql: `SELECT DISTINCT toString(tupleElement(tuple(*), 1)) AS value FROM (\n${sql}\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
     // Only the params the SQL reads, so a query that ignores the time range
     // keeps its cache key, and isn't re-run, when the range changes.
     params: Object.fromEntries(

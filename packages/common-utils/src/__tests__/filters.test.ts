@@ -1237,7 +1237,7 @@ describe('filters', () => {
       values,
     });
 
-    it('reads the first column as strings, capped', () => {
+    it('reads the distinct first column values as strings, capped', () => {
       expect(
         renderSqlQueryFilterValuesQuery({
           sqlTemplate: 'SELECT env, count() FROM envs GROUP BY env',
@@ -1245,7 +1245,7 @@ describe('filters', () => {
           dateRange,
         }),
       ).toEqual({
-        sql: `SELECT toString(tupleElement(tuple(*), 1)) AS value FROM (\nSELECT env, count() FROM envs GROUP BY env\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
+        sql: `SELECT DISTINCT toString(tupleElement(tuple(*), 1)) AS value FROM (\nSELECT env, count() FROM envs GROUP BY env\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
         params: {},
       });
     });
