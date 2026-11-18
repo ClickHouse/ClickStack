@@ -27,7 +27,9 @@ const WHERE_DESCRIPTION =
   '  when the source has one. With an index it matches whole tokens: timeout does not match ConnectionTimeoutException.\n' +
   "  For a substring inside a word, use SQL ILIKE '%timeout%' (reads the whole column).\n" +
   '  Body:timeout, Body LIKE and Body ILIKE read the whole column, and Body:"..." is exact equality on the\n' +
-  '  whole body.';
+  '  whole body.\n' +
+  "  In SQL, hasToken(Body, 'x') errors unless x is only letters and digits: _ - . @ : and spaces are\n" +
+  '  separators, so ids, emails and snake_case names fail. Use the Lucene term instead.';
 
 const WHERE_LANGUAGE_DESCRIPTION =
   'Language of the "where" filter. The syntax in "where" MUST match this setting.\n' +
