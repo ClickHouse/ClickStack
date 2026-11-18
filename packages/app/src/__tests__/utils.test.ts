@@ -1619,6 +1619,33 @@ describe('orderByAfterRemovingSelectItem', () => {
     ).toBe('ServiceName ASC');
   });
 
+  it('strips a saved sort when the form sort is empty', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '',
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '',
+        'message DESC, ServiceName ASC',
+        'Timestamp DESC',
+      ),
+    ).toBe('ServiceName ASC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '',
+        'Timestamp DESC',
+        'ServiceName ASC',
+      ),
+    ).toBe('');
+  });
+
   it('strips every removed alias from the saved sort at once', () => {
     expect(
       orderByAfterRemovingSelectItems(

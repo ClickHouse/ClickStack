@@ -1301,6 +1301,8 @@ const orderByWithoutAliases = (
  * those aliases is dropped. When none remain, the fallback sort is used with
  * the same keys removed: a saved search's sort is that fallback, so it can
  * still name the alias. The source default is used when that leaves nothing.
+ * An empty orderBy means "use the fallback", so the fallback is stripped too
+ * rather than left to apply unchanged.
  */
 export const orderByAfterRemovingSelectItems = (
   items: readonly string[],
@@ -1312,11 +1314,14 @@ export const orderByAfterRemovingSelectItems = (
     const alias = selectItemAlias(item);
     return alias == null ? [] : [alias];
   });
-  const next = orderByWithoutAliases(orderBy, aliases);
-  if (next == null) return orderBy;
-  if (next !== '') return next;
+  const explicit = orderBy.trim();
+  if (explicit !== '') {
+    const next = orderByWithoutAliases(explicit, aliases);
+    if (next == null) return orderBy;
+    if (next !== '') return next;
+  }
   const fallback = orderByWithoutAliases(defaultOrderBy, aliases);
-  if (fallback == null) return defaultOrderBy;
+  if (fallback == null) return explicit === '' ? orderBy : defaultOrderBy;
   if (fallback !== '') return fallback;
   return sourceOrderBy;
 };
