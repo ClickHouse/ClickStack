@@ -6,7 +6,8 @@
 }
 
 .fillViewport {
-  height: 100vh;
+  // Same reason the app shell avoids 100vh — see styles/globals.css.
+  height: var(--app-viewport-height);
 }
 
 .content {

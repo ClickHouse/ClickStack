@@ -19,7 +19,12 @@ import {
   getRawSqlTileMacroWarnings,
   getTileVariableWarnings,
 } from './validation';
-import { mcpVariableValuesParam, resolveDashboardVariables } from './variables';
+import {
+  getReferenceTargets,
+  mcpVariableValuesParam,
+  resolveDashboardVariables,
+  resolveTileVariableReferences,
+} from './variables';
 
 /**
  * How many tiles to query against ClickHouse at once. Kept lowish so a batch
@@ -230,6 +235,8 @@ export function registerQueryTiles({
         .slice(MAX_TILES_PER_CALL)
         .map(t => t.id);
 
+      const referenceTargets = await getReferenceTargets(teamId.toString());
+
       // Fix one shared deadline for the whole batch that every tile races.
       const deadlineAt = Date.now() + BATCH_DEADLINE_MS;
 
@@ -251,6 +258,17 @@ export function registerQueryTiles({
               return { ...base, status: 'skipped' };
             }
 
+            const resolvedTile = resolveTileVariableReferences(
+              tile,
+              externalDashboard.filters,
+              variableValues,
+              externalDashboard.savedFilterValues,
+              referenceTargets,
+            );
+            if ('error' in resolvedTile) {
+              return { ...base, status: 'error', error: resolvedTile.error };
+            }
+
             // Run the query under the shared deadline. It's passed as a thunk
             // so withDeadline can skip issuing it entirely once the budget is
             // spent (see withDeadline). withDeadline hands the thunk an
@@ -263,10 +281,13 @@ export function registerQueryTiles({
             try {
               const result = await withDeadline(
                 signal =>
-                  runConfigTile(teamId.toString(), tile, startDate, endDate, {
-                    abortSignal: signal,
-                    variables,
-                  }),
+                  runConfigTile(
+                    teamId.toString(),
+                    resolvedTile.tile,
+                    startDate,
+                    endDate,
+                    { abortSignal: signal, variables },
+                  ),
                 deadlineAt,
               );
 

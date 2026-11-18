@@ -8,6 +8,8 @@ export { default as objectHash } from 'object-hash';
 
 import {
   isAdhocFilter,
+  isConnectionFilter,
+  isDataSourceFilter,
   isQueryExpressionFilter,
   isSqlQueryFilter,
   isStaticListFilter,
@@ -27,6 +29,11 @@ import {
   replaceMacros,
 } from '@/macros';
 import { QUERY_PARAMS, RawSqlQueryParam } from '@/rawSqlParams';
+import {
+  configUsesReferenceVariable,
+  getObjectName,
+  getReferenceVariableFilters,
+} from '@/referenceVariables';
 import {
   BuilderChartConfig,
   BuilderChartConfigWithDateRange,
@@ -915,51 +922,44 @@ export function convertToDashboardTemplate(
     };
   };
 
+  // A variable reference is portable as written; '' marks a missing object
+  const getSourceName = (id: string) => getObjectName(id, sources) ?? '';
+  const getConnectionName = (id: string) =>
+    getObjectName(id, connections) ?? '';
+
   const convertToTileTemplate = (
     input: Dashboard['tiles'][0],
-    sources: TSource[],
-    connections: Connection[],
   ): TileTemplate => {
     const tile = TileTemplateSchema.strip().parse(structuredClone(input));
     // Extract name from source/connection or default to '' if not found
     const tileConfig = tile.config;
     if (isBuilderSavedChartConfig(tileConfig)) {
-      tileConfig.source = (
-        sources.find(source => source.id === tileConfig.source) ?? { name: '' }
-      ).name;
+      tileConfig.source = getSourceName(tileConfig.source);
     } else if (isRawSqlSavedChartConfig(tileConfig)) {
-      tileConfig.connection = (
-        connections.find(conn => conn.id === tileConfig.connection) ?? {
-          name: '',
-        }
-      ).name;
+      tileConfig.connection = getConnectionName(tileConfig.connection);
       if (tileConfig.source) {
-        tileConfig.source =
-          sources.find(source => source.id === tileConfig.source)?.name ?? '';
+        tileConfig.source = getSourceName(tileConfig.source);
       }
     }
     convertOnClickTargetIdToName(tileConfig);
     return tile;
   };
 
-  const convertToFilterTemplate = (
-    input: DashboardFilter,
-    sources: TSource[],
-    connections: Connection[],
-  ): DashboardFilter => {
+  const convertToFilterTemplate = (input: DashboardFilter): DashboardFilter => {
     const filter = DashboardFilterSchema.parse(structuredClone(input));
 
-    // A static filter references nothing in the workspace
-    if (isStaticListFilter(filter)) return filter;
-
+    // These reference nothing in the workspace
+    if (isStaticListFilter(filter) || isConnectionFilter(filter)) return filter;
     if (isSqlQueryFilter(filter)) {
-      filter.connection =
-        connections.find(conn => conn.id === filter.connection)?.name ?? '';
+      filter.connection = getConnectionName(filter.connection);
       return filter;
     }
-
-    const getSourceName = (id: string) =>
-      sources.find(source => source.id === id)?.name ?? '';
+    if (isDataSourceFilter(filter)) {
+      if (filter.connection) {
+        filter.connection = getConnectionName(filter.connection) || undefined;
+      }
+      return filter;
+    }
 
     if (isAdhocFilter(filter)) {
       filter.sources = filter.sources.map(getSourceName);
@@ -977,15 +977,13 @@ export function convertToDashboardTemplate(
   };
 
   for (const tile of input.tiles) {
-    output.tiles.push(convertToTileTemplate(tile, sources, connections));
+    output.tiles.push(convertToTileTemplate(tile));
   }
 
   if (input.filters) {
     output.filters = [];
     for (const filter of input.filters ?? []) {
-      output.filters.push(
-        convertToFilterTemplate(filter, sources, connections),
-      );
+      output.filters.push(convertToFilterTemplate(filter));
     }
   }
 
@@ -998,8 +996,16 @@ export function convertToDashboardTemplate(
     output.savedQueryLanguage = input.savedQueryLanguage ?? null;
   }
 
-  if (input.savedFilterValues && input.savedFilterValues.length > 0) {
-    output.savedFilterValues = structuredClone(input.savedFilterValues);
+  // A reference variable's saved value is an ID from this workspace
+  const referenceVariableNames = new Set(
+    getReferenceVariableFilters(input.filters).map(({ name }) => name),
+  );
+  const savedFilterValues = (input.savedFilterValues ?? []).filter(
+    value =>
+      !(value.type === 'variable' && referenceVariableNames.has(value.name)),
+  );
+  if (savedFilterValues.length > 0) {
+    output.savedFilterValues = structuredClone(savedFilterValues);
   }
 
   return output;
@@ -1738,6 +1744,8 @@ export function displayTypeSupportsPromQLAlerts(
 export function savedChartConfigSupportsAlerts(
   config: SavedChartConfig,
 ): boolean {
+  // An alert must query one fixed source, not the viewer's current selection.
+  if (configUsesReferenceVariable(config)) return false;
   if (isPromqlSavedChartConfig(config)) {
     return displayTypeSupportsPromQLAlerts(config.displayType);
   }

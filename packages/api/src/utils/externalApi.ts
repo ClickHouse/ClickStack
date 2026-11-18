@@ -269,6 +269,15 @@ export function translateFilterToExternalFilter(
         connectionId: filter.connection.toString(),
       };
 
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connection'),
+        ...(filter.connection ? { connectionId: filter.connection } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
+
     case 'QUERY_EXPRESSION': {
       // Ignore variableName and appliesToSourceIds if the filter is not in a mode that uses them
       const ignoredKeys = [
@@ -309,6 +318,15 @@ export function translateExternalFilterToFilter(
 
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connectionId'),
+        ...(filter.connectionId ? { connection: filter.connectionId } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     default:
       filter satisfies never;

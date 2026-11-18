@@ -107,4 +107,28 @@ describe('resolveConnectionSourceSync', () => {
       }),
     ).toBeNull();
   });
+
+  it('leaves the connection alone when a data source variable is selected', () => {
+    expect(
+      resolveConnectionSourceSync({
+        source: '$logs',
+        connection: 'conn-2',
+        prevSource: 'src-b',
+        prevConnection: 'conn-2',
+        sources,
+      }),
+    ).toBeNull();
+  });
+
+  it('keeps a data source variable when the connection changes', () => {
+    expect(
+      resolveConnectionSourceSync({
+        source: '$logs',
+        connection: 'conn-2',
+        prevSource: '$logs',
+        prevConnection: 'conn-1',
+        sources,
+      }),
+    ).toBeNull();
+  });
 });
