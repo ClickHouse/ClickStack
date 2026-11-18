@@ -1593,6 +1593,13 @@ function DBSearchPageContent() {
       const isCatchingUpToConfig =
         !!watchedSource && watchedSource === searchedSource?.id;
 
+      // Re-selecting the searched source before a pick's search ran undoes that
+      // pick, so drop the trace chart mode reset it armed. Left set, it would
+      // fire on a later navigation to the abandoned source.
+      if (isCatchingUpToConfig) {
+        pendingTraceChartModeResetRef.current = null;
+      }
+
       if (isCatchingUpToConfig && savedSearchId == null) {
         prevSourceRef.current = watchedSource;
         if (rawSearchedConfig.source !== watchedSource) {
