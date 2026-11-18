@@ -2399,7 +2399,7 @@ function DBSearchPageContent() {
   return (
     <Flex
       direction="column"
-      h="100vh"
+      h="var(--app-viewport-height)"
       style={{ overflow: 'hidden' }}
       data-testid="search-page"
     >
