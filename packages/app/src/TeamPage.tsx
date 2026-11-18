@@ -62,6 +62,22 @@ function TeamTabContent({
   sections: TeamTab['sections'];
   active: boolean;
 }) {
+  // Deep links like `?tab=api-agents#team-api-agents-mcp-server` (spotlight,
+  // onboarding) land before the team has loaded, so Next's own hash scroll
+  // finds no element.
+  const { asPath } = useRouter();
+  const hash = asPath.split('#')[1];
+  const scrollTargetId =
+    active && sections.some(section => section.id === hash) ? hash : null;
+  useEffect(() => {
+    if (!scrollTargetId) return;
+    requestAnimationFrame(() => {
+      document
+        .getElementById(scrollTargetId)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [scrollTargetId]);
+
   return (
     <Stack gap="lg" pt="lg">
       {sections.map(section => (
