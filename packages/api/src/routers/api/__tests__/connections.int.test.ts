@@ -130,6 +130,62 @@ describe('connections router', () => {
     expect(stored?.isPrometheusEndpoint).toBe(false);
   });
 
+  it('rejects a host change on PUT without the password', async () => {
+    const { agent, team } = await getLoggedInAgent(server);
+
+    const created = await Connection.create({
+      team: team._id,
+      name: 'Move-host',
+      host: config.CLICKHOUSE_HOST,
+      username: 'default',
+      password: 'pw',
+    });
+
+    const res = await agent
+      .put(`/connections/${created._id.toString()}`)
+      .send({
+        id: created._id.toString(),
+        name: 'Move-host',
+        host: 'https://attacker.example.com:8443',
+        username: 'default',
+        password: '',
+      })
+      .expect(400);
+
+    expect(res.body?.message).toBe(
+      'Password is required when changing the host',
+    );
+    const stored = await Connection.findById(created._id);
+    expect(stored?.host).toBe(config.CLICKHOUSE_HOST);
+  });
+
+  it('allows a host change on PUT when the password is sent', async () => {
+    const { agent, team } = await getLoggedInAgent(server);
+
+    const created = await Connection.create({
+      team: team._id,
+      name: 'Move-host',
+      host: config.CLICKHOUSE_HOST,
+      username: 'default',
+      password: 'pw',
+    });
+
+    await agent
+      .put(`/connections/${created._id.toString()}`)
+      .send({
+        id: created._id.toString(),
+        name: 'Move-host',
+        host: 'https://new.example.com:8443',
+        username: 'default',
+        password: 'new-pw',
+      })
+      .expect(200);
+
+    const stored = await Connection.findById(created._id).select('+password');
+    expect(stored?.host).toBe('https://new.example.com:8443');
+    expect(stored?.password).toBe('new-pw');
+  });
+
   describe('GET /connections/:id/prometheus-http-api', () => {
     const createClickHouseConnection = (teamId: Types.ObjectId) =>
       Connection.create({

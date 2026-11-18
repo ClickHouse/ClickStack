@@ -34,6 +34,7 @@ import {
   useUpdateConnection,
 } from '@/connection';
 import { stripTrailingSlash } from '@/utils';
+import { getApiErrorMessage } from '@/utils/apiErrors';
 
 import ConfirmDeleteMenu from './ConfirmDeleteMenu';
 
@@ -211,11 +212,13 @@ export function ConnectionForm({
             });
             onSave?.();
           },
-          onError: () => {
+          onError: async error => {
             notifications.show({
               color: 'red',
-              message:
+              message: await getApiErrorMessage(
+                error,
                 'Error updating connection, please check the host and credentials and try again.',
+              ),
               autoClose: 5000,
             });
           },
@@ -225,6 +228,12 @@ export function ConnectionForm({
   };
 
   const [showUpdatePassword, setShowUpdatePassword] = useState(false);
+  // The API rejects a host change that doesn't resend the password.
+  const isHostChanged =
+    !isNew &&
+    stripTrailingSlash(watchedHost ?? '') !==
+      stripTrailingSlash(connection.host ?? '');
+  const showPasswordInput = isNew || showUpdatePassword || isHostChanged;
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const { testConnectionState, handleTestConnection } = useTestConnection({
@@ -317,7 +326,7 @@ export function ConnectionForm({
               <Text size="xs" mb="xs">
                 Password
               </Text>
-              {!showUpdatePassword && !isNew && (
+              {!showPasswordInput && (
                 <Button
                   data-testid="update-password-button"
                   variant="secondary"
@@ -328,7 +337,7 @@ export function ConnectionForm({
                   Update Password
                 </Button>
               )}
-              {(showUpdatePassword || isNew) && (
+              {showPasswordInput && (
                 <Flex align="center" gap="sm">
                   <PasswordInputControlled
                     data-testid="connection-password-input"
@@ -337,7 +346,7 @@ export function ConnectionForm({
                     control={control}
                     placeholder="Password (default: blank)"
                   />
-                  {!isNew && (
+                  {!isNew && !isHostChanged && (
                     <Button
                       data-testid="cancel-password-button"
                       variant="secondary"
@@ -350,6 +359,11 @@ export function ConnectionForm({
                     </Button>
                   )}
                 </Flex>
+              )}
+              {isHostChanged && (
+                <Text size="xs" c="dimmed" mt="xs">
+                  Re-enter the password to move this connection to a new host.
+                </Text>
               )}
             </Box>
           </>
