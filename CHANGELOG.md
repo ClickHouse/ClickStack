@@ -6,6 +6,234 @@ PR — keep the `hyperdx-release-notes` comment marker intact when editing so yo
 edits survive regeneration. Per-package detail lives in each
 `packages/*/CHANGELOG.md`.
 
+## v2.46.0 — 2026-11-18
+
+<!-- hyperdx-release-notes version=2.46.0 inputs=d9a37b017d91 -->
+
+**Data source variables and pattern filters**
+
+Dashboards can now take data source and connection variables, so a single
+dashboard can be pointed at a different source or ClickHouse connection — raw
+SQL tiles and SQL query filters included — instead of being duplicated once per
+source. Event Patterns gains "Filter for this pattern" and "Exclude this
+pattern" buttons, so you can narrow a search to a pattern — or hide it — across
+every event in the time range rather than the sampled rows alone. Ad hoc
+dashboard filters gain an `IN` operator and can now be created, read and updated
+through the external API and the MCP dashboard tools; note before upgrading that
+every ad hoc filter now broadcasts and its name is only an identifier, so a
+query that referred to it as a `$variable` no longer picks up its value. Log and
+trace sources can now carry an optional "Row key expression", so the side panel
+looks a row up using exactly the columns you nominate instead of guessing keys
+from table metadata, and one MCP tool is renamed:
+`clickstack_trace_top_time_consuming_operations` is now
+`clickstack_trace_top_time_consuming_ops`. The app and collector images also
+clear their critical CVEs, which drops the unused `goose` binary — a custom
+entrypoint that called it needs to call `migrate` instead — and the collector
+base moves up to v0.165.0, which changes the names of the Kubernetes attributes
+it emits.
+
+### 💥 Breaking Changes
+
+- **Ad hoc filters always broadcast, and are no longer `$variable`s**:
+  broadcasting is now always on for an ad hoc filter (`isBroadcastEnabled:
+  true`), so one that had it switched off now applies wherever its sources are
+  used, and the filter's name is only a unique identifier — it is no longer
+  declared as a `$variable`. Check whether a tile query or another filter on
+  your dashboards refers to an ad hoc filter by its `$name` before you upgrade,
+  because that reference no longer resolves to it.
+- **The MCP trace operations tool has a shorter name**:
+  `clickstack_trace_top_time_consuming_operations` is now
+  `clickstack_trace_top_time_consuming_ops`. The old name was the longest tool
+  name the server offered and exceeded the tool-name length limit some MCP
+  clients enforce, so anything calling the tool by its old name needs to switch
+  to the new one.
+- **`goose` is no longer in the app and collector images**: the unused `goose`
+  binary has been dropped as part of clearing the images' critical CVEs. A
+  custom entrypoint that called `goose` directly should call `migrate` with the
+  same schema directory instead, otherwise it will fail at startup with the
+  binary missing.
+- **`k8sattributes` emits the stable Kubernetes semantic conventions only**: pod,
+  node and namespace `labels.*` and `annotations.*` are now `label.*` and
+  `annotation.*`, and `container.image.tag` is now `container.image.tags`, so a
+  dashboard, alert or saved search that matches the old attribute names stops
+  matching once you upgrade the collector. Set
+  `OTEL_AGENT_FEATURE_GATE_ARG=--feature-gates=-processor.k8sattributes.DontEmitV0K8sConventions`
+  to keep emitting the legacy names alongside the new ones while you migrate.
+- **The OpAMP supervisor refuses to start with `reports_remote_config`**: the
+  custom OTel Collector base moves from contrib v0.155.0 (core 1.61.0) to
+  v0.165.0 (core 1.71.0), picking up upstream Go and dependency CVE fixes in the
+  collector and OpAMP supervisor binaries. A custom supervisor config that sets
+  `reports_remote_config` must drop it — the supervisor has rejected it since
+  v0.163.0, and `accepts_remote_config` now covers both.
+
+### ✨ New Features
+
+- **Data source variables on dashboards**: dashboards take a new data source
+  variable type that you can use in dashboard filters and tiles, and a tile or
+  filter can draw its source from that variable rather than a fixed one — so you
+  can repoint a whole dashboard at another source from its filter bar instead of
+  keeping a copy per source. Data source variables are supported through the
+  external API and MCP as well.
+- **Connection variables for raw SQL tiles and SQL query filters**: a connection
+  variable supplies the ClickHouse connection a raw SQL tile or SQL query filter
+  runs against, and can scope a data source variable to the sources belonging to
+  the chosen connection, so one dashboard can be run against a different
+  connection without editing every tile. Both kinds of variable accept a source
+  or connection name in place of an id, so a value set by hand — in a dashboard
+  URL, say — can name what it points at.
+- **Filter for or exclude a pattern from Event Patterns**: each row in Event
+  Patterns now has "Filter for this pattern" and "Exclude this pattern" buttons
+  on hover, and each adds a filter matching every event that fits the pattern in
+  the time range, not only the sampled rows, so the results table, histogram and
+  counts all update together. Exclusions stack and show as pills next to your
+  other filters, survive sidebar filter changes, and are kept in the URL and in
+  saved searches; a new include replaces the previous one, and switching source
+  removes pattern filters.
+- **Ad hoc dashboard filters through the API and MCP**: `/api/v2/dashboards` now
+  accepts and returns `ADHOC` filters — with SQL and PromQL source types, and
+  their `adhoc` entries in `savedFilterValues` — and
+  `clickstack_save_dashboard`, `clickstack_get_dashboard` and
+  `clickstack_patch_dashboard` handle the same filters and their saved
+  conditions, so an assistant can hand you a dashboard with its ad hoc filters
+  already in place. Each filter's sources must exist and be a kind its
+  `sourceType` supports. Over MCP, PromQL ad hoc filters are offered only while
+  PromQL is enabled and are otherwise hidden and kept as they are on update, and
+  a saved condition that names no ad hoc filter, or uses an operator its filter
+  can't apply, comes back as a warning.
+- **Row key expression on log and trace sources**: set an optional row key
+  expression on a source and the side panel's row lookup selects and filters on
+  only those columns, instead of detecting keys from table metadata. Leave it
+  empty and nothing changes — detection behaves exactly as it does today.
+- **Find settings and preferences from the Cmd+K menu**: the command menu now
+  lists team settings sections — sources, connections, team members, API keys,
+  MCP server, webhooks, query settings and more — and jumps straight to the
+  right tab and section. "Preferences" opens the preferences modal, and "Use
+  light mode", "Use dark mode" and "Use system color mode" switch the theme on
+  the spot.
+- **Keep several ClickStack MCP servers side by side**: `hdx mcp install
+  --name <server-name>` adds the MCP server under a name you choose, so
+  installing a second ClickStack instance no longer overwrites the first. When
+  your key belongs to more than one team, the installer asks which teams to add
+  a server for and adds one entry per team, and when it finds more than one
+  agent it asks which to set up.
+- **SQL query dashboard filters**: a dashboard filter can now take its values
+  from a ClickHouse SQL query — the filter editor offers a "SQL query values"
+  type with a connection, a SQL editor and a preview of the values, and the
+  dropdown lists the query's first column in the order it returns, up to 10,000
+  values, with the time macros and other filters' variables available inside the
+  query. The filter is variable-only, and a template that uses `$__sourceTable`
+  or `$__filters`, or whose macros and variable references can't expand, is
+  rejected when you save the dashboard — as is a filter pointing at a connection
+  that doesn't belong to your team. You can read and write it through the API,
+  external API and MCP as well, where MCP also warns about unknown variables and
+  source-only macros in the SQL.
+
+### 🔧 Improvements
+
+- **An `IN` operator for ad hoc filters, and a shorter filter input**: ad hoc
+  filters take an `IN` operator, and `IN` conditions on the same key are OR'd
+  into a single `IN (...)` condition for SQL, or one `=~"a|b"` matcher for
+  PromQL, so picking several values for one key reads as one condition rather
+  than a stack of them. The filter input collapses to three conditions behind a
+  "+N more" toggle, and you are warned when another ad hoc filter already
+  applies to the same sources.
+- **PromQL sources are named after the connection behind them**: a PromQL
+  source's type now reads "Time Series" when it queries a ClickHouse TimeSeries
+  table and "Prometheus" when it queries an external Prometheus API, and "Time
+  Series / Prometheus" where no connection is known yet — the source form before
+  you pick a connection, or a data source variable's kinds. The stored kind is
+  still `promql`, and the source that onboarding auto-detection and the local
+  dev defaults create is now named "Time Series" rather than "PromQL".
+- **Alert checks scale better with the number of alerts**: each alert is now
+  evaluated against only its own previous history, so a single check-alerts tick
+  no longer re-scans every alert's group history once per alert. Deployments
+  with many alerts should see noticeably lighter alert-checking work each tick.
+- **Dashboard tile alerts can check every minute**: the 1 minute interval is no
+  longer limited to development, so an alert on a dashboard tile can run at the
+  shortest interval in your own deployment.
+- **`clickstack_save_alert` handles notes and consecutive windows**: the MCP
+  tool now accepts `note` and `numConsecutiveWindows`, and an update that leaves
+  either field out keeps the stored value instead of clearing it. Send `null`
+  when you actually want to clear one.
+- **Claude Code and Codex commands are back in the MCP setup panel**: the setup
+  panel shows the Claude Code and Codex CLI commands again, alongside the
+  `hdx mcp install` command, so connecting one of those agents no longer needs
+  another CLI installed first.
+- **Bare-text search falls back to a log source's body expression**: when a log
+  source has no implicit search column set, bare-text MCP searches, pattern
+  filters, event deltas and alert alias queries now search the source's body
+  expression instead, so those features have something sensible to match on
+  without one configured.
+- **One pattern predicate behind the app and MCP**: `templateToRegex`,
+  `buildPatternPredicate` and a new, much shorter `buildCompactPatternPredicate`
+  now live in `@hyperdx/common-utils/dist/drain`, so the app's new pattern
+  filters and the MCP `clickstack_event_patterns` drill-down build their match
+  from one implementation — the compact form being short enough to carry in a
+  URL. `parsePatternPredicate` reads either form back into its value expression
+  and template, and new options match templates mined with extra delimiters or
+  by Python Drain3. The MCP drill-down snippet itself is unchanged.
+
+### 🐛 Bug Fixes
+
+- **Numeric range searches work on String attributes**: a range search with
+  numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, used to fail outright with "no
+  supertype for types String, UInt8". Those bounds now compare with
+  `toFloat64OrNull`, and values that aren't numbers simply don't match. `>`,
+  `<`, `>=` and `<=` still compare String fields as text, so reach for a range
+  such as `:[1000 TO *]` when you want a numeric comparison.
+- **Event Deltas no longer leaves a blank panel on an unsupported source**:
+  switching from a trace source in Event Deltas mode to a source that doesn't
+  support deltas, such as a log source, left the search panel empty. The view
+  now falls back to the results table and shows a notification telling you why.
+- **Time chart series keep their colour across refreshes**: a series no longer
+  changes colour when a chart reloads, because series are now ordered by name
+  instead of by the order ClickHouse returned them. A chart you are watching
+  stays readable from one refresh to the next.
+- **Stacked charts no longer repeat Y-axis labels**: stacked bar and stacked
+  line charts showed the same label twice when rounding collapsed two ticks onto
+  one value — an axis reading "0, 500, 1k, 2k, 2k" where 1.5k rounded up to 2k.
+  The ticks are now distinct.
+- **Typing in the source selector replaces the name you picked**: clicking the
+  source selector now selects its current label, so what you type replaces the
+  old name instead of landing in the middle of it.
+- **The team switcher and user preferences are reachable on a phone**: the app
+  shell and nav were sized with `100vh`, which on mobile browsers counts the
+  area behind the retractable toolbar, so the bottom of the nav sat off screen
+  with no way to scroll to it. Both now size to the small viewport, putting
+  those items back within reach.
+- **The organisation API keys empty state fills its section**: the "No
+  organization API keys yet" message now spans the full width of the team
+  settings section instead of sitting in a narrow column.
+
+### 📦 Build / Packaging
+
+- **Critical CVEs cleared from the app and collector images**: the collector
+  moves to Alpine 3.24 and gomplate v5, and the unused `goose` and `esbuild`
+  binaries are gone from the images, so neither image ships those critical CVEs
+  any more. See the breaking change above if a custom entrypoint of yours calls
+  `goose`.
+- **Vulnerable Node dependencies updated in the app image**: the Node packages
+  flagged as vulnerable in the app image — axios, the MCP SDK, express, js-yaml,
+  brace-expansion and others — have been updated. MCP tool validation errors
+  still name the field that failed under the new MCP SDK, and they list the
+  accepted values when a tile's `displayType` is wrong.
+- **`uuid` updated to 11.1.1 in the API**: the API now depends on `uuid` 11.1.1,
+  which carries the fix for GHSA-w5hq-g745-h8pq. No action is needed beyond
+  upgrading.
+
+<!-- hyperdx-package-list -->
+
+### 📦 Package changelogs
+
+- `@hyperdx/api` 2.45.0 → 2.46.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/api/CHANGELOG.md#2460)
+- `@hyperdx/app` 2.45.0 → 2.46.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/app/CHANGELOG.md#2460)
+- `@hyperdx/cli` 0.9.0 → 0.9.1 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/cli/CHANGELOG.md#091)
+- `@hyperdx/common-utils` 0.35.0 → 0.36.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/common-utils/CHANGELOG.md#0360)
+- `@hyperdx/otel-collector` 2.45.0 → 2.46.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/otel-collector/CHANGELOG.md#2460)
+
+<!-- /hyperdx-package-list -->
+
 ## v2.45.0 — 2026-11-13
 
 <!-- hyperdx-release-notes version=2.45.0 inputs=8861d0a1698f -->
