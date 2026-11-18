@@ -37,10 +37,8 @@ export function generateTimeWindowsDescending(
 
   while (currentEnd > startDate) {
     const windowSizeSeconds =
-      // eslint-disable-next-line security/detect-object-injection
-      windowDurationsSeconds[windowIndex] ||
-      windowDurationsSeconds[windowDurationsSeconds.length - 1]; // use largest window size
-    const windowSizeMs = windowSizeSeconds * 1000;
+      windowDurationsSeconds.at(windowIndex) || windowDurationsSeconds.at(-1); // use largest window size
+    const windowSizeMs = Number(windowSizeSeconds) * 1000;
     const windowStart = new Date(
       Math.max(currentEnd.getTime() - windowSizeMs, startDate.getTime()),
     );
@@ -82,10 +80,8 @@ export function generateTimeWindowsAscending(
 
   while (currentStart < endDate) {
     const windowSizeSeconds =
-      // eslint-disable-next-line security/detect-object-injection
-      windowDurationsSeconds[windowIndex] ||
-      windowDurationsSeconds[windowDurationsSeconds.length - 1]; // use largest window size
-    const windowSizeMs = windowSizeSeconds * 1000;
+      windowDurationsSeconds.at(windowIndex) || windowDurationsSeconds.at(-1); // use largest window size
+    const windowSizeMs = Number(windowSizeSeconds) * 1000;
     const windowEnd = new Date(
       Math.min(currentStart.getTime() + windowSizeMs, endDate.getTime()),
     );
