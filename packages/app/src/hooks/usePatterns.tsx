@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { timeBucketByGranularity, toStartOfInterval } from '@/ChartUtils';
 import { useConfigWithAdditionalSelect } from '@/components/DBRowTable';
+import { DRAIN_EXTRA_DELIMITERS } from '@/components/Patterns/drainDelimiters';
 import { reconstructTemplate } from '@/components/Patterns/reconstructTemplate';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import { getFirstTimestampValueExpression } from '@/source';
@@ -42,11 +43,6 @@ function usePyodide(options: { enabled: boolean }) {
     enabled: options.enabled,
   });
 }
-
-// Python's string.punctuation. Shared with the denoise matcher, which must
-// split bodies into the same tokens the miner built its templates from.
-export const DRAIN_EXTRA_DELIMITERS =
-  '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'.split('');
 
 class Miner {
   private minerVariableName;
@@ -120,6 +116,11 @@ type SampleLog = {
 export type Pattern = {
   id: string;
   pattern: string;
+  /**
+   * The cluster's Drain template, which `pattern` reconstructs for display.
+   * Missing when the miner returned none for the cluster.
+   */
+  template?: string;
   count: number;
   samples: SampleLog[];
 };
@@ -306,6 +307,8 @@ export function useGroupedPatterns({
       fullPatternGroups[patternId] = {
         id: patternId,
         pattern: reconstructedPattern, // last pattern is usually the most up to date templated pattern
+        template:
+          results?.clusterTemplates?.[patternId] ?? lastRow?.__hdx_pattern,
         count,
         countStr: `~${count}`,
         level: lastRow?.[LEVEL_COLUMN_ALIAS], // last level is usually representative of the entire pattern set
