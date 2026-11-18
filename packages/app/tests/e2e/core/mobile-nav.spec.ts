@@ -42,6 +42,9 @@ async function expectUserMenuOnScreen(page: Page, smallViewportHeight: number) {
       return box ? box.y + box.height : Number.POSITIVE_INFINITY;
     })
     .toBeLessThanOrEqual(smallViewportHeight);
+  // Fitting inside the small viewport is not enough on its own: a nav that
+  // collapsed to nothing, or one pushed off the top, would also satisfy it.
+  expect((await userMenu.boundingBox())?.y).toBeGreaterThanOrEqual(0);
 }
 
 test.describe('Mobile app shell', { tag: ['@core'] }, () => {
@@ -65,14 +68,19 @@ test.describe('Mobile app shell', { tag: ['@core'] }, () => {
     // override, since every viewport unit would resolve to the same height.
     expect(viewport.small).toBeLessThan(viewport.large);
 
+    const navToggle = page.locator(
+      'button[aria-label="Collapse/expand navigation"]',
+    );
+
     await test.step('collapsed rail', async () => {
+      await expect(navToggle).toHaveAttribute('aria-expanded', 'false');
       await expectUserMenuOnScreen(page, viewport.small);
     });
 
     await test.step('expanded overlay', async () => {
-      await page
-        .locator('button[aria-label="Collapse/expand navigation"]')
-        .click();
+      await navToggle.click();
+      // Without this a dropped click would quietly re-measure the rail.
+      await expect(navToggle).toHaveAttribute('aria-expanded', 'true');
       await expectUserMenuOnScreen(page, viewport.small);
     });
   });
