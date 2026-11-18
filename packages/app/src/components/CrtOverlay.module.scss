@@ -4,16 +4,17 @@
   inset: 0;
   z-index: 2147483647;
   pointer-events: none;
+
   // Rounded screen corners plus edge shading read as a curved tube.
   border-radius: 3vmin / 4vmin;
   box-shadow:
     0 0 0 10vmin #000,
-    inset 0 0 10vmin rgba(0, 0, 0, 0.55);
+    inset 0 0 10vmin rgb(0 0 0 / 55%);
   background: radial-gradient(
     ellipse at center,
-    rgba(255, 255, 255, 0.03) 0%,
+    rgb(255 255 255 / 3%) 0%,
     transparent 55%,
-    rgba(0, 0, 0, 0.35) 100%
+    rgb(0 0 0 / 35%) 100%
   );
 
   &::before,
@@ -27,10 +28,10 @@
   &::before {
     background: repeating-linear-gradient(
       to bottom,
-      rgba(0, 0, 0, 0.3) 0,
-      rgba(0, 0, 0, 0.3) 2px,
-      rgba(255, 255, 255, 0.03) 2px,
-      rgba(255, 255, 255, 0.03) 4px
+      rgb(0 0 0 / 30%) 0,
+      rgb(0 0 0 / 30%) 2px,
+      rgb(255 255 255 / 3%) 2px,
+      rgb(255 255 255 / 3%) 4px
     );
   }
 
@@ -38,12 +39,12 @@
   &::after {
     background: repeating-linear-gradient(
       to right,
-      rgba(255, 0, 0, 0.05) 0,
-      rgba(255, 0, 0, 0.05) 1px,
-      rgba(0, 255, 0, 0.04) 1px,
-      rgba(0, 255, 0, 0.04) 2px,
-      rgba(0, 0, 255, 0.05) 2px,
-      rgba(0, 0, 255, 0.05) 3px
+      rgb(255 0 0 / 5%) 0,
+      rgb(255 0 0 / 5%) 1px,
+      rgb(0 255 0 / 4%) 1px,
+      rgb(0 255 0 / 4%) 2px,
+      rgb(0 0 255 / 5%) 2px,
+      rgb(0 0 255 / 5%) 3px
     );
     will-change: opacity;
     animation: flicker 0.15s steps(1) infinite;
@@ -61,7 +62,7 @@
   background: linear-gradient(
     to bottom,
     transparent,
-    rgba(255, 255, 255, 0.07),
+    rgb(255 255 255 / 7%),
     transparent
   );
   transform: translateY(-15vh);
@@ -83,15 +84,17 @@
   0% {
     opacity: 0.7;
   }
+
   50% {
     opacity: 1;
   }
 }
 
 // Chromatic aberration and phosphor glow on all text.
+/* stylelint-disable-next-line selector-pseudo-class-no-unknown */
 :global(html[data-crt]) body {
   text-shadow:
-    0.6px 0 rgba(255, 0, 80, 0.35),
-    -0.6px 0 rgba(0, 200, 255, 0.35),
-    0 0 2px color-mix(in srgb, currentColor 60%, transparent);
+    0.6px 0 rgb(255 0 80 / 35%),
+    -0.6px 0 rgb(0 200 255 / 35%),
+    0 0 2px color-mix(in srgb, currentcolor 60%, transparent);
 }

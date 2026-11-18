@@ -18,6 +18,8 @@ export function useKonamiCode(onMatch: () => void) {
   useEffect(() => {
     const recent: string[] = [];
     const onKeyDown = (e: KeyboardEvent) => {
+      // Browser autofill dispatches keydown events with no `key`.
+      if (!e.key) return;
       recent.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
       if (recent.length > 10) recent.shift();
       if (recent.join() === KONAMI_CODE) {

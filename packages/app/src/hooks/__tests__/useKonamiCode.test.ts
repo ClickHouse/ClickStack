@@ -42,6 +42,18 @@ describe('useKonamiCode', () => {
     expect(onMatch).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores keydown events with no key', () => {
+    const onError = jest.fn();
+    window.addEventListener('error', onError);
+    renderHook(() => useKonamiCode(jest.fn()));
+
+    act(() => {
+      window.dispatchEvent(new Event('keydown'));
+    });
+    window.removeEventListener('error', onError);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('stops listening on unmount', () => {
     const onMatch = jest.fn();
     const { unmount } = renderHook(() => useKonamiCode(onMatch));
