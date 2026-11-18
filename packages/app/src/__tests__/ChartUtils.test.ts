@@ -225,8 +225,8 @@ describe('ChartUtils', () => {
     });
 
     it('does not let a pinned series consume a positional palette slot', () => {
-      // seriesHi has the higher peak, so it sorts (and colors) first. If a
-      // pinned series wrongly advanced the positional index, the one unpinned
+      // seriesHi sorts (and colors) first, since series are ordered by key. If
+      // a pinned series wrongly advanced the positional index, the one unpinned
       // series would land on COLORS[1] instead of COLORS[0].
       const res = {
         data: [
