@@ -2232,6 +2232,23 @@ describe('getSelectSeriesStyles', () => {
     ).toEqual({});
   });
 
+  // Ratio mode only merges exactly two series; with a third the editor hides
+  // the ratio switch but keeps the saved flag, and every series is drawn.
+  it('keeps styles when a ratio flag outlives its two series', () => {
+    expect(
+      getSelectSeriesStyles(
+        config(
+          [
+            { ...countSeries, alias: 'A', color: 'chart-blue' },
+            { ...countSeries, alias: 'B' },
+            { ...countSeries, alias: 'C' },
+          ],
+          { seriesReturnType: 'ratio' },
+        ),
+      ),
+    ).toEqual({ seriesColors: { A: 'chart-blue' } });
+  });
+
   // With operands hidden only the formula columns are in the result, so
   // positional keys would put an operand's style on a formula line.
   it('returns no styles when formula operands are hidden', () => {
@@ -2273,6 +2290,19 @@ describe('getLineStrokeDasharray', () => {
     expect(dashed).not.toBe('0');
     expect(dotted).not.toBe('0');
     expect(dashed).not.toBe(dotted);
+  });
+
+  // Bars have no stroke, so the legend swatch stays solid to match them.
+  it('draws stacked bar series solid', () => {
+    expect(
+      getLineStrokeDasharray(
+        line({ lineStyle: 'dashed' }),
+        DisplayType.StackedBar,
+      ),
+    ).toBe('0');
+    expect(
+      getLineStrokeDasharray(line({ lineStyle: 'dashed' }), DisplayType.Line),
+    ).not.toBe('0');
   });
 
   it('keeps previous-period lines on their own dash pattern', () => {

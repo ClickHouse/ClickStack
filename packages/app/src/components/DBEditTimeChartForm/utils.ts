@@ -52,6 +52,7 @@ import {
   convertToReducedPromqlChartConfig,
   convertToTableChartConfig,
   convertToTimeChartConfig,
+  selectItemsHaveOwnColumns,
   tryExpandConfigVariables,
 } from '@/ChartUtils';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
@@ -617,7 +618,7 @@ export function buildGroupByConnectionProps({
  * undefined for none. Table columns take a color and conditional rules. Time
  * chart series take a color (and a line style on line charts), but only when
  * each select item draws exactly one series: a group by splits it into many,
- * ratio mode merges two into one, and hidden formula operands are not drawn.
+ * and see `selectItemsHaveOwnColumns` for ratio mode and hidden operands.
  */
 export function getSeriesStyleMode({
   displayType,
@@ -625,6 +626,7 @@ export function getSeriesStyleMode({
   seriesReturnType,
   formulas,
   showOperandSeries,
+  seriesCount,
 }: Pick<
   ChartEditorFormState,
   | 'displayType'
@@ -632,7 +634,7 @@ export function getSeriesStyleMode({
   | 'seriesReturnType'
   | 'formulas'
   | 'showOperandSeries'
->): SeriesStyleMode | undefined {
+> & { seriesCount: number }): SeriesStyleMode | undefined {
   if (displayType === DisplayType.Table) {
     return 'column';
   }
@@ -643,9 +645,15 @@ export function getSeriesStyleMode({
     typeof groupBy === 'string'
       ? groupBy.trim() !== ''
       : (groupBy?.length ?? 0) > 0;
-  const operandsHidden =
-    (formulas?.length ?? 0) > 0 && showOperandSeries === false;
-  if (isGrouped || seriesReturnType === 'ratio' || operandsHidden) {
+  if (
+    isGrouped ||
+    !selectItemsHaveOwnColumns({
+      selectCount: seriesCount,
+      seriesReturnType,
+      formulas,
+      showOperandSeries,
+    })
+  ) {
     return undefined;
   }
   return displayType === DisplayType.StackedBar ? 'bar' : 'line';

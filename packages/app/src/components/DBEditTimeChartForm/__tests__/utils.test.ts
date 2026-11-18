@@ -1362,6 +1362,7 @@ describe('getSeriesStyleMode', () => {
     seriesReturnType: undefined,
     formulas: undefined,
     showOperandSeries: undefined,
+    seriesCount: 2,
   };
 
   it('styles table columns with a color and rules, grouped or not', () => {
@@ -1415,6 +1416,16 @@ describe('getSeriesStyleMode', () => {
     expect(
       getSeriesStyleMode({ ...base, seriesReturnType: 'ratio' }),
     ).toBeUndefined();
+  });
+
+  it('offers series styles when a ratio flag outlives its two series', () => {
+    expect(
+      getSeriesStyleMode({
+        ...base,
+        seriesReturnType: 'ratio',
+        seriesCount: 3,
+      }),
+    ).toBe('line');
   });
 
   it('offers no series style when formula operands are hidden', () => {

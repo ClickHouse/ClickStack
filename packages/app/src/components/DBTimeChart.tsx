@@ -61,6 +61,7 @@ import {
 } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useResultColumnFilterKeys } from '@/hooks/useResultColumnFilterKeys';
+import { useStableValue } from '@/hooks/useStableValue';
 import { useChartNumberFormats, useSource } from '@/source';
 import { useTimeZoneLinkParam } from '@/timeZoneOverride';
 import type { NumberFormat, TileFilterHandler } from '@/types';
@@ -644,9 +645,11 @@ function DBTimeChartComponent({
   const { formatByColumn, chartFormat: axisNumberFormat } =
     useChartNumberFormats(queriedConfig, data?.meta);
 
-  const { seriesColors, seriesLineStyles } = useMemo(
-    () => getSelectSeriesStyles(config, data?.meta),
-    [config, data?.meta],
+  // `config` is rebuilt on every dashboard render, so keep the styles'
+  // reference while their content is unchanged; a new one would reformat the
+  // response and rebuild every line.
+  const { seriesColors, seriesLineStyles } = useStableValue(
+    getSelectSeriesStyles(config, data?.meta),
   );
 
   const {

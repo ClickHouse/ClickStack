@@ -193,6 +193,7 @@ export function ChartEditorControls({
     seriesReturnType,
     formulas,
     showOperandSeries,
+    seriesCount: fields.length,
   });
 
   const showAlertButton =

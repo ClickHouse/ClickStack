@@ -14,10 +14,7 @@ import {
   getQueriedPromqlSeries,
 } from '@hyperdx/common-utils/dist/core/promql';
 import { getPromqlChartRange } from '@hyperdx/common-utils/dist/core/promqlChart';
-import {
-  isMetricChartConfig,
-  isRatioChartConfig,
-} from '@hyperdx/common-utils/dist/core/renderChartConfig';
+import { isMetricChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import { SERIES_KEY_JOINER } from '@hyperdx/common-utils/dist/core/seriesNameTemplate';
 import {
   convertGranularityToSeconds,
@@ -654,12 +651,43 @@ const LINE_STYLE_DASHARRAY: Record<SeriesLineStyle, string> = {
   dotted: '1.5 3',
 };
 
-/** SVG stroke-dasharray for a time chart line and its legend swatch. */
-export function getLineStrokeDasharray(line: LineData): string {
+/**
+ * SVG stroke-dasharray for a time chart line and its legend swatch. Bars have
+ * no stroke, so their swatch stays solid whatever line style is saved.
+ */
+export function getLineStrokeDasharray(
+  line: LineData,
+  displayType?: DisplayType,
+): string {
   if (line.isDashed) {
     return PREVIOUS_PERIOD_DASHARRAY;
   }
+  if (displayType === DisplayType.StackedBar) {
+    return LINE_STYLE_DASHARRAY.solid;
+  }
   return LINE_STYLE_DASHARRAY[line.lineStyle ?? 'solid'];
+}
+
+/**
+ * Whether select item i is result value column i. Not so when ratio mode
+ * merges two items into one column (the `isRatioChartConfig` condition) or
+ * when hidden formula operands leave only formula columns. Shared by the
+ * series editor and `getSelectSeriesStyles` so they agree on when per-series
+ * styles apply.
+ */
+export function selectItemsHaveOwnColumns({
+  selectCount,
+  seriesReturnType,
+  formulas,
+  showOperandSeries,
+}: Pick<
+  BuilderChartConfigWithDateRange,
+  'seriesReturnType' | 'formulas' | 'showOperandSeries'
+> & { selectCount: number }): boolean {
+  const isRatio = seriesReturnType === 'ratio' && selectCount === 2;
+  const operandsHidden =
+    (formulas?.length ?? 0) > 0 && showOperandSeries === false;
+  return !isRatio && !operandsHidden;
 }
 
 export type SelectSeriesStyles = {
@@ -686,8 +714,12 @@ export function getSelectSeriesStyles(
   if (
     !isBuilderChartConfig(config) ||
     !Array.isArray(config.select) ||
-    isRatioChartConfig(config.select, config) ||
-    ((config.formulas?.length ?? 0) > 0 && config.showOperandSeries === false)
+    !selectItemsHaveOwnColumns({
+      selectCount: config.select.length,
+      seriesReturnType: config.seriesReturnType,
+      formulas: config.formulas,
+      showOperandSeries: config.showOperandSeries,
+    })
   ) {
     return {};
   }

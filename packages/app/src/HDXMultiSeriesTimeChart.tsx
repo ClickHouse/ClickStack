@@ -378,9 +378,16 @@ const LegendRenderer = memo<{
   allLineData?: LineData[];
   selectedSeries?: Set<string>;
   onToggleSeries?: (seriesName: string, isShiftKey?: boolean) => void;
+  displayType?: DisplayType;
 }>(props => {
-  const { payload, lineDataMap, allLineData, selectedSeries, onToggleSeries } =
-    props;
+  const {
+    payload,
+    lineDataMap,
+    allLineData,
+    selectedSeries,
+    onToggleSeries,
+    displayType,
+  } = props;
 
   const hasSelection = hasSeriesSelection(selectedSeries);
 
@@ -391,11 +398,11 @@ const LegendRenderer = memo<{
         dataKey: ld.dataKey,
         value: ld.displayName || ld.dataKey,
         color: ld.color,
-        payload: { strokeDasharray: getLineStrokeDasharray(ld) },
+        payload: { strokeDasharray: getLineStrokeDasharray(ld, displayType) },
       }));
     }
     return payload ?? [];
-  }, [allLineData, payload]);
+  }, [allLineData, payload, displayType]);
 
   const sortedLegendItems = useMemo(() => {
     // Order items such that current and previous period lines are consecutive
@@ -2307,6 +2314,7 @@ export const MemoChart = memo(function MemoChart({
                   allLineData={lineData}
                   selectedSeries={selectedSeriesNames || new Set()}
                   onToggleSeries={onToggleSeries}
+                  displayType={displayType}
                 />
               }
               offset={-100}

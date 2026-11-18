@@ -931,4 +931,50 @@ describe('DBTimeChart', () => {
       }),
     );
   });
+  // Dashboard tiles rebuild their config object on every render (e.g. hover),
+  // so the styles must keep their reference or every line is rebuilt.
+  it('keeps series styles stable across renders with an equal config', () => {
+    mockUseQueriedChartConfig.mockReturnValue({
+      data: {
+        data: [{ 'count()': 3, __hdx_time_bucket: '2024-01-01T00:00:00Z' }],
+        meta: [
+          { name: 'count()', type: 'UInt64' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+        rows: 1,
+        isComplete: true,
+      },
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      isPlaceholderData: false,
+    });
+    const makeConfig = () => ({
+      ...baseTestConfig,
+      displayType: DisplayType.Line,
+      select: [
+        {
+          aggFn: 'count' as const,
+          aggCondition: '',
+          valueExpression: '',
+          color: 'chart-purple' as const,
+        },
+      ],
+    });
+    const lastSeriesColors = () =>
+      jest.mocked(formatResponseForTimeChart).mock.lastCall?.[0].seriesColors;
+
+    const { rerender } = renderWithMantine(
+      <DBTimeChart config={makeConfig()} />,
+    );
+    const firstSeriesColors = lastSeriesColors();
+    rerender(
+      <TestProviders>
+        <DBTimeChart config={makeConfig()} />
+      </TestProviders>,
+    );
+
+    expect(firstSeriesColors).toEqual({ 'count()': 'chart-purple' });
+    expect(lastSeriesColors()).toBe(firstSeriesColors);
+  });
 });
