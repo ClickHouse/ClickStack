@@ -157,7 +157,12 @@ export async function runWindowedSearch({
       if (results.length === 0) throw e;
       stopReason = isQueryTimeoutError(e) ? 'time_budget' : 'query_error';
       logger.warn(
-        { err: e, windowIndex: window.windowIndex },
+        {
+          err: e,
+          windowIndex: window.windowIndex,
+          windowStart: window.startTime.toISOString(),
+          windowEnd: window.endTime.toISOString(),
+        },
         'clickstack_search older window failed; returning partial results',
       );
       break;
@@ -224,14 +229,13 @@ export async function runWindowedSearch({
 }
 
 /** Tells the agent what a partial search covered and what to call next. */
-export function partialSearchHint(partial: SearchCoverage): string {
+export function partialSearchHint(
+  partial: SearchCoverage,
+  { empty }: { empty: boolean },
+): string {
   const budget = `${SEARCH_TIME_BUDGET_MS / 1000}s`;
   const { coveredRange, incompleteRange, requestedRange, reason } = partial;
   if (coveredRange) {
-    // The next call's end is inclusive; stop just short of rows already returned.
-    const nextEnd = new Date(
-      new Date(coveredRange.startTime).getTime() - 1,
-    ).toISOString();
     const stopped =
       reason === 'query_error'
         ? 'the query for an older window failed'
@@ -243,8 +247,8 @@ export function partialSearchHint(partial: SearchCoverage): string {
     return (
       `Partial result: ${stopped}. ` +
       `Rows are complete (newest first) from ${coveredRange.startTime} to ${coveredRange.endTime}.${cutOff} ` +
-      `For older events, call again with startTime=${requestedRange.startTime} endTime=${nextEnd}, ` +
-      'or add filters so each window scans faster.'
+      `For older events, call again with startTime=${requestedRange.startTime} endTime=${coveredRange.startTime} ` +
+      '(rows exactly at that boundary may repeat), or add filters so each window scans faster.'
     );
   }
   const range = incompleteRange ?? requestedRange;
@@ -253,7 +257,10 @@ export function partialSearchHint(partial: SearchCoverage): string {
   const narrowStart = new Date(endMs - Math.max(60_000, spanMs / 4));
   return (
     `Partial result: the search ran out of its ${budget} time budget before finishing the newest window ` +
-    `(${range.startTime} to ${range.endTime}). Returned rows are only those read before the limit and may not be the newest. ` +
+    `(${range.startTime} to ${range.endTime}). ` +
+    (empty
+      ? 'No rows were found before the limit. '
+      : 'Returned rows are only those read before the limit and may not be the newest. ') +
     `Narrow the range (e.g. startTime=${narrowStart.toISOString()} endTime=${range.endTime}) ` +
     'or add filters to reduce the rows scanned.'
   );

@@ -212,7 +212,7 @@ describe('clickstack_search partial results', () => {
       },
     });
     expect(body.hints.join(' ')).toContain(
-      `endTime=${new Date(minutesBefore(15).getTime() - 1).toISOString()}`,
+      `endTime=${minutesBefore(15).toISOString()} `,
     );
     expect(body.hints.join(' ')).toContain('may repeat on the next call');
     // Stops at the window that ran out of time instead of scanning older ones.
@@ -315,6 +315,7 @@ describe('clickstack_search partial results', () => {
       endTime: END.toISOString(),
     });
     expect(body.hints.join(' ')).toMatch(/narrow|filter/i);
+    expect(body.hints[0]).toContain('Returned rows are only those read');
   });
 
   it('detects a cut-off window by wall-clock time when ClickHouse reports ~0 elapsed', async () => {
@@ -334,6 +335,8 @@ describe('clickstack_search partial results', () => {
     const body = parse(result);
     expect(body.partial.coveredRange).toBeNull();
     expect(body.hints.join(' ')).not.toContain('No data found');
+    expect(body.hints[0]).toContain('No rows were found before the limit');
+    expect(body.hints[0]).not.toContain('Returned rows');
   });
 
   it('returns a fast single-window search unchanged', async () => {
@@ -493,10 +496,10 @@ describe('clickstack_search partial results', () => {
     );
     expect(body.hints[0]).toContain('older window failed');
     expect(body.hints[0]).toContain(
-      `endTime=${new Date(minutesBefore(15).getTime() - 1).toISOString()}`,
+      `endTime=${minutesBefore(15).toISOString()} `,
     );
     expect(body.partial.incompleteRange).toBeUndefined();
-    expect(body.hints[0]).not.toContain('may repeat');
+    expect(body.hints[0]).not.toContain('only those read before the limit');
   });
 
   it('returns the error when the newest window fails', async () => {

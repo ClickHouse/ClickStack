@@ -375,7 +375,7 @@ function formatQueryResult(
   // A partial empty result did not search the whole range, so "no data
   // found" would be wrong.
   const hints = partial
-    ? [partialSearchHint(partial)]
+    ? [partialSearchHint(partial, { empty })]
     : empty
       ? [
           'No data found in the queried time range. Try setting startTime to a wider window (e.g. 24 hours ago) or check that filters match existing data.',
