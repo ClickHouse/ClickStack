@@ -29,6 +29,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   ClickHouseQueryError,
   ColumnMeta,
+  filterColumnMetaByType,
+  JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { buildSearchChartConfig } from '@hyperdx/common-utils/dist/core/searchChartConfig';
@@ -1468,6 +1470,19 @@ function DBSearchPageContent() {
         : new Set<string>(),
     [inputSourceColumns],
   );
+  // Native JSON columns, so dotted filter keys under them are written as JSON
+  // access (`toString(`col`.`a`)`) and not as Map brackets (`col['a']`).
+  const jsonColumns = useMemo(
+    () =>
+      inputSourceColumns
+        ? new Set(
+            filterColumnMetaByType(inputSourceColumns, [JSDataType.JSON])?.map(
+              c => c.name,
+            ),
+          )
+        : new Set<string>(),
+    [inputSourceColumns],
+  );
 
   const watchedSource = useWatch({
     control,
@@ -1506,6 +1521,7 @@ function DBSearchPageContent() {
     onFilterChange: handleSetFilters,
     dateTimeColumns,
     knownColumns,
+    jsonColumns,
     isPreservedFilter: isPatternFilter,
   });
 

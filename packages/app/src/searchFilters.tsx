@@ -26,10 +26,12 @@ export const IS_ROOT_SPAN_COLUMN_NAME = 'isRootSpan';
 export const escapeFilterStateKeys = (
   filters: FilterState,
   knownColumns: Set<string>,
+  jsonColumns: Set<string>,
 ): FilterState => {
   const escaped: FilterState = {};
   for (const [key, value] of Object.entries(filters)) {
-    escaped[toQuotedClickHouseKeyExpression(key, knownColumns)] = value;
+    escaped[toQuotedClickHouseKeyExpression(key, knownColumns, jsonColumns)] =
+      value;
   }
   return escaped;
 };
@@ -96,6 +98,7 @@ export const useSearchPageFilterState = ({
   onFilterChange,
   dateTimeColumns,
   knownColumns,
+  jsonColumns,
   isPreservedFilter,
 }: {
   searchQuery?: Filter[];
@@ -107,6 +110,8 @@ export const useSearchPageFilterState = ({
    * (eg. service-name --> `service-name`).
    **/
   knownColumns: Set<string>;
+  /** Subset of `knownColumns` that are native JSON columns. */
+  jsonColumns: Set<string>;
   /**
    * Filters this state can't represent (e.g. pattern filters) that should
    * survive its updates instead of being dropped. "Clear all" and
@@ -125,6 +130,10 @@ export const useSearchPageFilterState = ({
   useEffect(() => {
     knownColumnsRef.current = knownColumns;
   }, [knownColumns]);
+  const jsonColumnsRef = useRef<Set<string>>(jsonColumns);
+  useEffect(() => {
+    jsonColumnsRef.current = jsonColumns;
+  }, [jsonColumns]);
 
   // Same reason as knownColumnsRef.
   const preservedFiltersRef = useRef<Filter[]>([]);
@@ -164,6 +173,7 @@ export const useSearchPageFilterState = ({
       const escapedFilters = escapeFilterStateKeys(
         newFilters,
         knownColumnsRef.current,
+        jsonColumnsRef.current,
       );
       onFilterChange([
         ...filtersToQuery(escapedFilters, { dateTimeColumns }),
