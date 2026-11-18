@@ -2393,23 +2393,18 @@ async function translateMetricChartConfig(
       // these expressions go inside tuple(...) in the ranking CTE and the
       // outer IN predicate, where an `AS "alias"` suffix is a syntax error
       // (mirrors the strip in renderSeriesLimitCte).
-      // A string groupBy is split per column, as in renderSeriesLimitCte, so
-      // the empty filter below tests each column rather than the whole list.
-      const groupByForRank =
+      const groupByForRank = await renderSelectList(
         typeof chartConfig.groupBy === 'string'
-          ? splitAndTrimWithBracket(chartConfig.groupBy).map(
-              col => chSql`${{ UNSAFE_RAW_SQL: col }}`,
-            )
-          : await renderSelectList(
-              chartConfig.groupBy!.map(col => ({ ...col, alias: undefined })),
-              {
-                ...chartConfig,
-                from: { databaseName: '', tableName: 'Bucketed' },
-                with: sumWith,
-              } as BuilderChartConfigWithOptDateRangeEx,
-              metadata,
-              { mergeRatio: false },
-            );
+          ? chartConfig.groupBy
+          : chartConfig.groupBy!.map(col => ({ ...col, alias: undefined })),
+        {
+          ...chartConfig,
+          from: { databaseName: '', tableName: 'Bucketed' },
+          with: sumWith,
+        } as BuilderChartConfigWithOptDateRangeEx,
+        metadata,
+        { mergeRatio: false },
+      );
       const groupBySql = concatChSql(',', groupByForRank);
 
       // Exclude rows where any groupBy column is NULL/empty so they don't

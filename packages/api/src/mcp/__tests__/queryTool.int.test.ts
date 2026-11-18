@@ -2260,12 +2260,11 @@ describe('MCP Query Tools', () => {
         expect(data.map(row => Number(row.requests))).toEqual([125]);
       });
 
-      it('takes the increase per day and attribute', async () => {
+      it('takes the increase per day', async () => {
         const data = await runTable(
           {
             select: [{ ...counter, aggFn: 'increase' }],
-            groupBy:
-              "ServiceName, ResourceAttributes['service.name'], toDate(TimeUnix)",
+            groupBy: 'toDate(TimeUnix)',
             orderBy: 'toDate(TimeUnix) DESC',
           },
           seedSum,

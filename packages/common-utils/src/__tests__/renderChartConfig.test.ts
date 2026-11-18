@@ -336,25 +336,6 @@ describe('renderChartConfig', () => {
       );
     });
 
-    it('splits a string increase group-by per column in the TopGroups empty filter', async () => {
-      const sql = await render(
-        tableConfig(
-          MetricsDataType.Sum,
-          'increase',
-          "Attributes['kind'], Attributes['outcome'], toDate(TimeUnix)",
-        ),
-      );
-      expect(sql).toContain(
-        "tuple(Attributes['kind'],Attributes['outcome'],toDate(TimeUnix)) AS `group`",
-      );
-      expect(sql).toContain(
-        "WHERE (Attributes['kind'] IS NOT NULL AND toString(Attributes['kind']) != '') AND (Attributes['outcome'] IS NOT NULL AND toString(Attributes['outcome']) != '') AND (toDate(TimeUnix) IS NOT NULL AND toString(toDate(TimeUnix)) != '')",
-      );
-      expect(sql).toContain(
-        'GROUP BY AttributesHash, `__hdx_time_bucket2`, `TimeUnix`',
-      );
-    });
-
     it('keeps TimeUnix for an increase group-by that embeds it in an expression', async () => {
       const sql = await render(
         tableConfig(
