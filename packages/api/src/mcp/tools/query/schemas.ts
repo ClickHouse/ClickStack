@@ -27,9 +27,7 @@ const WHERE_DESCRIPTION =
   '  when the source has one. With an index it matches whole tokens: timeout does not match ConnectionTimeoutException.\n' +
   "  For a substring inside a word, use SQL ILIKE '%timeout%' (reads the whole column).\n" +
   '  Body:timeout, Body LIKE and Body ILIKE read the whole column, and Body:"..." is exact equality on the\n' +
-  '  whole body.\n' +
-  "  In SQL, hasToken(Body, 'x') errors unless x is only letters and digits: _ - . @ : and spaces are\n" +
-  '  separators, so ids, emails and snake_case names fail. Use the Lucene term instead.';
+  '  whole body.';
 
 const WHERE_LANGUAGE_DESCRIPTION =
   'Language of the "where" filter. The syntax in "where" MUST match this setting.\n' +
@@ -42,7 +40,9 @@ const WHERE_LANGUAGE_DESCRIPTION =
   'For exact matching, quote the value (field:"value", case-sensitive) or use SQL: WHERE field = \'value\'. ' +
   "For reliable wildcards, use SQL: WHERE field LIKE 'val%'.\n\n" +
   'Common mistake: writing Column:value (Lucene) but setting whereLanguage to "sql". ' +
-  'If your filter uses colon syntax, use "lucene".';
+  'If your filter uses colon syntax, use "lucene".\n\n' +
+  "In SQL, hasToken(col, 'x') errors unless x is only letters and digits: _ - . @ : and spaces are " +
+  'separators, so ids, emails and snake_case names fail. Search the term with Lucene instead.';
 
 // ─── Shared Zod schemas ──────────────────────────────────────────────────────
 

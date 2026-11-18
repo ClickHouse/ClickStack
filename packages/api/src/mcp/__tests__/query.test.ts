@@ -339,6 +339,30 @@ describe('errorHint', () => {
     expect(hint).toContain('hasToken() takes a single token');
   });
 
+  it('keeps the hasToken hint when BAD_ARGUMENTS is only in the message text', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Token argument contains a separator: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+    );
+    expect(hint).toContain('hasToken() takes a single token');
+  });
+
+  it('does not show the hasToken hint for a non-BAD_ARGUMENTS hasToken error', () => {
+    const hint = errorHint(
+      'Code: 42. DB::Exception: Number of arguments for function hasToken does not match: passed 1, should be 2. (NUMBER_OF_ARGUMENTS_DOESNT_MATCH)',
+    );
+    expect(hint ?? '').not.toContain('hasToken() takes a single token');
+  });
+
+  it('gives raw SQL callers a SQL-only hasToken hint', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Needle must not contain whitespace or separator characters: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+      undefined,
+      { rawSql: true },
+    );
+    expect(hint).toContain('hasAllTokens');
+    expect(hint).not.toContain('whereLanguage');
+  });
+
   it('does not show the hasToken hint for other BAD_ARGUMENTS errors', () => {
     const message =
       "Code: 36. DB::Exception: Argument for function 'splitByChar' must be a single character. (BAD_ARGUMENTS)";

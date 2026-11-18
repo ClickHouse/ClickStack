@@ -1014,14 +1014,18 @@ export function errorHint(
       (getClickHouseErrorType(error) === 'BAD_ARGUMENTS' ||
         /BAD_ARGUMENTS|Code: 36\b/.test(msg)))
   ) {
+    const sqlAlternatives =
+      "hasAllTokens(col, 'payment_failed') to match every token (uses a text " +
+      "index), or position(col, 'payment_failed') > 0 for the exact substring.";
     return (
       'hasToken() takes a single token of letters and digits; "_", "-", ".", ' +
       '"@", ":" and spaces all split tokens, so a needle like payment_failed, ' +
-      'a UUID or an email is rejected. Put the term in a Lucene filter ' +
-      '(whereLanguage:"lucene", e.g. "payment_failed"), which splits it into ' +
-      'tokens and still uses the text index. In SQL, use ' +
-      "hasAllTokens(col, 'payment_failed') AND col LIKE '%payment_failed%' " +
-      "for an exact match, or position(col, 'payment_failed') > 0."
+      'a UUID or an email is rejected. ' +
+      (options?.rawSql
+        ? `Use ${sqlAlternatives}`
+        : 'Put the term in a Lucene filter (whereLanguage:"lucene", e.g. ' +
+          '"payment_failed"), which splits it into tokens and still uses the ' +
+          `text index. In SQL, use ${sqlAlternatives}`)
     );
   }
   if (/Syntax error.*\bAS\b/.test(msg)) {
