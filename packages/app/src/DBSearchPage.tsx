@@ -1148,6 +1148,36 @@ function DBSearchPageContent() {
     }
   }, [analysisMode, setIsLive]);
 
+  // Event deltas only apply to trace sources that expose a duration. Mirrors
+  // the "Event Deltas" tab visibility so the two never disagree.
+  const searchedSourceSupportsDelta =
+    searchedSource?.kind === SourceKind.Trace &&
+    !!searchedSource.durationExpression;
+
+  // Switching to a source that can't do deltas (e.g. a log source) while in
+  // delta mode would otherwise leave an empty panel. Fall back to the results
+  // table and tell the user why.
+  useEffect(() => {
+    if (
+      analysisMode === 'delta' &&
+      searchedSource != null &&
+      !searchedSourceSupportsDelta
+    ) {
+      setAnalysisMode('results');
+      notifications.show({
+        id: 'delta-mode-unsupported-source',
+        color: 'yellow',
+        message:
+          'Event deltas are only available for trace sources. Switched to the results table.',
+      });
+    }
+  }, [
+    analysisMode,
+    searchedSource,
+    searchedSourceSupportsDelta,
+    setAnalysisMode,
+  ]);
+
   const [isFilterSidebarCollapsed, setIsFilterSidebarCollapsed] =
     useLocalStorage<boolean>('isFilterSidebarCollapsed', false);
   // Compact open state stays out of `isFilterSidebarCollapsed`. Writing that
@@ -2766,11 +2796,7 @@ function DBSearchPageContent() {
                     setAnalysisMode={setAnalysisMode}
                     chartConfig={filtersChartConfig}
                     sourceId={inputSourceObj?.id}
-                    showDelta={
-                      !!(searchedSource?.kind === SourceKind.Trace
-                        ? searchedSource.durationExpression
-                        : undefined)
-                    }
+                    showDelta={searchedSourceSupportsDelta}
                     onColumnToggle={toggleColumn}
                     displayedColumns={displayedColumns}
                     onCollapse={isCompact ? undefined : collapseFilters}
