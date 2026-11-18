@@ -76,8 +76,9 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
         'For pattern discovery, use clickstack_event_patterns instead.\n\n' +
         'Set denoise=true to automatically filter out high-frequency repetitive patterns, ' +
         'surfacing only unusual or interesting events.\n\n' +
-        'Scans newest-first. If time runs out before the range is searched, it returns the rows ' +
-        'found so far with a `partial` block (coveredRange, incompleteRange) and a hint for the next call.\n\n' +
+        'Scans newest-first. If time runs out (or an older part of the range fails) before the range is searched, ' +
+        'it returns the rows found so far with a `partial` block (reason, requestedRange, coveredRange, incompleteRange) ' +
+        'and a `hints` entry naming the next call.\n\n' +
         'Column naming: top-level columns are PascalCase (Duration, StatusCode). ' +
         "Map attributes use bracket syntax: SpanAttributes['http.method'].",
       inputSchema: searchSchema,

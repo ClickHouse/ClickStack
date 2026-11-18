@@ -6,6 +6,7 @@
 const mockQueryChartConfig = jest.fn();
 const mockGetSource = jest.fn();
 const mockGetConnectionById = jest.fn();
+const mockDenoise = jest.fn();
 
 jest.mock('@/models/source', () => ({}));
 jest.mock('@/controllers/sources', () => ({
@@ -13,6 +14,13 @@ jest.mock('@/controllers/sources', () => ({
 }));
 jest.mock('@/controllers/connection', () => ({
   getConnectionById: (...args: unknown[]) => mockGetConnectionById(...args),
+}));
+jest.mock('@/utils/logger', () => ({
+  __esModule: true,
+  default: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+}));
+jest.mock('@/mcp/tools/query/denoise', () => ({
+  denoiseSearchResults: (...args: unknown[]) => mockDenoise(...args),
 }));
 jest.mock('@/clickhouse', () => ({
   ClickhouseClient: jest.fn().mockImplementation(() => ({
@@ -41,9 +49,15 @@ import mongoose from 'mongoose';
 import { registerSearch } from '@/mcp/tools/query/search';
 import { SEARCH_TIME_BUDGET_MS } from '@/mcp/tools/query/windowedSearch';
 import type { RegisterToolFn, ToolResult } from '@/mcp/tools/types';
+import { MCP_TIMEOUT_GRACE_MS } from '@/mcp/utils/timeout';
 
 type Handler = Parameters<RegisterToolFn>[2];
-type SearchArgs = { sourceId: string; startTime?: string; endTime?: string };
+type SearchArgs = {
+  sourceId: string;
+  startTime?: string;
+  endTime?: string;
+  denoise?: boolean;
+};
 
 const sourceId = new mongoose.Types.ObjectId().toString();
 const connectionId = new mongoose.Types.ObjectId().toString();
@@ -198,8 +212,9 @@ describe('clickstack_search partial results', () => {
       },
     });
     expect(body.hints.join(' ')).toContain(
-      `endTime=${minutesBefore(15).toISOString()}`,
+      `endTime=${new Date(minutesBefore(15).getTime() - 1).toISOString()}`,
     );
+    expect(body.hints.join(' ')).toContain('may repeat on the next call');
     // Stops at the window that ran out of time instead of scanning older ones.
     expect(queriedRanges()).toEqual([
       [minutesBefore(15).toISOString(), END.toISOString()],
@@ -393,9 +408,64 @@ describe('clickstack_search partial results', () => {
     expect(result.isError).toBeFalsy();
     const body = parse(result);
     expect(body.result.data).toHaveLength(1);
+    expect(body.partial.reason).toBe('time_budget');
     expect(body.partial.coveredRange.startTime).toBe(
       minutesBefore(15).toISOString(),
     );
+    // The failed window returned nothing, so it is not reported as cut off.
+    expect(body.partial.incompleteRange).toBeUndefined();
+  });
+
+  it('gives up on a stalled window at the backstop and keeps the rows already found', async () => {
+    jest.useFakeTimers({ now: END, doNotFake: ['nextTick', 'queueMicrotask'] });
+    mockQueryChartConfig.mockImplementation(({ config }: QueryArgs) => {
+      const [start] = config.dateRange;
+      return start >= minutesBefore(15)
+        ? Promise.resolve(chResult(rowsAt(1)))
+        : new Promise(() => {});
+    });
+
+    const pending = getHandler()({
+      sourceId,
+      startTime: minutesBefore(24 * 60).toISOString(),
+      endTime: END.toISOString(),
+    });
+    await jest.advanceTimersByTimeAsync(
+      SEARCH_TIME_BUDGET_MS + MCP_TIMEOUT_GRACE_MS,
+    );
+    const body = parse(await pending);
+
+    expect(body.result.data).toHaveLength(1);
+    expect(body.partial.reason).toBe('time_budget');
+    expect(body.partial.coveredRange.startTime).toBe(
+      minutesBefore(15).toISOString(),
+    );
+    expect(body.partial.incompleteRange).toBeUndefined();
+  });
+
+  it('keeps the partial block through denoise and samples only the scanned range', async () => {
+    mockQueryChartConfig.mockImplementation(slowPastFifteenMinutes);
+    mockDenoise.mockImplementation(
+      (_team, _source, _start, _end, rows: unknown[]) =>
+        Promise.resolve({ rows, removedPatterns: [] }),
+    );
+
+    const result = await getHandler()({
+      sourceId,
+      startTime: minutesBefore(24 * 60).toISOString(),
+      endTime: END.toISOString(),
+      denoise: true,
+    });
+
+    const body = parse(result);
+    expect(body.denoised.filteredRowCount).toBe(5);
+    expect(body.partial.coveredRange.startTime).toBe(
+      minutesBefore(15).toISOString(),
+    );
+    expect(body.hints[0]).toContain('Partial result');
+    const [, , denoiseStart, denoiseEnd] = mockDenoise.mock.calls[0];
+    expect(denoiseStart).toEqual(minutesBefore(15 + 6 * 60));
+    expect(denoiseEnd).toEqual(END);
   });
 
   it('keeps the rows already found when an older window fails for a reason other than time', async () => {
@@ -423,8 +493,10 @@ describe('clickstack_search partial results', () => {
     );
     expect(body.hints[0]).toContain('older window failed');
     expect(body.hints[0]).toContain(
-      `endTime=${minutesBefore(15).toISOString()}`,
+      `endTime=${new Date(minutesBefore(15).getTime() - 1).toISOString()}`,
     );
+    expect(body.partial.incompleteRange).toBeUndefined();
+    expect(body.hints[0]).not.toContain('may repeat');
   });
 
   it('returns the error when the newest window fails', async () => {

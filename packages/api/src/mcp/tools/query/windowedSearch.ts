@@ -18,6 +18,7 @@ import {
   MCP_TIMEOUT_GRACE_MS,
   MCP_TOOL_TIMEOUT_MS,
   runWithTimeout,
+  type TimeoutOutcome,
 } from '@/mcp/utils/timeout';
 import { isQueryTimeoutError } from '@/tasks/checkAlerts/errors';
 import { getCounter } from '@/utils/instrumentation';
@@ -47,7 +48,7 @@ export type SearchCoverage = {
   requestedRange: IsoRange;
   /** Fully scanned, newest first. Null when not even the newest window finished. */
   coveredRange: IsoRange | null;
-  /** The window that was cut off; its rows are only those read before the limit. */
+  /** The cut-off window whose partial rows are included; only those read before the limit. */
   incompleteRange?: IsoRange;
 };
 
@@ -120,7 +121,7 @@ export async function runWindowedSearch({
     const maxExecutionSec = Math.floor(remainingMs / 100) / 10;
     const queryStart = Date.now();
 
-    let outcome;
+    let outcome: TimeoutOutcome<ResponseJSON<SearchRow>>;
     try {
       outcome = await runWithTimeout(
         signal =>
@@ -159,12 +160,12 @@ export async function runWindowedSearch({
         { err: e, windowIndex: window.windowIndex },
         'clickstack_search older window failed; returning partial results',
       );
-      incompleteWindow = window;
       break;
     }
+    // A failed or stalled window returned nothing, so it is not reported as
+    // incompleteRange: that field marks rows that came from a cut-off window.
     if (outcome.timedOut) {
       stopReason = 'time_budget';
-      incompleteWindow = window;
       break;
     }
 
@@ -227,6 +228,10 @@ export function partialSearchHint(partial: SearchCoverage): string {
   const budget = `${SEARCH_TIME_BUDGET_MS / 1000}s`;
   const { coveredRange, incompleteRange, requestedRange, reason } = partial;
   if (coveredRange) {
+    // The next call's end is inclusive; stop just short of rows already returned.
+    const nextEnd = new Date(
+      new Date(coveredRange.startTime).getTime() - 1,
+    ).toISOString();
     const stopped =
       reason === 'query_error'
         ? 'the query for an older window failed'
@@ -238,7 +243,7 @@ export function partialSearchHint(partial: SearchCoverage): string {
     return (
       `Partial result: ${stopped}. ` +
       `Rows are complete (newest first) from ${coveredRange.startTime} to ${coveredRange.endTime}.${cutOff} ` +
-      `For older events, call again with startTime=${requestedRange.startTime} endTime=${coveredRange.startTime}, ` +
+      `For older events, call again with startTime=${requestedRange.startTime} endTime=${nextEnd}, ` +
       'or add filters so each window scans faster.'
     );
   }
