@@ -119,8 +119,7 @@ export default function OrgApiKeysSection() {
         <Box>
           <Text size="md">Organization API keys</Text>
           <Text size="sm" c="dimmed">
-            Keys owned by the team. They keep working when the person who
-            created them leaves.
+            Keys owned by the team.
           </Text>
         </Box>
         <Button variant="primary" onClick={() => setIsCreateOpen(true)}>
