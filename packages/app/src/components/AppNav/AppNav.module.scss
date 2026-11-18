@@ -58,8 +58,11 @@ $transition-slow: 0.2s ease;
 }
 
 .nav {
-  height: 100vh;
-  max-height: 100vh;
+  // Matches the app shell. The overlay nav is position: fixed with body scroll
+  // locked, so anything laid out past the small viewport is unreachable on a
+  // phone. See --app-viewport-height in styles/globals.css.
+  height: var(--app-viewport-height, 100vh);
+  max-height: var(--app-viewport-height, 100vh);
   display: flex;
   flex-flow: column nowrap;
   justify-content: space-between;
