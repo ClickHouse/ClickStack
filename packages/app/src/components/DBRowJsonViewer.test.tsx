@@ -1,5 +1,6 @@
 import React from 'react';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { Provider as JotaiProvider } from 'jotai';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { useMaterializedAliasColumnsOption } from '@/hooks/useMaterializedAliasColumnsOption';
 
@@ -272,6 +273,91 @@ describe('DBRowJsonViewer', () => {
         });
       },
     );
+  });
+
+  // The rendered array index becomes a ClickHouse subscript, so it must be the
+  // element's real position even when the viewer has filtered the tree.
+  describe('JSON column arrays in a filtered tree', () => {
+    const mockClipboard = jest.fn();
+
+    beforeEach(() => {
+      Object.assign(navigator, {
+        clipboard: { writeText: mockClipboard },
+      });
+    });
+
+    afterEach(() => {
+      localStorage.removeItem('hdx_json_viewer_options');
+    });
+
+    // A fresh jotai store per test keeps the stored viewer options from
+    // leaking between tests.
+    const renderJsonRow = (data: any) =>
+      renderWithMantine(
+        <JotaiProvider>
+          <RowSidePanelContext value={defaultContext}>
+            <DBRowJsonViewer data={data} jsonColumns={['message']} />
+          </RowSidePanelContext>
+        </JotaiProvider>,
+      );
+
+    const toggleHideBlanks = async (container: HTMLElement) => {
+      fireEvent.click(container.querySelector('[aria-haspopup="menu"]')!);
+      fireEvent.click(await screen.findByText('Hide blank values'));
+    };
+
+    const rowWithBlankElement = {
+      message: { events: [{ name: '' }, { name: 'second' }] },
+    };
+
+    it('keeps the real index of an element after a blank one is hidden', async () => {
+      const { container } = renderJsonRow(rowWithBlankElement);
+      await toggleHideBlanks(container);
+
+      expect(screen.getByText('[] 1 items')).toBeInTheDocument();
+      clickLineButton('name', 'Add to Filters');
+      expect(mockOnPropertyAddClick).toHaveBeenCalledWith(
+        'toString(message.`events`[2].`name`)',
+        'second',
+      );
+    });
+
+    it('copies the row without nulls for hidden blank elements', async () => {
+      const { container } = renderJsonRow(rowWithBlankElement);
+      await toggleHideBlanks(container);
+
+      fireEvent.click(screen.getByTitle('Copy row as JSON'));
+      expect(mockClipboard).toHaveBeenCalledWith(
+        JSON.stringify({ message: { events: [{ name: 'second' }] } }, null, 2),
+      );
+    });
+
+    it('copies an array without nulls for hidden blank elements', async () => {
+      const { container } = renderJsonRow(rowWithBlankElement);
+      await toggleHideBlanks(container);
+
+      clickLineButton('events', 'Copy Object');
+      expect(mockClipboard).toHaveBeenCalledWith(
+        JSON.stringify([{ name: 'second' }], null, 2),
+      );
+    });
+
+    it('uses a subscript for an array element while the property search is active', async () => {
+      renderJsonRow({
+        message: { events: [{ name: 'first' }, { name: 'second' }] },
+      });
+      fireEvent.change(
+        screen.getByPlaceholderText('Search properties by key or value'),
+        { target: { value: 'second' } },
+      );
+      await waitFor(() => expect(screen.queryByText('first')).toBeNull());
+
+      clickLineButton('name', 'Add to Filters');
+      expect(mockOnPropertyAddClick).toHaveBeenCalledWith(
+        'toString(message.`events`[2].`name`)',
+        'second',
+      );
+    });
   });
 
   describe('copy functionality', () => {

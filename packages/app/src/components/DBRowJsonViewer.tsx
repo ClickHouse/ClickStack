@@ -104,15 +104,31 @@ function filterObjectRecursively(obj: any, filter: string): any {
   return result;
 }
 
+// JSON.stringify writes array holes as `null`; drop them so copying with
+// blanks hidden doesn't bring the blanks back.
+function stringifyWithoutHoles(value: unknown): string {
+  return JSON.stringify(
+    value,
+    (_key, v) => (Array.isArray(v) ? v.filter(() => true) : v),
+    2,
+  );
+}
+
 function filterBlankValuesRecursively(value: any): any {
   if (value === null || value === '') {
     return undefined;
   }
 
+  // Leave holes instead of compacting: the rendered index becomes an array
+  // subscript in filters, so it must stay the element's real position.
   if (Array.isArray(value)) {
-    const filtered = value
-      .map(filterBlankValuesRecursively)
-      .filter(v => v !== undefined);
+    const filtered: unknown[] = [];
+    value.forEach((v, i) => {
+      const f = filterBlankValuesRecursively(v);
+      if (f !== undefined) {
+        filtered[i] = f;
+      }
+    });
 
     return filtered.length > 0 ? filtered : undefined;
   }
@@ -280,7 +296,7 @@ function HyperJsonMenu({
             const copied = await copyTextToClipboard(
               typeof rowData === 'string'
                 ? rowData
-                : JSON.stringify(rowData, null, 2),
+                : stringifyWithoutHoles(rowData),
             );
             if (!copied) {
               notifications.show({
@@ -422,19 +438,20 @@ function HyperJsonMenu({
   );
 }
 
-// Positions in `keyPath` whose parent value in `rowData` is an array, i.e. the
-// segments that are array indexes and not object keys.
+// Positions in `keyPath` whose parent value in `row` is an array, i.e. the
+// segments that are array indexes and not object keys. Pass the unfiltered
+// row: the property search rebuilds arrays as plain objects.
 export function getArrayIndexPositions(
-  rowData: unknown,
+  row: unknown,
   keyPath: string[],
 ): Set<number> {
   const positions = new Set<number>();
-  let node: any = rowData;
+  let node: unknown = row;
   keyPath.forEach((segment, i) => {
     if (Array.isArray(node)) {
       positions.add(i);
     }
-    node = node?.[segment];
+    node = get(node, segment);
   });
   return positions;
 }
@@ -516,7 +533,7 @@ export function DBRowJsonViewer({
         keyPath,
         jsonColumns,
         mapColumns,
-        getArrayIndexPositions(rowData, keyPath),
+        getArrayIndexPositions(data, keyPath),
       );
       const isJsonColumn =
         keyPath.length > 0 && jsonColumns?.includes(keyPath[0]);
@@ -723,7 +740,7 @@ export function DBRowJsonViewer({
         }
 
         const copied = await copyTextToClipboard(
-          JSON.stringify(copiedObj, null, 2),
+          stringifyWithoutHoles(copiedObj),
         );
         if (!copied) {
           notifications.show({
@@ -778,6 +795,7 @@ export function DBRowJsonViewer({
       generateChartUrl,
       generateSearchUrl,
       onPropertyAddClick,
+      data,
       rowData,
       toggleColumn,
       jsonColumns,
