@@ -274,6 +274,20 @@ describe('ColumnsPopover', () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
   });
 
+  it('lets Escape close the column suggestions without closing the popover', async () => {
+    renderPopover();
+    openPopover();
+    const input = await screen.findByPlaceholderText('Search columns');
+    fireEvent.change(input, { target: { value: 'Severity' } });
+    expect(await screen.findByText('SeverityText')).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(
+      screen.getByTestId('search-columns-button-popover'),
+    ).toBeInTheDocument();
+    expect(input).toHaveValue('Severity');
+  });
+
   it('lets Escape close the SQL completion list without discarding', async () => {
     renderPopover();
     openPopover();

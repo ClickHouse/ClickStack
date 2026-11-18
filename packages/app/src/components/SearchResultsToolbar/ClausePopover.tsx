@@ -52,10 +52,15 @@ const MODE_OPTIONS = [
   { label: 'SQL', value: 'sql' },
 ];
 
-// CodeMirror closes its completion list on Escape, but the popover sees the
-// key first. Let that Escape through while a completion is open.
-const sqlCompletionHandlesEscape = (target: EventTarget | null) => {
+// CodeMirror and the Fields autocomplete both close their own list on Escape,
+// but the popover sees the key first. Let that Escape through while a list is
+// open, so it does not close the popover or discard a draft.
+const nestedListHandlesEscape = (target: EventTarget | null) => {
   if (!(target instanceof Element)) return false;
+  if (
+    target.closest('[aria-expanded="true"], [data-combobox-dropdown]') != null
+  )
+    return true;
   const editor = target.closest('.cm-editor');
   if (!(editor instanceof HTMLElement)) return false;
   if (editor.querySelector('.cm-tooltip-autocomplete') != null) return true;
@@ -195,7 +200,7 @@ export function ClausePopover({
         style={{ width: `min(${POPOVER_MAX_WIDTH}px, calc(100vw - 16px))` }}
         onKeyDownCapture={event => {
           if (event.key !== 'Escape') return;
-          if (sqlCompletionHandlesEscape(event.target)) return;
+          if (nestedListHandlesEscape(event.target)) return;
           requestClose();
         }}
       >
