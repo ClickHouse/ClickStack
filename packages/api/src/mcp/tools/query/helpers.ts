@@ -49,6 +49,11 @@ import { externalDashboardTileSchemaWithId } from '@/utils/zod';
 
 import { runPromqlTile } from './promqlTile';
 import { runEventPatterns } from './runEventPatterns';
+import {
+  partialSearchHint,
+  runWindowedSearch,
+  type SearchCoverage,
+} from './windowedSearch';
 
 // ─── Source body expression helpers ──────────────────────────────────────────
 
@@ -355,7 +360,11 @@ function isEmptyResult(result: unknown): boolean {
   return false;
 }
 
-function formatQueryResult(result: unknown, maxResponseChars?: number) {
+function formatQueryResult(
+  result: unknown,
+  maxResponseChars?: number,
+  partial?: SearchCoverage,
+) {
   // Trimmed under its response key, so note paths read `result.data…`.
   const {
     data: { result: trimmedResult },
@@ -363,6 +372,15 @@ function formatQueryResult(result: unknown, maxResponseChars?: number) {
     notes: trimNotes,
   } = trimToolResponse({ result }, maxResponseChars);
   const empty = isEmptyResult(result);
+  // A partial empty result did not search the whole range, so "no data
+  // found" would be wrong.
+  const hints = partial
+    ? [partialSearchHint(partial, { empty })]
+    : empty
+      ? [
+          'No data found in the queried time range. Try setting startTime to a wider window (e.g. 24 hours ago) or check that filters match existing data.',
+        ]
+      : [];
   return {
     content: [
       {
@@ -376,13 +394,8 @@ function formatQueryResult(result: unknown, maxResponseChars?: number) {
                   trimNotes,
                 }
               : {}),
-            ...(empty
-              ? {
-                  hints: [
-                    'No data found in the queried time range. Try setting startTime to a wider window (e.g. 24 hours ago) or check that filters match existing data.',
-                  ],
-                }
-              : {}),
+            ...(partial ? { partial } : {}),
+            ...(hints.length > 0 ? { hints } : {}),
           },
           null,
           2,
@@ -491,6 +504,11 @@ export async function runConfigTile(
     limit?: number;
     /** Source lookup for raw SQL tiles, so a batch can share one per-call cache. */
     lookupSource?: (sourceId: string) => ReturnType<typeof getSource>;
+    /**
+     * Search tiles only: scan newest-first under a time budget and return
+     * partial rows instead of a timeout (MCP search tool).
+     */
+    partialSearchResults?: boolean;
   },
 ) {
   if (!isConfigTile(tile)) {
@@ -695,6 +713,18 @@ export async function runConfigTile(
 
     const metadata = getMetadata(clickhouseClient);
     try {
+      if (isSearch && options?.partialSearchResults) {
+        const { result, partial } = await runWindowedSearch({
+          clickhouseClient,
+          metadata,
+          config: chartConfig,
+          querySettings: source.querySettings,
+          clickhouseSettings: MCP_CLICKHOUSE_SETTINGS,
+          maxResults: options?.maxResults ?? 50,
+          abortSignal: options?.abortSignal,
+        });
+        return formatQueryResult(result, options?.maxResponseChars, partial);
+      }
       const result = await clickhouseClient.queryChartConfig({
         config: renderConfig,
         metadata,
