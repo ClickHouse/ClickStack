@@ -55,11 +55,11 @@ import {
   tryExpandConfigVariables,
 } from '@/ChartUtils';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
-import type { SeriesStyleMode } from '@/components/SeriesColorDrawer';
 import {
   buildHeatmapSeriesConfig,
   resolveHeatmapGranularity,
 } from '@/components/DBHeatmapChart/heatmapQueries';
+import type { SeriesStyleMode } from '@/components/SeriesColorDrawer';
 import { getMinGranularitySeconds } from '@/hooks/useChartConfig';
 import { getFirstTimestampValueExpression } from '@/source';
 import { getMetricTableName } from '@/utils';

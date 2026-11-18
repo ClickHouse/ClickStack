@@ -117,8 +117,8 @@ describe('SeriesColorDrawer', () => {
         screen.getByTestId('series-line-style-control'),
       ).toBeInTheDocument();
       expect(
-      screen.queryByTestId('color-rules-add-button'),
-    ).not.toBeInTheDocument();
+        screen.queryByTestId('color-rules-add-button'),
+      ).not.toBeInTheDocument();
     });
 
     it('applies the picked color and line style', async () => {
