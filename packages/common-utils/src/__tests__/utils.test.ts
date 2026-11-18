@@ -1390,6 +1390,7 @@ describe('utils', () => {
           {
             id: 'filter-scoped',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Scoped',
             sourceType: 'sql',
             sources: ['source1', 'source2'],
@@ -1400,6 +1401,7 @@ describe('utils', () => {
           {
             id: 'filter-unresolved',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Unresolved',
             sourceType: 'sql',
             sources: ['source1'],
@@ -1416,6 +1418,7 @@ describe('utils', () => {
         {
           id: 'filter-scoped',
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           name: 'Scoped',
           sourceType: 'sql',
           sources: ['Logs', 'Traces'],
@@ -1426,6 +1429,7 @@ describe('utils', () => {
         {
           id: 'filter-unresolved',
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           name: 'Unresolved',
           sourceType: 'sql',
           sources: ['Logs'],
@@ -1604,6 +1608,39 @@ describe('utils', () => {
         convertToDashboardDocument({ ...template, filters: template.filters })
           .filters?.[0],
       ).toEqual(staticFilter);
+    });
+
+    it('should export a SQL query filter with its connection id remapped to a name', () => {
+      const sqlFilter = {
+        id: 'filter-sql',
+        type: 'SQL_QUERY' as const,
+        name: 'Environment',
+        connection: 'conn1',
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+        isBroadcastEnabled: false as const,
+        isVariableEnabled: true as const,
+      };
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'SQL Filter Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [sqlFilter],
+      };
+      const connections: Connection[] = [
+        {
+          id: 'conn1',
+          name: 'Production DB',
+          host: 'http://localhost:8123',
+          username: 'default',
+        },
+      ];
+
+      const template = convertToDashboardTemplate(dashboard, [], connections);
+
+      expect(template.filters).toEqual([
+        { ...sqlFilter, connection: 'Production DB' },
+      ]);
     });
 
     it('should convert a dashboard without filters to a dashboard template', () => {

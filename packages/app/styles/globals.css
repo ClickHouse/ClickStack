@@ -33,12 +33,32 @@ a {
   background-color: var(--color-text-muted);
 }
 
+/*
+ * Height of a full-viewport, non-scrolling app shell.
+ *
+ * Mobile browsers resolve 100vh against the large viewport, which includes the
+ * area behind the retractable toolbar. A shell sized that way puts its bottom
+ * row off screen, and since the shell itself never scrolls there is no way to
+ * reach it. The small viewport is the part that is always on screen; the
+ * toolbar only retracts when the root document scrolls, which this shell does
+ * not do, so svh is also the steady-state height and never reflows.
+ */
+:root {
+  --app-viewport-height: 100vh;
+}
+
+@supports (height: 100svh) {
+  :root {
+    --app-viewport-height: 100svh;
+  }
+}
+
 .app-layout {
-  height: 100vh;
+  height: var(--app-viewport-height);
 }
 
 .app-layout-with-banner {
-  height: 100vh;
+  height: var(--app-viewport-height);
   display: grid;
   grid-template-rows: auto 1fr;
 }

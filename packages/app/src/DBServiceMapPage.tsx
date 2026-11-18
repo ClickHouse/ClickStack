@@ -34,6 +34,10 @@ import { PageLayout } from '@/components/PageLayout';
 import SearchWhereInput, {
   getStoredLanguage,
 } from '@/components/SearchInput/SearchWhereInput';
+import { parseServiceMapGroupBy } from '@/components/ServiceMap/dimensions';
+import ServiceMapGroupByInput, {
+  ServiceMapSearchFormValues,
+} from '@/components/ServiceMap/ServiceMapGroupByInput';
 import { IS_LOCAL_MODE } from '@/config';
 import { useGetKeyValues } from '@/hooks/useMetadata';
 import { useResolvedSourceParam } from '@/hooks/useResolvedSourceParam';
@@ -86,6 +90,8 @@ const searchQueryStateMap = {
   where: parseAsStringEncoded,
   whereLanguage: parseAsStringEnum<'sql' | 'lucene'>(['sql', 'lucene']),
   services: parseAsArrayOf(parseAsString),
+  // Comma-separated SQL expressions the nodes are split by, after ServiceName.
+  groupBy: parseAsStringEncoded,
 };
 
 function DBServiceMapPage() {
@@ -121,14 +127,22 @@ function DBServiceMapPage() {
   // useResolvedSourceParam will show a notification to the user.
   const source = paramSource ?? defaultSource;
 
-  const { control, handleSubmit, setValue } = useForm({
-    values: {
-      source: source?.id,
-      where: searchedConfig.where ?? '',
-      whereLanguage:
-        searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
-    },
-  });
+  const groupBy = useMemo(
+    () => parseServiceMapGroupBy(searchedConfig.groupBy),
+    [searchedConfig.groupBy],
+  );
+  const { control, handleSubmit, setValue } =
+    useForm<ServiceMapSearchFormValues>({
+      values: {
+        source: source?.id,
+        where: searchedConfig.where ?? '',
+        whereLanguage:
+          searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
+        // Seeded from the parsed list so the editor shows exactly what the map
+        // is grouped by, even for a hand-edited URL with too many expressions.
+        groupBy: groupBy.join(', '),
+      },
+    });
 
   const watchedSource = useWatch({ control, name: 'source' });
   const [isSourceSchemaPreviewOpen, setIsSourceSchemaPreviewOpen] =
@@ -207,10 +221,17 @@ function DBServiceMapPage() {
     [setSearchedConfig],
   );
 
+  // The time range is applied together with the form values, so an invalid
+  // group-by leaves the URL untouched instead of moving the time window.
   const onSubmit = useCallback(() => {
-    onSearch(displayedTimeInputValue);
-    handleSubmit(({ where, whereLanguage }) => {
-      setSearchedConfig(prev => ({ ...prev, where, whereLanguage }));
+    handleSubmit(({ where, whereLanguage, groupBy }) => {
+      onSearch(displayedTimeInputValue);
+      setSearchedConfig(prev => ({
+        ...prev,
+        where,
+        whereLanguage,
+        groupBy: groupBy || null,
+      }));
     })();
   }, [handleSubmit, setSearchedConfig, displayedTimeInputValue, onSearch]);
 
@@ -410,6 +431,13 @@ function DBServiceMapPage() {
                 sqlPlaceholder="SQL WHERE to filter spans (ex. Duration > 1000000)"
                 minWidth="min(500px, 100%)"
               />
+              <ServiceMapGroupByInput
+                control={control}
+                tableConnection={sourceTableConnection}
+                sourceId={source.id}
+                dateRange={searchedTimeRange}
+                onSubmit={onSubmit}
+              />
             </Flex>
             <ServiceMap
               traceTableSource={source}
@@ -420,6 +448,7 @@ function DBServiceMapPage() {
               serviceNames={
                 selectedServices.length > 0 ? selectedServices : undefined
               }
+              groupBy={groupBy}
               onFocusService={onFocusService}
             />
           </>

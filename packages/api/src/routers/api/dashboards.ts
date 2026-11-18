@@ -1,13 +1,11 @@
 import {
+  getVariableReferenceError,
   validateDashboardFilterModes,
   validateDashboardFilterOptionUniqueness,
   validateDashboardFilterVariableNames,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
-import {
-  getAdhocFilterSourceKinds,
-  isAdhocFilter,
-  isPrometheusLabelFilter,
-} from '@hyperdx/common-utils/dist/filters';
+import { isSqlQueryFilter } from '@hyperdx/common-utils/dist/filters';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   DashboardFilter,
   DashboardSchema,
@@ -15,7 +13,6 @@ import {
   PresetDashboard,
   PresetDashboardFilterSchema,
   resolveChartPaletteToken,
-  SourceKind,
   walkRawDashboardTileColors,
 } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
@@ -23,6 +20,7 @@ import _ from 'lodash';
 import { z } from 'zod';
 import { validateRequest } from 'zod-express-middleware';
 
+import { getConnectionsByTeam } from '@/controllers/connection';
 import {
   createDashboard,
   deleteDashboard,
@@ -39,6 +37,10 @@ import {
 import { getSources } from '@/controllers/sources';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
 import type { ObjectId } from '@/models';
+import {
+  getChangedFilterSourceRefs,
+  getFilterSourceRefError,
+} from '@/utils/filterSources';
 import { objectIdSchema } from '@/utils/zod';
 
 // create routes that will get and update dashboards
@@ -64,22 +66,6 @@ const addFilterIssues = (
   validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx);
 };
 
-/** The sources a filter reads from, each with the kinds it must be. */
-function getFilterSourceRefs(
-  filter: DashboardFilter,
-): { id: string; kinds: SourceKind[] }[] {
-  if (isPrometheusLabelFilter(filter)) {
-    return [{ id: filter.source, kinds: [SourceKind.Promql] }];
-  }
-  if (isAdhocFilter(filter)) {
-    const kinds = getAdhocFilterSourceKinds(filter.sourceType);
-    return [...filter.sources, ...(filter.appliesToSourceIds ?? [])].map(
-      id => ({ id, kinds }),
-    );
-  }
-  return [];
-}
-
 /**
  * Rejects PROMETHEUS_LABEL and ADHOC filters that reference a source that is
  * missing or of the wrong kind. Resolving these filters needs a live source of
@@ -93,33 +79,59 @@ async function validateFilterSources(
   filters: DashboardFilter[] = [],
   existingFilters: DashboardFilter[] = [],
 ): Promise<string | null> {
-  const refKey = ({ id, kinds }: { id: string; kinds: SourceKind[] }) =>
-    `${id}:${kinds.join(',')}`;
-  const existingRefsById = new Map(
-    existingFilters.map(filter => [
-      filter.id,
-      new Set(getFilterSourceRefs(filter).map(refKey)),
-    ]),
+  const refs = getChangedFilterSourceRefs(filters, existingFilters).filter(
+    // Variable references are checked by validateDashboardVariableReferences
+    ref => parseVariableReference(ref.id) == null,
   );
-  const newRefs = filters.flatMap(filter =>
-    getFilterSourceRefs(filter).filter(
-      ref => !existingRefsById.get(filter.id)?.has(refKey(ref)),
-    ),
-  );
-  if (newRefs.length === 0) return null;
+  if (refs.length === 0) return null;
+  return getFilterSourceRefError(refs, await getSources(teamId.toString()));
+}
 
-  const sources = await getSources(teamId.toString());
-  const kindById = new Map(sources.map(s => [s._id.toString(), s.kind]));
-  const invalid = new Set(
-    newRefs
-      .filter(({ id, kinds }) => {
-        const kind = kindById.get(id);
-        return kind === undefined || !kinds.includes(kind);
-      })
-      .map(({ id }) => id),
+/**
+ * Rejects SQL_QUERY filters whose connection doesn't belong to the team. As in
+ * `validateFilterSources`, a connection the stored filter with the same ID
+ * already used is skipped, and so is a variable reference. Returns an error
+ * message, or null.
+ */
+async function validateFilterConnections(
+  teamId: ObjectId,
+  filters: DashboardFilter[] = [],
+  existingFilters: DashboardFilter[] = [],
+): Promise<string | null> {
+  const existingConnectionById = new Map(
+    existingFilters
+      .filter(isSqlQueryFilter)
+      .map(filter => [filter.id, filter.connection]),
   );
-  if (invalid.size === 0) return null;
-  return `The following filter source IDs do not exist or are not a kind of source the filter supports: ${[...invalid].join(', ')}`;
+  const connectionIds = new Set(
+    filters
+      .filter(isSqlQueryFilter)
+      .filter(
+        filter =>
+          // Variable references are checked by validateDashboardVariableReferences
+          parseVariableReference(filter.connection) == null &&
+          existingConnectionById.get(filter.id) !== filter.connection,
+      )
+      .map(filter => filter.connection),
+  );
+  if (connectionIds.size === 0) return null;
+
+  const connections = await getConnectionsByTeam(teamId.toString());
+  const knownIds = new Set(connections.map(c => c._id.toString()));
+  const missing = [...connectionIds].filter(id => !knownIds.has(id));
+  if (missing.length === 0) return null;
+  return `The following filter connection IDs do not exist: ${missing.join(', ')}`;
+}
+
+async function validateFilterReferences(
+  teamId: ObjectId,
+  filters?: DashboardFilter[],
+  existingFilters?: DashboardFilter[],
+): Promise<string | null> {
+  return (
+    (await validateFilterSources(teamId, filters, existingFilters)) ??
+    (await validateFilterConnections(teamId, filters, existingFilters))
+  );
 }
 
 /**
@@ -178,9 +190,11 @@ router.post(
       // dashboard to the provisioner.
       const dashboard = _.omit(req.body, 'provisioned');
 
-      const sourceError = await validateFilterSources(teamId, req.body.filters);
-      if (sourceError != null) {
-        return res.status(400).json({ message: sourceError });
+      const filterError =
+        getVariableReferenceError(req.body.tiles, req.body.filters) ??
+        (await validateFilterReferences(teamId, req.body.filters));
+      if (filterError != null) {
+        return res.status(400).json({ message: filterError });
       }
 
       const newDashboard = await createDashboard(teamId, dashboard, userId);
@@ -223,13 +237,21 @@ router.patch(
       // null still signals field removal downstream.
       const updates = DashboardWithoutIdSchema.partial().parse(req.body);
 
-      const sourceError = await validateFilterSources(
-        teamId,
-        req.body.filters,
-        dashboard.filters,
-      );
-      if (sourceError != null) {
-        return res.status(400).json({ message: sourceError });
+      const filterError =
+        // Only references this update adds are checked, so a filter edit
+        // can't fail on tiles and filters it didn't touch
+        getVariableReferenceError(
+          req.body.tiles ?? dashboard.tiles,
+          req.body.filters ?? dashboard.filters,
+          dashboard,
+        ) ??
+        (await validateFilterReferences(
+          teamId,
+          req.body.filters,
+          dashboard.filters,
+        ));
+      if (filterError != null) {
+        return res.status(400).json({ message: filterError });
       }
 
       const updatedDashboard = await updateDashboard(
