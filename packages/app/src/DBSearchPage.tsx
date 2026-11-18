@@ -2325,37 +2325,6 @@ function DBSearchPageContent() {
     [setValue, setNewSourceModalClosed],
   );
 
-  const applySelect = useCallback(
-    (select: string, removedItems: string[]) => {
-      setValue('select', select);
-      setValue(
-        'orderBy',
-        orderByAfterRemovingSelectItems(
-          selectItemsWithRemovedAlias(removedItems, select),
-          getValues('orderBy') ?? '',
-          defaultSearchConfig.orderBy ?? '',
-          defaultOrderBy ?? '',
-        ),
-      );
-      onSubmit();
-    },
-    [
-      setValue,
-      getValues,
-      defaultSearchConfig.orderBy,
-      defaultOrderBy,
-      onSubmit,
-    ],
-  );
-
-  const applyOrderBy = useCallback(
-    (orderBy: string) => {
-      setValue('orderBy', orderBy);
-      onSubmit();
-    },
-    [setValue, onSubmit],
-  );
-
   // The dropdown source can move before the URL source does. An empty SELECT
   // is shown as this default, so it has to follow the dropdown, the same way
   // the sort default follows useDefaultOrderBy(inputSource).
@@ -2371,6 +2340,40 @@ function DBSearchPageContent() {
       ? inputSourceObj.defaultTableSelectExpression
       : undefined;
   const defaultSelect = savedSelect ?? sourceDefaultSelect ?? '';
+
+  const applySelect = useCallback(
+    (select: string, removedItems: string[]) => {
+      setValue('select', select);
+      setValue(
+        'orderBy',
+        orderByAfterRemovingSelectItems(
+          // An empty SELECT means the default, so keep the sorts on aliases
+          // that default still defines.
+          selectItemsWithRemovedAlias(removedItems, select || defaultSelect),
+          getValues('orderBy') ?? '',
+          defaultSearchConfig.orderBy ?? '',
+          defaultOrderBy ?? '',
+        ),
+      );
+      onSubmit();
+    },
+    [
+      setValue,
+      getValues,
+      defaultSearchConfig.orderBy,
+      defaultOrderBy,
+      defaultSelect,
+      onSubmit,
+    ],
+  );
+
+  const applyOrderBy = useCallback(
+    (orderBy: string) => {
+      setValue('orderBy', orderBy);
+      onSubmit();
+    },
+    [setValue, onSubmit],
+  );
 
   // SELECT and ORDER BY shape the results table, so they sit on that table
   // and stay hidden on Event Deltas and Event Patterns. Memoized so a where

@@ -1638,6 +1638,18 @@ describe('orderByAfterRemovingSelectItem', () => {
     ).toEqual(['upper(Body) AS message', 'Body']);
   });
 
+  it('keeps a sort on an alias the default SELECT still defines after Reset', () => {
+    const defaultSelect = 'upper(Body) AS message, Timestamp';
+    expect(
+      orderByAfterRemovingSelectItems(
+        selectItemsWithRemovedAlias(['lower(Body) AS message'], defaultSelect),
+        'message DESC',
+        '',
+        'Timestamp DESC',
+      ),
+    ).toBe('message DESC');
+  });
+
   it('does not restore a saved sort that still names the removed alias', () => {
     expect(
       orderByAfterRemovingSelectItem(
