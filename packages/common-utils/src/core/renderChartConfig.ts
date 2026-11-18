@@ -2382,8 +2382,12 @@ async function translateMetricChartConfig(
     // groups (mirrors v1's MAX_NUM_GROUPS). Ranking is done in a separate
     // CTE rather than a window, since ClickHouse can't reference a
     // window-aggregate inside another window's ORDER BY.
+    // Skipped for a group-by over the raw time column: ranking would keep only
+    // the 20 largest time buckets and silently drop the rest.
     const shouldApplyIncreaseGroupLimit =
-      _select.aggFn === 'increase' && isUsingGroupBy(chartConfig);
+      _select.aggFn === 'increase' &&
+      isUsingGroupBy(chartConfig) &&
+      !computedColumns.timeColumn;
 
     let outerWhere: string = '';
 

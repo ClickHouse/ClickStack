@@ -349,6 +349,16 @@ describe('renderChartConfig', () => {
       );
     });
 
+    it.each(['toDate(TimeUnix)', 'ServiceName, toStartOfHour(TimeUnix)'])(
+      'keeps every time bucket of an increase grouped by %p',
+      async groupBy => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Sum, 'increase', groupBy),
+        );
+        expect(sql).not.toContain('TopGroups');
+      },
+    );
+
     it.each(['StartTimeUnix', "Attributes['TimeUnix']", 'ServiceName'])(
       'leaves Bucketed per bucket for group-by %p',
       async groupBy => {
