@@ -133,7 +133,11 @@ export default function OrgApiKeysSection() {
           Couldn&apos;t load organization API keys
         </Text>
       ) : !isLoading && keys.length === 0 ? (
-        <EmptyState variant="card" title="No organization API keys yet" />
+        <EmptyState
+          variant="card"
+          fullWidth
+          title="No organization API keys yet"
+        />
       ) : (
         <Card>
           <Table horizontalSpacing="md" verticalSpacing="xs">
