@@ -37,7 +37,11 @@ function getFilterSourceRefs(filter: FilterWithOptionalId): SourceRef[] {
       {
         id: filter.source,
         kinds: SQL_QUERY_FILTER_SOURCE_KINDS,
-        connection: filter.connection,
+        // A connection variable can select any connection, so only an ID
+        // pins the source to one.
+        ...(parseVariableReference(filter.connection) == null && {
+          connection: filter.connection,
+        }),
       },
     ];
   }
@@ -110,25 +114,4 @@ export function getFilterSourceRefError(
     .map(({ id }) => id);
   if (mismatched.length === 0) return null;
   return `The following filter source IDs are not on the filter's connection: ${[...new Set(mismatched)].join(', ')}`;
-}
-
-/**
- * An error naming SQL_QUERY filters whose source or connection is a variable
- * while it has a source, or null. A source is only offered on a fixed
- * connection, so neither field may change what the other points at.
- */
-export function getSqlQueryFilterSourceVariableError(
-  filters: FilterWithOptionalId[] = [],
-): string | null {
-  const invalid = filters
-    .filter(isSqlQueryFilter)
-    .filter(
-      ({ source, connection }) =>
-        source != null &&
-        (parseVariableReference(source) != null ||
-          parseVariableReference(connection) != null),
-    )
-    .map(({ name }) => name);
-  if (invalid.length === 0) return null;
-  return `SQL_QUERY filters with a source need a source ID and a connection ID, not variables. The following filters use a variable: ${invalid.join(', ')}`;
 }

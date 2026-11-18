@@ -473,11 +473,8 @@ const isSourceBackedTemplateFilter = (
   | SqlQueryDashboardFilter =>
   (isQueryExpressionFilter(filter) ||
     isPrometheusLabelFilter(filter) ||
-    // The source is optional for a SQL query filter, and only offered on a
-    // connection ID
-    (isSqlQueryFilter(filter) &&
-      !!filter.source &&
-      !isVariableRef(filter.connection))) &&
+    // The source is optional for a SQL query filter
+    (isSqlQueryFilter(filter) && !!filter.source)) &&
   !isVariableRef(filter.source);
 
 /**
@@ -1443,7 +1440,8 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
             {/** Map filter sources */}
             {input.filters?.map((filter, i) => {
-              // A SQL query filter's source must be on its mapped connection.
+              // A SQL query filter's source must be on its mapped connection,
+              // unless that is a connection variable, which isn't mapped.
               const sourceConnectionId = isSqlQueryFilter(filter)
                 ? filterConnectionMappings?.[i]
                 : undefined;

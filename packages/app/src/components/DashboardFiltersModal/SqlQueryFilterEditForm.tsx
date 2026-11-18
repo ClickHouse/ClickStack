@@ -90,49 +90,56 @@ export const SqlQueryFilterEditForm = ({
     control,
     name: ['connection', 'source', 'sqlTemplate'],
   });
-  const sourceObject = source ? sources?.find(s => s.id === source) : undefined;
-  // A source is only offered on a connection ID, since a connection variable
-  // can later select a connection the source isn't on.
-  const isConnectionVariable = parseVariableReference(connection) != null;
+  const isSourceVariable = parseVariableReference(source) != null;
+  // Source and connection variables preview, and are validated, as the source
+  // and connection they currently select.
+  const resolvedSource = useResolvedReference(source);
+  const resolvedConnection = useResolvedReference(connection);
+  const sourceObject = resolvedSource
+    ? sources?.find(s => s.id === resolvedSource)
+    : undefined;
+  const storedSourceObject = isSourceVariable ? undefined : sourceObject;
 
   const prevSource = usePrevious(source);
-  const prevConnection = usePrevious(connection);
+  const prevConnection = usePrevious(resolvedConnection);
   useEffect(() => {
-    if (isConnectionVariable) {
-      if (source) setValue('source', '');
-      return;
-    }
     // The source field is shared with the other filter types, so switching
     // type can carry over one this filter can't use.
     if (
       source &&
+      !isSourceVariable &&
       sources &&
-      (!sourceObject ||
-        !SQL_QUERY_FILTER_SOURCE_KINDS.includes(sourceObject.kind))
+      (!storedSourceObject ||
+        !SQL_QUERY_FILTER_SOURCE_KINDS.includes(storedSourceObject.kind))
     ) {
       setValue('source', '');
       return;
     }
     const update = resolveConnectionSourceSync({
       source,
-      connection,
+      connection: resolvedConnection,
       prevSource,
       prevConnection,
       sources,
     });
-    if (update?.field === 'connection') {
+    // A connection variable stays as picked, as on raw SQL tiles
+    if (
+      update?.field === 'connection' &&
+      parseVariableReference(connection) == null
+    ) {
       setValue('connection', update.value);
     } else if (update?.field === 'source') {
       setValue('source', update.value);
     }
   }, [
     connection,
-    isConnectionVariable,
+    isSourceVariable,
     prevConnection,
     prevSource,
+    resolvedConnection,
     setValue,
     source,
-    sourceObject,
+    storedSourceObject,
     sources,
   ]);
 
@@ -155,15 +162,20 @@ export const SqlQueryFilterEditForm = ({
     source?: string;
     sqlTemplate: string;
   }>();
-  // A connection variable previews as the connection it currently selects.
-  const resolvedConnection = useResolvedReference(connection);
-  const unresolvedConnection =
-    parseVariableReference(connection) != null && !resolvedConnection;
-  const canPreview = !!resolvedConnection && !!sqlTemplate?.trim();
+  const unresolvedVariables = [
+    !resolvedConnection && parseVariableReference(connection) != null
+      ? connection
+      : undefined,
+    isSourceVariable && !resolvedSource ? source : undefined,
+  ].filter((value): value is string => !!value);
+  const canPreview =
+    !!resolvedConnection &&
+    !!sqlTemplate?.trim() &&
+    unresolvedVariables.length === 0;
   const queryClient = useQueryClient();
   const runPreview = () => {
     if (!canPreview) return;
-    const previewSource = source || undefined;
+    const previewSource = resolvedSource || undefined;
     // The same query keeps its cache key, so re-run it explicitly.
     if (
       previewed?.connection === resolvedConnection &&
@@ -182,10 +194,11 @@ export const SqlQueryFilterEditForm = ({
   };
 
   let sourceTables: SqlQueryFilterSourceTables | 'unknown' | undefined;
-  if (sourceObject) {
-    sourceTables = getSqlQueryFilterSourceTables(sourceObject);
+  if (storedSourceObject) {
+    sourceTables = getSqlQueryFilterSourceTables(storedSourceObject);
   } else if (source) {
-    // Set, but the sources list hasn't loaded yet.
+    // A variable can later select a source with other tables, and a source ID
+    // may be set before the sources list loads.
     sourceTables = 'unknown';
   }
 
@@ -222,7 +235,7 @@ export const SqlQueryFilterEditForm = ({
 
         <CustomInputWrapper
           label="Source"
-          tooltipText="Optional. Lets the query use $__sourceTable and $__filters, which applies the dashboard's filter selections for this source. Needs a connection, not a connection variable."
+          tooltipText="Optional. Lets the query use $__sourceTable and $__filters, which applies the dashboard's filter selections for this source. Can be a data source variable."
         >
           {/* The source select's wrapper is inline-flex; a grid cell
               stretches it to the full width. */}
@@ -235,12 +248,11 @@ export const SqlQueryFilterEditForm = ({
               control={control}
               name="source"
               allowedSourceKinds={SQL_QUERY_FILTER_SOURCE_KINDS}
-              connectionId={connection}
+              allowSourceVariables
+              connectionId={resolvedConnection}
+              variableConnection={connection}
               clearable
-              disabled={isConnectionVariable}
-              placeholder={
-                isConnectionVariable ? 'Not with a connection variable' : 'None'
-              }
+              placeholder="None"
               comboboxProps={{ withinPortal: true }}
             />
           </div>
@@ -265,9 +277,10 @@ export const SqlQueryFilterEditForm = ({
             parentRef={TOOLTIP_PORTAL_TARGET}
           />
           <Group justify="flex-end">
-            {unresolvedConnection && (
+            {unresolvedVariables.length > 0 && (
               <Text size="xs" c="dimmed">
-                Select a value for {connection} to preview
+                Select a value for {unresolvedVariables.join(' and ')} to
+                preview
               </Text>
             )}
             <Button

@@ -2913,9 +2913,9 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           type: string
  *           description: |
  *             Optional Log, Trace, Session, or Metric source on the same
- *             connection. Lets `sqlTemplate` use `$__sourceTable` and
- *             `$__filters`. Requires a connection ID in `connectionId`, not
- *             a connection variable.
+ *             connection, or `$name` of a DATA_SOURCE filter on this
+ *             dashboard. Lets `sqlTemplate` use `$__sourceTable` and
+ *             `$__filters`.
  *           example: "65f5e4a3b9e77c001a345678"
  *         sqlTemplate:
  *           type: string

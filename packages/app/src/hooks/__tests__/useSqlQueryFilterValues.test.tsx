@@ -236,6 +236,18 @@ describe('useSqlQueryFilterValues', () => {
       expect(mockQuery).not.toHaveBeenCalled();
     });
 
+    it("reports a source that isn't on the filter's connection", () => {
+      const { result } = renderFilters(
+        [filter({ connection: 'conn2', source: 'logs' })],
+        [],
+      );
+
+      expect(result.current.filterErrorMessages.get('sql1')).toBe(
+        "Source Logs is not on the filter's connection",
+      );
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
     it('reports a source that no longer exists', () => {
       const { result } = renderFilters([filter({ source: 'deleted' })], []);
 

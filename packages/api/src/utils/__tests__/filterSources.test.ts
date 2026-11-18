@@ -3,7 +3,6 @@ import { DashboardFilter, SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   getChangedFilterSourceRefs,
   getFilterSourceRefError,
-  getSqlQueryFilterSourceVariableError,
 } from '@/utils/filterSources';
 
 const adhoc = (
@@ -86,6 +85,12 @@ describe('getChangedFilterSourceRefs', () => {
     ]);
   });
 
+  it('does not pin a SQL query source to a connection variable', () => {
+    expect(
+      getChangedFilterSourceRefs([sqlQuery({ connection: '$conn' })]),
+    ).toEqual([{ id: 'logs', kinds: sqlQueryKinds }]);
+  });
+
   it('re-checks a SQL query source whose connection changed', () => {
     expect(
       getChangedFilterSourceRefs(
@@ -153,28 +158,6 @@ describe('getFilterSourceRefError', () => {
       ),
     ).toBe(
       "The following filter source IDs are not on the filter's connection: logs",
-    );
-  });
-});
-
-describe('getSqlQueryFilterSourceVariableError', () => {
-  it('accepts a source ID on a connection ID, or no source', () => {
-    expect(
-      getSqlQueryFilterSourceVariableError([
-        sqlQuery(),
-        sqlQuery({ connection: '$conn', source: undefined }),
-      ]),
-    ).toBeNull();
-  });
-
-  it('names filters with a source variable or a connection variable', () => {
-    expect(
-      getSqlQueryFilterSourceVariableError([
-        sqlQuery({ name: 'A', source: '$logs' }),
-        sqlQuery({ name: 'B', connection: '$conn' }),
-      ]),
-    ).toBe(
-      'SQL_QUERY filters with a source need a source ID and a connection ID, not variables. The following filters use a variable: A, B',
     );
   });
 });

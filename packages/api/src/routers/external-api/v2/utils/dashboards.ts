@@ -71,7 +71,6 @@ import {
   getChangedFilterSourceRefs,
   getFilterSourceRefError,
   getInvalidSourceIds,
-  getSqlQueryFilterSourceVariableError,
 } from '@/utils/filterSources';
 import logger from '@/utils/logger';
 import {
@@ -1916,9 +1915,6 @@ export async function validateDashboardTiles(
   const internalFilters = (filters ?? []).map(filter =>
     translateExternalFilterToFilter({ id: '', ...filter }),
   );
-  const sqlQueryFilterVariableError =
-    getSqlQueryFilterSourceVariableError(internalFilters);
-  if (sqlQueryFilterVariableError != null) return sqlQueryFilterVariableError;
   const filterSourceError = getFilterSourceRefError(
     getChangedFilterSourceRefs(internalFilters, existingFilters).filter(
       ref => parseVariableReference(ref.id) == null,

@@ -2450,7 +2450,8 @@ export const SqlQueryDashboardFilterSchema = dashboardFilterBaseSchema.extend({
   connection: z.string().min(1),
   /**
    * ID of the source `$__sourceTable` and `$__filters` resolve against, on the
-   * same connection. Optional, as for raw SQL tiles.
+   * same connection, or a data source variable reference. Optional, as for raw
+   * SQL tiles.
    */
   source: z.string().min(1).optional(),
   sqlTemplate: z.string().min(1),

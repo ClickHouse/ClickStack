@@ -251,17 +251,27 @@ describe('SqlQueryFilterEditForm', () => {
       );
     });
 
-    it('clears and disables the source when the connection becomes a variable', async () => {
+    it('keeps the source when the connection becomes a variable', async () => {
       await renderWithSource('SELECT 1');
 
       fireEvent.change(screen.getByTestId('connection-input'), {
         target: { value: '$conn' },
       });
 
-      await waitFor(() =>
-        expect(screen.getByTestId('source-input')).toHaveValue(''),
-      );
-      expect(screen.getByTestId('source-input')).toBeDisabled();
+      expect(screen.getByTestId('connection-input')).toHaveValue('$conn');
+      expect(screen.getByTestId('source-input')).toHaveValue('logs');
+      expect(screen.getByTestId('source-input')).toBeEnabled();
+    });
+
+    it('keeps a connection variable when a source is picked', async () => {
+      mockSources = [logSource('logs', 'conn1')];
+      renderWithMantine(<Harness defaultValues={{ connection: '$conn' }} />);
+
+      fireEvent.change(screen.getByTestId('source-input'), {
+        target: { value: 'logs' },
+      });
+
+      expect(screen.getByTestId('source-input')).toHaveValue('logs');
       expect(screen.getByTestId('connection-input')).toHaveValue('$conn');
     });
 
@@ -385,6 +395,68 @@ describe('SqlQueryFilterEditForm', () => {
     expect(
       screen.getByText('Select a value for $conn to preview'),
     ).toBeInTheDocument();
+  });
+
+  describe('with a source variable', () => {
+    const renderWithSourceVariable = async (
+      sql: string,
+      referenceValues?: Map<string, string>,
+    ) => {
+      mockSources = [logSource('logs', 'conn1')];
+      renderWithMantine(
+        <Harness
+          defaultValues={{ connection: '$conn', source: '$logs' }}
+          referenceValues={referenceValues}
+        />,
+      );
+      const user = userEvent.setup();
+      await user.type(screen.getByTestId('sql-input'), sql);
+      return user;
+    };
+
+    it('accepts the source macros and keeps both variables', async () => {
+      const user = await renderWithSourceVariable(
+        'SELECT ServiceName FROM $__sourceTable WHERE $__filters',
+      );
+
+      expect(mockCompletionLabels).toContain('$__sourceTable');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(
+        screen.queryByText(/no source is selected|cannot be used/),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId('source-input')).toHaveValue('$logs');
+      expect(screen.getByTestId('connection-input')).toHaveValue('$conn');
+    });
+
+    it('previews as the source and connection the variables select', async () => {
+      const user = await renderWithSourceVariable(
+        'SELECT ServiceName FROM $__sourceTable',
+        new Map([
+          ['conn', 'conn1'],
+          ['logs', 'logs'],
+        ]),
+      );
+
+      await user.click(screen.getByTestId('filter-sql-preview-button'));
+
+      expect(mockUseSqlQueryFilterValues).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          filters: [
+            expect.objectContaining({ connection: 'conn1', source: 'logs' }),
+          ],
+        }),
+      );
+    });
+
+    it('disables the preview while the variables have no value', async () => {
+      await renderWithSourceVariable('SELECT 1');
+
+      expect(screen.getByTestId('filter-sql-preview-button')).toBeDisabled();
+      expect(
+        screen.getByText('Select a value for $conn and $logs to preview'),
+      ).toBeInTheDocument();
+    });
   });
 
   it('lists the first twenty values and counts the rest', async () => {

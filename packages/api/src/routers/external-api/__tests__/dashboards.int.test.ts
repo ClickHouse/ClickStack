@@ -6425,22 +6425,65 @@ describe('External API v2 Dashboards - new format', () => {
         expect(response.body.message).toContain(traceSource._id.toString());
       });
 
-      it('rejects a source with a connection variable', async () => {
+      const connectionVariableInput = {
+        id: new ObjectId().toString(),
+        type: 'CONNECTION',
+        name: 'Connection',
+        variableName: 'conn',
+      };
+
+      it('accepts a source with a connection variable', async () => {
         const response = await sendFilters([
-          {
-            id: new ObjectId().toString(),
-            type: 'CONNECTION',
-            name: 'Connection',
-            variableName: 'conn',
-          },
+          connectionVariableInput,
           sqlFilterInput({
             connectionId: '$conn',
             sourceId: traceSource._id.toString(),
           }),
         ]);
 
+        expect(response.status).toBe(200);
+        expect(response.body.data.filters[1]).toMatchObject({
+          connectionId: '$conn',
+          sourceId: traceSource._id.toString(),
+        });
+      });
+
+      it('accepts a data source variable and round-trips it through GET', async () => {
+        const response = await sendFilters([
+          connectionVariableInput,
+          {
+            id: new ObjectId().toString(),
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+          },
+          sqlFilterInput({ connectionId: '$conn', sourceId: '$traces' }),
+        ]);
+        expect(response.status).toBe(200);
+        expect(response.body.data.filters[2]).toMatchObject({
+          connectionId: '$conn',
+          sourceId: '$traces',
+        });
+
+        const getResponse = await authRequest(
+          'get',
+          `${BASE_URL}/${response.body.data.id}`,
+        ).expect(200);
+        expect(getResponse.body.data.filters).toEqual(
+          response.body.data.filters,
+        );
+      });
+
+      it('rejects a reference to an unknown data source variable', async () => {
+        const response = await sendFilters([
+          sqlFilterInput({ sourceId: '$traces' }),
+        ]);
+
         expect(response.status).toBe(400);
-        expect(response.body.message).toContain('not variables');
+        expect(JSON.stringify(response.body)).toMatch(
+          /does not name a data source variable/,
+        );
       });
     });
 

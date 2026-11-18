@@ -4553,7 +4553,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "Optional Log, Trace, Session, or Metric source on the same\nconnection. Lets `sqlTemplate` use `$__sourceTable` and\n`$__filters`. Requires a connection ID in `connectionId`, not\na connection variable.\n",
+            "description": "Optional Log, Trace, Session, or Metric source on the same\nconnection, or `$name` of a DATA_SOURCE filter on this\ndashboard. Lets `sqlTemplate` use `$__sourceTable` and\n`$__filters`.\n",
             "example": "65f5e4a3b9e77c001a345678"
           },
           "sqlTemplate": {
