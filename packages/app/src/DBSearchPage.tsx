@@ -3035,11 +3035,13 @@ function DBSearchPageContent() {
                                 <SegmentedControl
                                   size="xs"
                                   value={traceChartMode}
+                                  // RED is the default, so it clears the param
+                                  // rather than writing traceChartMode=red.
                                   onChange={v =>
                                     setTraceChartMode(
                                       TRACE_CHART_MODES.find(
-                                        mode => mode === v,
-                                      ) ?? 'red',
+                                        mode => mode === v && mode !== 'red',
+                                      ) ?? null,
                                     )
                                   }
                                   data={[
