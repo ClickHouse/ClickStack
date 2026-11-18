@@ -15,6 +15,10 @@ const LARGE_VIEWPORT = { width: 390, height: 745 };
 // units differ", which the test asserts before relying on it.
 const SMALL_VIEWPORT_DIFFERENCE = 200;
 
+// APP_CONTENT_SCROLL_CONTAINER_ID from src/layout.tsx, inlined because
+// importing that module pulls the whole page tree into the test runtime.
+const APP_CONTENT_SCROLL_CONTAINER_ID = 'app-content-scroll-container';
+
 async function measureViewportHeights(page: Page) {
   return page.evaluate(() => {
     const measure = (unit: string) => {
@@ -40,17 +44,19 @@ async function expectUserMenuOnScreen(page: Page, smallViewportHeight: number) {
     .toBeLessThanOrEqual(smallViewportHeight);
 }
 
-test.describe('Mobile app nav', { tag: ['@core'] }, () => {
+test.describe('Mobile app shell', { tag: ['@core'] }, () => {
   test.use({ viewport: LARGE_VIEWPORT, isMobile: true, hasTouch: true });
 
-  test('keeps the user menu on screen behind a browser toolbar', async ({
-    page,
-  }) => {
+  test.beforeEach(async ({ page }) => {
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setSmallViewportHeightDifferenceOverride', {
       difference: SMALL_VIEWPORT_DIFFERENCE,
     });
+  });
 
+  test('keeps the user menu on screen behind a browser toolbar', async ({
+    page,
+  }) => {
     await page.goto('/search');
     await expect(page.locator('[data-testid="app-nav"]')).toBeVisible();
 
@@ -69,5 +75,28 @@ test.describe('Mobile app nav', { tag: ['@core'] }, () => {
         .click();
       await expectUserMenuOnScreen(page, viewport.small);
     });
+  });
+
+  test('does not leave the page content taller than the shell', async ({
+    page,
+  }) => {
+    await page.goto('/search');
+    await expect(page.locator('[data-testid="search-page"]')).toBeVisible();
+
+    const viewport = await measureViewportHeights(page);
+    expect(viewport.small).toBeLessThan(viewport.large);
+
+    // A page root still sized to the large viewport would overflow the shell
+    // and make the whole app scroll, which it is not meant to do.
+    await expect
+      .poll(async () =>
+        page.evaluate(id => {
+          const scroller = document.getElementById(id);
+          return scroller
+            ? scroller.scrollHeight - scroller.clientHeight
+            : Number.POSITIVE_INFINITY;
+        }, APP_CONTENT_SCROLL_CONTAINER_ID),
+      )
+      .toBe(0);
   });
 });
