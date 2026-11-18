@@ -191,7 +191,9 @@ test.describe(
       });
     });
 
-    test('drives a raw SQL tile from connection and source variables', async () => {
+    test('drives a raw SQL tile from connection and source variables', async ({
+      page,
+    }) => {
       const editor = dashboardPage.chartEditor;
 
       await test.step('Create a connection variable and a source variable limited to it', async () => {
@@ -243,6 +245,38 @@ test.describe(
           'Logs source',
           DEFAULT_LOGS_SOURCE_NAME,
         );
+        await expect(
+          dashboardPage.getTileMissingRequiredFilters(0),
+        ).toHaveCount(0);
+        await expect(dashboardPage.getNumberTileValue(0)).toBeVisible();
+      });
+
+      await test.step('A URL can select the connection and source by name', async () => {
+        const url = new URL(page.url());
+        url.searchParams.set(
+          'filters',
+          JSON.stringify([
+            {
+              type: 'variable',
+              name: 'cluster',
+              values: [DEFAULT_CONNECTION_NAME],
+            },
+            {
+              type: 'variable',
+              name: 'logs',
+              values: [DEFAULT_LOGS_SOURCE_NAME.toLowerCase()],
+            },
+          ]),
+        );
+        await page.goto(url.toString());
+        await dashboardPage.waitForLoaded();
+
+        await expect(
+          dashboardPage.getFilterSelectByName('Cluster'),
+        ).toHaveValue(DEFAULT_CONNECTION_NAME);
+        await expect(
+          dashboardPage.getFilterSelectByName('Logs source'),
+        ).toHaveValue(DEFAULT_LOGS_SOURCE_NAME);
         await expect(
           dashboardPage.getTileMissingRequiredFilters(0),
         ).toHaveCount(0);
