@@ -107,6 +107,7 @@ export function formatZodIssues(error: z.ZodError): string {
 }
 
 type UnionOptions = readonly [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]];
+type Path = (string | number)[];
 
 function unwrapSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
   if (schema instanceof z.ZodEffects) return unwrapSchema(schema.innerType());
@@ -118,80 +119,134 @@ function unwrapSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
   return schema;
 }
 
-/** Counts the literal and enum fields, at any object depth, that `data` satisfies. */
-function countMatchedDiscriminators(
+function objectShape(schema: z.ZodTypeAny): Map<string, z.ZodTypeAny> | null {
+  const inner = unwrapSchema(schema);
+  if (!(inner instanceof z.ZodObject)) return null;
+  const shape: z.ZodRawShape = inner.shape;
+  return new Map(Object.entries(shape));
+}
+
+/** Records every object path at which `schema` requires a literal value. */
+function collectLiteralPaths(
+  schema: z.ZodTypeAny,
+  path: Path,
+  into: Set<string>,
+) {
+  if (unwrapSchema(schema) instanceof z.ZodLiteral)
+    into.add(formatZodPath(path));
+  for (const [key, field] of objectShape(schema) ?? []) {
+    collectLiteralPaths(field, [...path, key], into);
+  }
+}
+
+/**
+ * Scores how well `data` fits a branch on the discriminator fields: +1 for
+ * each one it satisfies, -1 for each one it sets that the branch doesn't have.
+ */
+function scoreBranch(
   schema: z.ZodTypeAny,
   data: unknown,
+  path: Path,
+  discriminators: Set<string>,
 ): number {
   const inner = unwrapSchema(schema);
   if (inner instanceof z.ZodLiteral || inner instanceof z.ZodEnum) {
+    if (!discriminators.has(formatZodPath(path))) return 0;
     return inner.safeParse(data).success ? 1 : 0;
   }
-  if (!(inner instanceof z.ZodObject) || typeof data !== 'object' || !data) {
-    return 0;
+  const shape = objectShape(inner);
+  if (!shape || typeof data !== 'object' || !data) return 0;
+  let score = 0;
+  for (const [key, value] of Object.entries(data)) {
+    const field = shape.get(key);
+    if (field) {
+      score += scoreBranch(field, value, [...path, key], discriminators);
+    } else if (
+      value !== undefined &&
+      discriminators.has(formatZodPath([...path, key]))
+    ) {
+      score -= 1;
+    }
   }
-  const shape: z.ZodRawShape = inner.shape;
-  const values = new Map(Object.entries(data));
-  return Object.entries(shape).reduce(
-    (count, [key, field]) =>
-      count + countMatchedDiscriminators(field, values.get(key)),
-    0,
-  );
+  return score;
 }
-
-const isDiscriminatorIssue = (
-  issue: z.ZodIssue,
-): issue is z.ZodIssue &
-  (z.ZodInvalidLiteralIssue | z.ZodInvalidEnumValueIssue) =>
-  issue.code === z.ZodIssueCode.invalid_literal ||
-  issue.code === z.ZodIssueCode.invalid_enum_value;
 
 /**
  * `z.union` for MCP tool input. MCP SDK 1.30+ prints only a failed union's
- * top-level issue, so the error reports the branch whose literal and enum
- * fields the input matched most, or every accepted value when even that branch
- * rejects one of them.
+ * top-level issue, so the error reports the branch that best fits the input's
+ * discriminators (fields some branch pins to a literal). When that branch
+ * rejects a discriminator, it lists the values the best-fitting branches
+ * accept.
  */
 export function mcpUnion<T extends UnionOptions>(options: T) {
+  const discriminators = new Set<string>();
+  for (const option of options) collectLiteralPaths(option, [], discriminators);
+
   const errorMap: z.ZodErrorMap = (issue, ctx) => {
     if (issue.code !== z.ZodIssueCode.invalid_union) {
       return { message: ctx.defaultError };
     }
-    const branches = options.map((option, index) => ({
-      error: issue.unionErrors.at(index) ?? new z.ZodError([]),
-      matched: countMatchedDiscriminators(option, ctx.data),
-    }));
-    const [closest] = branches.sort(
-      (a, b) =>
-        b.matched - a.matched || a.error.issues.length - b.error.issues.length,
-    );
-    if (!closest) return { message: ctx.defaultError };
+    // Paths relative to the union, so nested unions don't repeat their prefix.
+    const relativePath = (i: z.ZodIssue) =>
+      formatZodPath(i.path.slice(issue.path.length));
+    const isDiscriminatorIssue = (
+      i: z.ZodIssue,
+    ): i is z.ZodIssue &
+      (z.ZodInvalidLiteralIssue | z.ZodInvalidEnumValueIssue) =>
+      (i.code === z.ZodIssueCode.invalid_literal ||
+        i.code === z.ZodIssueCode.invalid_enum_value) &&
+      discriminators.has(relativePath(i));
 
-    const mismatchedPaths = new Set(
-      closest.error.issues
-        .filter(isDiscriminatorIssue)
-        .map(i => formatZodPath(i.path)),
+    const ranked = options
+      .map((option, index) => {
+        const issues = issue.unionErrors.at(index)?.issues ?? [];
+        return {
+          issues,
+          score: scoreBranch(option, ctx.data, [], discriminators),
+          mismatches: issues.filter(isDiscriminatorIssue).length,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          a.mismatches - b.mismatches ||
+          a.issues.length - b.issues.length,
+      );
+    const closest = ranked[0];
+    const best = ranked.filter(branch => branch.score === closest.score);
+
+    const mismatched = new Set(
+      closest.issues.filter(isDiscriminatorIssue).map(relativePath),
     );
-    if (mismatchedPaths.size === 0) {
-      return { message: formatZodIssues(closest.error) };
-    }
-    const discriminatorIssues = issue.unionErrors
-      .flatMap(e => e.issues)
-      .filter(isDiscriminatorIssue);
-    const lines = [...mismatchedPaths].map(path => {
+    const acceptedLines = [...mismatched].map(path => {
       const accepted = new Set(
-        discriminatorIssues
-          .filter(i => formatZodPath(i.path) === path)
+        best
+          .flatMap(branch => branch.issues)
+          .filter(i => isDiscriminatorIssue(i) && relativePath(i) === path)
           .flatMap(i =>
             i.code === z.ZodIssueCode.invalid_literal
               ? [i.expected]
-              : i.options,
+              : i.code === z.ZodIssueCode.invalid_enum_value
+                ? i.options
+                : [],
           )
           .map(value => JSON.stringify(value)),
       );
-      return `${path}: expected one of ${[...accepted].join(', ')}`;
+      const expected = `expected one of ${[...accepted].join(', ')}`;
+      return path ? `${path}: ${expected}` : expected;
     });
-    return { message: lines.join('\n') };
+    // With no discriminator matched, the branch is a guess, so its other
+    // issues would point the agent at the wrong tile type.
+    const otherLines =
+      closest.score > 0 || mismatched.size === 0
+        ? closest.issues
+            .filter(i => !isDiscriminatorIssue(i))
+            .map(i => {
+              const path = relativePath(i);
+              return path ? `${path}: ${i.message}` : i.message;
+            })
+        : [];
+    return { message: [...acceptedLines, ...otherLines].join('; ') };
   };
   return z.union(options, { errorMap });
 }

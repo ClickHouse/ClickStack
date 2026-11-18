@@ -6,8 +6,7 @@ import { z } from 'zod';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
-import { mcpUserError } from '@/mcp/utils/errors';
-import { mcpUnion } from '@/mcp/utils/errors';
+import { mcpUnion, mcpUserError } from '@/mcp/utils/errors';
 import { objectIdSchema } from '@/utils/zod';
 
 import { buildTile, parseTimeRange, runConfigTile } from './helpers';
