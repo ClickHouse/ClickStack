@@ -86,7 +86,7 @@ const renderModal = (
 
 const selectFilterType = async (
   user: ReturnType<typeof userEvent.setup>,
-  label: 'Queried values' | 'Static values',
+  label: 'SQL expression values' | 'Static values',
 ) => {
   await user.click(screen.getByTestId('filter-type-picker'));
   // The dropdown's options are matched by text: jsdom has none of Mantine's
@@ -135,7 +135,7 @@ describe('DashboardFiltersModal', () => {
     await user.type(screen.getByTestId('filter-variable-name-input'), 'env');
     await user.type(screen.getByTestId('filter-options-input'), 'prod{Enter}');
 
-    await selectFilterType(user, 'Queried values');
+    await selectFilterType(user, 'SQL expression values');
 
     expect(screen.getByTestId('filter-name-input')).toHaveValue('Environment');
     expect(screen.getByTestId('filter-expression-input')).toHaveValue('Env');
@@ -291,7 +291,7 @@ describe('DashboardFiltersModal', () => {
     });
 
     await user.click(screen.getByTestId('edit-filter-button-Environment'));
-    await selectFilterType(user, 'Queried values');
+    await selectFilterType(user, 'SQL expression values');
     await user.type(screen.getByTestId('filter-expression-input'), 'Env');
     await user.type(screen.getByTestId('source-selector'), 'logs');
     await user.click(screen.getByTestId('save-filter-button'));
@@ -327,7 +327,7 @@ describe('DashboardFiltersModal', () => {
     expect(screen.queryByTestId('filter-type-picker')).toBeNull();
   });
 
-  it.each(['Queried values', 'Static values'] as const)(
+  it.each(['SQL expression values', 'Static values'] as const)(
     'offers the required control on a %s filter',
     async label => {
       const { user } = renderModal();

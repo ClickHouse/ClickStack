@@ -1400,7 +1400,7 @@ export class DashboardPage {
   /** Switch the add-filter form between the available value types. */
   async selectFilterType(
     label:
-      | 'Queried values'
+      | 'SQL expression values'
       | 'Static values'
       | 'PromQL label values'
       | 'Ad hoc keys and values'

@@ -50,10 +50,10 @@ import { VariableNameInput } from './VariableNameInput';
 const FILTER_TYPE_OPTIONS = [
   {
     value: DashboardFilterType.enum.QUERY_EXPRESSION,
-    label: 'Queried values',
+    label: 'SQL expression values',
   },
-  { value: DashboardFilterType.enum.STATIC_LIST, label: 'Static values' },
   { value: DashboardFilterType.enum.SQL_QUERY, label: 'SQL query values' },
+  { value: DashboardFilterType.enum.STATIC_LIST, label: 'Static values' },
   ...(IS_PROMQL_ENABLED
     ? [
         {
