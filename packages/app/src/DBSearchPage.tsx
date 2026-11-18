@@ -40,6 +40,7 @@ import {
 import {
   BuilderChartConfigWithDateRange,
   ChartConfigWithDateRange,
+  ConditionFilter,
   DisplayType,
   Filter,
   isPersistableUserId,
@@ -102,6 +103,13 @@ import ResourceTerraformPopover from '@/components/Iac/ResourceTerraformPopover'
 import { InlineNameInput } from '@/components/InlineNameInput/InlineNameInput';
 import { InputControlled } from '@/components/InputControlled';
 import OnboardingModal from '@/components/OnboardingModal';
+import {
+  isPatternFilter,
+  parsePatternFilter,
+  PatternFilter,
+  PatternFilterAction,
+  withPatternFilter,
+} from '@/components/Patterns/patternFilter';
 import {
   isCustomSearchGroupBy,
   resolveSearchGroupBy,
@@ -1468,7 +1476,36 @@ function DBSearchPageContent() {
     onFilterChange: handleSetFilters,
     dateTimeColumns,
     knownColumns,
+    isPreservedFilter: isPatternFilter,
   });
+
+  const patternFilters = useMemo(
+    () =>
+      (filters ?? []).flatMap(filter => {
+        const parsed = parsePatternFilter(filter);
+        return parsed ? [parsed] : [];
+      }),
+    [filters],
+  );
+  const removePatternFilter = useCallback(
+    (removed: PatternFilter) =>
+      handleSetFilters(
+        (filters ?? []).filter(
+          f => f.type !== 'sql' || f.condition !== removed.condition,
+        ),
+      ),
+    [filters, handleSetFilters],
+  );
+  // Showing matches switches to the results view.
+  const addPatternFilter = useCallback(
+    (added: ConditionFilter, action: PatternFilterAction) => {
+      handleSetFilters(withPatternFilter(filters ?? [], added));
+      if (action === 'include') {
+        setAnalysisMode('results');
+      }
+    },
+    [filters, handleSetFilters, setAnalysisMode],
+  );
 
   useEffect(() => {
     // If the user changes the source dropdown, reset the select and orderby fields
@@ -2659,6 +2696,8 @@ function DBSearchPageContent() {
           searchFilters={searchFilters}
           chartConfig={filtersChartConfig}
           dateTimeColumns={dateTimeColumns}
+          patternFilters={patternFilters}
+          onRemovePatternFilter={removePatternFilter}
           mt={6}
         />
       </form>
@@ -2800,6 +2839,7 @@ function DBSearchPageContent() {
                         draftPatternColumn={draftPatternColumn}
                         onDraftPatternColumnChange={setDraftPatternColumn}
                         onSubmit={onSubmit}
+                        onPatternFilter={addPatternFilter}
                         totalCountConfig={totalCountConfig}
                         totalCountQueryKeyPrefix={QUERY_KEY_PREFIX}
                       />

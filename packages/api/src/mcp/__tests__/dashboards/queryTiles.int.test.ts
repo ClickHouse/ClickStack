@@ -594,4 +594,59 @@ describe('MCP Dashboard Tools - clickstack_query_tiles', () => {
       expect(text).toContain('prod, staging');
     });
   });
+
+  it('reports a tile whose data source variable has no selection without failing the batch', async () => {
+    const sourceId = ctx.traceSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Batch reference variable test',
+        tiles: [
+          {
+            name: 'Fixed',
+            config: {
+              displayType: 'number',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Variable',
+            config: {
+              displayType: 'number',
+              sourceId: '$traces',
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+        filters: [
+          {
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+          },
+        ],
+      },
+    );
+    expect(createResult.isError).toBeFalsy();
+    const dashboard = JSON.parse(getFirstText(createResult));
+
+    const result = await callTool(ctx.client!, 'clickstack_query_tiles', {
+      dashboardId: dashboard.id,
+      ...wideRange(),
+    });
+
+    expect(result.isError).toBeFalsy();
+    const { tiles } = JSON.parse(getFirstText(result));
+    expect(tiles).toEqual([
+      expect.objectContaining({ name: 'Fixed', status: 'ok' }),
+      expect.objectContaining({
+        name: 'Variable',
+        status: 'error',
+        error: expect.stringContaining('$traces variable'),
+      }),
+    ]);
+  });
 });

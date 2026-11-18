@@ -8,6 +8,7 @@ import {
   MetricsDataType,
   PromqlReducer,
   PromqlSavedChartConfig,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 import { z } from 'zod';
@@ -537,6 +538,30 @@ describe('convertToExternalDashboard orphan-ref heal', () => {
     const hidden = convertToExternalDashboard(doc, { hidePromql: true });
     expect(hidden.filters).toEqual([adhoc('sql')]);
     expect(hidden.savedFilterValues).toEqual([adhocValue]);
+  });
+
+  it('keeps data source variables that offer promql sources with hidePromql', () => {
+    const doc = makeDoc({
+      filters: [
+        {
+          id: 'mixed',
+          type: 'DATA_SOURCE',
+          name: 'mixed',
+          variableName: 'mixed',
+          allowedSourceKinds: [SourceKind.Metric, SourceKind.Promql],
+          minSelections: 1,
+          maxSelections: 1,
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
+      ],
+    });
+
+    expect(
+      convertToExternalDashboard(doc, { hidePromql: true }).filters?.map(
+        f => f.id,
+      ),
+    ).toEqual(['mixed']);
   });
 
   // seriesLimit is three-state (matching the internal schema): omitted =
