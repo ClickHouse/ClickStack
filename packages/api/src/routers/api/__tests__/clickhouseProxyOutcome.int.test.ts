@@ -41,7 +41,7 @@ const scenarios: Record<
   },
   unavailable: (_req, res) => {
     res.writeHead(503);
-    res.end('Service is starting up');
+    res.end(`Service is starting up${' '.repeat(10_000)}<footer>`);
   },
   cut: (req, res) => {
     res.writeHead(200);
@@ -195,7 +195,9 @@ describe('clickhouse-proxy outcome', () => {
     });
     expect(setAttributes).toHaveBeenCalledWith(
       expect.objectContaining({
-        'hyperdx.clickhouse_proxy.error.message': 'Service is starting up',
+        'hyperdx.clickhouse_proxy.error.message': expect.stringMatching(
+          /^Service is starting up/,
+        ),
       }),
     );
   });
@@ -204,6 +206,7 @@ describe('clickhouse-proxy outcome', () => {
     const send = await connect();
     await expect(send('cut')).rejects.toThrow();
     expect(await proxyOutcome()).toMatchObject({
+      outcome: 'error',
       attributes: { error_category: 'upstream_unavailable' },
     });
   });

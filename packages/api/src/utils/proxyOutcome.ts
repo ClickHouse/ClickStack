@@ -138,6 +138,8 @@ type ProxyState = {
   headerErrorCode?: number;
   exceptionTag?: string;
   tail?: Buffer;
+  /** Start of an error body, where an endpoint's status message sits. */
+  head?: Buffer;
   done: boolean;
 };
 
@@ -197,7 +199,11 @@ export function observeUpstreamResponse(
   // shortcut: a compressed body is not inspected, so an exception at its end
   // goes undetected; decompress the tail if browsers start asking for gzip.
   if (proxyRes.headers['content-encoding']) return;
+  const isErrorStatus = (proxyRes.statusCode ?? 0) >= 400;
   proxyRes.on('data', (chunk: Buffer) => {
+    if (isErrorStatus && (state.head?.length ?? 0) < MAX_MESSAGE_LENGTH) {
+      state.head = Buffer.concat([state.head ?? Buffer.alloc(0), chunk]);
+    }
     state.tail =
       chunk.length >= TAIL_BYTES || !state.tail
         ? chunk.subarray(-TAIL_BYTES)
@@ -217,8 +223,9 @@ function finishProxyOutcome(res: ServerResponse, state: ProxyState) {
   if (state.done) return;
   state.done = true;
 
-  const failedUpstream =
-    state.timedOut || state.upstreamCut || state.transportError != null;
+  const failedUpstream = state.upstreamCut || state.transportError != null;
+  // Node emits 'timeout' on any idle socket; it only matters if the request failed.
+  const timedOut = state.timedOut && failedUpstream;
   const isErrorStatus = (state.upstreamStatus ?? 0) >= 400;
   const exception = state.tail
     ? findTrailingException(state.tail, state.exceptionTag)
@@ -227,7 +234,7 @@ function finishProxyOutcome(res: ServerResponse, state: ProxyState) {
 
   const category = classifyProxyFailure({
     clientAborted: !res.writableFinished && !failedUpstream,
-    timedOut: state.timedOut,
+    timedOut,
     transportError: state.transportError,
     upstreamStatus: state.upstreamStatus,
     upstreamCut: state.upstreamCut,
@@ -239,7 +246,7 @@ function finishProxyOutcome(res: ServerResponse, state: ProxyState) {
   const message =
     state.transportError?.message ??
     (isErrorStatus && clickhouseErrorCode == null
-      ? state.tail?.toString('utf8')
+      ? state.head?.toString('utf8')
       : undefined);
 
   state.span?.setAttributes({
@@ -258,10 +265,10 @@ function finishProxyOutcome(res: ServerResponse, state: ProxyState) {
 
   recordOperationOutcome({
     operation: QUERY_PROXY_OPERATION,
-    // Outcome keeps its status-based meaning; error_category is what lets the
-    // SLO decide which failures count.
+    // An upstream failure or an error status, as before; error_category is
+    // what lets the SLO decide which failures count.
     outcome:
-      state.transportError || (state.upstreamStatus ?? res.statusCode) >= 400
+      failedUpstream || (state.upstreamStatus ?? res.statusCode) >= 400
         ? 'error'
         : 'success',
     // Time to the upstream's response headers, as before, so the latency SLI
