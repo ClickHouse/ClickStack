@@ -2244,13 +2244,16 @@ function DBSearchPageContent() {
   // and pattern modes keep it off: the guard below turns it off, and the
   // TimePicker's Live option and the Resume Live Tail button are hidden.
   // Results mode defaults to live, so this view has to opt out for itself.
-  // Only while the heatmap is actually rendered, so a stale
-  // ?traceChartMode=heatmap on a source that shows the histogram can't disable
-  // live tail.
+  // Only while the heatmap is actually rendered (the same conditions as the
+  // chart branch below), so a stale ?traceChartMode=heatmap on a source that
+  // shows the histogram, or a query error that hides the chart area, can't
+  // disable live tail or hide its controls.
   const isHeatmapChartVisible =
     analysisMode === 'results' &&
     traceChartsSource != null &&
-    traceChartMode === 'heatmap';
+    traceChartMode === 'heatmap' &&
+    traceHeatmapChartConfig != null &&
+    !hasQueryError;
   useHeatmapLiveTailGuard({ isHeatmapChartVisible, isLive, setIsLive });
 
   const histogramGroupBySelect = (
