@@ -207,11 +207,14 @@ const externalPromqlLabelFilterShape = PromqlLabelDashboardFilterSchema.omit({
   isVariableEnabled: z.literal(true).default(true),
 });
 
-// `connectionId` rather than `connection`, matching raw SQL tiles.
+// `connectionId`/`sourceId` rather than `connection`/`source`, matching raw SQL
+// tiles.
 const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
   connection: true,
+  source: true,
 }).extend({
   connectionId: objectIdOrVariableReferenceSchema,
+  sourceId: objectIdSchema.optional(),
   isBroadcastEnabled: z.literal(false).default(false),
   isVariableEnabled: z.literal(true).default(true),
 });

@@ -3,6 +3,7 @@ import * as SQLParser from 'node-sql-parser';
 import { escapeSqlString, replaceJsonExpressions } from '@/core/utils';
 import {
   getSourceDependentMacrosUsed,
+  getSourceTableMacroArgCounts,
   hasMacro,
   INTERVAL_MACROS,
   replaceMacros,
@@ -23,10 +24,13 @@ import {
   DashboardFilter,
   DashboardFilterValue,
   Filter,
+  MetricsDataType,
   PROMQL_ADHOC_FILTER_OPERATORS,
   PromqlConditionFilter,
+  RawSqlChartConfig,
   SourceKind,
   SQL_ADHOC_FILTER_OPERATORS,
+  TSource,
 } from '@/types';
 import {
   escapePromqlStringValue,
@@ -812,10 +816,11 @@ export function validateDashboardFilterQueries(
 
   for (const filter of filters) {
     if (isSqlQueryFilter(filter)) {
-      const detail = validateSqlQueryFilterTemplate(
-        filter.sqlTemplate,
+      // Source IDs here may not be mapped to this team's sources yet.
+      const detail = validateSqlQueryFilterTemplate(filter.sqlTemplate, {
         variables,
-      );
+        sourceTables: filter.source ? 'unknown' : undefined,
+      });
       if (detail) {
         issues.push({
           filterId: filter.id,
@@ -857,16 +862,70 @@ export function validateDashboardFilterQueries(
   return issues;
 }
 
+/** The tables a SQL query filter's source resolves `$__sourceTable` to. */
+export type SqlQueryFilterSourceTables = Pick<
+  RawSqlChartConfig,
+  'from' | 'metricTables'
+>;
+
+/** The `$__sourceTable` tables of a source, as a raw SQL tile resolves them. */
+export function getSqlQueryFilterSourceTables(
+  source: TSource,
+): SqlQueryFilterSourceTables {
+  return {
+    from: source.from,
+    metricTables:
+      source.kind === SourceKind.Metric ? source.metricTables : undefined,
+  };
+}
+
+/**
+ * Stand-in tables for a source that is set but not loaded. Every metric table
+ * is configured when the SQL calls `$__sourceTable(<metricType>)`, so only a
+ * mix of bare and metric calls, which no source satisfies, is rejected.
+ */
+function getUnknownSourceTables(
+  sqlTemplate: string,
+): SqlQueryFilterSourceTables {
+  const hasMetricCall = getSourceTableMacroArgCounts(sqlTemplate).some(
+    count => count > 0,
+  );
+  return {
+    from: { databaseName: 'source', tableName: 'table' },
+    metricTables: hasMetricCall
+      ? {
+          [MetricsDataType.Gauge]: 'table',
+          [MetricsDataType.Histogram]: 'table',
+          [MetricsDataType.Sum]: 'table',
+          [MetricsDataType.Summary]: 'table',
+          [MetricsDataType.ExponentialHistogram]: 'table',
+        }
+      : undefined,
+  };
+}
+
+type SqlQueryFilterTemplateContext = {
+  /** The dashboard's variables and their current selections. */
+  variables: ChartVariable[] | undefined;
+  /**
+   * The filter's source tables. `'unknown'` when the filter has a source whose
+   * tables aren't loaded; undefined when it has no source.
+   */
+  sourceTables?: SqlQueryFilterSourceTables | 'unknown';
+  /** The broadcast filter conditions `$__filters` expands to. */
+  filtersSQL?: string;
+};
+
 /**
  * Why a SQL query filter's template can't expand, or undefined when it can.
  * The SQL itself is not parsed: ClickHouse syntax is only checked when it runs.
  */
 export function validateSqlQueryFilterTemplate(
   sqlTemplate: string,
-  variables: ChartVariable[],
+  context: SqlQueryFilterTemplateContext,
 ): string | undefined {
   try {
-    expandSqlQueryFilterTemplate(sqlTemplate, variables);
+    expandSqlQueryFilterTemplate(sqlTemplate, context);
     return undefined;
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
@@ -876,15 +935,17 @@ export function validateSqlQueryFilterTemplate(
 /** Expand a SQL query filter's macros and variables. Throws when it can't. */
 function expandSqlQueryFilterTemplate(
   sqlTemplate: string,
-  variables: ChartVariable[] | undefined,
+  { variables, sourceTables, filtersSQL }: SqlQueryFilterTemplateContext,
 ): string {
-  const sourceMacros = getSourceDependentMacrosUsed(sqlTemplate);
-  if (sourceMacros.length > 0) {
-    throw new Error(
-      `SQL query filters have no source, so ${sourceMacros
-        .map(macro => `$__${macro}`)
-        .join(' and ')} cannot be used`,
-    );
+  if (!sourceTables) {
+    const sourceMacros = getSourceDependentMacrosUsed(sqlTemplate);
+    if (sourceMacros.length > 0) {
+      throw new Error(
+        `SQL uses ${sourceMacros
+          .map(macro => `$__${macro}`)
+          .join(' and ')} but no source is selected`,
+      );
+    }
   }
   const intervalMacros = INTERVAL_MACROS.filter(macro =>
     hasMacro(sqlTemplate, macro),
@@ -896,7 +957,11 @@ function expandSqlQueryFilterTemplate(
         .join(' and ')} cannot be used`,
     );
   }
-  return replaceMacros({ sqlTemplate, variables });
+  const tables =
+    sourceTables === 'unknown'
+      ? getUnknownSourceTables(sqlTemplate)
+      : sourceTables;
+  return replaceMacros({ sqlTemplate, variables, ...tables }, filtersSQL);
 }
 
 /** Most dropdown values a SQL query filter reads from its query. */
@@ -912,14 +977,13 @@ export const SQL_QUERY_FILTER_VALUES_LIMIT = 10_000;
  */
 export function renderSqlQueryFilterValuesQuery({
   sqlTemplate,
-  variables,
   dateRange,
-}: {
+  ...context
+}: SqlQueryFilterTemplateContext & {
   sqlTemplate: string;
-  variables: ChartVariable[] | undefined;
   dateRange: [Date, Date];
 }): { sql: string; params: Record<string, number> } {
-  const sql = expandSqlQueryFilterTemplate(sqlTemplate, variables)
+  const sql = expandSqlQueryFilterTemplate(sqlTemplate, context)
     .trim()
     .replace(/;+$/, '');
   // The SQL goes on its own lines so a trailing `--` comment can't swallow the
@@ -1008,6 +1072,14 @@ export type DashboardFilterKind = DashboardFilter['type'];
 
 /** The source kinds a QUERY_EXPRESSION filter can run its `SELECT` against. */
 export const QUERY_EXPRESSION_FILTER_SOURCE_KINDS: SourceKind[] = [
+  SourceKind.Log,
+  SourceKind.Trace,
+  SourceKind.Session,
+  SourceKind.Metric,
+];
+
+/** The source kinds a SQL_QUERY filter can use, the same as raw SQL tiles. */
+export const SQL_QUERY_FILTER_SOURCE_KINDS: SourceKind[] = [
   SourceKind.Log,
   SourceKind.Trace,
   SourceKind.Session,

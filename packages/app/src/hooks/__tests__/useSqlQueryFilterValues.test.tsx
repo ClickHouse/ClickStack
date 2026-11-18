@@ -1,8 +1,11 @@
 import React from 'react';
 import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import {
+  BroadcastFilter,
   ChartVariable,
+  SourceKind,
   SqlQueryDashboardFilter,
+  TSource,
 } from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -13,10 +16,35 @@ import {
 } from '@/hooks/useSqlQueryFilterValues';
 
 const mockQuery = jest.fn();
+const mockRenderSourceFiltersToSql = jest.fn();
+let mockSources: { data?: TSource[]; isLoading: boolean } = {
+  data: [],
+  isLoading: false,
+};
 
 jest.mock('@/clickhouse', () => ({
   getClickhouseClient: () => ({ query: mockQuery }),
 }));
+jest.mock('@/source', () => ({
+  useSources: () => mockSources,
+}));
+jest.mock('@/hooks/useMetadata', () => ({
+  useMetadataWithSettings: () => ({}),
+}));
+jest.mock('@hyperdx/common-utils/dist/core/renderChartConfig', () => ({
+  renderSourceFiltersToSql: (...args: unknown[]) =>
+    mockRenderSourceFiltersToSql(...args),
+}));
+
+const logs: TSource = {
+  id: 'logs',
+  name: 'Logs',
+  kind: SourceKind.Log,
+  connection: 'conn1',
+  from: { databaseName: 'default', tableName: 'otel_logs' },
+  timestampValueExpression: 'Timestamp',
+  defaultTableSelectExpression: '',
+};
 
 const respondWith = (rows: { value: string | null }[]) =>
   mockQuery.mockResolvedValue({ json: async () => ({ data: rows }) });
@@ -49,6 +77,7 @@ describe('useSqlQueryFilterValues', () => {
   const renderFilters = (
     filters: SqlQueryDashboardFilter[],
     variables?: ChartVariable[],
+    getDashboardFilters?: (sourceId: string) => BroadcastFilter[],
   ) =>
     renderHook(
       () =>
@@ -56,11 +85,14 @@ describe('useSqlQueryFilterValues', () => {
           filters,
           dateRange: DATE_RANGE,
           variables,
+          getDashboardFilters,
         }),
       { wrapper },
     );
 
   beforeEach(() => {
+    mockSources = { data: [logs], isLoading: false };
+    mockRenderSourceFiltersToSql.mockReset();
     mockQuery.mockReset();
     respondWith([{ value: 'prod' }, { value: 'dev' }]);
     const queryClient = new QueryClient({
@@ -134,13 +166,84 @@ describe('useSqlQueryFilterValues', () => {
 
     expect(result.current.erroredFilterIds).toEqual(new Set(['sql1']));
     expect(result.current.filterErrorMessages.get('sql1')).toMatch(
-      /have no source/,
+      /no source is selected/,
     );
     expect(result.current.data.get('sql1')).toEqual({
       values: [],
       isLoading: false,
     });
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  describe('with a source', () => {
+    it("expands $__sourceTable to the source's table", async () => {
+      const { result } = renderFilters(
+        [
+          filter({
+            source: 'logs',
+            sqlTemplate: 'SELECT 1 FROM $__sourceTable',
+          }),
+        ],
+        [],
+      );
+
+      await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+      expect(mockQuery.mock.calls[0][0].query).toMatch(/default.*otel_logs/);
+      expect(mockRenderSourceFiltersToSql).not.toHaveBeenCalled();
+    });
+
+    it("expands $__filters to the dashboard's selections for the source", async () => {
+      mockRenderSourceFiltersToSql.mockResolvedValue("(ServiceName = 'api')");
+      const selections: BroadcastFilter[] = [
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+        { type: 'promql', condition: 'job="api"' },
+      ];
+      const getDashboardFilters = jest.fn(() => selections);
+
+      const { result } = renderFilters(
+        [
+          filter({
+            source: 'logs',
+            sqlTemplate: 'SELECT 1 FROM $__sourceTable WHERE $__filters',
+          }),
+        ],
+        [],
+        getDashboardFilters,
+      );
+
+      await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+      expect(getDashboardFilters).toHaveBeenCalledWith('logs');
+      expect(mockRenderSourceFiltersToSql).toHaveBeenCalledWith(
+        expect.objectContaining({ source: logs, filters: [selections[0]] }),
+      );
+      expect(mockQuery.mock.calls[0][0].query).toContain(
+        "(ServiceName = 'api')",
+      );
+    });
+
+    it('waits for the sources to load', () => {
+      mockSources = { data: undefined, isLoading: true };
+
+      const { result } = renderFilters([filter({ source: 'logs' })], []);
+
+      expect(result.current.isLoading).toBe(true);
+      expect(result.current.data.get('sql1')).toEqual({
+        values: [],
+        isLoading: true,
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('reports a source that no longer exists', () => {
+      const { result } = renderFilters([filter({ source: 'deleted' })], []);
+
+      expect(result.current.filterErrorMessages.get('sql1')).toBe(
+        'Source deleted not found',
+      );
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
   });
 
   it('reports a failed query with its error message', async () => {

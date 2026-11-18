@@ -31,6 +31,7 @@ import {
   QUERY_EXPRESSION_FILTER_SOURCE_KINDS,
   type SavedFilterValueIssue,
   type SavedQueryIssue,
+  SQL_QUERY_FILTER_SOURCE_KINDS,
   validateDashboardFilterQueries,
   validateSavedFilterValues,
   validateSavedQuery,
@@ -52,6 +53,7 @@ import {
   type QueryExpressionDashboardFilter,
   SavedChartConfig,
   SourceKind,
+  type SqlQueryDashboardFilter,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import {
@@ -465,8 +467,17 @@ const mappableSourceNames = (names: string[] | undefined) =>
 /** Whether the filter names a single source that import must map. */
 const isSourceBackedTemplateFilter = (
   filter: DashboardFilter,
-): filter is QueryExpressionDashboardFilter | PromqlLabelDashboardFilter =>
-  (isQueryExpressionFilter(filter) || isPrometheusLabelFilter(filter)) &&
+): filter is
+  | QueryExpressionDashboardFilter
+  | PromqlLabelDashboardFilter
+  | SqlQueryDashboardFilter =>
+  (isQueryExpressionFilter(filter) ||
+    isPrometheusLabelFilter(filter) ||
+    // The source is optional for a SQL query filter, and only offered on a
+    // connection ID
+    (isSqlQueryFilter(filter) &&
+      !!filter.source &&
+      !isVariableRef(filter.connection))) &&
   !isVariableRef(filter.source);
 
 /**
@@ -513,7 +524,9 @@ const filterSourceKinds = (
     ? [SourceKind.Promql]
     : isQueryExpressionFilter(filter)
       ? QUERY_EXPRESSION_FILTER_SOURCE_KINDS
-      : undefined;
+      : isSqlQueryFilter(filter)
+        ? SQL_QUERY_FILTER_SOURCE_KINDS
+        : undefined;
 
 /**
  * One mapping select's value. Mantine's Select writes `null` when the user
@@ -531,7 +544,7 @@ const MappingValueSchema = z
  */
 export function buildMappingFormSchema(
   input: DashboardTemplate,
-  sources?: readonly Pick<TSource, 'id' | 'kind'>[],
+  sources?: readonly Pick<TSource, 'id' | 'kind' | 'connection'>[],
 ) {
   return z
     .object({
@@ -675,6 +688,22 @@ export function buildMappingFormSchema(
             message: isPrometheusLabelFilter(filter)
               ? 'Select a PromQL source for this filter'
               : 'Select a non-PromQL source for this filter',
+          });
+          return;
+        }
+
+        // The filter's query runs on its connection, so its source must be there too.
+        const mappedConnectionId = data.filterConnectionMappings?.[idx];
+        if (
+          isSqlQueryFilter(filter) &&
+          mappedSource &&
+          mappedConnectionId &&
+          mappedSource.connection !== mappedConnectionId
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['filterSourceMappings', idx],
+            message: "Select a source on this filter's connection",
           });
         }
       });
@@ -1231,11 +1260,16 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
           };
         }
         if (connectionBackedTemplateFilter(filter)) {
+          // A SQL query filter's optional source
+          const source = isSourceBackedTemplateFilter(filter)
+            ? findSource(data.filterSourceMappings?.[idx])
+            : undefined;
           return {
             ...filter,
             // The form schema requires this mapping
             connection: findConnection(data.filterConnectionMappings?.[idx])!
               .id,
+            ...(source ? { source: source.id } : {}),
           };
         }
         const source = findSource(data.filterSourceMappings?.[idx]);
@@ -1409,6 +1443,10 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
             {/** Map filter sources */}
             {input.filters?.map((filter, i) => {
+              // A SQL query filter's source must be on its mapped connection.
+              const sourceConnectionId = isSqlQueryFilter(filter)
+                ? filterConnectionMappings?.[i]
+                : undefined;
               const appliesToSourceIds = mappableSourceNames(
                 appliesToTemplateFilter(filter)?.appliesToSourceIds,
               );
@@ -1446,8 +1484,13 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                           control={control}
                           name={`filterSourceMappings.${i}`}
                           data={sources
-                            ?.filter(source =>
-                              filterSourceKinds(filter)?.includes(source.kind),
+                            ?.filter(
+                              source =>
+                                filterSourceKinds(filter)?.includes(
+                                  source.kind,
+                                ) &&
+                                (!sourceConnectionId ||
+                                  source.connection === sourceConnectionId),
                             )
                             .map(source => ({
                               value: source.id,

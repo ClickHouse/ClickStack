@@ -200,7 +200,7 @@ Dashboards open with a 15-minute default window. There is no dashboard-level fie
 - Using $__filter or $__conditionalAll in a Lucene where (they are matched as literal text; switch to whereLanguage: "sql", or write ServiceName:$var).
 - Chaining a filter's where off a filter that is not variable-enabled. Only isVariableEnabled: true publishes the $variableName token; without it the reference resolves to nothing and the downstream dropdown is unscoped or empty.
 - Referencing a filter's OWN variable in its where. That narrows its dropdown to the values already picked, so the rest of the options vanish from a multi-select. Reference a sibling filter's variable instead.
-- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters, connectionId/sqlTemplate to SQL_QUERY filters, sourceType/sources to ADHOC filters.
+- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters, connectionId/sqlTemplate (and an optional sourceId) to SQL_QUERY filters, sourceType/sources to ADHOC filters.
 - Referencing an ADHOC filter's variableName in a tile. Ad hoc conditions reach tiles only by broadcast; the name is not a variable.
 - Expecting a STATIC_LIST filter to broadcast. It cannot; a tile must reference its $variableName (via $__filter with the column passed explicitly) or nothing changes when the user picks a value.`;
 }
@@ -1213,16 +1213,22 @@ Example (static list):
   ]
 
 SQL query filter shape:
-  { type: "SQL_QUERY", name, connectionId, sqlTemplate, variableName? }
+  { type: "SQL_QUERY", name, connectionId, sourceId?, sqlTemplate, variableName? }
 
-  connectionId         ClickHouse connection the query runs on (from clickstack_list_sources).
-  sqlTemplate          SELECT whose FIRST column becomes the dropdown values, cast to string with nulls and duplicates dropped, in row order (add ORDER BY). May use the time macros and other filters' variables; cannot use $__sourceTable or $__filters, because the filter has no source.
+  connectionId         ClickHouse connection the query runs on (from clickstack_list_sources), or a CONNECTION filter's "$variableName".
+  sourceId             Optional log, trace, session, or metric source on that connection. Requires a connection ID, not a connection variable. Needed for $__sourceTable and $__filters; $__filters expands to the dashboard's broadcast filter selections for that source.
+  sqlTemplate          SELECT whose FIRST column becomes the dropdown values, cast to string with nulls and duplicates dropped, in row order (add ORDER BY). May use the time macros and other filters' variables, plus $__sourceTable and $__filters when sourceId is set.
 
   Use it when the values live in a lookup table, dictionary, or join that no single source column covers; otherwise prefer QUERY_EXPRESSION. Like a static filter it is variable-only, so tiles pass the column explicitly: $__filter(<expression>, $<variableName>).
 
 Example (SQL query, narrowed by another filter's variable):
   filters: [
     { type: "SQL_QUERY", name: "Environment", connectionId: "<connection-id>", sqlTemplate: "SELECT DISTINCT env FROM default.envs WHERE $__filter(cloud, $cloud) ORDER BY env", variableName: "env" }
+  ]
+
+Example (SQL query on a source, narrowed by the dashboard's broadcast filters):
+  filters: [
+    { type: "SQL_QUERY", name: "Host", connectionId: "<connection-id>", sourceId: "<log-source-id>", sqlTemplate: "SELECT DISTINCT ResourceAttributes['host.name'] FROM $__sourceTable WHERE $__timeFilter(TimestampTime) AND $__filters ORDER BY 1", variableName: "host" }
   ]
 
 Ad hoc filter shape:

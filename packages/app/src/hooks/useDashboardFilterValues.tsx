@@ -7,6 +7,7 @@ import {
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import {
+  BroadcastFilter,
   ChartVariable,
   DashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
@@ -34,6 +35,7 @@ export function useDashboardFilterValues({
   dateRange,
   selectionByFilterId,
   variables,
+  getDashboardFilters,
 }: {
   filters: DashboardFilter[];
   dateRange: [Date, Date];
@@ -41,6 +43,8 @@ export function useDashboardFilterValues({
   selectionByFilterId?: ReadonlyMap<string, FilterSelection>;
   /** The dashboard's variables and their current selections, if any */
   variables?: ChartVariable[];
+  /** The filter selections that broadcast to a source, for `$__filters` */
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
 }): DashboardFilterValuesResult {
   const [queriedFilters, staticFilters, promqlLabelFilters, sqlQueryFilters] =
     useMemo(
@@ -74,6 +78,7 @@ export function useDashboardFilterValues({
     filters: sqlQueryFilters,
     dateRange,
     variables,
+    getDashboardFilters,
   });
 
   const data = useMemo(
