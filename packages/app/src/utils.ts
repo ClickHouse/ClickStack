@@ -1170,24 +1170,32 @@ export const formatUptime = (seconds: number) => {
 const escapeSqlSingleQuoted = (v: string): string =>
   v.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
+// `arrayIndexes` (optional) holds the positions in `path` that index into an
+// array. It only affects JSON columns: a numeric segment at one of those
+// positions is a 1-based subscript (`Col.\`events\`[1]`), not a quoted key
+// (`Col.\`events\`.\`0\``), which matches nothing. Callers that cannot tell
+// arrays from objects omit it and keep numeric segments as keys.
 export const mergePath = (
   path: string[],
   jsonColumns: string[] = [],
   mapColumns: string[] = [],
+  arrayIndexes?: ReadonlySet<number>,
 ) => {
   const [key, ...rest] = path;
   if (rest.length === 0) {
     return key;
   }
   if (jsonColumns.includes(key)) {
-    return `${key}.${rest
-      .map(v =>
-        v
-          .split('.')
-          .map(v => (v.startsWith('`') && v.endsWith('`') ? v : `\`${v}\``))
-          .join('.'),
-      )
-      .join('.')}`;
+    return rest.reduce((expr, v, i) => {
+      if (arrayIndexes?.has(i + 1) && /^\d+$/.test(v)) {
+        return `${expr}[${Number(v) + 1}]`;
+      }
+      const quoted = v
+        .split('.')
+        .map(v => (v.startsWith('`') && v.endsWith('`') ? v : `\`${v}\``))
+        .join('.');
+      return `${expr}.${quoted}`;
+    }, key);
   }
   if (mapColumns.includes(key)) {
     // Map columns always take string-key subscripts; ClickHouse's Map index
