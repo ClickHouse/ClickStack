@@ -30,6 +30,7 @@ import {
   orderByStringToSortingState,
   parseTimestampToMs,
   resolveConditionalColor,
+  selectItemsWithRemovedAlias,
   sortingStateToOrderByString,
   stripTrailingSlash,
   useQueryHistory,
@@ -1598,6 +1599,43 @@ describe('orderByAfterRemovingSelectItem', () => {
         'Timestamp DESC',
       ),
     ).toBe('Timestamp DESC');
+  });
+
+  it('keeps a sort when the alias is still in the new SELECT', () => {
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) AS message'],
+        'lower(Body) AS message',
+      ),
+    ).toEqual([]);
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) as message'],
+        'upper(Body) AS message',
+      ),
+    ).toEqual([]);
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) AS message'],
+        'lower(Body) AS "message"',
+      ),
+    ).toEqual([]);
+    expect(
+      orderByAfterRemovingSelectItems(
+        selectItemsWithRemovedAlias(
+          ['upper(Body) AS message'],
+          'lower(Body) AS message',
+        ),
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('message DESC');
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) AS message', 'Body'],
+        'lower(Body) AS note',
+      ),
+    ).toEqual(['upper(Body) AS message', 'Body']);
   });
 
   it('does not restore a saved sort that still names the removed alias', () => {

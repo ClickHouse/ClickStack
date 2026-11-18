@@ -1230,6 +1230,26 @@ const selectItemAlias = (item: string): string | undefined => {
 };
 
 /**
+ * Removed SELECT items whose alias left with them. Rewriting the expression,
+ * or the casing of AS, keeps the alias, so a sort on it still resolves.
+ */
+export const selectItemsWithRemovedAlias = (
+  removedItems: readonly string[],
+  nextSelect: string,
+): string[] => {
+  const keptAliases = new Set(
+    splitAndTrimWithBracket(nextSelect).flatMap(item => {
+      const alias = selectItemAlias(item);
+      return alias == null ? [] : [alias];
+    }),
+  );
+  return removedItems.filter(item => {
+    const alias = selectItemAlias(item);
+    return alias == null || !keptAliases.has(alias);
+  });
+};
+
+/**
  * Whether a column picked in the UI is in the SELECT list, aliased or not
  */
 export const isColumnInSelect = (

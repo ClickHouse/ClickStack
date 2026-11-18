@@ -147,6 +147,7 @@ import {
   orderByAfterRemovingSelectItems,
   QUERY_LOCAL_STORAGE,
   selectItemExpression,
+  selectItemsWithRemovedAlias,
   useLocalStorage,
   usePrevious,
   withMapKeyAlias,
@@ -2330,7 +2331,7 @@ function DBSearchPageContent() {
       setValue(
         'orderBy',
         orderByAfterRemovingSelectItems(
-          removedItems,
+          selectItemsWithRemovedAlias(removedItems, select),
           getValues('orderBy') ?? '',
           defaultSearchConfig.orderBy ?? '',
           defaultOrderBy ?? '',
