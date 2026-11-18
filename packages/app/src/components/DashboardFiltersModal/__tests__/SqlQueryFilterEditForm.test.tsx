@@ -1,4 +1,5 @@
 import { RegisterOptions, useForm } from 'react-hook-form';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -15,6 +16,7 @@ const mockUseSqlQueryFilterValues = jest.fn();
 const mockCompletionLabels: string[] = [];
 
 jest.mock('@/hooks/useSqlQueryFilterValues', () => ({
+  SQL_QUERY_FILTER_VALUES_QUERY_KEY: 'sql-values',
   useSqlQueryFilterValues: (...args: unknown[]) =>
     mockUseSqlQueryFilterValues(...args),
 }));
@@ -71,6 +73,7 @@ const valuesResult = ({
 const cloudVariable = { name: 'cloud', expression: 'cloud', values: [] };
 
 const NO_REFERENCE_VALUES = new Map<string, string>();
+let queryClient: QueryClient;
 
 function Harness({
   referenceValues = NO_REFERENCE_VALUES,
@@ -81,14 +84,16 @@ function Harness({
     defaultValues: { ...toFormValues(), type: 'SQL_QUERY' },
   });
   return (
-    <ReferenceVariablesProvider filters={[]} values={referenceValues}>
-      <SqlVariablesProvider variables={[cloudVariable]}>
-        <SqlQueryFilterEditForm control={control} otherFilters={[]} />
-        <button type="button" onClick={handleSubmit(() => {})}>
-          Save
-        </button>
-      </SqlVariablesProvider>
-    </ReferenceVariablesProvider>
+    <QueryClientProvider client={queryClient}>
+      <ReferenceVariablesProvider filters={[]} values={referenceValues}>
+        <SqlVariablesProvider variables={[cloudVariable]}>
+          <SqlQueryFilterEditForm control={control} otherFilters={[]} />
+          <button type="button" onClick={handleSubmit(() => {})}>
+            Save
+          </button>
+        </SqlVariablesProvider>
+      </ReferenceVariablesProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -109,6 +114,7 @@ const renderForm = async (
 
 describe('SqlQueryFilterEditForm', () => {
   beforeEach(() => {
+    queryClient = new QueryClient();
     mockUseSqlQueryFilterValues.mockReset();
     mockUseSqlQueryFilterValues.mockReturnValue(
       valuesResult({ values: ['prod', 'dev'] }),
@@ -196,6 +202,19 @@ describe('SqlQueryFilterEditForm', () => {
         ],
       }),
     );
+  });
+
+  it('re-runs the same query when previewed again', async () => {
+    const invalidate = jest.spyOn(queryClient, 'invalidateQueries');
+    const user = await renderForm();
+
+    await user.click(screen.getByTestId('filter-sql-preview-button'));
+    expect(invalidate).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('filter-sql-preview-button'));
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['sql-values', 'conn1'],
+    });
   });
 
   it('previews a connection variable as the connection it selects', async () => {

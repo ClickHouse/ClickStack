@@ -17,6 +17,10 @@ import {
 import { getClickhouseClient } from '@/clickhouse';
 import { useMetadataQueryAttribution } from '@/queryAttribution';
 
+/** First element of every values query key, followed by the connection. */
+export const SQL_QUERY_FILTER_VALUES_QUERY_KEY =
+  'dashboard-filter-sql-query-values';
+
 /** Seconds a filter's values query may run before ClickHouse stops it. */
 const MAX_EXECUTION_SECONDS = 30;
 
@@ -73,7 +77,7 @@ export function useSqlQueryFilterValues({
   const results: UseQueryResult<string[]>[] = useQueries({
     queries: calls.map(call => ({
       queryKey: [
-        'dashboard-filter-sql-query-values',
+        SQL_QUERY_FILTER_VALUES_QUERY_KEY,
         call.connection,
         call.sql,
         call.params,

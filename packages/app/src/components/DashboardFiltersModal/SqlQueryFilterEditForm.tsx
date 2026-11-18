@@ -13,6 +13,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { Alert, Button, Group, Loader, Stack, Text } from '@mantine/core';
 import { IconAlertTriangle, IconPlayerPlay } from '@tabler/icons-react';
+import { useQueryClient } from '@tanstack/react-query';
 
 import { ConnectionSelectControlled } from '@/components/ConnectionSelect';
 import EmptyState from '@/components/EmptyState';
@@ -24,7 +25,10 @@ import {
   useChartVariables,
 } from '@/components/SQLEditor/variableCompletions';
 import { NOW } from '@/config';
-import { useSqlQueryFilterValues } from '@/hooks/useSqlQueryFilterValues';
+import {
+  SQL_QUERY_FILTER_VALUES_QUERY_KEY,
+  useSqlQueryFilterValues,
+} from '@/hooks/useSqlQueryFilterValues';
 import { truncateText } from '@/utils';
 
 import { TOOLTIP_PORTAL_TARGET } from './constants';
@@ -91,10 +95,19 @@ export const SqlQueryFilterEditForm = ({
   const unresolvedConnection =
     parseVariableReference(connection) != null && !resolvedConnection;
   const canPreview = !!resolvedConnection && !!sqlTemplate?.trim();
+  const queryClient = useQueryClient();
   const runPreview = () => {
-    if (canPreview) {
-      setPreviewed({ connection: resolvedConnection, sqlTemplate });
+    if (!canPreview) return;
+    // The same query keeps its cache key, so re-run it explicitly.
+    if (
+      previewed?.connection === resolvedConnection &&
+      previewed.sqlTemplate === sqlTemplate
+    ) {
+      void queryClient.invalidateQueries({
+        queryKey: [SQL_QUERY_FILTER_VALUES_QUERY_KEY, resolvedConnection],
+      });
     }
+    setPreviewed({ connection: resolvedConnection, sqlTemplate });
   };
 
   return (
