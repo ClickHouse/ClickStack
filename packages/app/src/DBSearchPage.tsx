@@ -1134,9 +1134,8 @@ function DBSearchPageContent() {
     ]).withDefault('results'),
   );
 
-  // RED metrics vs heatmap for the trace results chart area. URL state (like
-  // the other view toggles on this page) so a reload or shared link keeps the
-  // chosen view; the switch lives inline in the search stats row.
+  // RED vs heatmap for the trace results chart. URL state, like the page's
+  // other view toggles, so a reload or shared link keeps the view.
   const [traceChartMode, setTraceChartMode] = useQueryState(
     'traceChartMode',
     parseAsStringEnum([...TRACE_CHART_MODES]).withDefault('red'),
@@ -1520,9 +1519,7 @@ function DBSearchPageContent() {
   // Same, for the histogram group by. Also set when a saved search switches the
   // source, since the group by isn't part of the saved search.
   const pendingGroupByReconcileRef = useRef<string | null>(null);
-  // Same, for the trace RED/Heatmap choice: a source the user picks opens in
-  // the default RED view once the URL points at it (see
-  // useTraceChartModeReset).
+  // Same, for the trace RED/Heatmap choice (see useTraceChartModeReset).
   const { arm: armTraceChartModeReset, disarm: disarmTraceChartModeReset } =
     useTraceChartModeReset({
       searchedSourceId: searchedSource?.id,
@@ -1595,9 +1592,7 @@ function DBSearchPageContent() {
       const isCatchingUpToConfig =
         !!watchedSource && watchedSource === searchedSource?.id;
 
-      // Re-selecting the searched source before a pick's search ran undoes that
-      // pick, so drop the trace chart mode reset it armed. Left armed, it would
-      // fire on a later navigation to the abandoned source.
+      // Re-selecting the searched source undoes a pick whose search hasn't run.
       if (isCatchingUpToConfig) {
         disarmTraceChartModeReset();
       }
@@ -2131,10 +2126,10 @@ function DBSearchPageContent() {
 
   const aliasWith = useMemo(() => aliasMapToWithClauses(aliasMap), [aliasMap]);
 
-  // The trace results chart shows RED metrics (and a heatmap) only for a trace
-  // source that exposes a duration column; otherwise the single histogram
-  // stays. Derived once, as the narrowed source or null, so the callers can't
-  // drift apart on which one renders.
+  // The trace results chart shows RED metrics only for a trace source that
+  // exposes a duration column; otherwise the single histogram stays. Derived
+  // once, as the narrowed source or null, so the callers can't drift apart on
+  // which one renders.
   const traceRedMetricsSource =
     searchedSource != null &&
     isTraceSource(searchedSource) &&
@@ -2201,24 +2196,18 @@ function DBSearchPageContent() {
     [isCustomGroupBy, histogramTimeChartConfig, searchedSource],
   );
 
-  // The RED/Heatmap chart area renders only where it fits: a trace source with
-  // a duration column, on a non-compact viewport (three side-by-side tiles
-  // would be unreadable on a phone), without a custom group-by (the RED tiles
-  // have fixed grouping, so a custom group-by falls back to the histogram,
-  // which honors it). Derived once, as the narrowed source or null, so the
-  // chart branch, the stats-row RED/Heatmap switch and the live-tail pin can't
-  // drift apart on which one renders.
+  // The RED/Heatmap area renders only where it fits: not on a compact viewport,
+  // and not with a custom group-by, which the RED tiles' fixed grouping can't
+  // honor (the histogram can). The chart branch, the switch and the live-tail
+  // guard all read this, so they agree on which chart shows.
   const traceChartsSource =
     traceRedMetricsSource != null && !isCompact && !isCustomGroupBy
       ? traceRedMetricsSource
       : null;
 
-  // Base config for the trace heatmap tile, mirroring the delta-mode heatmap:
-  // the search's chart config over the searched range, carrying the source's
-  // select-alias definitions. Memoized so the tile's query stays stable across
-  // re-renders. The results table's sort is dropped, as for the histogram: the
-  // heatmap's own queries don't use it, but the chart keys its uPlot instance on
-  // the config, so sorting a column would otherwise rebuild the heatmap.
+  // Base config for the trace heatmap, like the delta-view heatmap's. The
+  // table's sort is dropped: the chart keys its uPlot instance on the config,
+  // so sorting a column would otherwise rebuild it.
   const traceHeatmapChartConfig = useMemo(
     () =>
       chartConfig == null
@@ -2232,14 +2221,10 @@ function DBSearchPageContent() {
     [chartConfig, searchedTimeRange, aliasWith],
   );
 
-  // Live tail stays off while the heatmap is the visible chart, the way delta
-  // and pattern modes keep it off: the guard below turns it off, and the
-  // TimePicker's Live option and the Resume Live Tail button are hidden.
-  // Results mode defaults to live, so this view has to opt out for itself.
-  // Only while the heatmap is actually rendered (the same conditions as the
-  // chart branch below), so a stale ?traceChartMode=heatmap on a source that
-  // shows the histogram, or a query error that hides the chart area, can't
-  // disable live tail or hide its controls.
+  // While the heatmap shows, live tail stays off as in delta and pattern modes:
+  // the guard turns it off and the Live option and Resume Live Tail are hidden.
+  // Uses the chart branch's conditions, so a stale ?traceChartMode=heatmap or a
+  // query error that hides the chart can't take live tail away.
   const isHeatmapChartVisible =
     analysisMode === 'results' &&
     traceChartsSource != null &&
@@ -3040,10 +3025,7 @@ function DBSearchPageContent() {
                               totalCountConfig={totalCountConfig}
                               enableParallelQueries
                             >
-                              {/* The heatmap doesn't group, and a custom
-                                  group-by would swap it for the histogram (see
-                                  traceChartsSource), so the picker is hidden
-                                  while it shows. */}
+                              {/* The heatmap doesn't group. */}
                               {isHeatmapChartVisible
                                 ? null
                                 : histogramGroupBySelect}

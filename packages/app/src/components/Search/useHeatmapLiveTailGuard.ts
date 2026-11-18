@@ -1,13 +1,10 @@
 import { useEffect } from 'react';
 
 /**
- * Keeps live tail off while the trace heatmap is the visible chart, the way
- * delta and pattern modes keep it off. A live tick moves the absolute time
- * range, and the heatmap keys its uPlot instance on the chart config, so every
- * refresh would tear the chart down and rebuild it with a recomputed y-axis
- * instead of updating in place. `isLive` is part of the check, not just the
- * visibility, so live tail turned back on while the heatmap is showing
- * (through any control) is switched off again.
+ * Keeps live tail off while the trace heatmap shows: each tick moves the time
+ * range, and the heatmap keys its uPlot instance on the config, so it would
+ * rebuild on every refresh. Checking `isLive` too switches live tail off again
+ * if any control turns it back on under the heatmap.
  */
 export function useHeatmapLiveTailGuard({
   isHeatmapChartVisible,

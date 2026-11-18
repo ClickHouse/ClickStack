@@ -23,11 +23,8 @@ import {
   redBaseConfig,
 } from './traceRedMetrics';
 
-/**
- * The trace results chart views, RED first as the default. The URL parser and
- * the view switch both read this list, so a new mode can't be added to the type
- * alone and silently parse back to RED.
- */
+// The trace results chart views, RED first as the default. The type and the
+// URL parser both come from this list, so they can't drift apart.
 export const TRACE_CHART_MODES = ['red', 'heatmap'] as const;
 export type TraceChartMode = (typeof TRACE_CHART_MODES)[number];
 
@@ -51,9 +48,7 @@ const HEATMAP_TILE_STYLE = {
  * RED metrics (Throughput, Errors, Duration) for the trace search results view,
  * replacing the single count histogram. The three charts render side by side as
  * sibling DBTimeCharts under a shared sync scope, so hovering one shows a
- * cross-chart cursor on all three at the same timestamp. The RED/Heatmap switch
- * lives in the search stats row (passed in as `mode`); the Heatmap view is the
- * same bare heatmap tile the dashboard renders.
+ * cross-chart cursor on all three at the same timestamp.
  *
  * The per-chart aggregations are built by ./traceRedMetrics from the same base
  * config the histogram uses, so all three honor the active WHERE filter and
@@ -112,18 +107,10 @@ export function TraceRedMetricsChart({
     [base, durationExpression],
   );
 
-  // The heatmap plots getDurationMsExpression (the source's duration already
-  // scaled to ms by its durationPrecision), which is the value
-  // HEATMAP_DURATION_NUMBER_FORMAT is paired with.
+  // Duration distribution over time, like the dashboard heatmap tile: the query
+  // the delta view's heatmap builds with its default settings, fixed here
+  // rather than read from that view's settings drawer.
   const durationMsExpression = getDurationMsExpression(source);
-  /**
-   * Heatmap tile query (duration distribution over time), matching the
-   * dashboard heatmap tile: no significant-fields comparison panel. It is the
-   * query the delta view's heatmap builds with its default settings, but the
-   * value, count and scale are fixed here rather than read from that view's
-   * settings drawer, so this stays a plain duration heatmap independent of the
-   * delta view's query state.
-   */
   const heatmapQuery = useMemo(
     () =>
       toHeatmapQuery({
