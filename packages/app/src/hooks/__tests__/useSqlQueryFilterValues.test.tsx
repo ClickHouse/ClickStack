@@ -1,4 +1,5 @@
 import React from 'react';
+import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import {
   ChartVariable,
   SqlQueryDashboardFilter,
@@ -63,7 +64,7 @@ describe('useSqlQueryFilterValues', () => {
     mockQuery.mockReset();
     respondWith([{ value: 'prod' }, { value: 'dev' }]);
     const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
+      defaultOptions: { queries: { retry: false, retryDelay: 0 } },
     });
     wrapper = ({ children }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -149,6 +150,28 @@ describe('useSqlQueryFilterValues', () => {
     expect(result.current.filterErrorMessages.get('sql1')).toBe(
       'Unknown table default.envs',
     );
+  });
+
+  it('does not retry a query ClickHouse rejected', async () => {
+    mockQuery.mockRejectedValue(
+      new ClickHouseQueryError('Syntax error', 'SELECT'),
+    );
+
+    const { result } = renderFilters([filter()], []);
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transport failure once', async () => {
+    mockQuery.mockRejectedValue(new Error('Failed to fetch'));
+
+    const { result } = renderFilters([filter()], []);
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(mockQuery).toHaveBeenCalledTimes(2);
   });
 });
 

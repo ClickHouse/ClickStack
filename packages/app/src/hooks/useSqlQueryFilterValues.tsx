@@ -1,5 +1,8 @@
 import { useMemo } from 'react';
-import { ResponseJSON } from '@hyperdx/common-utils/dist/clickhouse';
+import {
+  ClickHouseQueryError,
+  ResponseJSON,
+} from '@hyperdx/common-utils/dist/clickhouse';
 import { renderSqlQueryFilterValuesQuery } from '@hyperdx/common-utils/dist/filters';
 import {
   ChartVariable,
@@ -79,6 +82,9 @@ export function useSqlQueryFilterValues({
       // blanking the dropdown.
       placeholderData: keepPreviousData,
       staleTime: 1000 * 60 * 5,
+      retry: (failureCount: number, error: Error) =>
+        !(error instanceof ClickHouseQueryError) && failureCount < 1,
+      refetchOnWindowFocus: false,
       queryFn: async ({ signal }) => {
         const result = (await getClickhouseClient({ attribution })
           .query<'JSON'>({
