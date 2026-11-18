@@ -1,5 +1,64 @@
 # @hyperdx/common-utils
 
+## 0.36.0
+
+### Minor Changes
+
+- fe96b722b: feat: add `buildCompactPatternPredicate`
+
+  It builds the same match as `buildPatternPredicate` in much shorter SQL, for
+  pattern filters that are kept in a URL. `parsePatternPredicate` reads both
+  forms.
+
+- d311d82e2: feat: share the Event Patterns drill-down predicate
+
+  `templateToRegex` and `buildPatternPredicate`, which the MCP server uses to
+  build the `clickstack_event_patterns` drill-down filter, are now in
+  `@hyperdx/common-utils/dist/drain`. New options match templates mined with extra
+  delimiters (`extraDelimiters`) or by Python Drain3 (`whitespace: 'python'`), and
+  `parsePatternPredicate` reads a predicate back into its value expression and
+  template. Without options the output is the same as the MCP server's.
+
+- 743c3c1a6: feat: add an optional "Row key expression" to log and trace sources. When set,
+  the side panel's row lookup selects and filters on only those columns instead of
+  detecting keys from table metadata.
+- a7744e82a: feat: add data source and connection variable types to dashboards
+- a7744e82a: feat: add connection variables for raw SQL tiles, SQL query filters, and
+  connection-scoped data source variables
+
+### Patch Changes
+
+- f15b849da: feat: Ad hoc dashboard filter finishing touches
+
+  - Add an `IN` operator. `IN` conditions on the same key are OR'd into one
+    `IN (...)` condition for SQL, or one `=~"a|b"` matcher for PromQL.
+  - Ad hoc filters always broadcast (`isBroadcastEnabled: true`), and their
+    variable name is only a unique identifier. It is no longer declared as a
+    `$variable`.
+  - Warn when another ad hoc filter already applies to the same sources.
+  - Collapse the filter input to three conditions behind a "+N more" toggle.
+
+- 02a40929d: feat: `clickstack_save_alert` accepts `note` and `numConsecutiveWindows`
+
+  Updates that omit either field now keep the stored value instead of clearing it;
+  send `null` to clear.
+
+- 272c51486: fix: support numeric range searches on String attributes
+
+  Range searches with numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, failed with "no supertype for types
+  String, UInt8". They now compare with `toFloat64OrNull`; values that aren't
+  numbers don't match. `>`, `<`, `>=` and `<=` still compare String fields as
+  text; use a range such as `:[1000 TO *]` for a numeric comparison.
+
+- 3acd5ba1a: feat: create SQL query dashboard filters and fill their dropdowns
+
+  Dashboard filters can now take their values from a ClickHouse SQL query. The filter editor offers a "SQL query values" type with a connection, a SQL editor, and a preview of the values. The dropdown lists the query's first column in the order it returns, up to 10,000 values, and the query can use the time macros and other filters' variables.
+
+- 5b50c31c9: feat: add the SQL query dashboard filter type to the dashboard schema
+
+  A `SQL_QUERY` filter stores a ClickHouse connection and a SQL template whose first column fills the filter's dropdown. It is variable-only. Validation flags templates that use `$__sourceTable` or `$__filters`, or whose macros and variable references can't expand. The filter is not yet exposed through the external API or MCP, and has no editor or values lookup yet.
+
 ## 0.35.0
 
 ### Minor Changes
