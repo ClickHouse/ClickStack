@@ -43,7 +43,20 @@ const eventPatternsSchema = z.object({
         'Examples: "Body", "SpanName", "LogAttributes[\'exception.type\']", ' +
         "\"JSONExtractString(Body, 'error', 'message')\". Other function calls are rejected. " +
         "Rows where the value is '' (missing key, invalid JSON) are mined as an empty " +
-        'pattern; add where "<expression> != \'\'" (whereLanguage:"sql") to exclude them.',
+        'pattern; add where "<expression> != \'\'" (whereLanguage:"sql") to exclude them. ' +
+        'To mine the start of long values, use maxBodyChars.',
+    ),
+  maxBodyChars: z
+    .number()
+    .int()
+    .min(1)
+    .max(1_000_000)
+    .optional()
+    .describe(
+      'Mine only the first maxBodyChars characters of each value, e.g. 1000 for long ' +
+        'stack traces or request dumps. Long values are cut in the query, so less data ' +
+        'is read; samples are the cut values, and whereSnippet matches events by that ' +
+        'prefix (summary.bodyColumn shows the leftUTF8 expression used).',
     ),
   topN: z
     .number()
@@ -124,6 +137,7 @@ export function registerEventPatterns({
           where: input.where,
           whereLanguage: input.whereLanguage,
           bodyExpression: input.bodyExpression,
+          maxBodyChars: input.maxBodyChars,
           sampleSize: input.sampleSize,
           topN: input.topN,
           trendBuckets: input.trendBuckets,

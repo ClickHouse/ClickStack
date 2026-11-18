@@ -69,6 +69,8 @@ export async function mineWindowPatterns(
     where?: string;
     whereLanguage?: 'lucene' | 'sql';
     bodyExpression?: string;
+    /** Mine only the first maxBodyChars characters of each body. */
+    maxBodyChars?: number;
     sampleSize?: number;
     trendBuckets?: number;
     abortSignal?: AbortSignal;
@@ -151,6 +153,17 @@ export async function mineWindowPatterns(
           'Try specifying bodyExpression explicitly.',
       ),
     };
+  }
+  // Truncate in the query, so long bodies are not transferred, and in the
+  // drill-down predicate, so it matches the prefix the template came from.
+  const maxBodyChars = options?.maxBodyChars;
+  if (maxBodyChars != null) {
+    if (!Number.isSafeInteger(maxBodyChars) || maxBodyChars < 1) {
+      return {
+        error: mcpUserError('maxBodyChars must be a positive integer.'),
+      };
+    }
+    bodyColumn = `leftUTF8(${bodyColumn}, ${maxBodyChars})`;
   }
 
   const filters = getSourceTableFilters(source);
@@ -392,6 +405,7 @@ export async function runEventPatterns(
     where?: string;
     whereLanguage?: 'lucene' | 'sql';
     bodyExpression?: string;
+    maxBodyChars?: number;
     sampleSize?: number;
     topN?: number;
     trendBuckets?: number;
@@ -416,6 +430,7 @@ export async function runEventPatterns(
     where: options?.where,
     whereLanguage: options?.whereLanguage,
     bodyExpression: options?.bodyExpression,
+    maxBodyChars: options?.maxBodyChars,
     sampleSize: options?.sampleSize,
     trendBuckets,
     abortSignal: options?.abortSignal,
@@ -500,7 +515,8 @@ export async function runEventPatterns(
         ? {
             drilldownUnavailable:
               `Template is longer than ${MAX_PREDICATE_TEMPLATE_LENGTH} characters, so ` +
-              'whereSnippet is empty. Do not search with it; it would match every row.',
+              'whereSnippet is empty. Do not search with it; it would match every row. ' +
+              'Pass maxBodyChars to mine a shorter prefix of each body.',
           }
         : {}),
       ...(formattedTrend ? { trend: formattedTrend } : {}),
