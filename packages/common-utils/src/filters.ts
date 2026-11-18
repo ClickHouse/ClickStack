@@ -1078,13 +1078,12 @@ export const QUERY_EXPRESSION_FILTER_SOURCE_KINDS: SourceKind[] = [
   SourceKind.Metric,
 ];
 
-/** The source kinds a SQL_QUERY filter can use, the same as raw SQL tiles. */
-export const SQL_QUERY_FILTER_SOURCE_KINDS: SourceKind[] = [
-  SourceKind.Log,
-  SourceKind.Trace,
-  SourceKind.Session,
-  SourceKind.Metric,
-];
+/**
+ * The source kinds a SQL_QUERY filter can use, the same as raw SQL tiles.
+ * Kept as an alias so the two filter types cannot drift apart.
+ */
+export const SQL_QUERY_FILTER_SOURCE_KINDS: SourceKind[] =
+  QUERY_EXPRESSION_FILTER_SOURCE_KINDS;
 
 /**
  * The source kinds an ADHOC filter of the given source type can read keys
