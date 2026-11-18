@@ -1,4 +1,6 @@
 import { type ReactNode, useRef, useState } from 'react';
+import { completionStatus } from '@codemirror/autocomplete';
+import { EditorView } from '@codemirror/view';
 import { Button, Group, Popover, SegmentedControl, Stack } from '@mantine/core';
 
 import { SplitValueButton } from '@/components/SplitValueButton/SplitValueButton';
@@ -49,6 +51,17 @@ const MODE_OPTIONS = [
   { label: 'Fields', value: 'pick' },
   { label: 'SQL', value: 'sql' },
 ];
+
+// CodeMirror closes its completion list on Escape, but the popover sees the
+// key first. Let that Escape through while a completion is open.
+const sqlCompletionHandlesEscape = (target: EventTarget | null) => {
+  if (!(target instanceof Element)) return false;
+  const editor = target.closest('.cm-editor');
+  if (!(editor instanceof HTMLElement)) return false;
+  if (editor.querySelector('.cm-tooltip-autocomplete') != null) return true;
+  const view = EditorView.findFromDOM(editor);
+  return view != null && completionStatus(view.state) != null;
+};
 
 /**
  * A toolbar button that edits one query clause in a popover. Edits stay in a
@@ -141,6 +154,8 @@ export function ClausePopover({
       position="bottom-start"
       shadow="md"
       withinPortal
+      // Escape is handled below, so a completion list can take the key first.
+      closeOnEscape={false}
       // Let shift move the dropdown past the button's edge, so a dropdown
       // wider than the space to the right slides left instead of overflowing.
       middlewares={{
@@ -178,6 +193,11 @@ export function ClausePopover({
         data-testid={`${testId}-popover`}
         // Set after Mantine's inline width (max-content), which would win over a class.
         style={{ width: `min(${POPOVER_MAX_WIDTH}px, calc(100vw - 16px))` }}
+        onKeyDownCapture={event => {
+          if (event.key !== 'Escape') return;
+          if (sqlCompletionHandlesEscape(event.target)) return;
+          requestClose();
+        }}
       >
         <Stack gap="sm">
           <SegmentedControl

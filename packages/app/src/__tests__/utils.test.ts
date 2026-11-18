@@ -26,6 +26,7 @@ import {
   mapKeyBy,
   mergePath,
   orderByAfterRemovingSelectItem,
+  orderByAfterRemovingSelectItems,
   orderByStringToSortingState,
   parseTimestampToMs,
   resolveConditionalColor,
@@ -1594,6 +1595,36 @@ describe('orderByAfterRemovingSelectItem', () => {
       orderByAfterRemovingSelectItem(
         'upper(Body) AS message',
         '`message` ASC, Timestamp DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+  });
+
+  it('does not restore a saved sort that still names the removed alias', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        'message DESC',
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        'message DESC',
+        'message DESC, ServiceName ASC',
+        'Timestamp DESC',
+      ),
+    ).toBe('ServiceName ASC');
+  });
+
+  it('strips every removed alias from the saved sort at once', () => {
+    expect(
+      orderByAfterRemovingSelectItems(
+        ['upper(Body) AS message', 'lower(ServiceName) AS service'],
+        'message DESC',
+        'message DESC, service DESC',
         'Timestamp DESC',
       ),
     ).toBe('Timestamp DESC');

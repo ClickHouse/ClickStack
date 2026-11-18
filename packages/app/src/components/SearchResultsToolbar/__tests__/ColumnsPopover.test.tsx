@@ -261,6 +261,40 @@ describe('ColumnsPopover', () => {
     expect(await screen.findByText(/Then click Apply/)).toBeInTheDocument();
   });
 
+  it('asks before Escape discards a SQL edit', async () => {
+    renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByText('SQL'));
+    fireEvent.change(screen.getByLabelText('SELECT'), {
+      target: { value: 'count()' },
+    });
+    fireEvent.keyDown(screen.getByTestId('search-columns-button-popover'), {
+      key: 'Escape',
+    });
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+  });
+
+  it('lets Escape close the SQL completion list without discarding', async () => {
+    renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByText('SQL'));
+    fireEvent.change(screen.getByLabelText('SELECT'), {
+      target: { value: 'count()' },
+    });
+    const popover = screen.getByTestId('search-columns-button-popover');
+    const editor = document.createElement('div');
+    editor.className = 'cm-editor';
+    const field = document.createElement('div');
+    const tooltip = document.createElement('div');
+    tooltip.className = 'cm-tooltip-autocomplete';
+    field.appendChild(tooltip);
+    editor.appendChild(field);
+    popover.appendChild(editor);
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(popover).toBeInTheDocument();
+  });
+
   it('shrinks to the viewport so Apply stays on screen', async () => {
     renderPopover();
     openPopover();

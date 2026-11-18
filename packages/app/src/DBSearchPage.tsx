@@ -144,6 +144,7 @@ import { TimeZoneOverrideProvider } from '@/timeZoneOverride';
 import {
   formatDurationMs,
   orderByAfterRemovingSelectItem,
+  orderByAfterRemovingSelectItems,
   QUERY_LOCAL_STORAGE,
   selectItemExpression,
   useLocalStorage,
@@ -1859,6 +1860,7 @@ function DBSearchPageContent() {
           selected,
           orderBy,
           defaultSearchConfig.orderBy ?? '',
+          defaultOrderBy ?? '',
         );
         if (nextOrderBy !== orderBy) {
           setValue('orderBy', nextOrderBy);
@@ -1872,6 +1874,7 @@ function DBSearchPageContent() {
       setValue,
       getValues,
       defaultSearchConfig.orderBy,
+      defaultOrderBy,
       onSubmit,
     ],
   );
@@ -2324,18 +2327,24 @@ function DBSearchPageContent() {
   const applySelect = useCallback(
     (select: string, removedItems: string[]) => {
       setValue('select', select);
-      let orderBy = getValues('orderBy') ?? '';
-      for (const item of removedItems) {
-        orderBy = orderByAfterRemovingSelectItem(
-          item,
-          orderBy,
+      setValue(
+        'orderBy',
+        orderByAfterRemovingSelectItems(
+          removedItems,
+          getValues('orderBy') ?? '',
           defaultSearchConfig.orderBy ?? '',
-        );
-      }
-      setValue('orderBy', orderBy);
+          defaultOrderBy ?? '',
+        ),
+      );
       onSubmit();
     },
-    [setValue, getValues, defaultSearchConfig.orderBy, onSubmit],
+    [
+      setValue,
+      getValues,
+      defaultSearchConfig.orderBy,
+      defaultOrderBy,
+      onSubmit,
+    ],
   );
 
   const applyOrderBy = useCallback(
@@ -2363,31 +2372,49 @@ function DBSearchPageContent() {
   const defaultSelect = savedSelect ?? sourceDefaultSelect ?? '';
 
   // SELECT and ORDER BY shape the results table, so they sit on that table
-  // and stay hidden on Event Deltas and Event Patterns.
-  const resultsClauseEditors =
-    analysisMode === 'results' ? (
-      <Group gap="xs" wrap="wrap">
-        <ColumnsPopover
-          value={inputSelect ?? ''}
-          defaultValue={defaultSelect}
-          fieldOptions={clauseFieldOptions}
-          knownColumns={knownColumns}
-          onApply={applySelect}
-          tableConnection={inputSourceTableConnection}
-          sourceId={inputSource}
-          dateRange={searchedTimeRange}
-        />
-        <SortPopover
-          value={inputOrderBy ?? ''}
-          defaultValue={defaultSearchConfig.orderBy ?? ''}
-          fieldOptions={clauseFieldOptions}
-          onApply={applyOrderBy}
-          tableConnection={inputSourceTableConnection}
-          sourceId={inputSource}
-          dateRange={searchedTimeRange}
-        />
-      </Group>
-    ) : null;
+  // and stay hidden on Event Deltas and Event Patterns. Memoized so a where
+  // keystroke, which re-renders this page, does not hand the results table a
+  // new element and defeat its memo.
+  const resultsClauseEditors = useMemo(
+    () =>
+      analysisMode === 'results' ? (
+        <Group gap="xs" wrap="wrap">
+          <ColumnsPopover
+            value={inputSelect ?? ''}
+            defaultValue={defaultSelect}
+            fieldOptions={clauseFieldOptions}
+            knownColumns={knownColumns}
+            onApply={applySelect}
+            tableConnection={inputSourceTableConnection}
+            sourceId={inputSource}
+            dateRange={searchedTimeRange}
+          />
+          <SortPopover
+            value={inputOrderBy ?? ''}
+            defaultValue={defaultSearchConfig.orderBy ?? ''}
+            fieldOptions={clauseFieldOptions}
+            onApply={applyOrderBy}
+            tableConnection={inputSourceTableConnection}
+            sourceId={inputSource}
+            dateRange={searchedTimeRange}
+          />
+        </Group>
+      ) : null,
+    [
+      analysisMode,
+      inputSelect,
+      defaultSelect,
+      clauseFieldOptions,
+      knownColumns,
+      applySelect,
+      inputSourceTableConnection,
+      inputSource,
+      searchedTimeRange,
+      inputOrderBy,
+      defaultSearchConfig.orderBy,
+      applyOrderBy,
+    ],
+  );
 
   return (
     <Flex
