@@ -182,6 +182,52 @@ describe('ConnectionForm', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('should not crash when the host is cleared', async () => {
+    renderWithMantine(
+      <ConnectionForm
+        connection={{ ...baseConnection, id: 'existing-id' }}
+        isNew={false}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('http://localhost:8123'), {
+      target: { value: '' },
+    });
+
+    expect(
+      await screen.findByTestId('connection-password-input'),
+    ).toBeInTheDocument();
+  });
+
+  it('should not save a password typed before the host is reverted', async () => {
+    renderWithMantine(
+      <ConnectionForm
+        connection={{ ...baseConnection, id: 'existing-id' }}
+        isNew={false}
+      />,
+    );
+    const hostInput = screen.getByPlaceholderText('http://localhost:8123');
+
+    fireEvent.change(hostInput, { target: { value: 'http://other.com:8123' } });
+    fireEvent.change(
+      await screen.findByPlaceholderText('Password (default: blank)'),
+      { target: { value: 'typed-password' } },
+    );
+    fireEvent.change(hostInput, { target: { value: baseConnection.host } });
+    await screen.findByTestId('update-password-button');
+
+    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connection: expect.objectContaining({ password: '' }),
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
   it('should show the API message when an update is rejected', async () => {
     mockUpdateMutate.mockImplementationOnce((_args, { onError }) =>
       onError({

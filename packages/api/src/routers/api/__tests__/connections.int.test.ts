@@ -155,8 +155,9 @@ describe('connections router', () => {
     expect(res.body?.message).toBe(
       'Password is required when changing the host',
     );
-    const stored = await Connection.findById(created._id);
+    const stored = await Connection.findById(created._id).select('+password');
     expect(stored?.host).toBe(config.CLICKHOUSE_HOST);
+    expect(stored?.password).toBe('pw');
   });
 
   it('allows a host change on PUT when the password is sent', async () => {

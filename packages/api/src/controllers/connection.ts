@@ -104,7 +104,7 @@ export const HOST_CHANGE_PASSWORD_REQUIRED_MESSAGE =
 // password could point it at a server they control and receive the password
 // on the next query.
 export function resolveUpdatedPassword(
-  existing: { host: string; password?: string },
+  existing: { host: string; password?: string; isPrometheusEndpoint?: boolean },
   update: { host?: string; password?: string; isPrometheusEndpoint?: boolean },
 ): string | undefined {
   if (update.password) {
@@ -119,8 +119,8 @@ export function resolveUpdatedPassword(
   }
   // Prometheus endpoints authenticate through the URL and never send the
   // stored password, and the form has no password field for them, so drop it
-  // instead of rejecting.
-  if (update.isPrometheusEndpoint) {
+  // instead of rejecting. An omitted flag keeps the stored one.
+  if (update.isPrometheusEndpoint ?? existing.isPrometheusEndpoint) {
     return '';
   }
   return undefined;

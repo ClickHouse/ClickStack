@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { omit } from 'lodash';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { testLocalConnection } from '@hyperdx/common-utils/dist/clickhouse/browser';
@@ -228,12 +228,18 @@ export function ConnectionForm({
   };
 
   const [showUpdatePassword, setShowUpdatePassword] = useState(false);
-  // The API rejects a host change that doesn't resend the password.
+  // The API rejects a host change that doesn't resend the password. Matches
+  // the API's normalization; stripTrailingSlash throws on an empty host.
+  const normalizeHost = (host?: string) => (host ?? '').replace(/\/+$/, '');
   const isHostChanged =
-    !isNew &&
-    stripTrailingSlash(watchedHost ?? '') !==
-      stripTrailingSlash(connection.host ?? '');
+    !isNew && normalizeHost(watchedHost) !== normalizeHost(connection.host);
   const showPasswordInput = isNew || showUpdatePassword || isHostChanged;
+  // Reverting the host hides the input; don't save a password typed into it.
+  useEffect(() => {
+    if (!showPasswordInput) {
+      resetField('password');
+    }
+  }, [showPasswordInput, resetField]);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const { testConnectionState, handleTestConnection } = useTestConnection({

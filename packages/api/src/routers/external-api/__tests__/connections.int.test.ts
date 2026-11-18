@@ -386,8 +386,11 @@ describe('External API v2 Connections', () => {
       expect(response.body.message).toBe(
         'Password is required when changing the host',
       );
-      const stored = await Connection.findById(connection._id);
+      const stored = await Connection.findById(connection._id).select(
+        '+password',
+      );
       expect(stored?.host).toBe(MOCK_CONNECTION.host);
+      expect(stored?.password).toBe(MOCK_CONNECTION.password);
     });
 
     it('should not treat a trailing slash as a host change', async () => {
