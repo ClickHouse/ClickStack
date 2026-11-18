@@ -24,7 +24,7 @@ export const CustomInputWrapper = ({
     <div>
       <Input.Label>{label}</Input.Label>
       {tooltipText && (
-        <Tooltip label={tooltipText}>
+        <Tooltip label={tooltipText} multiline maw={400}>
           <IconInfoCircle size={14} className="ms-2" />
         </Tooltip>
       )}

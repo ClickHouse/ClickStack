@@ -15,6 +15,7 @@ import {
   isClickHouseVersionAtLeast,
   supportsDirectReadMap,
 } from '@/core/clickhouseVersion';
+import { stripTypeWrappers } from '@/core/eventDeltas';
 import {
   Metadata,
   parseKeyPath,
@@ -24,6 +25,7 @@ import {
 } from '@/core/metadata';
 import {
   parseTokenizerFromTextIndex,
+  parseToNumber,
   splitAndTrimWithBracket,
 } from '@/core/utils';
 import { UseTextIndex } from '@/types';
@@ -129,6 +131,46 @@ function normalizeChExpression(expr: string): string {
 
 export const IMPLICIT_FIELD = '<implicit>';
 const RANGE_UNBOUNDED = '*';
+
+// Decimal numbers only; parseToNumber also accepts hex such as 0x10.
+const isNumericLiteral = (term: string) =>
+  /^[-+.\deE]+$/.test(term) && parseToNumber(term) !== undefined;
+
+/**
+ * Map attributes (and other String columns) hold numbers as text, and a range
+ * with numeric bounds on them fails with "no supertype for types String,
+ * UInt8". Enum, UUID and IP columns also map to JSDataType.String but
+ * toFloat64OrNull rejects them, so check the type.
+ */
+function isStringComparedToNumbers(
+  columnType: string | undefined,
+  terms: string[],
+) {
+  if (!columnType) {
+    return false;
+  }
+  return (
+    (stripTypeWrappers(columnType) === 'String' ||
+      isCHFixedStringType(columnType)) &&
+    terms.length > 0 &&
+    terms.every(isNumericLiteral)
+  );
+}
+
+/**
+ * Values that aren't numbers convert to NULL. ifNull makes them a non-match
+ * rather than NULL, so a NOT around the range still includes them.
+ */
+function numericComparison(
+  column: string | undefined,
+  comparison: string,
+  values: number[],
+) {
+  return SqlString.format(
+    `ifNull(toFloat64OrNull(${column}) ${comparison}, 0)`,
+    values,
+  );
+}
 
 // Type guards for lucene AST types
 function isNodeTerm(node: lucene.Node | lucene.AST): node is lucene.NodeTerm {
@@ -485,6 +527,8 @@ export abstract class SQLSerializer implements Serializer {
     column?: string;
     columnJSON?: { string: string; number: string };
     propertyType?: JSDataType;
+    /** The ClickHouse type of the resolved column or map value. */
+    columnType?: string;
     /**
      * The resolved column is FixedString. Token functions (hasToken,
      * hasAllTokens) reject that haystack and need CAST(... AS String).
@@ -798,7 +842,7 @@ export abstract class SQLSerializer implements Serializer {
     context: SerializerContext,
     inclusive: lucene.NodeRangedTerm['inclusive'] = 'both',
   ) {
-    const { column, found, mapKeyIndexExpression, isArray } =
+    const { column, found, mapKeyIndexExpression, isArray, columnType } =
       await this.getColumnForField(field, context);
     if (!found) {
       return this.NOT_FOUND_QUERY;
@@ -818,31 +862,36 @@ export abstract class SQLSerializer implements Serializer {
     if (isStartUnbounded && isEndUnbounded) {
       return this.isNotNull(field, isNegatedField, context);
     }
+    const compareAsNumbers = isStringComparedToNumbers(
+      columnType,
+      [start, end].filter(bound => bound !== RANGE_UNBOUNDED),
+    );
     if (!isStartUnbounded && !isEndUnbounded && inclusive === 'both') {
+      if (compareAsNumbers) {
+        return `(${isNegatedField ? 'NOT ' : ''}${numericComparison(column, 'BETWEEN ? AND ?', [Number(start), Number(end)])}${expressionPostfix})`;
+      }
       return SqlString.format(
         `(${column} ${isNegatedField ? 'NOT ' : ''}BETWEEN ? AND ?${expressionPostfix})`,
         [this.attemptToParseNumber(start), this.attemptToParseNumber(end)],
       );
     }
 
+    const compareBound = (operator: string, bound: string) =>
+      compareAsNumbers
+        ? numericComparison(column, `${operator} ?`, [Number(bound)])
+        : SqlString.format(`${column} ${operator} ?`, [
+            this.attemptToParseNumber(bound),
+          ]);
     const bounds: string[] = [];
     if (!isStartUnbounded) {
       const operator =
         inclusive === 'both' || inclusive === 'left' ? '>=' : '>';
-      bounds.push(
-        SqlString.format(`${column} ${operator} ?`, [
-          this.attemptToParseNumber(start),
-        ]),
-      );
+      bounds.push(compareBound(operator, start));
     }
     if (!isEndUnbounded) {
       const operator =
         inclusive === 'both' || inclusive === 'right' ? '<=' : '<';
-      bounds.push(
-        SqlString.format(`${column} ${operator} ?`, [
-          this.attemptToParseNumber(end),
-        ]),
-      );
+      bounds.push(compareBound(operator, end));
     }
     return isNegatedField
       ? `(NOT (${bounds.join(' AND ')})${expressionPostfix})`
@@ -2031,6 +2080,7 @@ export class CustomSchemaSQLSerializerV2 extends SQLSerializer {
       column: expression.columnExpression,
       columnJSON: expression?.columnExpressionJSON,
       propertyType: type ?? undefined,
+      columnType: expression.columnType,
       isArray,
       found: expression.found,
       mapKey: expression.mapKey,

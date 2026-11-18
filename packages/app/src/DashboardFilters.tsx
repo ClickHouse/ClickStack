@@ -11,6 +11,7 @@ import {
   isFilterRequired,
   isQueryExpressionFilter,
   isReferenceVariableFilter,
+  isSqlQueryFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import { ReferenceVariableValues } from '@hyperdx/common-utils/dist/referenceVariables';
@@ -149,8 +150,9 @@ const DashboardFilterSelect = ({
           // so a completed/empty/failed query stays interactive and the user can
           // still clear or adjust the selection.
           loading={isLoading}
-          // A static list renders in the order its author wrote it.
-          sort={!isStaticListFilter(filter)}
+          // A static list renders in the order its author wrote it, and a SQL
+          // query filter in the order its query returns.
+          sort={!isStaticListFilter(filter) && !isSqlQueryFilter(filter)}
           isMultiSelect={!isFilterSingleSelect(filter)}
           onChange={onChange}
           data-testid={`dashboard-filter-select-${filter.name}`}
@@ -306,13 +308,19 @@ const DashboardFilters = ({
         const isLoadingValues =
           unresolvedVariables.length === 0 &&
           (queriedFilterValues ? queriedFilterValues.isLoading : isFetching);
-        // Only a queried dropdown has a values query that can await a
-        // variable's selection, besides any data source variable it reads from.
+        // Only queried and SQL query dropdowns have a values query that can
+        // await a variable's selection, besides any data source variable it
+        // reads from.
         const pendingVariables = [
           ...unselectedVariables,
           ...(isQueryExpressionFilter(filter)
             ? getPendingFilterValuesVariables(filter, variables)
-            : []),
+            : isSqlQueryFilter(filter)
+              ? getPendingFilterValuesVariables(
+                  { where: filter.sqlTemplate, whereLanguage: 'sql' },
+                  variables,
+                )
+              : []),
         ];
         return (
           <DashboardFilterSelect
