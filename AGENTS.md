@@ -34,7 +34,7 @@ This is a **monorepo** with six packages:
   comparison workflow.
 
 **Data flow**: Apps → OpenTelemetry Collector → ClickHouse (telemetry data) /
-MongoDB (configuration/metadata)
+a MongoDB-compatible store (configuration/metadata; DocumentDB in local dev)
 
 ## Development Setup (HOW)
 

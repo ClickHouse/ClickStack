@@ -49,7 +49,7 @@ export DOCUMENTDB_PG_URL_FILE=/tmp/pg-url DOCUMENTDB_TLS_STATE_DIR=/tmp/tls
 documentdb-gateway run --config /etc/documentdb/gateway/SetupConfiguration.json &
 gateway=$!
 # Stop Postgres cleanly on docker stop so persistent volumes skip crash recovery.
-trap 'kill "$gateway" 2>/dev/null; pg_ctl -D "$PGDATA" -m fast stop >/dev/null; exit 0' TERM INT
+trap 'kill "$gateway" 2>/dev/null || true; pg_ctl -D "$PGDATA" -m fast stop >/dev/null; exit 0' TERM INT
 # Keep the gateway's exit code so a crash shows as a failed container, not a clean exit.
 rc=0
 wait "$gateway" || rc=$?

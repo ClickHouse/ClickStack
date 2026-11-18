@@ -3,16 +3,22 @@
  * usable in full-stack mode (DocumentDB via docker-compose); there is no database in
  * local mode, so callers must gate on `{ tag: ['@full-stack'] }`.
  */
-import { type Db, MongoClient } from 'mongodb';
+import { type Db, MongoClient, MongoServerError } from 'mongodb';
 
 export { ObjectId } from 'mongodb';
 
 const E2E_DB_NAME = 'hyperdx-e2e';
+// Matches DOCDB_USER/DOCDB_PASSWORD in the e2e compose file and MONGO_URI in packages/api/.env.e2e.
+const DOCDB_AUTH = 'hyperdx:hyperdx';
+const DOCDB_OPTIONS =
+  'tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256';
+// DocumentDB's transient dropDatabase failures: WriteConflict and InternalError.
+const TRANSIENT_DROP_CODES = [112, 1];
 
 // Built from the e2e slot port rather than MONGO_URI, so a MONGO_URI exported in a
 // developer's shell can never point these destructive helpers at another database.
 function e2eMongoUri(): string {
-  return `mongodb://hyperdx:hyperdx@localhost:${process.env.HDX_E2E_MONGO_PORT || '21100'}/${E2E_DB_NAME}?tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256`;
+  return `mongodb://${DOCDB_AUTH}@localhost:${process.env.HDX_E2E_MONGO_PORT || '21100'}/${E2E_DB_NAME}?${DOCDB_OPTIONS}`;
 }
 
 /** Runs `fn` against the e2e database over the Mongo wire protocol. */
@@ -25,17 +31,15 @@ export async function withE2eDb<T>(fn: (db: Db) => Promise<T>): Promise<T> {
   }
 }
 
-/**
- * Drops the e2e database. DocumentDB intermittently fails this while the API's
- * background index builds run (WriteConflict 112, or InternalError 1).
- */
+/** Drops the e2e database, retrying while the API's background index builds run. */
 export async function dropE2eDatabase(): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
       await withE2eDb(db => db.dropDatabase());
       return;
-    } catch (e: any) {
-      if (attempt >= 5 || ![1, 112].includes(e?.code)) throw e;
+    } catch (e: unknown) {
+      const code = e instanceof MongoServerError ? e.code : undefined;
+      if (attempt >= 5 || !TRANSIENT_DROP_CODES.includes(Number(code))) throw e;
       await new Promise(resolve => setTimeout(resolve, 200 * attempt));
     }
   }

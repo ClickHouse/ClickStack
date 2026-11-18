@@ -41,7 +41,7 @@ services:
       DOCDB_USER: hyperdx
       DOCDB_PASSWORD: hyperdx
     ports:
-      - '${HDX_CI_MONGO_PORT:-39999}:10260'
+      - '127.0.0.1:${HDX_CI_MONGO_PORT:-39999}:10260'
     networks:
       - internal
 networks:

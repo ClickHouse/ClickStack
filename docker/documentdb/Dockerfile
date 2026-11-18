@@ -1,9 +1,9 @@
 # DocumentDB (MIT): Postgres extensions plus a Mongo wire-protocol gateway, used
 # in place of MongoDB (SSPL). Built from source because upstream ships glibc
 # packages only; Alpine 3.24 matches the all-in-one base and its PostGIS targets PG18.
-ARG DOCUMENTDB_VERSION=v1.0-RC2
+ARG DOCUMENTDB_VERSION=v1.2-0
 # Tags can move; the build fails unless the tag still resolves to this commit.
-ARG DOCUMENTDB_COMMIT=b0cb0dae85e8746f4e0b79c847894179b2f80d64
+ARG DOCUMENTDB_COMMIT=965b6e7ad1c49aefb983a412a3fea0ff637cd7f1
 
 FROM alpine:3.24 AS builder
 ARG DOCUMENTDB_VERSION

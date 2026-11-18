@@ -7,7 +7,7 @@ services:
       DOCDB_USER: hyperdx
       DOCDB_PASSWORD: hyperdx
     ports:
-      - ${HDX_E2E_MONGO_PORT:-21100}:10260
+      - 127.0.0.1:${HDX_E2E_MONGO_PORT:-21100}:10260
     networks:
       - internal
     deploy:
