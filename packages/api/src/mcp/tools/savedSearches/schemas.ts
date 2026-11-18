@@ -1,44 +1,43 @@
 import { z } from 'zod';
 
+import { mcpUnion } from '@/mcp/utils/errors';
 import { objectIdSchema, tagsSchema } from '@/utils/zod';
 
 // ---------------------------------------------------------------------------
 // MCP-compatible Zod schemas for saved search tools.
 // ---------------------------------------------------------------------------
 
-const mcpFilterSchema = z
-  .union([
-    z.object({
-      type: z.enum(['lucene', 'sql']).describe('Language of condition.'),
-      condition: z
-        .string()
-        .describe(
-          "Filter condition in the chosen language, e.g. level:error or StatusCode = 'Error'.",
-        ),
-    }),
-    z.object({
-      type: z
-        .literal('sql_ast')
-        .describe('Structured comparison, rendered as `left operator right`.'),
-      operator: z
-        .enum(['=', '<', '>', '!=', '<=', '>='])
-        .describe('Comparison between left and right.'),
-      left: z
-        .string()
-        .describe('Column or SQL expression to compare. Inserted as raw SQL.'),
-      right: z
-        .string()
-        .describe(
-          'Value or SQL expression that left is compared against. Inserted ' +
-            'verbatim as raw SQL, so quote string literals ("\'ok\'") and leave ' +
-            'numbers bare ("100").',
-        ),
-    }),
-  ])
-  .describe(
-    'Extra filter ANDed with where: either a lucene/sql condition string or a ' +
-      'structured sql_ast comparison.',
-  );
+const mcpFilterSchema = mcpUnion([
+  z.object({
+    type: z.enum(['lucene', 'sql']).describe('Language of condition.'),
+    condition: z
+      .string()
+      .describe(
+        "Filter condition in the chosen language, e.g. level:error or StatusCode = 'Error'.",
+      ),
+  }),
+  z.object({
+    type: z
+      .literal('sql_ast')
+      .describe('Structured comparison, rendered as `left operator right`.'),
+    operator: z
+      .enum(['=', '<', '>', '!=', '<=', '>='])
+      .describe('Comparison between left and right.'),
+    left: z
+      .string()
+      .describe('Column or SQL expression to compare. Inserted as raw SQL.'),
+    right: z
+      .string()
+      .describe(
+        'Value or SQL expression that left is compared against. Inserted ' +
+          'verbatim as raw SQL, so quote string literals ("\'ok\'") and leave ' +
+          'numbers bare ("100").',
+      ),
+  }),
+]).describe(
+  'Extra filter ANDed with where: either a lucene/sql condition string or a ' +
+    'structured sql_ast comparison.',
+);
 
 export const mcpSaveSavedSearchSchema = z.object({
   id: z
