@@ -71,9 +71,17 @@ export const UserPreferencesModal = ({
   useKonamiCode(
     React.useCallback(() => opened && setCrtUnlocked(true), [opened]),
   );
+  // Stays true once CRT mode has been on while the modal is open, so turning
+  // the switch off does not remove it mid-click.
+  const [crtVisible, setCrtVisible] = React.useState(false);
   React.useEffect(() => {
-    if (!opened) setCrtUnlocked(false);
-  }, [opened]);
+    if (!opened) {
+      setCrtUnlocked(false);
+      setCrtVisible(false);
+    } else if (userPreferences.crtMode) {
+      setCrtVisible(true);
+    }
+  }, [opened, userPreferences.crtMode]);
 
   const crtSetting = (
     <SettingContainer
@@ -82,6 +90,7 @@ export const UserPreferencesModal = ({
     >
       <Switch
         data-testid="crt-mode-switch"
+        aria-label="CRT mode"
         checked={!!userPreferences.crtMode}
         onChange={e => setUserPreference({ crtMode: e.currentTarget.checked })}
       />
@@ -204,7 +213,7 @@ export const UserPreferencesModal = ({
         {crtUnlocked ? (
           <CrtUnlockReveal>{crtSetting}</CrtUnlockReveal>
         ) : (
-          userPreferences.crtMode && crtSetting
+          crtVisible && crtSetting
         )}
       </Stack>
     </Modal>

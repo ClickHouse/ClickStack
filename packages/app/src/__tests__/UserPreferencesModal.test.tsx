@@ -144,5 +144,14 @@ describe('UserPreferencesModal', () => {
 
       expect(screen.getByTestId('crt-mode-switch')).toBeChecked();
     });
+
+    it('keeps the toggle after CRT mode is turned off', async () => {
+      renderModal({ crtMode: true });
+
+      await userEvent.click(screen.getByRole('switch', { name: 'CRT mode' }));
+
+      expect(readStoredPreferences().crtMode).toBe(false);
+      expect(screen.getByTestId('crt-mode-switch')).not.toBeChecked();
+    });
   });
 });

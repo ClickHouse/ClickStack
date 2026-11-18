@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Portal } from '@mantine/core';
 
 import styles from './CrtUnlockReveal.module.scss';
 
@@ -17,7 +18,10 @@ export function CrtUnlockReveal({ children }: { children: React.ReactNode }) {
       <div className={styles.content}>{children}</div>
       {playing && (
         <>
-          <div className={styles.flash} aria-hidden />
+          {/* The modal content has a transform, which would clip a fixed child to the modal. */}
+          <Portal>
+            <div className={styles.flash} aria-hidden />
+          </Portal>
           <div
             className={styles.scene}
             aria-hidden
