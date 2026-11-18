@@ -1,6 +1,6 @@
 ## base #############################################################################################
-ARG OTEL_COLLECTOR_VERSION=0.155.0
-ARG OTEL_COLLECTOR_CORE_VERSION=1.61.0
+ARG OTEL_COLLECTOR_VERSION=0.165.0
+ARG OTEL_COLLECTOR_CORE_VERSION=1.71.0
 
 FROM otel/opentelemetry-collector-opampsupervisor:${OTEL_COLLECTOR_VERSION} AS supervisor
 FROM hairyhenderson/gomplate:v4.3.3-alpine AS gomplate
