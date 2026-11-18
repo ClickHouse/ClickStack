@@ -1259,7 +1259,6 @@ const DBSearchPageFiltersComponent = ({
     () => (columns ? new Set(columns.map(c => c.name)) : new Set<string>()),
     [columns],
   );
-  // Same JSON columns as `jsonColumns` above, as a Set for key escaping.
   const jsonColumnSet = useMemo(
     () => new Set(jsonColumns ?? []),
     [jsonColumns],

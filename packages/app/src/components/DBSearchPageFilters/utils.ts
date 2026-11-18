@@ -307,7 +307,7 @@ function quoteIdentifierIfNeeded(id: string): string {
 export function toQuotedClickHouseKeyExpression(
   key: string,
   knownColumns: Set<string>,
-  jsonColumns?: Set<string>,
+  jsonColumns: Set<string>,
 ): string {
   // A whole-key match against a real column wins: quote the entire name as one
   // identifier (handles flat columns whose name contains dots/hyphens/etc.).
@@ -316,7 +316,6 @@ export function toQuotedClickHouseKeyExpression(
   }
 
   if (
-    jsonColumns &&
     jsonColumns.size > 0 &&
     !key.includes("['") &&
     !key.includes('["') &&

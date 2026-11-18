@@ -970,6 +970,7 @@ describe('searchFilters', () => {
           searchQuery: [],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1055,6 +1056,7 @@ describe('searchFilters', () => {
           searchQuery: [pattern, other],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
           isPreservedFilter: f => f === pattern,
         }),
       );
@@ -1082,6 +1084,7 @@ describe('searchFilters', () => {
           searchQuery: [service, raw],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1111,6 +1114,7 @@ describe('searchFilters', () => {
           searchQuery: [service, pattern],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
           isPreservedFilter: f => f === pattern,
         }),
       );
@@ -1130,6 +1134,7 @@ describe('searchFilters', () => {
           searchQuery: [],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1155,6 +1160,7 @@ describe('searchFilters', () => {
           searchQuery: [{ type: 'sql', condition: `level IN ('info', 'ok')` }],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1177,6 +1183,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1202,6 +1209,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1225,6 +1233,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1250,6 +1259,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1271,6 +1281,7 @@ describe('searchFilters', () => {
             searchQuery: [],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1295,6 +1306,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1322,6 +1334,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1346,6 +1359,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1370,6 +1384,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 

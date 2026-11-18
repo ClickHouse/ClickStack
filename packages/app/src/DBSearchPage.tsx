@@ -29,6 +29,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   ClickHouseQueryError,
   ColumnMeta,
+  filterColumnMetaByType,
+  JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { buildSearchChartConfig } from '@hyperdx/common-utils/dist/core/searchChartConfig';
@@ -1444,9 +1446,9 @@ function DBSearchPageContent() {
     () =>
       inputSourceColumns
         ? new Set(
-            inputSourceColumns
-              .filter(c => c.type === 'JSON' || c.type.startsWith('JSON('))
-              .map(c => c.name),
+            filterColumnMetaByType(inputSourceColumns, [JSDataType.JSON])?.map(
+              c => c.name,
+            ),
           )
         : new Set<string>(),
     [inputSourceColumns],

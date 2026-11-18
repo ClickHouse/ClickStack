@@ -103,6 +103,10 @@ function useFacets({
     [columns],
   );
   const { data: jsonColumns } = useJsonColumns(tableConnection);
+  const jsonColumnSet = useMemo(
+    () => new Set(jsonColumns ?? []),
+    [jsonColumns],
+  );
   const { data: mapColumns } = useMapColumns(tableConnection);
 
   const {
@@ -170,12 +174,16 @@ function useFacets({
 
     const sqlKeyToUiKey = new Map<string, string>();
     const escapedKeysToFetch = keysToFetch.map(key => {
-      const sqlKey = toQuotedClickHouseKeyExpression(key, knownColumns);
+      const sqlKey = toQuotedClickHouseKeyExpression(
+        key,
+        knownColumns,
+        jsonColumnSet,
+      );
       sqlKeyToUiKey.set(sqlKey, key);
       return sqlKey;
     });
     return { escapedKeysToFetch, sqlKeyToUiKey };
-  }, [isColumnsLoading, keysToFetch, knownColumns]);
+  }, [isColumnsLoading, keysToFetch, knownColumns, jsonColumnSet]);
 
   const facetsChartConfig = useMemo(
     () =>
@@ -216,7 +224,11 @@ function useFacets({
   const loadMoreFacetsForKey = useCallback(
     async (key: string): Promise<Facet | undefined> => {
       try {
-        const sqlKey = toQuotedClickHouseKeyExpression(key, knownColumns);
+        const sqlKey = toQuotedClickHouseKeyExpression(
+          key,
+          knownColumns,
+          jsonColumnSet,
+        );
         if (mode === 'exact') {
           const strippedFilterState: FilterState = { ...filterState };
           delete strippedFilterState[key];
@@ -226,7 +238,11 @@ function useFacets({
               ...chartConfig,
               dateRange,
               filters: filtersToQuery(
-                escapeFilterStateKeys(strippedFilterState, knownColumns),
+                escapeFilterStateKeys(
+                  strippedFilterState,
+                  knownColumns,
+                  jsonColumnSet,
+                ),
                 { dateTimeColumns },
               ),
             },
@@ -282,6 +298,7 @@ function useFacets({
       chartConfig,
       dateRange,
       knownColumns,
+      jsonColumnSet,
       source,
       filterState,
       dateTimeColumns,
