@@ -22,16 +22,6 @@ function renderPanel() {
   );
 }
 
-describe('McpInstallPanel shell commands', () => {
-  it('defaults to the Claude Code command, which prompts for the key', () => {
-    renderPanel();
-    expect(
-      screen.getByText(/^read -rs CLICKSTACK_ACCESS_KEY && claude mcp add/),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(new RegExp(ACCESS_KEY))).not.toBeInTheDocument();
-  });
-});
-
 describe('McpInstallPanel CLI installer', () => {
   it('shows the npx command, which carries no access key', () => {
     renderPanel();
@@ -49,6 +39,16 @@ function codeText(): string {
 }
 
 describe('McpInstallPanel secret masking', () => {
+  it('masks the access key in the default (Claude Code) command snippet', () => {
+    renderPanel();
+
+    const text = codeText();
+    // The raw key must never appear in the rendered snippet...
+    expect(text).not.toContain(ACCESS_KEY);
+    // ...but the masked stand-in (visible prefix + dots) should.
+    expect(text).toContain(defaultRedact(ACCESS_KEY));
+  });
+
   it('masks the access key in the JSON fallback (Other) snippet', async () => {
     const user = userEvent.setup();
     renderPanel();

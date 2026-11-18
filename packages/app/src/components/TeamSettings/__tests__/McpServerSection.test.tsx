@@ -100,9 +100,7 @@ describe('McpServerSection', () => {
   it('renders the fixed clickstack server name in the install snippet', () => {
     renderSection();
 
-    expect(
-      screen.getByText(/claude mcp add .* clickstack /),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/claude mcp add clickstack /)).toBeInTheDocument();
   });
 
   // `MeApiResponseSchema.accessKey` is `z.string()` non-nullable
@@ -126,7 +124,7 @@ describe('McpServerSection', () => {
 
     expect(
       screen.getByText(
-        /codex mcp add clickstack --url .*--bearer-token-env-var/,
+        /codex mcp add clickstack --url .*--bearer-token-env-var/s,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/claude mcp add/)).not.toBeInTheDocument();

@@ -1,6 +1,6 @@
 import {
-  ACCESS_KEY_ENV_VAR,
   buildAllSnippets,
+  CODEX_TOKEN_ENV_VAR,
   type DeploymentShape,
   SERVER_NAME,
 } from '@/components/ClickStackOnboarding/installSnippets';
@@ -11,22 +11,22 @@ const DEPLOYMENT: DeploymentShape = {
 };
 
 describe('buildAllSnippets > Claude Code', () => {
-  it('reads the key from a hidden prompt into the header', () => {
+  it('emits the documented Claude Code MCP install one-liner', () => {
     const { claudeCode } = buildAllSnippets(DEPLOYMENT);
 
     expect(claudeCode).toBe(
-      `read -rs ${ACCESS_KEY_ENV_VAR} && claude mcp add --scope user --transport http ${SERVER_NAME} https://hyperdx.example.com/api/mcp --header "Authorization: Bearer $${ACCESS_KEY_ENV_VAR}"`,
+      `claude mcp add ${SERVER_NAME} --transport http https://hyperdx.example.com/api/mcp --header "Authorization: Bearer k_abcdef123456"`,
     );
   });
 });
 
 describe('buildAllSnippets > Codex CLI', () => {
-  it('reads the key from a hidden prompt into the bearer-token env var', () => {
+  it('emits the current OpenAI Codex CLI mcp add command with a bearer-token env var', () => {
     const { codexCli } = buildAllSnippets(DEPLOYMENT);
 
     expect(codexCli).toBe(
-      `read -rs ${ACCESS_KEY_ENV_VAR} && export ${ACCESS_KEY_ENV_VAR} && ` +
-        `codex mcp add ${SERVER_NAME} --url https://hyperdx.example.com/api/mcp --bearer-token-env-var ${ACCESS_KEY_ENV_VAR}`,
+      `export ${CODEX_TOKEN_ENV_VAR}="k_abcdef123456"\n` +
+        `codex mcp add ${SERVER_NAME} --url https://hyperdx.example.com/api/mcp --bearer-token-env-var ${CODEX_TOKEN_ENV_VAR}`,
     );
   });
 
@@ -35,15 +35,6 @@ describe('buildAllSnippets > Codex CLI', () => {
 
     expect(codexCli).not.toContain('--transport');
     expect(codexCli).not.toContain('--header');
-  });
-});
-
-describe('buildAllSnippets > shell commands', () => {
-  it('keep the access key out of the command', () => {
-    const { claudeCode, codexCli } = buildAllSnippets(DEPLOYMENT);
-
-    expect(claudeCode).not.toContain(DEPLOYMENT.accessKey);
-    expect(codexCli).not.toContain(DEPLOYMENT.accessKey);
   });
 });
 
@@ -167,12 +158,53 @@ describe('buildAllSnippets > JSON block', () => {
   });
 });
 
+describe('buildAllSnippets > placeholder fallbacks', () => {
+  it('falls back to <accessKey> in the snippet when the key is empty', () => {
+    const { claudeCode } = buildAllSnippets({ ...DEPLOYMENT, accessKey: '' });
+
+    expect(claudeCode).toContain('Bearer <accessKey>');
+  });
+
+  it('falls back to <accessKey> in the Codex export when the key is empty', () => {
+    const { codexCli } = buildAllSnippets({ ...DEPLOYMENT, accessKey: '' });
+
+    expect(codexCli).toContain(`export ${CODEX_TOKEN_ENV_VAR}="<accessKey>"`);
+  });
+
+  it('escapes shell metacharacters in header values', () => {
+    // Today's access keys are UUIDv4 with no metacharacters; the
+    // escape is defensive against future formats that allow `"`,
+    // `$`, `\`, or backtick. Any of those would otherwise turn a
+    // copy-paste install into a shell-injection vector.
+    const { claudeCode } = buildAllSnippets({
+      ...DEPLOYMENT,
+      accessKey: 'k"$`\\suffix',
+    });
+
+    expect(claudeCode).toContain('Bearer k\\"\\$\\`\\\\suffix"');
+  });
+
+  it('escapes shell metacharacters in the Codex export value', () => {
+    // The bearer token lands on the right-hand side of an `export`,
+    // so the same shell-injection defense applies to the Codex
+    // snippet's quoted value.
+    const { codexCli } = buildAllSnippets({
+      ...DEPLOYMENT,
+      accessKey: 'k"$`\\suffix',
+    });
+
+    expect(codexCli).toContain(
+      'export ' + CODEX_TOKEN_ENV_VAR + '="k\\"\\$\\`\\\\suffix"',
+    );
+  });
+});
+
 describe('buildAllSnippets > host coverage', () => {
   it('returns a populated string for every supported host', () => {
     const all = buildAllSnippets(DEPLOYMENT);
 
     expect(all).toMatchObject({
-      claudeCode: expect.stringContaining('claude mcp add'),
+      claudeCode: expect.stringContaining(`claude mcp add ${SERVER_NAME}`),
       cursor: expect.stringContaining('cursor://'),
       vscode: expect.stringContaining('vscode:mcp/install'),
       codexCli: expect.stringContaining(`codex mcp add ${SERVER_NAME}`),

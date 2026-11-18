@@ -12,10 +12,10 @@ import {
 import { CopySnippet } from './CopySnippet';
 import { DeeplinkInstall } from './DeeplinkInstall';
 import {
-  ACCESS_KEY_ENV_VAR,
   buildAllSnippets,
   buildCliInstallCommand,
   type BuiltSnippets,
+  CODEX_TOKEN_ENV_VAR,
   type DeploymentShape,
 } from './installSnippets';
 
@@ -56,8 +56,7 @@ interface McpInstallPanelProps {
 
 /**
  * Host picker plus the install primitive (CLI command, deep link, or JSON
- * block) for the chosen host. The access key is masked wherever a snippet
- * inlines it.
+ * block) for the chosen host. The access key is masked in every snippet.
  */
 export default function McpInstallPanel({ deployment }: McpInstallPanelProps) {
   const [host, setHost] = useState<AgentHost>('claude-code');
@@ -132,16 +131,14 @@ interface HostInstallProps {
   accessKey: string;
 }
 
-const SHELL_COMMAND_LABEL =
-  'Run in your terminal, then paste your API access key and press Enter. Nothing shows as you paste:';
-
 function HostInstall({ host, snippets, accessKey }: HostInstallProps) {
   switch (host) {
     case 'claude-code':
       return (
         <CopySnippet
-          label={SHELL_COMMAND_LABEL}
+          label="Paste in your terminal:"
           snippet={snippets.claudeCode}
+          accessKey={accessKey}
         />
       );
 
@@ -176,12 +173,13 @@ function HostInstall({ host, snippets, accessKey }: HostInstallProps) {
       return (
         <Stack gap="xs">
           <CopySnippet
-            label={SHELL_COMMAND_LABEL}
+            label="Paste in your terminal:"
             snippet={snippets.codexCli}
+            accessKey={accessKey}
           />
           <Text size="xs" c="dimmed">
-            Codex reads {ACCESS_KEY_ENV_VAR} each time it starts, so also set it
-            in your shell profile.
+            Codex reads {CODEX_TOKEN_ENV_VAR} each time it starts, so also set
+            it in your shell profile.
           </Text>
         </Stack>
       );
