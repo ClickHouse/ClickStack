@@ -38,6 +38,7 @@ import {
   mcpQuantileLevelSchema,
 } from '@/mcp/tools/query/schemas';
 import { QUERYABLE_METRIC_KINDS } from '@/mcp/tools/sources/metricKinds';
+import { mcpUnion } from '@/mcp/utils/errors';
 import {
   externalAdhocSavedFilterValueSchema,
   externalSqlSavedFilterValueSchema,
@@ -1366,8 +1367,7 @@ const mcpPromqlTileSchema = mcpTileLayoutSchema.extend({
           'PromQL queries. Line and stacked charts plot every expression; ' +
             'other display types query only the first.',
         ),
-      granularity: z
-        .union([SQLIntervalSchema, z.literal('auto')])
+      granularity: mcpUnion([SQLIntervalSchema, z.literal('auto')])
         .optional()
         .describe(
           'Step of range queries and the value of $__interval, as "<n> <unit>" ' +
@@ -1449,7 +1449,7 @@ const mcpPromqlTileSchema = mcpTileLayoutSchema.extend({
     ),
 });
 
-const mcpTileSchema = z.union([
+const mcpTileSchema = mcpUnion([
   mcpLineTileSchema,
   mcpBarTileSchema,
   mcpStackedLineTileSchema,
@@ -1525,7 +1525,7 @@ const mcpPatchTileLayoutSchema = z.object({
 // Build the patch tile union by extending the default-free layout with
 // each tile type's config shape. We only need the `config` field from
 // each tile schema; the layout wrapper is replaced.
-const mcpPatchTileSchema = z.union([
+const mcpPatchTileSchema = mcpUnion([
   mcpPatchTileLayoutSchema.extend({ config: mcpLineTileSchema.shape.config }),
   mcpPatchTileLayoutSchema.extend({ config: mcpBarTileSchema.shape.config }),
   mcpPatchTileLayoutSchema.extend({
@@ -1593,7 +1593,7 @@ const PROMQL_TILE_EXAMPLE =
 export function buildMcpTilesParam(promqlEnabled: boolean) {
   if (!promqlEnabled) return mcpTilesParam;
   return z
-    .array(z.union([...mcpTileSchema.options, mcpPromqlTileSchema]))
+    .array(mcpUnion([...mcpTileSchema.options, mcpPromqlTileSchema]))
     .describe(`${mcpTilesParam.description}${PROMQL_TILE_EXAMPLE}`);
 }
 
@@ -2190,7 +2190,7 @@ const mcpAdhocSavedFilterValueSchema =
 
 export const mcpSavedFilterValuesParam = z
   .array(
-    z.union([
+    mcpUnion([
       mcpSqlSavedFilterValueSchema,
       mcpVariableSavedFilterValueSchema,
       mcpAdhocSavedFilterValueSchema,
@@ -2239,8 +2239,7 @@ const mcpPatchDashboardSchema = z.object({
 export function buildMcpPatchDashboardSchema(promqlEnabled: boolean) {
   if (!promqlEnabled) return mcpPatchDashboardSchema;
   return mcpPatchDashboardSchema.extend({
-    tile: z
-      .union([...mcpPatchTileSchema.options, mcpPromqlPatchTileSchema])
+    tile: mcpUnion([...mcpPatchTileSchema.options, mcpPromqlPatchTileSchema])
       .optional()
       .describe(mcpPatchDashboardSchema.shape.tile.description ?? ''),
   });
