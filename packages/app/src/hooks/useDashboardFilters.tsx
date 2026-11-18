@@ -45,6 +45,7 @@ import {
   AdhocFilterValueSchema,
   BroadcastFilter,
   ChartVariable,
+  Connection,
   DashboardFilter,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
@@ -54,6 +55,7 @@ import {
   notifyAdhocFilterFull,
 } from '@/components/AdhocDashboardFilter/notifications';
 import { dashboardFilterValuesParser } from '@/utils/queryParsers';
+import { matchIdOrNameParam } from '@/utils/sourceParams';
 
 const hasSelection = (selection: FilterSelection): boolean =>
   selection.included.size > 0 ||
@@ -142,15 +144,22 @@ const useDashboardFilters = (
   filters: DashboardFilter[],
   {
     sources,
+    connections,
   }: {
     /**
      * The team's sources. While given, a data source variable's selection
-     * that the variable no longer offers counts as no selection.
+     * may name a source instead of holding its ID, and a selection that the
+     * variable no longer offers counts as no selection.
      */
     sources?: readonly Pick<
       TSource,
-      'id' | 'kind' | 'connection' | 'disabled'
+      'id' | 'name' | 'kind' | 'connection' | 'disabled'
     >[];
+    /**
+     * The team's connections. While given, a connection variable's selection
+     * may name a connection instead of holding its ID.
+     */
+    connections?: readonly Pick<Connection, 'id' | 'name'>[];
   } = {},
 ) => {
   const [filterValueEntries, setFilterValueEntries] = useQueryState(
@@ -249,6 +258,19 @@ const useDashboardFilters = (
       const [id] = selectionByFilterId.get(filterId)?.included ?? [];
       return id == null ? undefined : String(id);
     };
+    // Hand-written URLs may select by name; from here on selections are IDs.
+    const selectId = (filterId: string, id: string) =>
+      selectionByFilterId.set(filterId, {
+        included: new Set([id]),
+        excluded: new Set(),
+      });
+    if (connections) {
+      for (const { filter } of getConnectionVariableFilters(filters)) {
+        const value = selectedId(filter.id);
+        const matched = value && matchIdOrNameParam(value, connections);
+        if (matched) selectId(filter.id, matched.match.id);
+      }
+    }
     const connectionValues = new Map(
       getConnectionVariableFilters(filters).map(({ filter, name }) => [
         name,
@@ -257,21 +279,25 @@ const useDashboardFilters = (
     );
     if (sources) {
       for (const { filter } of getSourceVariableFilters(filters)) {
-        const sourceId = selectedId(filter.id);
-        if (sourceId == null) continue;
-        const source = sources.find(s => s.id === sourceId);
+        const value = selectedId(filter.id);
+        if (value == null) continue;
         // An unselected connection variable leaves its reference, which no
         // source's connection matches
         const connection =
           resolveVariableReference(filter.connection, connectionValues) ??
           filter.connection;
-        if (
-          !source ||
-          !isSourceOfferedByVariable(source, {
+        // Match names among offered sources only, so a name shared with a
+        // source on another connection or of another kind isn't ambiguous
+        const offeredSources = sources.filter(source =>
+          isSourceOfferedByVariable(source, {
             allowedSourceKinds: filter.allowedSourceKinds,
             connection,
-          })
-        ) {
+          }),
+        );
+        const matched = matchIdOrNameParam(value, offeredSources);
+        if (matched) {
+          selectId(filter.id, matched.match.id);
+        } else {
           selectionByFilterId.delete(filter.id);
         }
       }
@@ -339,7 +365,7 @@ const useDashboardFilters = (
       ignoredExpressions,
       ignoredVariableNames,
     };
-  }, [filterValueEntries, filters, sources]);
+  }, [filterValueEntries, filters, sources, connections]);
 
   // Filters as they query: source and connection variable references replaced
   // by the selections. Unselected references, and those selecting a source the

@@ -1595,6 +1595,95 @@ describe('useDashboardFilters', () => {
       });
     });
 
+    describe('a selection by name', () => {
+      const connectionFilter: DashboardFilter = {
+        id: 'conn',
+        type: 'CONNECTION',
+        name: 'Cluster',
+        variableName: 'cluster',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      };
+      const scopedFilter: DashboardFilter = {
+        ...dataSourceFilter,
+        connection: '$cluster',
+      };
+      const connections = [
+        { id: 'conn-a', name: 'Cluster A' },
+        { id: 'conn-b', name: 'Cluster B' },
+      ];
+      const sources = [
+        {
+          id: 'logs-a',
+          name: 'Logs',
+          kind: SourceKind.Log,
+          connection: 'conn-a',
+        },
+        {
+          id: 'logs-b',
+          name: 'Logs',
+          kind: SourceKind.Log,
+          connection: 'conn-b',
+        },
+        {
+          id: 'traces-a',
+          name: 'Traces',
+          kind: SourceKind.Trace,
+          connection: 'conn-a',
+        },
+      ];
+      const render = (
+        filters: DashboardFilter[],
+        selection: { cluster?: string; logs?: string },
+      ) => {
+        mockState = Object.entries(selection).map(([name, value]) => ({
+          type: 'variable' as const,
+          name,
+          values: [value],
+        }));
+        return renderHook(() =>
+          useDashboardFilters(filters, { sources, connections }),
+        ).result.current;
+      };
+
+      it('resolves a source name to its ID', () => {
+        const result = render([dataSourceFilter], { logs: 'logs' });
+        expect(result.referenceVariableValues.get('logs')).toBe('logs-a');
+        expect(result.selectionByFilterId.get('ds')?.included).toEqual(
+          new Set(['logs-a']),
+        );
+      });
+
+      it('resolves a connection name to its ID', () => {
+        const result = render([connectionFilter], { cluster: 'Cluster B' });
+        expect(result.referenceVariableValues.get('cluster')).toBe('conn-b');
+      });
+
+      it("matches a source name on the selected connection's sources only", () => {
+        const result = render([connectionFilter, scopedFilter], {
+          cluster: 'Cluster B',
+          logs: 'Logs',
+        });
+        expect(result.referenceVariableValues.get('logs')).toBe('logs-b');
+        expect(result.resolvedFilters[1]).toMatchObject({
+          connection: 'conn-b',
+        });
+      });
+
+      it('drops a name the variable does not offer', () => {
+        const result = render([dataSourceFilter], { logs: 'Traces' });
+        expect(result.referenceVariableValues.get('logs')).toBeUndefined();
+        expect(result.selectionByFilterId.has('ds')).toBe(false);
+      });
+
+      it('keeps an unmatched connection value as written', () => {
+        const result = render([connectionFilter], { cluster: 'conn-c' });
+        expect(result.referenceVariableValues.get('cluster')).toBe('conn-c');
+      });
+    });
+
     it('is a required filter while unselected', () => {
       const { result } = renderHook(() =>
         useDashboardFilters([dataSourceFilter]),

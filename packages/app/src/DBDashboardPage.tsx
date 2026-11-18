@@ -1988,7 +1988,7 @@ function DBDashboardPage({
     unresolvedReferenceVariablesByFilterId,
     incompatibleReferenceVariablesByFilterId,
     unsatisfiedRequiredFilters,
-  } = useDashboardFilters(filters, { sources });
+  } = useDashboardFilters(filters, { sources, connections });
   // Tiles as they query, by ID: source and connection variable references
   // replaced by the selections. Edits and saves read `dashboard.tiles`, so the
   // stored references survive.

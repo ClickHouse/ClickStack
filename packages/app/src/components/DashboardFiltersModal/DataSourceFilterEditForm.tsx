@@ -67,6 +67,19 @@ export const DataSourceFilterEditForm = ({
         />
       </CustomInputWrapper>
 
+      {hasMixedKinds && (
+        <Alert
+          variant="warning"
+          icon={<IconAlertTriangle size={16} />}
+          data-testid="filter-mixed-source-kinds-warning"
+        >
+          These kinds support different chart options, such as metrics and
+          formulas. A tile built while one kind is selected may not load when
+          the variable is switched to another, and a new tile can&apos;t be
+          saved until a source is selected.
+        </Alert>
+      )}
+
       <CustomInputWrapper
         label="Connection"
         tooltipText="Limits the offered sources to one connection, which can be a connection variable."
@@ -80,19 +93,6 @@ export const DataSourceFilterEditForm = ({
           data-testid="filter-data-source-connection-input"
         />
       </CustomInputWrapper>
-
-      {hasMixedKinds && (
-        <Alert
-          variant="warning"
-          icon={<IconAlertTriangle size={16} />}
-          data-testid="filter-mixed-source-kinds-warning"
-        >
-          These kinds support different chart options, such as metrics and
-          formulas. A tile built while one kind is selected may not load when
-          the variable is switched to another, and a new tile can&apos;t be
-          saved until a source is selected.
-        </Alert>
-      )}
 
       <VariableNameInput control={control} otherFilters={otherFilters} />
     </>
