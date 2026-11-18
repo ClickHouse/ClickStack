@@ -671,9 +671,11 @@ export function getLineStrokeDasharray(
 /**
  * Whether select item i is result value column i. Not so when ratio mode
  * merges two items into one column (the `isRatioChartConfig` condition) or
- * when hidden formula operands leave only formula columns. Shared by the
- * series editor and `getSelectSeriesStyles` so they agree on when per-series
- * styles apply.
+ * when hidden formula operands leave only formula columns. Formulas supersede
+ * ratio, as in `renderMultiSeriesMetricChartConfig` and
+ * `getBuilderValueColumnCount`. Takes plain fields rather than a chart config
+ * because the series editor calls it with form state. Shared by the editor and
+ * `getSelectSeriesStyles` so they agree on when per-series styles apply.
  */
 export function selectItemsHaveOwnColumns({
   selectCount,
@@ -684,10 +686,10 @@ export function selectItemsHaveOwnColumns({
   BuilderChartConfigWithDateRange,
   'seriesReturnType' | 'formulas' | 'showOperandSeries'
 > & { selectCount: number }): boolean {
-  const isRatio = seriesReturnType === 'ratio' && selectCount === 2;
-  const operandsHidden =
-    (formulas?.length ?? 0) > 0 && showOperandSeries === false;
-  return !isRatio && !operandsHidden;
+  if ((formulas?.length ?? 0) > 0) {
+    return showOperandSeries !== false;
+  }
+  return !(seriesReturnType === 'ratio' && selectCount === 2);
 }
 
 export type SelectSeriesStyles = {

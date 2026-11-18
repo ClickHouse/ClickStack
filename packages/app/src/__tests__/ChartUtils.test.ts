@@ -2249,6 +2249,25 @@ describe('getSelectSeriesStyles', () => {
     ).toEqual({ seriesColors: { A: 'chart-blue' } });
   });
 
+  // Formulas supersede ratio in the query, so visible operands keep their
+  // own columns even with a leftover ratio flag.
+  it('keeps styles when formulas override a ratio flag', () => {
+    expect(
+      getSelectSeriesStyles(
+        config(
+          [
+            { ...countSeries, alias: 'A', color: 'chart-blue' },
+            { ...countSeries, alias: 'B' },
+          ],
+          {
+            seriesReturnType: 'ratio',
+            formulas: [{ expression: 'A / B', alias: 'Rate' }],
+          },
+        ),
+      ),
+    ).toEqual({ seriesColors: { A: 'chart-blue' } });
+  });
+
   // With operands hidden only the formula columns are in the result, so
   // positional keys would put an operand's style on a formula line.
   it('returns no styles when formula operands are hidden', () => {
