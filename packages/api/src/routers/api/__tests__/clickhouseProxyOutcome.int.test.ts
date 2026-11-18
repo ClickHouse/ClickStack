@@ -1,3 +1,4 @@
+import { INVALID_SPAN_CONTEXT, trace } from '@opentelemetry/api';
 import http from 'http';
 
 import { getLoggedInAgent, getServer } from '@/fixtures';
@@ -63,7 +64,7 @@ describe('clickhouse-proxy outcome', () => {
   let upstream: http.Server;
   let upstreamUrl: string;
   let recordSpy: jest.SpyInstance;
-  const span = { setAttributes: jest.fn() };
+  let setAttributes: jest.SpyInstance;
 
   beforeAll(async () => {
     await server.start();
@@ -81,14 +82,13 @@ describe('clickhouse-proxy outcome', () => {
 
   beforeEach(() => {
     recordSpy = jest.spyOn(instrumentation, 'recordOperationOutcome');
-    jest
-      .spyOn(instrumentation, 'getServerSpan')
-      .mockReturnValue(span as unknown as instrumentation.Span);
+    const span = trace.wrapSpanContext(INVALID_SPAN_CONTEXT);
+    setAttributes = jest.spyOn(span, 'setAttributes');
+    jest.spyOn(instrumentation, 'getServerSpan').mockReturnValue(span);
   });
 
   afterEach(async () => {
     jest.restoreAllMocks();
-    span.setAttributes.mockReset();
     await server.clearDBs();
   });
 
@@ -152,7 +152,7 @@ describe('clickhouse-proxy outcome', () => {
       outcome: 'success',
       attributes: { error_category: 'query_timeout' },
     });
-    expect(span.setAttributes).toHaveBeenCalledWith(
+    expect(setAttributes).toHaveBeenCalledWith(
       expect.objectContaining({
         'hyperdx.clickhouse_proxy.clickhouse.error_code': 159,
         'hyperdx.clickhouse_proxy.clickhouse.error_type': 'TIMEOUT_EXCEEDED',
@@ -177,7 +177,7 @@ describe('clickhouse-proxy outcome', () => {
       outcome: 'error',
       attributes: { error_category: 'service_overloaded' },
     });
-    expect(span.setAttributes).toHaveBeenCalledWith(
+    expect(setAttributes).toHaveBeenCalledWith(
       expect.objectContaining({
         'hyperdx.clickhouse_proxy.clickhouse.error_type':
           'TOO_MANY_SIMULTANEOUS_QUERIES',
@@ -193,7 +193,7 @@ describe('clickhouse-proxy outcome', () => {
       outcome: 'error',
       attributes: { error_category: 'upstream_unavailable' },
     });
-    expect(span.setAttributes).toHaveBeenCalledWith(
+    expect(setAttributes).toHaveBeenCalledWith(
       expect.objectContaining({
         'hyperdx.clickhouse_proxy.error.message': 'Service is starting up',
       }),
@@ -234,10 +234,10 @@ describe('clickhouse-proxy outcome', () => {
     if ('req' in request && request.req instanceof http.ClientRequest) {
       request.req.destroy();
     }
-    for (let i = 0; i < 50 && !span.setAttributes.mock.calls.length; i++) {
+    for (let i = 0; i < 50 && !setAttributes.mock.calls.length; i++) {
       await new Promise(resolve => setTimeout(resolve, 20));
     }
-    expect(span.setAttributes).toHaveBeenCalledWith(
+    expect(setAttributes).toHaveBeenCalledWith(
       expect.objectContaining({
         'hyperdx.clickhouse_proxy.error.category': 'client_aborted',
       }),
