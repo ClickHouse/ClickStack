@@ -21,6 +21,7 @@ import {
 } from '@/mcp/utils/timeout';
 import { isQueryTimeoutError } from '@/tasks/checkAlerts/errors';
 import { getCounter } from '@/utils/instrumentation';
+import logger from '@/utils/logger';
 
 /**
  * Wall-clock budget for the whole scan. Under MCP_TOOL_TIMEOUT_MS because the
@@ -34,14 +35,15 @@ const MIN_WINDOW_BUDGET_MS = 1_000;
 
 const partialResultsCounter = getCounter('hyperdx.mcp.search.partial_results', {
   description:
-    'clickstack_search calls that ran out of time and returned partial rows instead of failing.',
+    'clickstack_search calls that returned partial rows instead of failing, labeled by why the scan stopped.',
 });
 
 type SearchRow = Record<string, string | number>;
 type IsoRange = { startTime: string; endTime: string };
 
 export type SearchCoverage = {
-  reason: 'time_budget';
+  /** time_budget: ran out of time. query_error: an older window's query failed. */
+  reason: 'time_budget' | 'query_error';
   requestedRange: IsoRange;
   /** Fully scanned, newest first. Null when not even the newest window finished. */
   coveredRange: IsoRange | null;
@@ -107,12 +109,12 @@ export async function runWindowedSearch({
   let rowCount = 0;
   let coveredStart: Date | undefined;
   let incompleteWindow: TimeWindow | undefined;
-  let outOfTime = false;
+  let stopReason: SearchCoverage['reason'] | undefined;
 
   for (const window of windows) {
     const remainingMs = deadline - Date.now();
     if (remainingMs < MIN_WINDOW_BUDGET_MS || abortSignal?.aborted) {
-      outOfTime = true;
+      stopReason = 'time_budget';
       break;
     }
     const maxExecutionSec = Math.floor(remainingMs / 100) / 10;
@@ -149,13 +151,19 @@ export async function runWindowedSearch({
         { timeoutMs: remainingMs + MCP_TIMEOUT_GRACE_MS },
       );
     } catch (e) {
-      if (results.length === 0 || !isQueryTimeoutError(e)) throw e;
-      outOfTime = true;
+      // Older windows are wider, so they are likelier to hit memory or
+      // network errors; keep the rows the newer windows already found.
+      if (results.length === 0) throw e;
+      stopReason = isQueryTimeoutError(e) ? 'time_budget' : 'query_error';
+      logger.warn(
+        { err: e, windowIndex: window.windowIndex },
+        'clickstack_search older window failed; returning partial results',
+      );
       incompleteWindow = window;
       break;
     }
     if (outcome.timedOut) {
-      outOfTime = true;
+      stopReason = 'time_budget';
       incompleteWindow = window;
       break;
     }
@@ -171,7 +179,7 @@ export async function runWindowedSearch({
       (Date.now() - queryStart) / 1000,
     );
     if (elapsedSec >= maxExecutionSec) {
-      outOfTime = true;
+      stopReason = 'time_budget';
       incompleteWindow = window;
       break;
     }
@@ -179,9 +187,9 @@ export async function runWindowedSearch({
     if (rowCount >= maxResults) break;
   }
 
-  const partial: SearchCoverage | undefined = outOfTime
+  const partial: SearchCoverage | undefined = stopReason
     ? {
-        reason: 'time_budget',
+        reason: stopReason,
         requestedRange: toIsoRange(startDate, endDate),
         coveredRange: coveredStart ? toIsoRange(coveredStart, endDate) : null,
         ...(incompleteWindow
@@ -204,7 +212,9 @@ export async function runWindowedSearch({
       'mcp.search.covered_ms',
       coveredStart ? endDate.getTime() - coveredStart.getTime() : 0,
     );
+    span?.setAttribute('mcp.search.partial_reason', partial.reason);
     partialResultsCounter.add(1, {
+      reason: partial.reason,
       coverage: partial.coveredRange ? 'some' : 'none',
     });
   }
@@ -215,13 +225,18 @@ export async function runWindowedSearch({
 /** Tells the agent what a partial search covered and what to call next. */
 export function partialSearchHint(partial: SearchCoverage): string {
   const budget = `${SEARCH_TIME_BUDGET_MS / 1000}s`;
-  const { coveredRange, incompleteRange, requestedRange } = partial;
+  const { coveredRange, incompleteRange, requestedRange, reason } = partial;
   if (coveredRange) {
-    const cutOff = incompleteRange
-      ? ` Rows from ${incompleteRange.startTime} to ${incompleteRange.endTime} are only those read before the limit, so they may repeat on the next call.`
-      : '';
+    const stopped =
+      reason === 'query_error'
+        ? 'the query for an older window failed'
+        : `the search stopped at its ${budget} time budget`;
+    const cutOff =
+      incompleteRange && reason === 'time_budget'
+        ? ` Rows from ${incompleteRange.startTime} to ${incompleteRange.endTime} are only those read before the limit, so they may repeat on the next call.`
+        : '';
     return (
-      `Partial result: the search stopped at its ${budget} time budget. ` +
+      `Partial result: ${stopped}. ` +
       `Rows are complete (newest first) from ${coveredRange.startTime} to ${coveredRange.endTime}.${cutOff} ` +
       `For older events, call again with startTime=${requestedRange.startTime} endTime=${coveredRange.startTime}, ` +
       'or add filters so each window scans faster.'

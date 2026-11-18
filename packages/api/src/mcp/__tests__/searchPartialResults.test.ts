@@ -398,6 +398,35 @@ describe('clickstack_search partial results', () => {
     );
   });
 
+  it('keeps the rows already found when an older window fails for a reason other than time', async () => {
+    mockQueryChartConfig.mockImplementation(({ config }: QueryArgs) => {
+      const [start] = config.dateRange;
+      return start >= minutesBefore(15)
+        ? Promise.resolve(chResult(rowsAt(1)))
+        : Promise.reject(
+            new Error('Memory limit exceeded (MEMORY_LIMIT_EXCEEDED)'),
+          );
+    });
+
+    const result = await getHandler()({
+      sourceId,
+      startTime: minutesBefore(24 * 60).toISOString(),
+      endTime: END.toISOString(),
+    });
+
+    expect(result.isError).toBeFalsy();
+    const body = parse(result);
+    expect(body.result.data).toHaveLength(1);
+    expect(body.partial.reason).toBe('query_error');
+    expect(body.partial.coveredRange.startTime).toBe(
+      minutesBefore(15).toISOString(),
+    );
+    expect(body.hints[0]).toContain('older window failed');
+    expect(body.hints[0]).toContain(
+      `endTime=${minutesBefore(15).toISOString()}`,
+    );
+  });
+
   it('returns the error when the newest window fails', async () => {
     mockQueryChartConfig.mockRejectedValue(new Error('Syntax error'));
 
