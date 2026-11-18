@@ -8,6 +8,7 @@ import {
   toFormValues,
 } from '@/components/DashboardFiltersModal/filterFormState';
 import { SqlQueryFilterEditForm } from '@/components/DashboardFiltersModal/SqlQueryFilterEditForm';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
 
 const mockUseSqlQueryFilterValues = jest.fn();
@@ -69,24 +70,38 @@ const valuesResult = ({
 
 const cloudVariable = { name: 'cloud', expression: 'cloud', values: [] };
 
-function Harness() {
+const NO_REFERENCE_VALUES = new Map<string, string>();
+
+function Harness({
+  referenceValues = NO_REFERENCE_VALUES,
+}: {
+  referenceValues?: Map<string, string>;
+}) {
   const { control, handleSubmit } = useForm<FilterFormValues>({
     defaultValues: { ...toFormValues(), type: 'SQL_QUERY' },
   });
   return (
-    <SqlVariablesProvider variables={[cloudVariable]}>
-      <SqlQueryFilterEditForm control={control} otherFilters={[]} />
-      <button type="button" onClick={handleSubmit(() => {})}>
-        Save
-      </button>
-    </SqlVariablesProvider>
+    <ReferenceVariablesProvider filters={[]} values={referenceValues}>
+      <SqlVariablesProvider variables={[cloudVariable]}>
+        <SqlQueryFilterEditForm control={control} otherFilters={[]} />
+        <button type="button" onClick={handleSubmit(() => {})}>
+          Save
+        </button>
+      </SqlVariablesProvider>
+    </ReferenceVariablesProvider>
   );
 }
 
-const renderForm = async (sql = 'SELECT env FROM envs') => {
-  renderWithMantine(<Harness />);
+const renderForm = async (
+  sql = 'SELECT env FROM envs',
+  {
+    connection = 'conn1',
+    referenceValues,
+  }: { connection?: string; referenceValues?: Map<string, string> } = {},
+) => {
+  renderWithMantine(<Harness referenceValues={referenceValues} />);
   const user = userEvent.setup();
-  await user.type(screen.getByTestId('connection-input'), 'conn1');
+  await user.type(screen.getByTestId('connection-input'), connection);
   // `{` starts a user-event key descriptor, so it must be doubled.
   await user.type(screen.getByTestId('sql-input'), sql.replace(/{/g, '{{'));
   return user;
@@ -181,6 +196,30 @@ describe('SqlQueryFilterEditForm', () => {
         ],
       }),
     );
+  });
+
+  it('previews a connection variable as the connection it selects', async () => {
+    const user = await renderForm(undefined, {
+      connection: '$conn',
+      referenceValues: new Map([['conn', 'conn2']]),
+    });
+
+    await user.click(screen.getByTestId('filter-sql-preview-button'));
+
+    expect(mockUseSqlQueryFilterValues).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        filters: [expect.objectContaining({ connection: 'conn2' })],
+      }),
+    );
+  });
+
+  it('disables the preview while a connection variable has no value', async () => {
+    await renderForm(undefined, { connection: '$conn' });
+
+    expect(screen.getByTestId('filter-sql-preview-button')).toBeDisabled();
+    expect(
+      screen.getByText('Select a value for $conn to preview'),
+    ).toBeInTheDocument();
   });
 
   it('lists the first twenty values and counts the rest', async () => {

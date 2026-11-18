@@ -6,6 +6,7 @@ import {
   MACRO_SUGGESTIONS,
   SOURCE_DEPENDENT_MACROS,
 } from '@hyperdx/common-utils/dist/macros';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   DashboardFilter,
   SqlQueryDashboardFilter,
@@ -15,6 +16,7 @@ import { IconAlertTriangle, IconPlayerPlay } from '@tabler/icons-react';
 
 import { ConnectionSelectControlled } from '@/components/ConnectionSelect';
 import EmptyState from '@/components/EmptyState';
+import { useResolvedReference } from '@/components/sourceSelectUtils';
 import { SQLEditorControlled } from '@/components/SQLEditor/SQLEditor';
 import {
   buildSqlVariableCompletions,
@@ -84,16 +86,22 @@ export const SqlQueryFilterEditForm = ({
     connection: string;
     sqlTemplate: string;
   }>();
-  const canPreview = !!connection && !!sqlTemplate?.trim();
+  // A connection variable previews as the connection it currently selects.
+  const resolvedConnection = useResolvedReference(connection);
+  const unresolvedConnection =
+    parseVariableReference(connection) != null && !resolvedConnection;
+  const canPreview = !!resolvedConnection && !!sqlTemplate?.trim();
   const runPreview = () => {
-    if (canPreview) setPreviewed({ connection, sqlTemplate });
+    if (canPreview) {
+      setPreviewed({ connection: resolvedConnection, sqlTemplate });
+    }
   };
 
   return (
     <>
       <CustomInputWrapper
         label="Connection"
-        tooltipText="The ClickHouse connection the query runs on"
+        tooltipText="The ClickHouse connection the query runs on, which can be a connection variable"
         error={errors.connection}
       >
         <div data-testid="filter-connection-select">
@@ -101,6 +109,7 @@ export const SqlQueryFilterEditForm = ({
             control={control}
             name="connection"
             rules={{ required: 'Select a connection' }}
+            allowConnectionVariables
           />
         </div>
       </CustomInputWrapper>
@@ -134,6 +143,11 @@ export const SqlQueryFilterEditForm = ({
             parentRef={TOOLTIP_PORTAL_TARGET}
           />
           <Group justify="flex-end">
+            {unresolvedConnection && (
+              <Text size="xs" c="dimmed">
+                Select a value for {connection} to preview
+              </Text>
+            )}
             <Button
               variant="secondary"
               size="compact-sm"
