@@ -511,8 +511,11 @@ describe('Dashboard import - SQL query filter connection', () => {
 
   it('maps neither connection nor source variables', () => {
     expect(
-      parseSqlQueryFilterMappings(sqlQueryFilterTemplate('$conn', '$logs'), '', '')
-        .success,
+      parseSqlQueryFilterMappings(
+        sqlQueryFilterTemplate('$conn', '$logs'),
+        '',
+        '',
+      ).success,
     ).toBe(true);
   });
 
