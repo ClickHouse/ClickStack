@@ -5,9 +5,9 @@ import styles from './CrtOverlay.module.scss';
 /** Full-viewport CRT effect. Mount only while the preference is on. */
 export function CrtOverlay() {
   useEffect(() => {
-    // Lets the global text glow in the stylesheet apply without a body class.
-    document.documentElement.setAttribute('data-crt', '');
-    return () => document.documentElement.removeAttribute('data-crt');
+    // A module class, not a global selector: the production build rejects those.
+    document.documentElement.classList.add(styles.root);
+    return () => document.documentElement.classList.remove(styles.root);
   }, []);
 
   return (

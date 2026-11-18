@@ -90,9 +90,8 @@
   }
 }
 
-// Chromatic aberration and phosphor glow on all text.
-/* stylelint-disable-next-line selector-pseudo-class-no-unknown */
-:global(html[data-crt]) body {
+// Chromatic aberration and phosphor glow on all text. `.root` goes on <html>.
+.root body {
   text-shadow:
     0.6px 0 rgb(255 0 80 / 35%),
     -0.6px 0 rgb(0 200 255 / 35%),
