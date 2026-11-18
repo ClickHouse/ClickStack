@@ -3038,7 +3038,13 @@ function DBSearchPageContent() {
                               totalCountConfig={totalCountConfig}
                               enableParallelQueries
                             >
-                              {histogramGroupBySelect}
+                              {/* The heatmap doesn't group, and a custom
+                                  group-by would swap it for the histogram (see
+                                  traceChartsSource), so the picker is hidden
+                                  while it shows. */}
+                              {isHeatmapChartVisible
+                                ? null
+                                : histogramGroupBySelect}
                             </SearchResultsCountGroup>
                             <Group gap="sm" align="center">
                               {traceChartsSource != null && (
