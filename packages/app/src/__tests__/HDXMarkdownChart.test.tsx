@@ -3,9 +3,40 @@ import { screen } from '@testing-library/react';
 
 import HDXMarkdownChart from '@/HDXMarkdownChart';
 
+jest.mock('@/hooks/useOnClickLinkBuilder', () => ({
+  usePageLinkContext: () => ({
+    timeZone: 'UTC',
+    currentFilters: [{ type: 'variable', name: 'env', values: ['prod'] }],
+  }),
+}));
+
 const service = { name: 'service', values: ['api', 'web'] };
 
 describe('HDXMarkdownChart', () => {
+  it('expands link globals when given a date range', () => {
+    renderWithMantine(
+      <HDXMarkdownChart
+        config={{
+          markdown:
+            '[Details](/dashboards/abc?$__url_time_range&$__all_variables)',
+        }}
+        dateRange={[new Date(1000), new Date(2000)]}
+      />,
+    );
+    const text = screen.getByText(/^\[Details\]/).textContent!;
+    const params = new URLSearchParams(text.slice(text.indexOf('?') + 1, -1));
+    expect(params.get('from')).toBe('1000');
+    expect(params.get('to')).toBe('2000');
+    expect(JSON.parse(decodeURIComponent(params.get('filters')!))).toEqual([
+      { type: 'variable', name: 'env', values: ['prod'] },
+    ]);
+  });
+
+  it('leaves link globals as written without a date range', () => {
+    renderWithMantine(<HDXMarkdownChart config={{ markdown: '$__from' }} />);
+    expect(screen.getByText('$__from')).toBeInTheDocument();
+  });
+
   it('substitutes variable references', () => {
     renderWithMantine(
       <HDXMarkdownChart

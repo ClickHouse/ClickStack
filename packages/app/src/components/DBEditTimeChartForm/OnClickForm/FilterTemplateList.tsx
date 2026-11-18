@@ -14,7 +14,14 @@ import { TextInputControlled } from '@/components/InputControlled';
 
 import { DrawerControl } from './utils';
 
-export function FilterTemplateList({ control }: { control: DrawerControl }) {
+export function FilterTemplateList({
+  control,
+  allowVariables = false,
+}: {
+  control: DrawerControl;
+  /** Offer filters keyed by the destination dashboard's variable name. */
+  allowVariables?: boolean;
+}) {
   const {
     fields: filters,
     append,
@@ -28,18 +35,31 @@ export function FilterTemplateList({ control }: { control: DrawerControl }) {
     <Box>
       <InputLabel>Filters</InputLabel>
       <Text size="xs" c="dimmed" mb="xs">
-        Enter an expression (e.g. a column name) and a template for its value.
+        Enter an expression (e.g. a column name)
+        {allowVariables ? ' or a variable name' : ''} and a template for its
+        value.
       </Text>
       <Stack gap="xs">
         {filters.map((filter, i) => (
           <Group key={filter.id} gap="xs" align="flex-start" wrap="nowrap">
-            <TextInputControlled
-              control={control}
-              name={`onClick.filters.${i}.expression` as const}
-              placeholder="Expression"
-              style={{ flex: 1 }}
-              data-testid="onclick-filter-expression-input"
-            />
+            {filter.kind === 'variableTemplate' ? (
+              <TextInputControlled
+                control={control}
+                name={`onClick.filters.${i}.variableName` as const}
+                placeholder="Variable"
+                leftSection="$"
+                style={{ flex: 1 }}
+                data-testid="onclick-filter-variable-input"
+              />
+            ) : (
+              <TextInputControlled
+                control={control}
+                name={`onClick.filters.${i}.expression` as const}
+                placeholder="Expression"
+                style={{ flex: 1 }}
+                data-testid="onclick-filter-expression-input"
+              />
+            )}
             <TextInputControlled
               control={control}
               name={`onClick.filters.${i}.template` as const}
@@ -59,21 +79,39 @@ export function FilterTemplateList({ control }: { control: DrawerControl }) {
             </ActionIcon>
           </Group>
         ))}
-        <Button
-          variant="subtle"
-          size="compact-sm"
-          leftSection={<IconPlus size={14} />}
-          onClick={() =>
-            append({
-              kind: 'expressionTemplate',
-              expression: '',
-              template: '',
-            })
-          }
-          style={{ alignSelf: 'flex-start' }}
-        >
-          Add filter
-        </Button>
+        <Group gap="xs">
+          <Button
+            variant="subtle"
+            size="compact-sm"
+            leftSection={<IconPlus size={14} />}
+            onClick={() =>
+              append({
+                kind: 'expressionTemplate',
+                expression: '',
+                template: '',
+              })
+            }
+          >
+            Add filter
+          </Button>
+          {allowVariables && (
+            <Button
+              variant="subtle"
+              size="compact-sm"
+              leftSection={<IconPlus size={14} />}
+              onClick={() =>
+                append({
+                  kind: 'variableTemplate',
+                  variableName: '',
+                  template: '',
+                })
+              }
+              data-testid="onclick-add-variable-button"
+            >
+              Add variable
+            </Button>
+          )}
+        </Group>
       </Stack>
     </Box>
   );

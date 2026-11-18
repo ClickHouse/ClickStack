@@ -1,8 +1,15 @@
+import {
+  parseDashboardFilterValues,
+  serializeDashboardFilterValues,
+  VariableEntryValue,
+} from '@/dashboardFilterValues';
 import { FilterState, filtersToQuery } from '@/filters';
 import type {
+  DashboardFilterValue,
   Filter,
   OnClick,
   OnClickDashboard,
+  OnClickDashboardFilterTemplate,
   OnClickExternal,
   OnClickFilterTemplate,
   OnClickSearch,
@@ -20,15 +27,67 @@ export type LinkBuildResult =
   | { ok: true; url: string }
   | { ok: false; error: string };
 
+/** Page state that link templates can read through the globals below. */
+export type LinkContext = {
+  dateRange: [Date, Date];
+  /** IANA time zone, exposed as `__timezone`. */
+  timeZone?: string;
+  /** The current dashboard's `filters=` entries. */
+  currentFilters?: DashboardFilterValue[];
+};
+
+export type LinkTemplateGlobals = {
+  /** Plain values, URL-encoded when interpolated into a URL. */
+  values: { __from: number; __to: number; __timezone: string };
+  /** Ready-made query string fragments, never re-encoded. */
+  fragments: { __url_time_range: string; __all_variables: string };
+};
+
+/** Encoded the way the dashboard page reads its own `filters=` param. */
+const filtersParam = (filters: DashboardFilterValue[]) =>
+  encodeURIComponent(JSON.stringify(filters));
+
+/**
+ * Grafana-style global variables, available to every link template next to
+ * the row's columns: `__from` / `__to` (epoch ms), `__timezone`,
+ * `__url_time_range` (`from=…&to=…`) and `__all_variables` (`filters=…`
+ * carrying the current dashboard's filter selections, or empty).
+ */
+export function getLinkTemplateGlobals({
+  dateRange,
+  timeZone,
+  currentFilters,
+}: LinkContext): LinkTemplateGlobals {
+  const from = dateRange[0].getTime();
+  const to = dateRange[1].getTime();
+  return {
+    values: { __from: from, __to: to, __timezone: timeZone ?? '' },
+    fragments: {
+      __url_time_range: `from=${from}&to=${to}`,
+      __all_variables: currentFilters?.length
+        ? new URLSearchParams({
+            filters: filtersParam(currentFilters),
+          }).toString()
+        : '',
+    },
+  };
+}
+
+type TemplateInput = {
+  row: Record<string, unknown>;
+  globals?: LinkTemplateGlobals;
+};
+
 function renderOrError(
   template: string,
-  rowData: Record<string, unknown>,
+  { row, globals }: TemplateInput,
   options?: { encodeValues?: boolean },
 ): { ok: true; value: string } | { ok: false; error: string } {
   try {
+    const values = { ...row, ...globals?.values };
     const value = options?.encodeValues
-      ? renderUrlTemplate(template, rowData)
-      : renderLinkTemplate(template, rowData);
+      ? renderUrlTemplate(template, values, globals?.fragments)
+      : renderLinkTemplate(template, { ...values, ...globals?.fragments });
     return { ok: true, value };
   } catch (err) {
     const message =
@@ -53,13 +112,13 @@ function renderOrError(
  */
 function renderFilterTemplates(
   templates: OnClickFilterTemplate[] | undefined,
-  row: Record<string, unknown>,
+  input: TemplateInput,
 ): { ok: true; filters: Filter[] } | { ok: false; error: string } {
   if (!templates || templates.length === 0) return { ok: true, filters: [] };
 
   const state: FilterState = {};
   for (const template of templates) {
-    const rendered = renderOrError(template.template, row);
+    const rendered = renderOrError(template.template, input);
     if (!rendered.ok) return rendered;
 
     if (state[template.expression]) {
@@ -76,6 +135,56 @@ function renderFilterTemplates(
 }
 
 /**
+ * Render a dashboard link's filter templates into `filters=` entries, on top
+ * of `baseFilters` (the current dashboard's selections, when carried over).
+ * A key the templates set replaces its base selection; templates sharing a
+ * key merge into one selection.
+ */
+function renderDashboardFilterTemplates(
+  templates: OnClickDashboardFilterTemplate[] | undefined,
+  input: TemplateInput,
+  baseFilters: DashboardFilterValue[] | undefined,
+):
+  | { ok: true; filters: DashboardFilterValue[] }
+  | { ok: false; error: string } {
+  const parsed = parseDashboardFilterValues(baseFilters);
+  const byExpression: FilterState = { ...parsed.byExpression };
+  const byVariable = new Map<string, VariableEntryValue>(parsed.byVariable);
+  const rendered = {
+    expressions: new Map<string, Set<string>>(),
+    variables: new Map<string, Set<string>>(),
+  };
+
+  for (const template of templates ?? []) {
+    const result = renderOrError(template.template, input);
+    if (!result.ok) return result;
+
+    const [values, key] =
+      template.kind === 'variableTemplate'
+        ? [rendered.variables, template.variableName]
+        : [rendered.expressions, template.expression];
+    const set = values.get(key) ?? new Set<string>();
+    values.set(key, set.add(result.value));
+  }
+
+  for (const [expression, included] of rendered.expressions) {
+    byExpression[expression] = { included, excluded: new Set() };
+  }
+  for (const [name, values] of rendered.variables) {
+    byVariable.set(name, { type: 'variable', values: Array.from(values) });
+  }
+
+  return {
+    ok: true,
+    filters: serializeDashboardFilterValues({
+      byExpression,
+      byVariable,
+      passthrough: parsed.passthrough,
+    }),
+  };
+}
+
+/**
  * Render an OnClickSearch to a URL.
  */
 export function renderOnClickSearch({
@@ -83,14 +192,16 @@ export function renderOnClickSearch({
   row,
   sourceIds,
   sourceIdsByName,
-  dateRange,
+  ...linkContext
 }: {
   onClick: OnClickSearch;
   row: Record<string, unknown>;
   sourceIds: Set<string>;
   sourceIdsByName: Map<string, string[]>;
-  dateRange: [Date, Date];
-}): LinkBuildResult {
+} & LinkContext): LinkBuildResult {
+  const { dateRange } = linkContext;
+  const input = { row, globals: getLinkTemplateGlobals(linkContext) };
+
   let sourceId;
   if (onClick.target.mode === 'id') {
     if (!sourceIds.has(onClick.target.id)) {
@@ -102,7 +213,10 @@ export function renderOnClickSearch({
     sourceId = onClick.target.id;
   } else {
     // Render the source name template
-    const sourceNameRenderResult = renderOrError(onClick.target.template, row);
+    const sourceNameRenderResult = renderOrError(
+      onClick.target.template,
+      input,
+    );
     if (!sourceNameRenderResult.ok) return sourceNameRenderResult;
 
     // Find the matching source's ID
@@ -132,7 +246,7 @@ export function renderOnClickSearch({
 
   let where = '';
   if (onClick.whereTemplate) {
-    const whereResult = renderOrError(onClick.whereTemplate, row);
+    const whereResult = renderOrError(onClick.whereTemplate, input);
     if (!whereResult.ok) return whereResult;
     where = whereResult.value;
   }
@@ -146,7 +260,7 @@ export function renderOnClickSearch({
     to: String(dateRange[1].getTime()),
   });
 
-  const filterRenderResult = renderFilterTemplates(onClick.filters, row);
+  const filterRenderResult = renderFilterTemplates(onClick.filters, input);
   if (!filterRenderResult.ok) return filterRenderResult;
 
   if (filterRenderResult.filters.length > 0) {
@@ -167,14 +281,16 @@ export function renderOnClickDashboard({
   row,
   dashboardIds,
   dashboardIdsByName,
-  dateRange,
+  ...linkContext
 }: {
   onClick: OnClickDashboard;
   row: Record<string, unknown>;
   dashboardIds: Set<string>;
   dashboardIdsByName: Map<string, string[]>;
-  dateRange: [Date, Date];
-}): LinkBuildResult {
+} & LinkContext): LinkBuildResult {
+  const { dateRange, currentFilters } = linkContext;
+  const input = { row, globals: getLinkTemplateGlobals(linkContext) };
+
   let dashboardId;
   if (onClick.target.mode === 'id') {
     if (!dashboardIds.has(onClick.target.id)) {
@@ -188,7 +304,7 @@ export function renderOnClickDashboard({
     // Render the dashboard name template
     const dashboardNameRenderResult = renderOrError(
       onClick.target.template,
-      row,
+      input,
     );
     if (!dashboardNameRenderResult.ok) return dashboardNameRenderResult;
 
@@ -220,7 +336,7 @@ export function renderOnClickDashboard({
   // Render the dashboard's global WHERE condition, if any
   let where = '';
   if (onClick.whereTemplate) {
-    const whereResult = renderOrError(onClick.whereTemplate, row);
+    const whereResult = renderOrError(onClick.whereTemplate, input);
     if (!whereResult.ok) return whereResult;
     where = whereResult.value;
   }
@@ -232,14 +348,17 @@ export function renderOnClickDashboard({
     to: String(dateRange[1].getTime()),
   });
 
-  const filterRenderResult = renderFilterTemplates(onClick.filters, row);
+  // shortcut: carried-over selections the destination doesn't declare trigger
+  // its "ignored filters" banner; drop them here if that gets noisy.
+  const filterRenderResult = renderDashboardFilterTemplates(
+    onClick.filters,
+    input,
+    onClick.includeCurrentFilters ? currentFilters : undefined,
+  );
   if (!filterRenderResult.ok) return filterRenderResult;
 
   if (filterRenderResult.filters.length > 0) {
-    params.set(
-      'filters',
-      encodeURIComponent(JSON.stringify(filterRenderResult.filters)),
-    );
+    params.set('filters', filtersParam(filterRenderResult.filters));
   }
 
   return { ok: true, url: `/dashboards/${dashboardId}?${params.toString()}` };
@@ -269,13 +388,22 @@ function isAllowedExternalUrl(url: string): boolean {
 export function renderOnClickExternal({
   onClick,
   row,
+  ...linkContext
 }: {
   onClick: OnClickExternal;
   row: Record<string, unknown>;
-}): LinkBuildResult {
-  const rendered = renderOrError(onClick.urlTemplate, row, {
-    encodeValues: true,
-  });
+} & Partial<LinkContext>): LinkBuildResult {
+  const globals = linkContext.dateRange
+    ? getLinkTemplateGlobals({
+        ...linkContext,
+        dateRange: linkContext.dateRange,
+      })
+    : undefined;
+  const rendered = renderOrError(
+    onClick.urlTemplate,
+    { row, globals },
+    { encodeValues: true },
+  );
   if (!rendered.ok) return rendered;
 
   const url = rendered.value.trim();
@@ -354,9 +482,7 @@ export function validateOnClickTemplate(onClick: OnClick) {
 
   if (onClick.filters) {
     for (const filter of onClick.filters) {
-      if (filter.kind === 'expressionTemplate') {
-        validateTemplate(filter.template);
-      }
+      validateTemplate(filter.template);
     }
   }
 

@@ -1387,6 +1387,7 @@ const Tile = ({
                     config={effectiveMarkdownConfig}
                     variables={tileVariables}
                     availableVariableNames={variableNames}
+                    dateRange={effectiveDateRange}
                   />
                 )}
               {effectiveQueriedConfig?.displayType === DisplayType.Search &&

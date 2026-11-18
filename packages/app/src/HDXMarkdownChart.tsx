@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { getLinkTemplateGlobals } from '@hyperdx/common-utils/dist/core/linkUrlBuilder';
 import { ChartVariable } from '@hyperdx/common-utils/dist/types';
 import {
   substituteVariables,
@@ -11,6 +12,7 @@ import {
   hasVariableIssues,
   VariableIssueIndicator,
 } from './components/SQLEditor/variableValidation';
+import { usePageLinkContext } from './hooks/useOnClickLinkBuilder';
 
 const HDXMarkdownChart = memo(
   ({
@@ -19,6 +21,7 @@ const HDXMarkdownChart = memo(
     toolbarItems,
     variables: referencedVariables,
     availableVariableNames,
+    dateRange,
   }: {
     title?: React.ReactNode;
     toolbarItems?: React.ReactNode[];
@@ -29,19 +32,41 @@ const HDXMarkdownChart = memo(
     variables?: ChartVariable[];
     /** Every variable name in scope, for flagging unknown references. */
     availableVariableNames?: string[];
+    /** Enables the `$__from`, `$__url_time_range`, ... link globals. */
+    dateRange?: [Date, Date];
   }) => {
+    const pageLinkContext = usePageLinkContext();
+
+    const textMacros = useMemo(() => {
+      if (!dateRange) return undefined;
+      const { values, fragments } = getLinkTemplateGlobals({
+        ...pageLinkContext,
+        dateRange,
+      });
+      // `$__from` is scanned as macro `from`, so drop the `__` prefix.
+      return new Map(
+        Object.entries({ ...values, ...fragments }).map(([name, value]) => [
+          name.slice(2),
+          String(value),
+        ]),
+      );
+    }, [dateRange, pageLinkContext]);
+
     const content = useMemo(() => {
-      if (!markdown || referencedVariables == null) return markdown ?? '';
+      if (!markdown || (referencedVariables == null && !textMacros)) {
+        return markdown ?? '';
+      }
       try {
         return substituteVariables(markdown, {
-          variables: referencedVariables,
+          variables: referencedVariables ?? [],
           inputLanguage: 'markdown',
+          textMacros,
         });
       } catch {
         // An unknown `${name:format}` throws; show the markdown as written.
         return markdown;
       }
-    }, [markdown, referencedVariables]);
+    }, [markdown, referencedVariables, textMacros]);
 
     const toolbar = useMemo(() => {
       const names =

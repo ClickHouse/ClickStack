@@ -60,15 +60,17 @@ function stringifyAndEncode(value: unknown): unknown {
 
 /**
  * Render a template that produces a URL. Identical to {@link renderLinkTemplate}
- * except that interpolated context (column) values are URL-encoded.
+ * except that interpolated context (column) values are URL-encoded. `raw`
+ * values are already URL fragments and are interpolated as-is.
  */
 export function renderUrlTemplate(
   template: string,
   ctx: Record<string, unknown>,
+  raw: Record<string, unknown> = {},
 ): string {
   const encoded: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(ctx)) {
     encoded[key] = stringifyAndEncode(value);
   }
-  return renderLinkTemplate(template, encoded);
+  return renderLinkTemplate(template, { ...encoded, ...raw });
 }

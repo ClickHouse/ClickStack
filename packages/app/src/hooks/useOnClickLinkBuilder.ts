@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
+import { useQueryState } from 'nuqs';
 import {
   describeOnClick,
+  LinkContext,
   renderOnClickDashboard,
   renderOnClickExternal,
   renderOnClickSearch,
@@ -11,6 +13,26 @@ import { notifications } from '@mantine/notifications';
 import { useDashboards } from '@/dashboard';
 import { useSources } from '@/source';
 import { useTimeZoneLinkParam } from '@/timeZoneOverride';
+import { useDisplayTimeZone } from '@/useDisplayTimeZone';
+import { dashboardFilterValuesParser } from '@/utils/queryParsers';
+
+/**
+ * The page state, besides the time range, that link templates read as globals
+ * (`__timezone`, `__all_variables`). Current filters come from the
+ * dashboard's `filters=` URL param, so they're empty outside a dashboard.
+ */
+export function usePageLinkContext(): Omit<LinkContext, 'dateRange'> {
+  const [currentFilters] = useQueryState(
+    'filters',
+    dashboardFilterValuesParser,
+  );
+  const timeZone =
+    useDisplayTimeZone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return useMemo(
+    () => ({ timeZone, currentFilters: currentFilters ?? [] }),
+    [timeZone, currentFilters],
+  );
+}
 
 /**
  * The action a row click should take. `url` is set when the row's
@@ -56,6 +78,11 @@ export function useOnClickLinkBuilder({
   const { data: sources } = useSources();
   const { data: dashboards } = useDashboards();
   const addTimeZone = useTimeZoneLinkParam();
+  const pageLinkContext = usePageLinkContext();
+  const linkContext = useMemo(
+    () => ({ ...pageLinkContext, dateRange }),
+    [pageLinkContext, dateRange],
+  );
 
   const [sourceIdsByName, sourceIds, sourceNamesById] = useMemo(() => {
     const idsByName = new Map<string, string[]>();
@@ -112,7 +139,7 @@ export function useOnClickLinkBuilder({
               row,
               sourceIds,
               sourceIdsByName,
-              dateRange,
+              ...linkContext,
             })
           : onClick.type === 'dashboard'
             ? renderOnClickDashboard({
@@ -120,9 +147,9 @@ export function useOnClickLinkBuilder({
                 row,
                 dashboardIds,
                 dashboardIdsByName,
-                dateRange,
+                ...linkContext,
               })
-            : renderOnClickExternal({ onClick, row });
+            : renderOnClickExternal({ onClick, row, ...linkContext });
 
       if (renderResult.ok) {
         return {
@@ -162,7 +189,7 @@ export function useOnClickLinkBuilder({
     sourceIds,
     sourceIdsByName,
     sourceNamesById,
-    dateRange,
+    linkContext,
     dashboardIds,
     dashboardIdsByName,
     dashboardNamesById,
