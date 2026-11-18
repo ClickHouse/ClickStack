@@ -583,9 +583,9 @@ describe('MCP Query Tools', () => {
       });
 
       expect(result.isError).toBe(true);
-      expect(getFirstText(result)).toContain(
-        'HINT: hasToken() takes a single token',
-      );
+      const text = getFirstText(result);
+      expect(text).toContain('HINT: hasToken() takes a single token');
+      expect(text).toContain('whereLanguage:"lucene"');
     });
 
     describe('denoise with seeded data', () => {

@@ -359,7 +359,9 @@ describe('errorHint', () => {
       undefined,
       { rawSql: true },
     );
-    expect(hint).toContain('hasAllTokens');
+    expect(hint).toContain(
+      "hasAllTokens(col, 'payment_failed') AND position(col, 'payment_failed') > 0",
+    );
     expect(hint).not.toContain('whereLanguage');
   });
 
