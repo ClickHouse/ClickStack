@@ -2448,6 +2448,11 @@ export const SqlQueryDashboardFilterSchema = dashboardFilterBaseSchema.extend({
   type: z.literal(DashboardFilterType.enum.SQL_QUERY),
   /** ID of the ClickHouse connection the query runs on. */
   connection: z.string().min(1),
+  /**
+   * ID of the source `$__sourceTable` and `$__filters` resolve against, on the
+   * same connection. Optional, as for raw SQL tiles.
+   */
+  source: z.string().min(1).optional(),
   sqlTemplate: z.string().min(1),
   // Variable-only: there is no column to broadcast
   isBroadcastEnabled: z.literal(false),

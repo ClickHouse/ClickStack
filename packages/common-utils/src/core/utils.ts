@@ -952,6 +952,11 @@ export function convertToDashboardTemplate(
     if (isStaticListFilter(filter) || isConnectionFilter(filter)) return filter;
     if (isSqlQueryFilter(filter)) {
       filter.connection = getConnectionName(filter.connection);
+      // The source is optional, so drop it rather than export an empty name
+      // the template schema would reject.
+      if (filter.source) {
+        filter.source = getSourceName(filter.source) || undefined;
+      }
       return filter;
     }
     if (isDataSourceFilter(filter)) {

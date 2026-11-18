@@ -71,6 +71,7 @@ import {
   getChangedFilterSourceRefs,
   getFilterSourceRefError,
   getInvalidSourceIds,
+  getSqlQueryFilterSourceVariableError,
 } from '@/utils/filterSources';
 import logger from '@/utils/logger';
 import {
@@ -1325,8 +1326,8 @@ function getMissingSources(
   }
 
   for (const filter of filters ?? []) {
-    // PROMETHEUS_LABEL and ADHOC sources are checked with the stored filter's
-    // references skipped; see `validateDashboardTiles`.
+    // PROMETHEUS_LABEL, ADHOC and SQL_QUERY sources are checked with the stored
+    // filter's references skipped; see `validateDashboardTiles`.
     if (isQueryExpressionFilter(filter)) sourceIds.add(filter.sourceId);
   }
 
@@ -1907,17 +1908,21 @@ export async function validateDashboardTiles(
     return `PromQL tiles require a PromQL source. The following source IDs are not PromQL sources: ${nonPromqlTileSourceIds.join(', ')}`;
   }
 
-  // PROMETHEUS_LABEL and ADHOC filters need live sources of the right kind. As
-  // in the internal API, references the stored filter already made are not
-  // re-checked, so a since-deleted source doesn't block unrelated saves.
+  // PROMETHEUS_LABEL, ADHOC and SQL_QUERY filters need live sources of the
+  // right kind. As in the internal API, references the stored filter already
+  // made are not re-checked, so a since-deleted source doesn't block unrelated
+  // saves.
+  // Create bodies carry no filter IDs; an empty one matches no stored filter.
+  const internalFilters = (filters ?? []).map(filter =>
+    translateExternalFilterToFilter({ id: '', ...filter }),
+  );
+  const sqlQueryFilterVariableError =
+    getSqlQueryFilterSourceVariableError(internalFilters);
+  if (sqlQueryFilterVariableError != null) return sqlQueryFilterVariableError;
   const filterSourceError = getFilterSourceRefError(
-    getChangedFilterSourceRefs(
-      // Create bodies carry no filter IDs; an empty one matches no stored filter.
-      (filters ?? []).map(filter =>
-        translateExternalFilterToFilter({ id: '', ...filter }),
-      ),
-      existingFilters,
-    ).filter(ref => parseVariableReference(ref.id) == null),
+    getChangedFilterSourceRefs(internalFilters, existingFilters).filter(
+      ref => parseVariableReference(ref.id) == null,
+    ),
     sources,
   );
   if (filterSourceError != null) return filterSourceError;

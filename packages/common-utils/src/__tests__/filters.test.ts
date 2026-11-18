@@ -745,11 +745,15 @@ describe('filters', () => {
     });
 
     describe('SQL query filters', () => {
-      const sqlFilter = (sqlTemplate: string): SqlQueryDashboardFilter => ({
+      const sqlFilter = (
+        sqlTemplate: string,
+        source?: string,
+      ): SqlQueryDashboardFilter => ({
         id: 'sql',
         type: 'SQL_QUERY',
         name: 'Environment',
         connection: 'conn-1',
+        source,
         sqlTemplate,
         isBroadcastEnabled: false,
         isVariableEnabled: true,
@@ -790,11 +794,29 @@ describe('filters', () => {
               filterName: 'Environment',
               language: 'sql',
               where: sql,
-              detail: `SQL query filters have no source, so ${macro} cannot be used`,
+              detail: `SQL uses ${macro} but no source is selected`,
             },
           ]);
         },
       );
+
+      it.each([
+        'SELECT env FROM $__sourceTable WHERE $__filters',
+        'SELECT env FROM $__sourceTable(gauge) UNION ALL SELECT env FROM $__sourceTable(sum)',
+      ])('accepts source macros when the filter has a source: %s', sql => {
+        expect(
+          validateDashboardFilterQueries([sqlFilter(sql, 'source-1')]),
+        ).toEqual([]);
+      });
+
+      // No source has both a table and metric tables.
+      it('flags a mix of bare and metric $__sourceTable calls', () => {
+        const sql =
+          'SELECT env FROM $__sourceTable UNION ALL SELECT env FROM $__sourceTable(gauge)';
+        expect(
+          validateDashboardFilterQueries([sqlFilter(sql, 'source-1')]),
+        ).toEqual([expect.objectContaining({ filterId: 'sql', where: sql })]);
+      });
 
       it.each([
         ['an undeclared variable macro', 'WHERE $__filter(env, $missing)'],
@@ -1292,14 +1314,71 @@ describe('filters', () => {
       expect(sql).not.toContain('$');
     });
 
-    it('throws when the template uses a source macro', () => {
+    it('throws when the template uses a source macro without a source', () => {
       expect(() =>
         renderSqlQueryFilterValuesQuery({
           sqlTemplate: 'SELECT env FROM $__sourceTable',
           variables: [],
           dateRange,
         }),
-      ).toThrow(/have no source/);
+      ).toThrow(/no source is selected/);
+    });
+
+    it("expands source macros against the filter's source", () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: 'SELECT env FROM $__sourceTable WHERE $__filters',
+        variables: [],
+        sourceTables: { from: { databaseName: 'db', tableName: 'logs' } },
+        filtersSQL: "(ServiceName = 'api')",
+        dateRange,
+      });
+      expect(sql).toContain(
+        "SELECT env FROM `db`.`logs` WHERE (ServiceName = 'api')",
+      );
+    });
+
+    it('expands $__filters to 1=1 when no filters apply', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: 'SELECT env FROM $__sourceTable WHERE $__filters',
+        variables: [],
+        sourceTables: { from: { databaseName: 'db', tableName: 'logs' } },
+        dateRange,
+      });
+      expect(sql).toContain('WHERE (1=1');
+    });
+
+    it.each([
+      ['a bare call on a metric source', 'SELECT 1 FROM $__sourceTable', true],
+      [
+        'a metric call on a non-metric source',
+        'SELECT 1 FROM $__sourceTable(gauge)',
+        false,
+      ],
+      [
+        'a metric type the source has no table for',
+        'SELECT 1 FROM $__sourceTable(sum)',
+        true,
+      ],
+    ])('throws on %s', (_label, sqlTemplate, isMetricSource) => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate,
+          variables: [],
+          sourceTables: {
+            from: { databaseName: 'db', tableName: '' },
+            metricTables: isMetricSource
+              ? {
+                  gauge: 'metrics_gauge',
+                  histogram: '',
+                  sum: '',
+                  summary: '',
+                  'exponential histogram': '',
+                }
+              : undefined,
+          },
+          dateRange,
+        }),
+      ).toThrow(/\$__sourceTable/);
     });
 
     it.each([

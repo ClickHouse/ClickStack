@@ -15,14 +15,44 @@ import {
 // Sources/connections the import maps the template's source *names* onto. The
 // auto-mapping effect in `Mapping` matches by name (case-insensitive), so a
 // template tile with `source: 'Metrics'` resolves to `src-metrics`, etc. The
-// mock objects only need the fields the import path touches (id/name/kind).
+// mock objects only need the fields the import path touches
+// (id/name/kind/connection).
 const mockSources = [
-  { id: 'src-metrics', name: 'Metrics', kind: SourceKind.Metric },
-  { id: 'src-traces', name: 'Traces', kind: SourceKind.Trace },
-  { id: 'src-logs', name: 'Logs', kind: SourceKind.Log },
-  { id: 'src-promql', name: 'Prom', kind: SourceKind.Promql },
+  {
+    id: 'src-metrics',
+    name: 'Metrics',
+    kind: SourceKind.Metric,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-traces',
+    name: 'Traces',
+    kind: SourceKind.Trace,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-logs',
+    name: 'Logs',
+    kind: SourceKind.Log,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-promql',
+    name: 'Prom',
+    kind: SourceKind.Promql,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-other-logs',
+    name: 'Other logs',
+    kind: SourceKind.Log,
+    connection: 'conn-other',
+  },
 ];
-const mockConnections = [{ id: 'conn-default', name: 'Default' }];
+const mockConnections = [
+  { id: 'conn-default', name: 'Default' },
+  { id: 'conn-other', name: 'Other' },
+];
 const mockMutateAsync = jest.fn().mockResolvedValue({ id: 'dash-new' });
 
 jest.mock('next/router', () => ({
@@ -269,7 +299,7 @@ const unresolvedConnectionTemplate = DashboardTemplateSchema.parse({
   ],
 });
 
-const sqlQueryFilterTemplate = (connection: string) =>
+const sqlQueryFilterTemplate = (connection: string, source?: string) =>
   DashboardTemplateSchema.parse({
     version: '0.1.0',
     name: 'SQL Query Filter',
@@ -280,6 +310,7 @@ const sqlQueryFilterTemplate = (connection: string) =>
         type: 'SQL_QUERY',
         name: 'Environment',
         connection,
+        source,
         sqlTemplate: 'SELECT DISTINCT env FROM envs',
         isBroadcastEnabled: false,
         isVariableEnabled: true,
@@ -429,6 +460,102 @@ describe('Dashboard import - SQL query filter connection', () => {
       type: 'SQL_QUERY',
       connection: 'conn-default',
     });
+    expect(payload.filters[0].source).toBeUndefined();
+  });
+
+  it('auto-maps an optional source by name and imports it as an id', async () => {
+    renderWithMantine(
+      <Mapping input={sqlQueryFilterTemplate('default', 'Logs')} />,
+    );
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    expect(screen.getByDisplayValue('Logs')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(DashboardWithoutIdSchema.safeParse(payload).success).toBe(true);
+    expect(payload.filters[0]).toMatchObject({
+      type: 'SQL_QUERY',
+      connection: 'conn-default',
+      source: 'src-logs',
+    });
+  });
+
+  it('maps neither the connection variable nor a source paired with it', () => {
+    const result = buildMappingFormSchema(
+      sqlQueryFilterTemplate('$conn', 'Logs'),
+      mockSources,
+    ).safeParse({
+      dashboardName: 'SQL Query Filter',
+      tags: [],
+      tileSourceMappings: ['src-metrics'],
+      connectionMappings: [''],
+      filterSourceMappings: [''],
+      filterConnectionMappings: [''],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a PromQL source for a filter with a source', () => {
+    const result = buildMappingFormSchema(
+      sqlQueryFilterTemplate('default', 'Logs'),
+      mockSources,
+    ).safeParse({
+      dashboardName: 'SQL Query Filter',
+      tags: [],
+      tileSourceMappings: ['src-metrics'],
+      connectionMappings: [''],
+      filterSourceMappings: ['src-promql'],
+      filterConnectionMappings: ['conn-default'],
+    });
+
+    expect(
+      result.error?.issues.map(issue => [issue.path.join('.'), issue.message]),
+    ).toEqual([
+      ['filterSourceMappings.0', 'Select a non-PromQL source for this filter'],
+    ]);
+  });
+
+  it("rejects a source on another connection than the filter's", () => {
+    const result = buildMappingFormSchema(
+      sqlQueryFilterTemplate('default', 'Logs'),
+      mockSources,
+    ).safeParse({
+      dashboardName: 'SQL Query Filter',
+      tags: [],
+      tileSourceMappings: ['src-metrics'],
+      connectionMappings: [''],
+      filterSourceMappings: ['src-other-logs'],
+      filterConnectionMappings: ['conn-default'],
+    });
+
+    expect(
+      result.error?.issues.map(issue => [issue.path.join('.'), issue.message]),
+    ).toEqual([
+      ['filterSourceMappings.0', "Select a source on this filter's connection"],
+    ]);
+  });
+
+  it("only lists sources on the filter's mapped connection", async () => {
+    renderWithMantine(
+      <Mapping input={sqlQueryFilterTemplate('default', 'Logs')} />,
+    );
+
+    await screen.findByRole('button', { name: /finish import/i });
+    fireEvent.click(screen.getByDisplayValue('Logs'));
+
+    expect(
+      await screen.findByRole('option', { name: 'Logs' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: 'Other logs' }),
+    ).not.toBeInTheDocument();
   });
 
   it('blocks the import and flags the filter row when its connection is unmapped', async () => {

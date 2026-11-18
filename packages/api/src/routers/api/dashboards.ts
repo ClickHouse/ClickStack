@@ -40,6 +40,7 @@ import type { ObjectId } from '@/models';
 import {
   getChangedFilterSourceRefs,
   getFilterSourceRefError,
+  getSqlQueryFilterSourceVariableError,
 } from '@/utils/filterSources';
 import { objectIdSchema } from '@/utils/zod';
 
@@ -67,9 +68,10 @@ const addFilterIssues = (
 };
 
 /**
- * Rejects PROMETHEUS_LABEL and ADHOC filters that reference a source that is
- * missing or of the wrong kind. Resolving these filters needs a live source of
- * the right kind, unlike other filter types. References the stored filter with
+ * Rejects PROMETHEUS_LABEL, ADHOC and SQL_QUERY filters that reference a source
+ * that is missing or of the wrong kind, and SQL_QUERY filters whose source is
+ * on another connection or that pair a source with a variable. Resolving these filters needs a live source of the
+ * right kind, unlike other filter types. References the stored filter with
  * the same ID already made are skipped, so a since-deleted source doesn't block
  * unrelated saves. Returns an error message, or null when there is nothing to
  * reject.
@@ -79,6 +81,8 @@ async function validateFilterSources(
   filters: DashboardFilter[] = [],
   existingFilters: DashboardFilter[] = [],
 ): Promise<string | null> {
+  const variableError = getSqlQueryFilterSourceVariableError(filters);
+  if (variableError != null) return variableError;
   const refs = getChangedFilterSourceRefs(filters, existingFilters).filter(
     // Variable references are checked by validateDashboardVariableReferences
     ref => parseVariableReference(ref.id) == null,

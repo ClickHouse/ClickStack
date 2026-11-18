@@ -3,6 +3,7 @@ import { DashboardFilter, SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   getChangedFilterSourceRefs,
   getFilterSourceRefError,
+  getSqlQueryFilterSourceVariableError,
 } from '@/utils/filterSources';
 
 const adhoc = (
@@ -28,7 +29,27 @@ const label: DashboardFilter = {
   isVariableEnabled: true,
 };
 
+const sqlQuery = (
+  overrides: Partial<Extract<DashboardFilter, { type: 'SQL_QUERY' }>> = {},
+): DashboardFilter => ({
+  id: 's1',
+  type: 'SQL_QUERY',
+  name: 'Hosts',
+  connection: 'conn1',
+  source: 'logs',
+  sqlTemplate: 'SELECT 1',
+  isBroadcastEnabled: false,
+  isVariableEnabled: true,
+  ...overrides,
+});
+
 const sql = [SourceKind.Log, SourceKind.Trace, SourceKind.Session];
+const sqlQueryKinds = [
+  SourceKind.Log,
+  SourceKind.Trace,
+  SourceKind.Session,
+  SourceKind.Metric,
+];
 
 describe('getChangedFilterSourceRefs', () => {
   it('returns every reference without stored filters', () => {
@@ -59,6 +80,21 @@ describe('getChangedFilterSourceRefs', () => {
     ).toEqual([{ id: 'logs', kinds: [SourceKind.Promql] }]);
   });
 
+  it("returns a SQL query filter's source with its connection", () => {
+    expect(getChangedFilterSourceRefs([sqlQuery()])).toEqual([
+      { id: 'logs', kinds: sqlQueryKinds, connection: 'conn1' },
+    ]);
+  });
+
+  it('re-checks a SQL query source whose connection changed', () => {
+    expect(
+      getChangedFilterSourceRefs(
+        [sqlQuery({ connection: 'conn2' })],
+        [sqlQuery()],
+      ),
+    ).toEqual([{ id: 'logs', kinds: sqlQueryKinds, connection: 'conn2' }]);
+  });
+
   it('checks a filter without an ID, or with a new one', () => {
     const { id: _id, ...withoutId } = adhoc();
     expect(
@@ -75,8 +111,8 @@ describe('getChangedFilterSourceRefs', () => {
 
 describe('getFilterSourceRefError', () => {
   const sources = [
-    { _id: 'logs', kind: SourceKind.Log },
-    { _id: 'prom', kind: SourceKind.Promql },
+    { _id: 'logs', kind: SourceKind.Log, connection: 'conn1' },
+    { _id: 'prom', kind: SourceKind.Promql, connection: 'conn1' },
   ];
 
   it('accepts references to existing sources of the right kind', () => {
@@ -103,6 +139,42 @@ describe('getFilterSourceRefError', () => {
       ),
     ).toBe(
       'The following filter source IDs do not exist or are not a kind of source the filter supports: prom, gone',
+    );
+  });
+
+  it('names sources not on the connection the filter requires', () => {
+    expect(
+      getFilterSourceRefError(
+        [
+          { id: 'logs', kinds: sql, connection: 'conn1' },
+          { id: 'logs', kinds: sql, connection: 'conn2' },
+        ],
+        sources,
+      ),
+    ).toBe(
+      "The following filter source IDs are not on the filter's connection: logs",
+    );
+  });
+});
+
+describe('getSqlQueryFilterSourceVariableError', () => {
+  it('accepts a source ID on a connection ID, or no source', () => {
+    expect(
+      getSqlQueryFilterSourceVariableError([
+        sqlQuery(),
+        sqlQuery({ connection: '$conn', source: undefined }),
+      ]),
+    ).toBeNull();
+  });
+
+  it('names filters with a source variable or a connection variable', () => {
+    expect(
+      getSqlQueryFilterSourceVariableError([
+        sqlQuery({ name: 'A', source: '$logs' }),
+        sqlQuery({ name: 'B', connection: '$conn' }),
+      ]),
+    ).toBe(
+      'SQL_QUERY filters with a source need a source ID and a connection ID, not variables. The following filters use a variable: A, B',
     );
   });
 });

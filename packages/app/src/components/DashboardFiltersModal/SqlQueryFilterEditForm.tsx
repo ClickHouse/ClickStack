@@ -1,6 +1,11 @@
-import { useMemo, useState } from 'react';
-import { useFormState, useWatch } from 'react-hook-form';
-import { validateSqlQueryFilterTemplate } from '@hyperdx/common-utils/dist/filters';
+import { useEffect, useMemo, useState } from 'react';
+import { UseFormSetValue, useFormState, useWatch } from 'react-hook-form';
+import {
+  getSqlQueryFilterSourceTables,
+  SQL_QUERY_FILTER_SOURCE_KINDS,
+  SqlQueryFilterSourceTables,
+  validateSqlQueryFilterTemplate,
+} from '@hyperdx/common-utils/dist/filters';
 import {
   INTERVAL_MACROS,
   MACRO_SUGGESTIONS,
@@ -8,6 +13,7 @@ import {
 } from '@hyperdx/common-utils/dist/macros';
 import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
+  BroadcastFilter,
   DashboardFilter,
   SqlQueryDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
@@ -17,6 +23,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { ConnectionSelectControlled } from '@/components/ConnectionSelect';
 import EmptyState from '@/components/EmptyState';
+import { SourceSelectControlled } from '@/components/SourceSelect';
 import { useResolvedReference } from '@/components/sourceSelectUtils';
 import { SQLEditorControlled } from '@/components/SQLEditor/SQLEditor';
 import {
@@ -29,11 +36,13 @@ import {
   SQL_QUERY_FILTER_VALUES_QUERY_KEY,
   useSqlQueryFilterValues,
 } from '@/hooks/useSqlQueryFilterValues';
-import { truncateText } from '@/utils';
+import { useSources } from '@/source';
+import { truncateText, usePrevious } from '@/utils';
+import { resolveConnectionSourceSync } from '@/utils/connectionSourceSync';
 
 import { TOOLTIP_PORTAL_TARGET } from './constants';
 import { CustomInputWrapper } from './CustomInputWrapper';
-import { FilterFormControl } from './filterFormState';
+import { FilterFormControl, FilterFormValues } from './filterFormState';
 import { VariableNameInput } from './VariableNameInput';
 
 /** Values the preview lists before summarizing the rest as a count. */
@@ -41,10 +50,10 @@ const PREVIEW_VALUES_SHOWN = 20;
 /** Characters of each value the preview shows before truncating it. */
 const PREVIEW_VALUE_MAX_LENGTH = 20;
 
-/**
- * Macros a SQL query filter can't expand: it has no source, and no time buckets.
- */
-const UNSUPPORTED_MACROS = new Set<string>([
+/** Macros a SQL query filter can't expand: it has no time buckets. */
+const UNSUPPORTED_MACROS = new Set<string>(INTERVAL_MACROS);
+/** Without a source, the source macros can't expand either. */
+const UNSUPPORTED_MACROS_WITHOUT_SOURCE = new Set<string>([
   ...SOURCE_DEPENDENT_MACROS,
   ...INTERVAL_MACROS,
 ]);
@@ -56,38 +65,94 @@ ORDER BY env`;
 
 interface SqlQueryFilterEditFormProps {
   control: FilterFormControl;
+  setValue: UseFormSetValue<FilterFormValues>;
   /** Filters other than the one being edited, used to keep variable names unique. */
   otherFilters: DashboardFilter[];
   /** The range the preview runs over. Defaults to the last hour. */
   dateRange?: [Date, Date];
+  /** The dashboard filter selections that broadcast to the given source */
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
 }
 
 /** Form describing a dashboard filter whose values come from a SQL query */
 export const SqlQueryFilterEditForm = ({
   control,
+  setValue,
   otherFilters,
   dateRange,
+  getDashboardFilters,
 }: SqlQueryFilterEditFormProps) => {
   const { errors } = useFormState({ control });
   const variables = useChartVariables();
-  const completions = useMemo(
-    () => [
+  const { data: sources } = useSources();
+
+  const [connection, source, sqlTemplate] = useWatch({
+    control,
+    name: ['connection', 'source', 'sqlTemplate'],
+  });
+  const sourceObject = source ? sources?.find(s => s.id === source) : undefined;
+  // A source is only offered on a connection ID, since a connection variable
+  // can later select a connection the source isn't on.
+  const isConnectionVariable = parseVariableReference(connection) != null;
+
+  const prevSource = usePrevious(source);
+  const prevConnection = usePrevious(connection);
+  useEffect(() => {
+    if (isConnectionVariable) {
+      if (source) setValue('source', '');
+      return;
+    }
+    // The source field is shared with the other filter types, so switching
+    // type can carry over one this filter can't use.
+    if (
+      source &&
+      sources &&
+      (!sourceObject ||
+        !SQL_QUERY_FILTER_SOURCE_KINDS.includes(sourceObject.kind))
+    ) {
+      setValue('source', '');
+      return;
+    }
+    const update = resolveConnectionSourceSync({
+      source,
+      connection,
+      prevSource,
+      prevConnection,
+      sources,
+    });
+    if (update?.field === 'connection') {
+      setValue('connection', update.value);
+    } else if (update?.field === 'source') {
+      setValue('source', update.value);
+    }
+  }, [
+    connection,
+    isConnectionVariable,
+    prevConnection,
+    prevSource,
+    setValue,
+    source,
+    sourceObject,
+    sources,
+  ]);
+
+  const completions = useMemo(() => {
+    const unsupported = source
+      ? UNSUPPORTED_MACROS
+      : UNSUPPORTED_MACROS_WITHOUT_SOURCE;
+    return [
       ...MACRO_SUGGESTIONS.filter(
         // `sourceTable(gauge)` etc. are per-metric variants of `sourceTable`.
-        macro => !UNSUPPORTED_MACROS.has(macro.name.split('(')[0]),
+        macro => !unsupported.has(macro.name.split('(')[0]),
       ).map(toMacroCompletion),
       ...buildSqlVariableCompletions(variables),
-    ],
-    [variables],
-  );
+    ];
+  }, [variables, source]);
 
-  const [connection, sqlTemplate] = useWatch({
-    control,
-    name: ['connection', 'sqlTemplate'],
-  });
   // What the preview last ran, so editing doesn't re-query on every keystroke.
   const [previewed, setPreviewed] = useState<{
     connection: string;
+    source?: string;
     sqlTemplate: string;
   }>();
   // A connection variable previews as the connection it currently selects.
@@ -98,56 +163,100 @@ export const SqlQueryFilterEditForm = ({
   const queryClient = useQueryClient();
   const runPreview = () => {
     if (!canPreview) return;
+    const previewSource = source || undefined;
     // The same query keeps its cache key, so re-run it explicitly.
     if (
       previewed?.connection === resolvedConnection &&
+      previewed.source === previewSource &&
       previewed.sqlTemplate === sqlTemplate
     ) {
       void queryClient.invalidateQueries({
         queryKey: [SQL_QUERY_FILTER_VALUES_QUERY_KEY, resolvedConnection],
       });
     }
-    setPreviewed({ connection: resolvedConnection, sqlTemplate });
+    setPreviewed({
+      connection: resolvedConnection,
+      source: previewSource,
+      sqlTemplate,
+    });
+  };
+
+  let sourceTables: SqlQueryFilterSourceTables | 'unknown' | undefined;
+  if (sourceObject) {
+    sourceTables = getSqlQueryFilterSourceTables(sourceObject);
+  } else if (source) {
+    // Set, but the sources list hasn't loaded yet.
+    sourceTables = 'unknown';
+  }
+
+  const validateSqlTemplate = (value: unknown) => {
+    if (typeof value !== 'string' || !value.trim()) {
+      return 'This field is required';
+    }
+    // `variables` leaves out this filter's own, so a reference to it is
+    // rejected as unknown.
+    const error = validateSqlQueryFilterTemplate(value, {
+      variables,
+      sourceTables,
+    });
+    return error ?? true;
   };
 
   return (
     <>
-      <CustomInputWrapper
-        label="Connection"
-        tooltipText="The ClickHouse connection the query runs on, which can be a connection variable"
-        error={errors.connection}
-      >
-        <div data-testid="filter-connection-select">
-          <ConnectionSelectControlled
-            control={control}
-            name="connection"
-            rules={{ required: 'Select a connection' }}
-            allowConnectionVariables
-          />
-        </div>
-      </CustomInputWrapper>
+      <Group grow align="flex-start">
+        <CustomInputWrapper
+          label="Connection"
+          tooltipText="The ClickHouse connection the query runs on, which can be a connection variable"
+          error={errors.connection}
+        >
+          <div data-testid="filter-connection-select">
+            <ConnectionSelectControlled
+              control={control}
+              name="connection"
+              rules={{ required: 'Select a connection' }}
+              allowConnectionVariables
+            />
+          </div>
+        </CustomInputWrapper>
+
+        <CustomInputWrapper
+          label="Source"
+          tooltipText="Optional. Lets the query use $__sourceTable and $__filters, which applies the dashboard's filter selections for this source. Needs a connection, not a connection variable."
+        >
+          {/* The source select's wrapper is inline-flex; a grid cell
+              stretches it to the full width. */}
+          <div
+            data-testid="filter-sql-source-select"
+            style={{ display: 'grid' }}
+          >
+            <SourceSelectControlled
+              flex={1}
+              control={control}
+              name="source"
+              allowedSourceKinds={SQL_QUERY_FILTER_SOURCE_KINDS}
+              connectionId={connection}
+              clearable
+              disabled={isConnectionVariable}
+              placeholder={
+                isConnectionVariable ? 'Not with a connection variable' : 'None'
+              }
+              comboboxProps={{ withinPortal: true }}
+            />
+          </div>
+        </CustomInputWrapper>
+      </Group>
 
       <CustomInputWrapper
         label="SQL query"
-        tooltipText="The first column of the results fills the dropdown, in the order the query returns them. The query may use the time macros and reference the dashboard's other variables."
+        tooltipText="The first column of the results fills the dropdown, in the order the query returns them. The query may use the time macros and reference the dashboard's other variables. With a source, it may also use $__sourceTable and $__filters."
         error={errors.sqlTemplate}
       >
         <Stack gap="xs" data-testid="filter-sql-template-input">
           <SQLEditorControlled
             control={control}
             name="sqlTemplate"
-            rules={{
-              validate: (value: unknown) => {
-                if (typeof value !== 'string' || !value.trim()) {
-                  return 'This field is required';
-                }
-                // `variables` leaves out this filter's own, so a reference to
-                // it is rejected as unknown.
-                return (
-                  validateSqlQueryFilterTemplate(value, variables ?? []) ?? true
-                );
-              },
-            }}
+            rules={{ validate: validateSqlTemplate }}
             height="150px"
             enableLineWrapping
             placeholder={PLACEHOLDER_SQL}
@@ -177,6 +286,7 @@ export const SqlQueryFilterEditForm = ({
               {...previewed}
               dateRange={dateRange}
               variables={variables}
+              getDashboardFilters={getDashboardFilters}
             />
           )}
         </Stack>
@@ -189,14 +299,18 @@ export const SqlQueryFilterEditForm = ({
 
 const SqlQueryFilterPreview = ({
   connection,
+  source,
   sqlTemplate,
   dateRange,
   variables,
+  getDashboardFilters,
 }: {
   connection: string;
+  source?: string;
   sqlTemplate: string;
   dateRange?: [Date, Date];
   variables: ReturnType<typeof useChartVariables>;
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
 }) => {
   const lastHour = useMemo(
     (): [Date, Date] => [new Date(NOW - 60 * 60 * 1000), new Date(NOW)],
@@ -209,18 +323,20 @@ const SqlQueryFilterPreview = ({
         type: 'SQL_QUERY',
         name: 'Preview',
         connection,
+        source,
         sqlTemplate,
         isBroadcastEnabled: false,
         isVariableEnabled: true,
       },
     ],
-    [connection, sqlTemplate],
+    [connection, source, sqlTemplate],
   );
   const { data, filterErrorMessages, isLoading, isFetching, isError } =
     useSqlQueryFilterValues({
       filters,
       dateRange: dateRange ?? lastHour,
       variables,
+      getDashboardFilters,
     });
   const values = data.get('preview')?.values ?? [];
 
