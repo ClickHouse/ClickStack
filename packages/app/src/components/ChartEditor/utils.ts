@@ -23,6 +23,7 @@ import {
 } from '@hyperdx/common-utils/dist/guards';
 import { MACRO_SUGGESTIONS } from '@hyperdx/common-utils/dist/macros';
 import { QUERY_PARAMS_BY_DISPLAY_TYPE } from '@hyperdx/common-utils/dist/rawSqlParams';
+import { getConfigReferenceVariables } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   BuilderSavedChartConfig,
   ChartConfigWithDateRange,
@@ -204,6 +205,22 @@ export const isRawSqlDisplayType = (
   displayType === DisplayType.Pie ||
   displayType === DisplayType.Bar ||
   displayType === DisplayType.Number;
+
+/** The variables a chart form's source, or a raw SQL tile's connection, references. */
+export function getFormReferenceVariables(
+  form: Pick<
+    ChartEditorFormState,
+    'source' | 'connection' | 'configType' | 'displayType'
+  >,
+): string[] {
+  // Only raw SQL tiles store a connection of their own
+  const isRawSql =
+    form.configType === 'sql' && isRawSqlDisplayType(form.displayType);
+  return getConfigReferenceVariables({
+    source: form.source,
+    connection: isRawSql ? form.connection : undefined,
+  });
+}
 
 const isCustomOrderByDisplayType = (
   displayType: DisplayType | undefined,

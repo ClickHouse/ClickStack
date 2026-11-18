@@ -17,6 +17,10 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { convertToDashboardDocument } from '@hyperdx/common-utils/dist/core/utils';
 import {
+  collectRefinementIssues,
+  validateDashboardVariableReferences,
+} from '@hyperdx/common-utils/dist/dashboardValidation';
+import {
   type DashboardFilterQueryIssue,
   getAdhocFilterSourceKinds,
   isAdhocFilter,
@@ -131,6 +135,32 @@ function CollapsibleMessage({
   );
 }
 
+/**
+ * A `$name` that names no variable of the right type in the template. The API
+ * rejects these too, but only once the mappings are filled in, and local mode
+ * doesn't check at all.
+ */
+export function getTemplateVariableReferenceIssues(
+  template: DashboardTemplate,
+): string[] {
+  return collectRefinementIssues(ctx =>
+    validateDashboardVariableReferences(
+      template.tiles,
+      template.filters ?? [],
+      ctx,
+    ),
+  ).map(({ path, message }) => {
+    const [collection, index] = path;
+    const owner =
+      collection === 'tiles' && typeof index === 'number'
+        ? `Tile "${template.tiles[index]?.config.name ?? index}"`
+        : collection === 'filters' && typeof index === 'number'
+          ? `Filter "${template.filters?.[index]?.name ?? index}"`
+          : path.join('.');
+    return `${owner}: ${message}`;
+  });
+}
+
 function FileSelection({
   onComplete,
 }: {
@@ -196,6 +226,24 @@ function FileSelection({
             {result.error.issues.map(issue => (
               <Text key={`${issue.path.join('.')}:${issue.message}`} c="red">
                 {issue.message}
+              </Text>
+            ))}
+          </Stack>
+        ),
+      });
+      return;
+    }
+
+    const referenceIssues = getTemplateVariableReferenceIssues(result.data);
+    if (referenceIssues.length > 0) {
+      onComplete(null);
+      setError({
+        message: 'Failed to Import Dashboard',
+        details: (
+          <Stack gap={0}>
+            {referenceIssues.map(issue => (
+              <Text key={issue} c="red">
+                {issue}
               </Text>
             ))}
           </Stack>

@@ -6,7 +6,11 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 
-import { buildMappingFormSchema, Mapping } from '@/DBDashboardImportPage';
+import {
+  buildMappingFormSchema,
+  getTemplateVariableReferenceIssues,
+  Mapping,
+} from '@/DBDashboardImportPage';
 
 // Sources/connections the import maps the template's source *names* onto. The
 // auto-mapping effect in `Mapping` matches by name (case-insensitive), so a
@@ -777,5 +781,33 @@ describe('Dashboard import - data source variables', () => {
     expect(payload.tiles[0].config.source).toBe('$logs');
     expect(payload.filters[1].source).toBe('$logs');
     expect(payload.filters[2].sources).toEqual(['$logs', 'src-traces']);
+  });
+
+  it('accepts references to the variables the template declares', () => {
+    expect(getTemplateVariableReferenceIssues(sourceVariableTemplate)).toEqual(
+      [],
+    );
+  });
+
+  it('reports references to variables the template does not declare', () => {
+    const template = DashboardTemplateSchema.parse({
+      version: '0.1.0',
+      name: 'Undeclared',
+      tiles: [builderTile('tile-line', 'line', '$traces', 0)],
+      filters: [
+        {
+          id: 'svc',
+          type: 'QUERY_EXPRESSION',
+          name: 'Service',
+          expression: 'ServiceName',
+          source: '$traces',
+        },
+      ],
+    });
+
+    expect(getTemplateVariableReferenceIssues(template)).toEqual([
+      'Tile "tile-line": "$traces" does not name a data source variable on this dashboard',
+      'Filter "Service": "$traces" does not name a data source variable on this dashboard',
+    ]);
   });
 });
