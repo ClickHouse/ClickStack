@@ -529,9 +529,12 @@ export const rewriteSqlFilterWithKvItems = (
  * Whether a min/max should aggregate `valueExpression` as-is instead of casting
  * it to Float64. The cast turns a Date/DateTime into 0 (its string form doesn't
  * parse as a float), so skip it when the expression is a bare date/time column.
- * Only tables and number tiles, which can show a date value, skip it. Charts
- * plot values on a numeric axis and drop non-numeric columns, and in a
- * time-bucketed result a second date column would be mistaken for the bucket.
+ * Only tables and single-series number tiles, which can show a date value, skip
+ * it. Charts plot values on a numeric axis and drop non-numeric columns, and in
+ * a time-bucketed result a second date column would be mistaken for the bucket.
+ * Number tiles show the first numeric column, so with several series a date
+ * value would be skipped in favour of another series. Ratios and formulas do
+ * arithmetic on the value, which ClickHouse rejects for dates.
  */
 async function isMinMaxOnDateTimeColumn(
   aggFn: string,
@@ -541,11 +544,17 @@ async function isMinMaxOnDateTimeColumn(
 ): Promise<boolean> {
   const { databaseName, tableName } = chartConfig.from;
   const { displayType } = chartConfig;
+  const seriesCount = Array.isArray(chartConfig.select)
+    ? chartConfig.select.length
+    : 0;
   if (
     (aggFn !== 'min' && aggFn !== 'max') ||
     (displayType != null &&
       displayType !== DisplayType.Table &&
       displayType !== DisplayType.Number) ||
+    (displayType === DisplayType.Number && seriesCount > 1) ||
+    chartConfig.seriesReturnType === 'ratio' ||
+    (chartConfig.formulas?.length ?? 0) > 0 ||
     isUsingGranularity(chartConfig) ||
     hasSubqueryCte(chartConfig.with) ||
     !databaseName ||
@@ -560,8 +569,15 @@ async function isMinMaxOnDateTimeColumn(
       column: unquoteIdentifier(valueExpression.trim()),
       connectionId: chartConfig.connection,
     });
-    return classifyTimestampType(column?.type) != null;
-  } catch {
+    return (
+      column != null &&
+      classifyTimestampType(stripTypeWrappers(column.type)) != null
+    );
+  } catch (e) {
+    console.warn(
+      `Column ${valueExpression} lookup failed while choosing min/max cast`,
+      e,
+    );
     return false;
   }
 }

@@ -3981,6 +3981,129 @@ describe('renderChartConfig', () => {
       },
     );
 
+    it('keeps the column type for LowCardinality-wrapped date columns', async () => {
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockResolvedValue({ name: 'Day', type: 'LowCardinality(Date)' });
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [{ aggFn: 'max', valueExpression: 'Day', aggCondition: '' }],
+      });
+      expect(actual).toContain('max( Day )');
+    });
+
+    it('keeps the raw column in the null check with sampleWeightExpression and an aggCondition', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        sampleWeightExpression: 'SampleRate',
+        select: [
+          {
+            aggFn: 'min',
+            valueExpression: 'Timestamp',
+            aggCondition: "ServiceName = 'api'",
+            aggConditionLanguage: 'sql',
+          },
+        ],
+      });
+      expect(actual).toContain(
+        "minIf( Timestamp, ServiceName = 'api' AND Timestamp IS NOT NULL )",
+      );
+    });
+
+    it('still casts when the column lookup fails', async () => {
+      const getColumn = mockMetadata.getColumn;
+      mockMetadata.getColumn = jest.fn().mockImplementation(async args => {
+        // Only this select's lookup fails; the time filter's still resolves.
+        if (args.column === 'TimestampTime') {
+          throw new Error('DESCRIBE failed');
+        }
+        return getColumn(args);
+      });
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'max', valueExpression: 'TimestampTime', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(TimestampTime)) )',
+      );
+    });
+
+    it('still casts in a ratio, which divides the values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        seriesReturnType: 'ratio',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'count', valueExpression: '', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'divide(max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts when formulas do arithmetic on the values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        formulas: [{ expression: 'B - A', alias: 'span' }],
+        select: [
+          { aggFn: 'min', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'min( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+      expect(actual).not.toContain('min( Timestamp )');
+    });
+
+    it('still casts in a number tile with several series', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        displayType: DisplayType.Number,
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'count', valueExpression: '', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts in a time-bucketed table', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        granularity: '1 minute',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts when reading from a subquery CTE', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        with: [
+          {
+            name: 'Recent',
+            sql: chSql`SELECT Timestamp FROM default.otel_traces`,
+          },
+        ],
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
     it('keeps the column type in number tiles', async () => {
       const actual = await render({
         ...baseTraceConfig,
