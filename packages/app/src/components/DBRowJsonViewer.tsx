@@ -56,6 +56,7 @@ export function buildJSONExtractQuery(
   jsonColumns: string[] = [],
   jsonExtractFn: JSONExtractFn = 'JSONExtractString',
   mapColumns: string[] = [],
+  arrayIndexes?: ReadonlySet<number>,
 ): string | null {
   const nestedPath = keyPath.slice(parsedJsonRootPath.length);
   if (nestedPath.length === 0) {
@@ -68,9 +69,27 @@ export function buildJSONExtractQuery(
   // to `isInParsedJson=true`, see HyperJson.tsx:227). Thread `mapColumns` so a
   // numeric-looking Map sub-key renders as `Map['1']` instead of the array
   // `Map[2]`. See HDX-4369.
-  const baseColumn = mergePath(parsedJsonRootPath, jsonColumns, mapColumns);
-  const jsonPathArgs = nestedPath.map(p => `'${p}'`).join(', ');
-  return `${jsonExtractFn}(${baseColumn}, ${jsonPathArgs})`;
+  const baseColumn = mergePath(
+    parsedJsonRootPath,
+    jsonColumns,
+    mapColumns,
+    arrayIndexes,
+  );
+  // A JSON-column subpath is Dynamic, which JSONExtract* rejects.
+  const baseArg =
+    parsedJsonRootPath.length > 1 && jsonColumns.includes(parsedJsonRootPath[0])
+      ? `toString(${baseColumn})`
+      : baseColumn;
+  // JSONExtract* reads an integer argument as a 1-based array index and a
+  // string argument as an object key, so '0' would look up a key named "0".
+  const jsonPathArgs = nestedPath
+    .map((p, i) =>
+      arrayIndexes?.has(parsedJsonRootPath.length + i) && /^\d+$/.test(p)
+        ? `${Number(p) + 1}`
+        : `'${p}'`,
+    )
+    .join(', ');
+  return `${jsonExtractFn}(${baseArg}, ${jsonPathArgs})`;
 }
 
 import { RowSidePanelContext } from './DBRowSidePanel';
@@ -438,9 +457,18 @@ function HyperJsonMenu({
   );
 }
 
+function parseJsonString(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
 // Positions in `keyPath` whose parent value in `row` is an array, i.e. the
 // segments that are array indexes and not object keys. Pass the unfiltered
-// row: the property search rebuilds arrays as plain objects.
+// row: the property search rebuilds arrays as plain objects. Descends into
+// string values the viewer expands as JSON.
 export function getArrayIndexPositions(
   row: unknown,
   keyPath: string[],
@@ -448,6 +476,9 @@ export function getArrayIndexPositions(
   const positions = new Set<number>();
   let node: unknown = row;
   keyPath.forEach((segment, i) => {
+    if (typeof node === 'string') {
+      node = parseJsonString(node);
+    }
     if (Array.isArray(node)) {
       positions.add(i);
     }
@@ -529,11 +560,12 @@ export function DBRowJsonViewer({
   const getLineActions = useCallback<GetLineActions>(
     ({ keyPath, value, isInParsedJson, parsedJsonRootPath }) => {
       const actions: LineAction[] = [];
+      const arrayIndexes = getArrayIndexPositions(data, keyPath);
       const fieldPath = mergePath(
         keyPath,
         jsonColumns,
         mapColumns,
-        getArrayIndexPositions(data, keyPath),
+        arrayIndexes,
       );
       const isJsonColumn =
         keyPath.length > 0 && jsonColumns?.includes(keyPath[0]);
@@ -573,6 +605,7 @@ export function DBRowJsonViewer({
                 jsonColumns,
                 jsonExtractFn,
                 mapColumns,
+                arrayIndexes,
               );
               if (jsonQuery) {
                 filterFieldPath = jsonQuery;
@@ -628,6 +661,7 @@ export function DBRowJsonViewer({
                 jsonColumns,
                 jsonExtractFn,
                 mapColumns,
+                arrayIndexes,
               );
 
               if (jsonQuery) {
@@ -673,6 +707,7 @@ export function DBRowJsonViewer({
                 jsonColumns,
                 'JSONExtractString',
                 mapColumns,
+                arrayIndexes,
               );
               if (jsonQuery) {
                 chartFieldPath = jsonQuery;
@@ -702,6 +737,7 @@ export function DBRowJsonViewer({
             jsonColumns,
             'JSONExtractString',
             mapColumns,
+            arrayIndexes,
           );
           if (jsonQuery) {
             columnFieldPath = jsonQuery;

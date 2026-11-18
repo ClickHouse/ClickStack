@@ -480,7 +480,33 @@ describe('DBRowJsonViewer', () => {
           ['LogAttributes', 'config'],
           ['LogAttributes'],
         ),
-      ).toBe("JSONExtractString(LogAttributes.`config`, 'host')");
+      ).toBe("JSONExtractString(toString(LogAttributes.`config`), 'host')");
+    });
+
+    it('passes array positions in the parsed JSON as 1-based integers', () => {
+      expect(
+        buildJSONExtractQuery(
+          ['Body', 'events', '0', 'name'],
+          ['Body'],
+          [],
+          'JSONExtractString',
+          [],
+          new Set([2]),
+        ),
+      ).toBe("JSONExtractString(Body, 'events', 1, 'name')");
+    });
+
+    it('subscripts a JSON-column array element holding parsed JSON', () => {
+      expect(
+        buildJSONExtractQuery(
+          ['message', 'events', '1', 'payload', 'k'],
+          ['message', 'events', '1', 'payload'],
+          ['message'],
+          'JSONExtractString',
+          [],
+          new Set([2]),
+        ),
+      ).toBe("JSONExtractString(toString(message.`events`[2].`payload`), 'k')");
     });
 
     // HDX-4369. HyperJson promotes a Map sub-value that is itself a
@@ -569,6 +595,19 @@ describe('getArrayIndexPositions', () => {
         getArrayIndexPositions(row, ['message', 'counts', '200', 'n']),
       ),
     ).toEqual([]);
+  });
+
+  it('descends into string values that hold JSON', () => {
+    expect(
+      Array.from(
+        getArrayIndexPositions({ Body: '{"events":[{"name":"x"}]}' }, [
+          'Body',
+          'events',
+          '0',
+          'name',
+        ]),
+      ),
+    ).toEqual([2]);
   });
 
   it('returns an empty set for a missing path', () => {
