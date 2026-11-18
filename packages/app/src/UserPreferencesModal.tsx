@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { atom, useAtom } from 'jotai';
 import { Badge } from '@clickhouse/click-ui';
 import {
   Divider,
@@ -32,6 +33,16 @@ const OPTIONS_ROW_CLICK_ACTION: { label: string; value: RowClickAction }[] = [
   { label: 'Open side panel', value: 'sidePanel' },
   { label: 'Expand inline', value: 'expand' },
 ];
+
+const userPreferencesModalOpenedAtom = atom(false);
+
+/** Shared so the spotlight can open the modal that AppNav renders. */
+export const useUserPreferencesModal = () => {
+  const [opened, setOpened] = useAtom(userPreferencesModalOpenedAtom);
+  const open = React.useCallback(() => setOpened(true), [setOpened]);
+  const close = React.useCallback(() => setOpened(false), [setOpened]);
+  return { opened, open, close };
+};
 
 const SettingContainer = ({
   label,
