@@ -549,8 +549,19 @@ function SaveSearchModalComponent({
     id: searchedConfig.source,
     kinds: [SourceKind.Log, SourceKind.Trace],
   });
+  // An empty SELECT or sort means the saved clause when one is loaded, else the
+  // source default, as the results table reads it. Save what the table runs.
+  const savedClauses =
+    savedSearch != null && savedSearch.source === searchedConfig.source
+      ? savedSearch
+      : undefined;
   const effectiveSelect =
-    searchedConfig.select || sourceObj?.defaultTableSelectExpression || '';
+    searchedConfig.select ||
+    savedClauses?.select ||
+    sourceObj?.defaultTableSelectExpression ||
+    '';
+  const effectiveOrderBy =
+    searchedConfig.orderBy || savedClauses?.orderBy || '';
 
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -570,7 +581,7 @@ function SaveSearchModalComponent({
             whereLanguage:
               searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
             source: searchedConfig.source ?? '',
-            orderBy: searchedConfig.orderBy ?? '',
+            orderBy: effectiveOrderBy,
             filters: searchedConfig.filters ?? [],
             tags: tags,
           },
@@ -598,7 +609,7 @@ function SaveSearchModalComponent({
             whereLanguage:
               searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
             source: searchedConfig.source ?? '',
-            orderBy: searchedConfig.orderBy ?? '',
+            orderBy: effectiveOrderBy,
             filters: searchedConfig.filters ?? [],
             tags: tags,
           });
