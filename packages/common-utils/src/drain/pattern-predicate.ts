@@ -87,10 +87,10 @@ function tokensOf(template: string, options?: PatternRegexOptions): string[] {
 
 // A template token as a regex: `<*>` and each mask become `wildcard`, the
 // rest is literal.
-function tokenRegex(token: string, masks: string[], wildcard: string): string {
-  if (token === PATTERN_WILDCARD) return wildcard;
-  if (masks.length === 0) return escapeRe2Literal(token);
-  return token
+function tokenRegex(word: string, masks: string[], wildcard: string): string {
+  if (word === PATTERN_WILDCARD) return wildcard;
+  if (masks.length === 0) return escapeRe2Literal(word);
+  return word
     .split(`<${masks[0]}>`)
     .map(part => tokenRegex(part, masks.slice(1), wildcard))
     .join(wildcard);
