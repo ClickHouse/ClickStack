@@ -249,6 +249,7 @@ describe('External API v2 Connections', () => {
           name: 'Updated Connection',
           host: 'https://clickhouse-updated.example.com:8443',
           username: 'updated-user',
+          password: 'updated-password',
         })
         .expect(200);
 
@@ -363,6 +364,111 @@ describe('External API v2 Connections', () => {
 
       const stored = await Connection.findById(connection._id);
       expect(stored?.hyperdxSettingPrefix).toBe('hyperdx_');
+    });
+
+    it('should require the password when changing the host', async () => {
+      const connection = await Connection.create({
+        ...MOCK_CONNECTION,
+        team: team._id,
+      });
+
+      const response = await authRequest(
+        'put',
+        `${CONNECTIONS_BASE_URL}/${connection._id}`,
+      )
+        .send({
+          name: MOCK_CONNECTION.name,
+          host: 'https://attacker.example.com:8443',
+          username: MOCK_CONNECTION.username,
+        })
+        .expect(400);
+
+      expect(response.body.message).toBe(
+        'Password is required when changing the host',
+      );
+      const stored = await Connection.findById(connection._id).select(
+        '+password',
+      );
+      expect(stored?.host).toBe(MOCK_CONNECTION.host);
+      expect(stored?.password).toBe(MOCK_CONNECTION.password);
+    });
+
+    it('should not treat a trailing slash as a host change', async () => {
+      const connection = await Connection.create({
+        ...MOCK_CONNECTION,
+        host: `${MOCK_CONNECTION.host}/`,
+        team: team._id,
+      });
+
+      await authRequest('put', `${CONNECTIONS_BASE_URL}/${connection._id}`)
+        .send({
+          name: MOCK_CONNECTION.name,
+          host: MOCK_CONNECTION.host,
+          username: MOCK_CONNECTION.username,
+        })
+        .expect(200);
+    });
+
+    it('should change the host when the password is sent', async () => {
+      const connection = await Connection.create({
+        ...MOCK_CONNECTION,
+        team: team._id,
+      });
+
+      await authRequest('put', `${CONNECTIONS_BASE_URL}/${connection._id}`)
+        .send({
+          ...MOCK_CONNECTION,
+          host: 'https://new.example.com:8443',
+          password: 'new-password',
+        })
+        .expect(200);
+
+      const stored = await Connection.findById(connection._id).select(
+        '+password',
+      );
+      expect(stored?.host).toBe('https://new.example.com:8443');
+      expect(stored?.password).toBe('new-password');
+    });
+
+    it('should change the host without a password when none is stored', async () => {
+      const connection = await Connection.create({
+        ...MOCK_CONNECTION,
+        password: '',
+        team: team._id,
+      });
+
+      await authRequest('put', `${CONNECTIONS_BASE_URL}/${connection._id}`)
+        .send({
+          name: MOCK_CONNECTION.name,
+          host: 'https://new.example.com:8443',
+          username: MOCK_CONNECTION.username,
+        })
+        .expect(200);
+
+      const stored = await Connection.findById(connection._id);
+      expect(stored?.host).toBe('https://new.example.com:8443');
+    });
+
+    it('should drop the stored password when a Prometheus endpoint changes host', async () => {
+      const connection = await Connection.create({
+        ...MOCK_CONNECTION,
+        team: team._id,
+      });
+
+      await authRequest('put', `${CONNECTIONS_BASE_URL}/${connection._id}`)
+        .send({
+          name: 'Thanos',
+          host: 'http://thanos:10902',
+          username: '',
+          isPrometheusEndpoint: true,
+        })
+        .expect(200);
+
+      const stored = await Connection.findById(connection._id).select(
+        '+password',
+      );
+      expect(stored?.host).toBe('http://thanos:10902');
+      expect(stored?.password).toBe('');
     });
 
     it('should return 404 for a non-existent connection', async () => {

@@ -734,6 +734,35 @@ describe('resolveFilterReferences (connections)', () => {
     ).toEqual(['conn']);
   });
 
+  it("resolves a SQL query filter's source reference, rejecting PromQL", () => {
+    const filter = sqlQueryFilter({ source: '$src' });
+
+    expect(
+      resolveFilterReferences(
+        filter,
+        new Map([
+          ['conn', 'conn-1'],
+          ['src', 'logs'],
+        ]),
+        new Map([['logs', SourceKind.Log]]),
+      ).filter,
+    ).toEqual(sqlQueryFilter({ connection: 'conn-1', source: 'logs' }));
+    expect(
+      resolveFilterReferences(
+        filter,
+        new Map([
+          ['conn', 'conn-1'],
+          ['src', 'prom'],
+        ]),
+        new Map([['prom', SourceKind.Promql]]),
+      ),
+    ).toEqual({
+      filter: sqlQueryFilter({ connection: 'conn-1', source: '$src' }),
+      unresolvedVariables: ['src'],
+      incompatibleVariables: ['src'],
+    });
+  });
+
   it("resolves a data source variable's connection reference", () => {
     expect(
       resolveFilterReferences(

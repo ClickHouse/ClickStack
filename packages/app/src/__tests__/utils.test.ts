@@ -2,6 +2,8 @@ import {
   ChartPaletteTokenSchema,
   ColorCondition,
   NumericUnit,
+  SourceKind,
+  TLogSource,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import { SortingState } from '@tanstack/react-table';
@@ -22,6 +24,7 @@ import {
   getColorFromCSSToken,
   getLogSeverityLevel,
   getMetricTableName,
+  getTableConnectionsForConnection,
   isColumnInSelect,
   mapKeyBy,
   mergePath,
@@ -300,6 +303,60 @@ describe('getAllMetricTables', () => {
     });
 
     expect(getAllMetricTables(source)).toEqual([]);
+  });
+});
+
+describe('getTableConnectionsForConnection', () => {
+  const logSource: TLogSource = {
+    kind: SourceKind.Log,
+    id: 'logs',
+    name: 'Logs',
+    connection: 'conn1',
+    from: { databaseName: 'otel', tableName: 'logs' },
+    timestampValueExpression: 'Timestamp',
+    defaultTableSelectExpression: 'Body',
+    materializedViews: [
+      {
+        databaseName: 'otel',
+        tableName: 'logs_mv',
+        dimensionColumns: 'ServiceName',
+        minGranularity: '1 minute',
+        timestampColumn: 'Timestamp',
+        aggregatedColumns: [],
+      },
+    ],
+  };
+  const otherConnectionSource: TLogSource = {
+    ...logSource,
+    id: 'other',
+    connection: 'conn2',
+    from: { databaseName: 'other', tableName: 'logs' },
+    materializedViews: undefined,
+  };
+  const disabledSource: TLogSource = {
+    ...logSource,
+    id: 'disabled',
+    disabled: true,
+    from: { databaseName: 'otel', tableName: 'disabled' },
+  };
+
+  const tables = (connectionId: string | undefined) =>
+    getTableConnectionsForConnection(
+      [logSource, otherConnectionSource, disabledSource],
+      connectionId,
+    ).map(tc => `${tc.connectionId}:${tc.databaseName}.${tc.tableName}`);
+
+  it('lists source tables and materialized views on the connection', () => {
+    expect(tables('conn1')).toEqual(['conn1:otel.logs', 'conn1:otel.logs_mv']);
+  });
+
+  it('skips disabled sources and other connections', () => {
+    expect(tables('conn2')).toEqual(['conn2:other.logs']);
+  });
+
+  it('returns nothing without sources or a connection', () => {
+    expect(getTableConnectionsForConnection(undefined, 'conn1')).toEqual([]);
+    expect(tables(undefined)).toEqual([]);
   });
 });
 

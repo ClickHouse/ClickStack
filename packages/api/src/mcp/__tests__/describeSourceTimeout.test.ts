@@ -12,6 +12,8 @@ jest.mock('@/controllers/connection', () => ({
 jest.mock('@/clickhouse', () => ({ ClickhouseClient: jest.fn() }));
 jest.mock('@hyperdx/common-utils/dist/core/metadata', () => ({
   getMetadata: () => mockMetadata,
+  tcFromSource: jest.requireActual('@hyperdx/common-utils/dist/core/metadata')
+    .tcFromSource,
 }));
 jest.mock('@/controllers/promql', () => ({
   getPromqlLabelCatalog: jest.fn(),

@@ -1,4 +1,4 @@
-import { resolveConnectionSourceSync } from '@/components/ChartEditor/RawSqlChartEditor';
+import { resolveConnectionSourceSync } from '@/utils/connectionSourceSync';
 
 const sources = [
   { id: 'src-a', connection: 'conn-1' },

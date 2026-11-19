@@ -178,6 +178,7 @@ import {
   useCreateDashboard,
   useDashboards,
   useDeleteDashboard,
+  withoutAlert,
 } from '@/dashboard';
 import { useAlertAnnotations } from '@/hooks/useAlertAnnotations';
 import { getMinGranularitySeconds } from '@/hooks/useChartConfig';
@@ -415,6 +416,41 @@ const tileToLayoutItem = (chart: Tile): RGL.Layout => ({
 const whereLanguageParser = parseAsString.withDefault(
   typeof window !== 'undefined' ? (getStoredLanguage() ?? 'lucene') : 'lucene',
 );
+
+function toWhereLanguage(value: string | null): SearchConditionLanguage {
+  return value === 'sql' || value === 'lucene'
+    ? value
+    : (getStoredLanguage() ?? 'lucene');
+}
+
+// Shared by "Save query" and saving a temporary dashboard so both persist a
+// view the same way.
+function toViewDefaults({
+  where,
+  whereLanguage,
+  rangeSeconds,
+  filterValues,
+}: {
+  where: string;
+  whereLanguage: SearchConditionLanguage;
+  rangeSeconds: number | null;
+  filterValues: Dashboard['savedFilterValues'] | null;
+}): Pick<
+  Dashboard,
+  'savedQuery' | 'savedQueryLanguage' | 'savedFilterValues' | 'savedDateRange'
+> {
+  const savedQuery = where || null;
+  return {
+    savedQuery,
+    savedQueryLanguage: savedQuery ? whereLanguage || 'lucene' : null,
+    savedFilterValues: filterValues ?? [],
+    // The time input shows absolute text even for relative picks, so a saved
+    // range can only be its duration.
+    savedDateRange: rangeSeconds
+      ? { type: 'relative', value: rangeSeconds }
+      : undefined,
+  };
+}
 
 /**
  * A tile that cannot draw its chart yet, explaining why in its place. Keeps the
@@ -2219,46 +2255,27 @@ function DBDashboardPage({
   // Sync changes to the URL params into the form
   useEffect(() => {
     setValue('where', where);
-    setValue(
-      'whereLanguage',
-      whereLanguage === 'sql' || whereLanguage === 'lucene'
-        ? whereLanguage
-        : (getStoredLanguage() ?? 'lucene'),
-    );
+    setValue('whereLanguage', toWhereLanguage(whereLanguage));
   }, [setValue, where, whereLanguage]);
 
   const handleSaveQuery = useCallback(() => {
     if (!dashboard || isLocalDashboard) return;
 
-    // Execute the query first (updates URL)
+    // Apply the draft query/time input so what's saved is what's shown.
     onSubmit();
-
-    // Then save to database (reads from form values which were just submitted to URL)
     const formValues = getValues();
-    const currentWhere = formValues.where || null;
-    const currentWhereLanguage = currentWhere
-      ? formValues.whereLanguage || 'lucene'
-      : null;
-    const currentFilterValues = filterValueEntries?.length
-      ? filterValueEntries
-      : [];
-
-    const currentRelativeDateRange = timeRangeInputToSeconds(
-      displayedTimeInputValue,
-      timeZone,
-    );
+    const { savedDateRange, ...defaults } = toViewDefaults({
+      where: formValues.where,
+      whereLanguage: formValues.whereLanguage,
+      rangeSeconds: timeRangeInputToSeconds(displayedTimeInputValue, timeZone),
+      filterValues: filterValueEntries,
+    });
 
     setDashboard(
       produce(dashboard, draft => {
-        draft.savedQuery = currentWhere;
-        draft.savedQueryLanguage = currentWhereLanguage;
-        draft.savedFilterValues = currentFilterValues;
-        // Only supporting relative date range saving ATM
-        if (currentRelativeDateRange) {
-          draft.savedDateRange = {
-            type: 'relative',
-            value: currentRelativeDateRange,
-          };
+        Object.assign(draft, defaults);
+        if (savedDateRange) {
+          draft.savedDateRange = savedDateRange;
         }
       }),
       () => {
@@ -2275,11 +2292,11 @@ function DBDashboardPage({
     dashboard,
     isLocalDashboard,
     setDashboard,
-    getValues,
-    filterValueEntries,
     onSubmit,
-    timeZone,
+    getValues,
     displayedTimeInputValue,
+    timeZone,
+    filterValueEntries,
   ]);
   const handleRemoveSavedQuery = useCallback(() => {
     if (!dashboard || isLocalDashboard) return;
@@ -2565,14 +2582,7 @@ function DBDashboardPage({
                 ...dashboard,
                 tiles: [
                   ...dashboard.tiles,
-                  {
-                    ...chart,
-                    id: makeId(),
-                    config: {
-                      ...chart.config,
-                      alert: undefined,
-                    },
-                  },
+                  { ...withoutAlert(chart), id: makeId() },
                 ],
               });
             }
@@ -2929,25 +2939,60 @@ function DBDashboardPage({
 
   const createDashboard = useCreateDashboard();
   const onCreateDashboard = useCallback(() => {
+    if (!dashboard) return;
+
+    // The new /dashboards/{id} page drops this page's URL state, so the view
+    // only survives as saved defaults.
+    // Reads the applied URL state rather than calling onSubmit(): its queued
+    // URL update would cancel the navigation to the new dashboard.
+    const [start, end] = searchedTimeRange;
+    const viewDefaults = toViewDefaults({
+      where,
+      whereLanguage: toWhereLanguage(whereLanguage),
+      rangeSeconds: (end.getTime() - start.getTime()) / 1000,
+      filterValues: filterValueEntries,
+    });
+
     createDashboard.mutate(
       {
-        name: 'My Dashboard',
-        tiles: [],
-        tags: [],
+        name: dashboard.name?.trim() ? dashboard.name : 'My New Dashboard',
+        tiles: dashboard.tiles.map(withoutAlert),
+        tags: dashboard.tags ?? [],
+        filters: dashboard.filters,
+        containers: dashboard.containers,
+        ...viewDefaults,
       },
       {
         onSuccess: data => {
           router.push(`/dashboards/${data.id}`);
         },
+        onError: e => {
+          notifications.show({
+            color: 'red',
+            title: 'Unable to save dashboard',
+            message: e.message.slice(0, 100),
+            autoClose: 5000,
+          });
+        },
       },
     );
-  }, [createDashboard, router]);
+  }, [
+    createDashboard,
+    router,
+    dashboard,
+    searchedTimeRange,
+    where,
+    whereLanguage,
+    filterValueEntries,
+  ]);
 
   const [isSaving, setIsSaving] = useState(false);
 
   const hasTiles = dashboard && dashboard.tiles.length > 0;
-  const hasSavedQueryAndFilterDefaults = Boolean(
-    dashboard?.savedQuery || dashboard?.savedFilterValues?.length,
+  const hasSavedDefaults = Boolean(
+    dashboard?.savedQuery ||
+      dashboard?.savedFilterValues?.length ||
+      dashboard?.savedDateRange,
   );
 
   const dashboardMeta =
@@ -3179,11 +3224,11 @@ function DBDashboardPage({
             leftSection={<IconDeviceFloppy size={16} />}
             onClick={handleSaveQuery}
           >
-            {hasSavedQueryAndFilterDefaults
+            {hasSavedDefaults
               ? 'Update Default Query & Filters'
               : 'Save Query & Filters as Default'}
           </Menu.Item>
-          {hasSavedQueryAndFilterDefaults && (
+          {hasSavedDefaults && (
             <Menu.Item
               data-testid="remove-default-query-filters-menu-item"
               leftSection={<IconX size={16} />}
@@ -3359,15 +3404,16 @@ function DBDashboardPage({
         <Paper mt="xs" mb="md" p="md" data-testid="temporary-dashboard-banner">
           <Flex justify="space-between" align="center">
             <Text size="sm">
-              This is a temporary dashboard and can not be saved.
+              This is currently an unsaved, temporary dashboard.
             </Text>
             <Button
               variant="primary"
               fw={400}
               onClick={onCreateDashboard}
+              loading={createDashboard.isPending || createDashboard.isSuccess}
               data-testid="create-dashboard-button"
             >
-              Create New Saved Dashboard
+              Save dashboard
             </Button>
           </Flex>
         </Paper>
@@ -3425,6 +3471,7 @@ function DBDashboardPage({
           incompatibleReferenceVariablesByFilterId={
             incompatibleReferenceVariablesByFilterId
           }
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
       {/* Selection indicator */}
@@ -3604,6 +3651,7 @@ function DBDashboardPage({
           showRequiredFilterOptions
           variables={variables}
           dateRange={searchedTimeRange}
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
     </ReferenceVariablesProvider>

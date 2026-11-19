@@ -937,9 +937,10 @@ describe('getFilterVariableWarnings', () => {
   });
 
   describe('SQL query filters', () => {
-    const sqlFilter = (sqlTemplate: string) => ({
+    const sqlFilter = (sqlTemplate: string, sourceId?: string) => ({
       name: 'Environment',
       sqlTemplate,
+      sourceId,
       isVariableEnabled: true,
       variableName: 'env',
     });
@@ -969,8 +970,19 @@ describe('getFilterVariableWarnings', () => {
         sqlFilter('SELECT env FROM $__sourceTable'),
       ]);
       expect(warnings).toEqual([
-        'Filter "Environment": SQL query filters have no source, so $__sourceTable cannot be used',
+        'Filter "Environment": SQL uses $__sourceTable but no source is selected',
       ]);
+    });
+
+    it('accepts source macros when the filter has a source', () => {
+      expect(
+        getFilterVariableWarnings([
+          sqlFilter(
+            'SELECT env FROM $__sourceTable WHERE $__filters',
+            '65f5e4a3b9e77c001a345678',
+          ),
+        ]),
+      ).toEqual([]);
     });
 
     it.each([
