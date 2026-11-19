@@ -1,4 +1,5 @@
-import { TemplateMinerConfig } from '@/drain/config';
+import { DATE_MASK, TemplateMinerConfig } from '@/drain/config';
+import { minePatterns } from '@/drain/mine-patterns';
 import {
   buildCompactPatternPredicate,
   buildPatternPredicate,
@@ -12,6 +13,7 @@ import { TemplateMiner } from '@/drain/template-miner';
 // Python's string.punctuation, the extra delimiters the app's miner uses.
 const PUNCTUATION = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'.split('');
 const withPunctuation = { extraDelimiters: PUNCTUATION };
+const withDates = { masks: [DATE_MASK] };
 
 // RE2 spells code points \x{HHHH} and categories \pZ; JS (with the u flag)
 // spells them \u{HHHH} and \p{Z}, and has no POSIX classes. RE2's \s is
@@ -57,6 +59,8 @@ const MESSAGES = [
 function mineClusters(): { template: string; members: string[] }[] {
   const config = new TemplateMinerConfig();
   config.drainExtraDelimiters = PUNCTUATION;
+  // Like the app's drain3 miner, which applies no masks.
+  config.maskingInstructions = [];
   const miner = new TemplateMiner(config);
   const members = new Map<number, string[]>();
   for (const message of MESSAGES) {
@@ -195,6 +199,46 @@ describe('buildCompactPatternPredicate', () => {
         }
       }
     }
+  });
+
+  it('honors masks like the full predicate', () => {
+    const values = [
+      'wrote backup_2026-11-04.tar',
+      'wrote  backup_2026-11-04.tar ',
+      'wrote backup_.tar',
+      'wrote backup_<DATE>.tar',
+      'I1104 06:12:12.345678 sync done',
+    ];
+    for (const options of [withDates, undefined]) {
+      for (const template of [
+        'wrote backup_<DATE>.tar',
+        'I<DATE> <*> sync done',
+      ]) {
+        const full = toJsRegex(templateToRegex(template, options));
+        const compact = buildCompactPatternPredicate(
+          'Body',
+          template,
+          options,
+        )!;
+        for (const value of values) {
+          expect([template, value, matchesCompact(compact, value)]).toEqual([
+            template,
+            value,
+            full.test(value),
+          ]);
+        }
+      }
+    }
+    expect(
+      matchesCompact(
+        buildCompactPatternPredicate(
+          'Body',
+          'wrote backup_<DATE>.tar',
+          withDates,
+        )!,
+        'wrote backup_2026-11-04.tar',
+      ),
+    ).toBe(true);
   });
 
   it('is much shorter than the full predicate for long templates', () => {
@@ -341,5 +385,94 @@ describe('parsePatternPredicate', () => {
         buildPatternPredicate('Body', 'Sending <*> rows', withPunctuation)!,
       ),
     ).toBeNull();
+  });
+});
+
+// Mines with the default masks, as the MCP tools do.
+function mineWithMasks(messages: string[]) {
+  return minePatterns(
+    messages.map(body => ({ body })),
+    {
+      totalCount: messages.length,
+      startDate: new Date(0),
+      endDate: new Date(1000),
+      trendBuckets: 0,
+      maxSamples: messages.length,
+      getBody: r => r.body,
+      getTimestamp: () => 0,
+    },
+  ).patterns;
+}
+
+describe('templateToRegex with masks', () => {
+  const matches = (
+    template: string,
+    value: string,
+    options: PatternRegexOptions = withDates,
+  ) => toJsRegex(templateToRegex(template, options)).test(value);
+
+  it('a masked date is one word, also inside a token', () => {
+    expect(
+      matches('wrote backup_<DATE>.tar', 'wrote backup_2026-11-04.tar'),
+    ).toBe(true);
+    expect(matches('wrote backup_<DATE>.tar', 'wrote backup_.tar')).toBe(false);
+    expect(
+      matches('wrote backup_<DATE>.tar', 'wrote backup_2026-11-04.tar.gz'),
+    ).toBe(false);
+    expect(
+      matches('I<DATE> <*> sync done', 'I1104 06:12:12.345678 sync done'),
+    ).toBe(true);
+    expect(
+      matches('<DATE> <*> INFO x', '2026-11-04\n06:12:12,345 INFO x'),
+    ).toBe(true);
+    expect(matches('<DATE> <*> INFO x', '2026-11-04 INFO x')).toBe(false);
+  });
+
+  it('keeps <DATE> literal without the option', () => {
+    const t = 'wrote backup_<DATE>.tar';
+    expect(matches(t, 'wrote backup_<DATE>.tar', {})).toBe(true);
+    expect(matches(t, 'wrote backup_2026-11-04.tar', {})).toBe(false);
+  });
+
+  it('matches the samples of patterns mined from dated lines', () => {
+    const patterns = mineWithMasks([
+      ...[1, 2, 3].map(
+        n =>
+          `2026-11-0${n} 06:12:1${n},345 INFO [main] c.e.Job - Sync ok for 10${n}`,
+      ),
+      ...[4, 5].map(n => `[0${n}/Nov/2026:06:12:12 +0000] "GET /health" 200`),
+      ...[
+        '4bf92f3577b34da6a3ce929d0e0e4736',
+        '00f067aa0ba902b7a3ce929d0e0e4736',
+      ].map(id => `exported span trace_id=${id} status=ok`),
+      ...[3, 4].map(n => `Nov  ${n} 06:12:12 host sshd[42]: session opened`),
+    ]);
+    expect(patterns).toHaveLength(4);
+    for (const p of patterns) {
+      const re = toJsRegex(templateToRegex(p.pattern, withDates));
+      for (const s of p.samples) expect(re.test(s.body)).toBe(true);
+      for (const o of patterns.filter(o => o !== p).flatMap(o => o.samples)) {
+        expect(re.test(o.body)).toBe(false);
+      }
+    }
+  });
+
+  it('matches every sample when a masked timestamp and a word share a position', () => {
+    const patterns = mineWithMasks([
+      'Started job at 2026-11-04 06:12:12',
+      'Started job at boot',
+      'Started job at shutdown',
+      'Started job at 2026-11-04T06:12:13Z',
+    ]);
+    // The space-separated timestamp is two words, so it can't share a cluster
+    // with the one-word lines; the one-word timestamp can, as <*>.
+    expect(patterns.map(p => p.pattern).sort()).toEqual([
+      'Started job at <*>',
+      'Started job at <DATE> 06:12:12',
+    ]);
+    for (const p of patterns) {
+      const re = toJsRegex(templateToRegex(p.pattern, withDates));
+      for (const sample of p.samples) expect(re.test(sample.body)).toBe(true);
+    }
   });
 });

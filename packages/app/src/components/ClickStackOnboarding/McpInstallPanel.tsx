@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react';
 import { Group, SegmentedControl, Stack, Text } from '@mantine/core';
 import {
   IconBraces,
+  IconBrandOpenai,
   IconBrandVisualStudio,
   IconCode,
   IconRobot,
+  IconTerminal2,
 } from '@tabler/icons-react';
 
 import { CopySnippet } from './CopySnippet';
@@ -13,14 +15,19 @@ import {
   buildAllSnippets,
   buildCliInstallCommand,
   type BuiltSnippets,
+  CODEX_TOKEN_ENV_VAR,
   type DeploymentShape,
 } from './installSnippets';
 
 // ChatGPT is intentionally absent: no native MCP yet, and bridges are a
-// user-side decision better tracked in docs than in this UI. Claude Code
-// and Codex are configured through shell commands, which would put the key
-// in shell history, so the CLI installer above covers them instead.
-type AgentHost = 'cursor' | 'vscode-copilot' | 'opencode' | 'other';
+// user-side decision better tracked in docs than in this UI.
+type AgentHost =
+  | 'claude-code'
+  | 'cursor'
+  | 'vscode-copilot'
+  | 'codex-cli'
+  | 'opencode'
+  | 'other';
 
 interface HostChoice {
   id: AgentHost;
@@ -28,8 +35,10 @@ interface HostChoice {
 }
 
 const CHOICES: HostChoice[] = [
+  { id: 'claude-code', label: 'Claude Code' },
   { id: 'cursor', label: 'Cursor' },
   { id: 'vscode-copilot', label: 'VS Code' },
+  { id: 'codex-cli', label: 'Codex CLI' },
   { id: 'opencode', label: 'OpenCode' },
   { id: 'other', label: 'Other' },
 ];
@@ -50,7 +59,7 @@ interface McpInstallPanelProps {
  * block) for the chosen host. The access key is masked in every snippet.
  */
 export default function McpInstallPanel({ deployment }: McpInstallPanelProps) {
-  const [host, setHost] = useState<AgentHost>('cursor');
+  const [host, setHost] = useState<AgentHost>('claude-code');
 
   const snippets = useMemo(() => buildAllSnippets(deployment), [deployment]);
 
@@ -96,10 +105,14 @@ export default function McpInstallPanel({ deployment }: McpInstallPanelProps) {
 
 function HostIcon({ id }: { id: AgentHost }) {
   switch (id) {
+    case 'claude-code':
+      return <IconTerminal2 size={16} />;
     case 'cursor':
       return <IconCode size={16} />;
     case 'vscode-copilot':
       return <IconBrandVisualStudio size={16} />;
+    case 'codex-cli':
+      return <IconBrandOpenai size={16} />;
     case 'opencode':
       return <IconBraces size={16} />;
     case 'other':
@@ -120,6 +133,15 @@ interface HostInstallProps {
 
 function HostInstall({ host, snippets, accessKey }: HostInstallProps) {
   switch (host) {
+    case 'claude-code':
+      return (
+        <CopySnippet
+          label="Paste in your terminal:"
+          snippet={snippets.claudeCode}
+          accessKey={accessKey}
+        />
+      );
+
     case 'cursor':
       return (
         <DeeplinkInstall
@@ -145,6 +167,21 @@ function HostInstall({ host, snippets, accessKey }: HostInstallProps) {
             </Text>
           }
         />
+      );
+
+    case 'codex-cli':
+      return (
+        <Stack gap="xs">
+          <CopySnippet
+            label="Paste in your terminal:"
+            snippet={snippets.codexCli}
+            accessKey={accessKey}
+          />
+          <Text size="xs" c="dimmed">
+            Codex reads {CODEX_TOKEN_ENV_VAR} each time it starts, so also set
+            it in your shell profile.
+          </Text>
+        </Stack>
       );
 
     case 'opencode':

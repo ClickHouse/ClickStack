@@ -120,6 +120,10 @@ const nextConfig = {
     // do not pull in passport-saml, mongoose, AWS SDK, etc.
     ...(process.env.HDX_PREVIEW_INLINE_API !== 'true' ? ['@hyperdx/api'] : []),
   ],
+  // Build-only tool that the server trace picks up; its Go binary shows up in image CVE scans.
+  outputFileTracingExcludes: {
+    '*': ['**/node_modules/esbuild/**', '**/node_modules/@esbuild/**'],
+  },
   typescript: {
     tsconfigPath: 'tsconfig.build.json',
   },

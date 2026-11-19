@@ -11,11 +11,13 @@ import {
   isFilterRequired,
   isQueryExpressionFilter,
   isReferenceVariableFilter,
+  isSqlQueryFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
 import { ReferenceVariableValues } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AdhocFilterCondition,
+  BroadcastFilter,
   ChartVariable,
   DashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
@@ -149,8 +151,9 @@ const DashboardFilterSelect = ({
           // so a completed/empty/failed query stays interactive and the user can
           // still clear or adjust the selection.
           loading={isLoading}
-          // A static list renders in the order its author wrote it.
-          sort={!isStaticListFilter(filter)}
+          // A static list renders in the order its author wrote it, and a SQL
+          // query filter in the order its query returns.
+          sort={!isStaticListFilter(filter) && !isSqlQueryFilter(filter)}
           isMultiSelect={!isFilterSingleSelect(filter)}
           onChange={onChange}
           data-testid={`dashboard-filter-select-${filter.name}`}
@@ -191,6 +194,8 @@ interface DashboardFilterProps {
   unresolvedReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
   /** The subset of those selecting a source the filter can't use. */
   incompatibleReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
+  /** The filter selections that broadcast to a source, for `$__filters` */
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
 }
 
 const DashboardFilters = ({
@@ -205,6 +210,7 @@ const DashboardFilters = ({
   referenceVariableValues,
   unresolvedReferenceVariablesByFilterId,
   incompatibleReferenceVariablesByFilterId,
+  getDashboardFilters,
 }: DashboardFilterProps) => {
   // "Link" mode (opt-in, off by default): each dropdown's values are narrowed by
   // the others' selections. Off by default because contingent value lookups
@@ -230,6 +236,7 @@ const DashboardFilters = ({
     filters: queryableFilters,
     dateRange,
     variables,
+    getDashboardFilters,
     // Only narrow by sibling selections when linked.
     selectionByFilterId: linked ? selectionByFilterId : EMPTY_SELECTIONS,
   });
@@ -306,13 +313,19 @@ const DashboardFilters = ({
         const isLoadingValues =
           unresolvedVariables.length === 0 &&
           (queriedFilterValues ? queriedFilterValues.isLoading : isFetching);
-        // Only a queried dropdown has a values query that can await a
-        // variable's selection, besides any data source variable it reads from.
+        // Only queried and SQL query dropdowns have a values query that can
+        // await a variable's selection, besides any data source variable it
+        // reads from.
         const pendingVariables = [
           ...unselectedVariables,
           ...(isQueryExpressionFilter(filter)
             ? getPendingFilterValuesVariables(filter, variables)
-            : []),
+            : isSqlQueryFilter(filter)
+              ? getPendingFilterValuesVariables(
+                  { where: filter.sqlTemplate, whereLanguage: 'sql' },
+                  variables,
+                )
+              : []),
         ];
         return (
           <DashboardFilterSelect

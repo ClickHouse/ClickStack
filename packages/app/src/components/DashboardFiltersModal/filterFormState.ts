@@ -14,6 +14,7 @@ import {
   DataSourceDashboardFilter,
   PromqlLabelDashboardFilter,
   QueryExpressionDashboardFilter,
+  SqlQueryDashboardFilter,
   StaticListDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
@@ -56,7 +57,8 @@ export type FilterFormValues = {
     | 'maxSelections'
   > &
   Pick<AdhocDashboardFilter, 'sourceType' | 'sources'> &
-  Pick<DataSourceDashboardFilter, 'allowedSourceKinds' | 'connection'>;
+  Pick<DataSourceDashboardFilter, 'allowedSourceKinds' | 'connection'> &
+  Pick<SqlQueryDashboardFilter, 'connection' | 'sqlTemplate'>;
 
 export type FilterFormControl = Control<FilterFormValues>;
 
@@ -69,6 +71,7 @@ export const toFormValues = (
   const promqlLabel = filter?.type === 'PROMETHEUS_LABEL' ? filter : undefined;
   const adhoc = filter?.type === 'ADHOC' ? filter : undefined;
   const dataSource = filter?.type === 'DATA_SOURCE' ? filter : undefined;
+  const sqlQuery = filter?.type === 'SQL_QUERY' ? filter : undefined;
 
   return {
     id: filter?.id ?? crypto.randomUUID(),
@@ -83,7 +86,12 @@ export const toFormValues = (
 
     // QUERY_EXPRESSION fields
     expression: queried?.expression ?? '',
-    source: queried?.source ?? promqlLabel?.source ?? presetSourceId ?? '',
+    source:
+      queried?.source ??
+      promqlLabel?.source ??
+      sqlQuery?.source ??
+      presetSourceId ??
+      '',
     sourceMetricType: queried?.sourceMetricType,
     where: queried?.where ?? adhoc?.where ?? '',
     whereLanguage:
@@ -107,7 +115,12 @@ export const toFormValues = (
 
     // DATA_SOURCE fields
     allowedSourceKinds: dataSource?.allowedSourceKinds ?? [],
-    connection: dataSource?.connection,
+
+    // DATA_SOURCE and SQL_QUERY fields
+    connection: dataSource?.connection ?? sqlQuery?.connection ?? '',
+
+    // SQL_QUERY fields
+    sqlTemplate: sqlQuery?.sqlTemplate ?? '',
   };
 };
 
@@ -141,6 +154,18 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       ...rest,
       label: values.label.trim(),
       match: values.match?.trim() || undefined,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: getFilterVariableName(values),
+      ...selectionLimits,
+    });
+  }
+
+  if (values.type === 'SQL_QUERY') {
+    return DashboardFilterSchema.parse({
+      ...rest,
+      source: values.source || undefined,
+      sqlTemplate: values.sqlTemplate.trim(),
       isBroadcastEnabled: false,
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),

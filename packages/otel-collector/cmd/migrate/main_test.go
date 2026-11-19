@@ -111,6 +111,9 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.ReconcileTableTTL {
 			t.Error("ReconcileTableTTL should default to false")
 		}
+		if !cfg.SetTextIndexBlockSize {
+			t.Error("SetTextIndexBlockSize should default to true")
+		}
 		if cfg.SchemaDir != dir {
 			t.Errorf("SchemaDir: got %q, want %q", cfg.SchemaDir, dir)
 		}
@@ -629,6 +632,20 @@ func TestProcessSchemaDir_NonexistentDir(t *testing.T) {
 // per-signal TTL resolution + reconcile helpers
 // ---------------------------------------------------------------------------
 
+func TestLoadConfig_TextIndexBlockSizeOptOut(t *testing.T) {
+	dir := t.TempDir()
+	os.Args = []string{"migrate", dir}
+	t.Setenv("HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE", "false")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SetTextIndexBlockSize {
+		t.Error("SetTextIndexBlockSize should be false")
+	}
+}
+
 func TestLoadConfig_PerSignalTTL(t *testing.T) {
 	dir := t.TempDir()
 	os.Args = []string{"migrate", dir}
@@ -953,6 +970,35 @@ func TestSupportsFullTextSearch(t *testing.T) {
 			got := supportsFullTextSearch(tt.major, tt.minor)
 			if got != tt.expected {
 				t.Errorf("supportsFullTextSearch(%d, %d) = %v, want %v", tt.major, tt.minor, got, tt.expected)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// supportsTextIndexTableSettings
+// ---------------------------------------------------------------------------
+
+func TestSupportsTextIndexTableSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		major    int
+		minor    int
+		expected bool
+	}{
+		{"26.6 exact threshold", 26, 6, true},
+		{"26.10 above minor", 26, 10, true},
+		{"27.0 above major", 27, 0, true},
+		{"26.5 below minor", 26, 5, false},
+		{"26.2 text indexes without the setting", 26, 2, false},
+		{"25.9 below major", 25, 9, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := supportsTextIndexTableSettings(tt.major, tt.minor)
+			if got != tt.expected {
+				t.Errorf("supportsTextIndexTableSettings(%d, %d) = %v, want %v", tt.major, tt.minor, got, tt.expected)
 			}
 		})
 	}

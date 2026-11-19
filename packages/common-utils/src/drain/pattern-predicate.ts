@@ -21,6 +21,14 @@ export type PatternRegexOptions = {
    * Drain port (the default), or Python's `str.split()` for Drain3.
    */
   whitespace?: 'js' | 'python';
+  /**
+   * The names of the masks the miner applied, e.g. `[DATE_MASK]`. Each
+   * `<NAME>` in a template then matches one or more characters of a token,
+   * as a whole token or inside one (`backup_<DATE>.tar`). Without this, it
+   * is literal text. A whole-token mask matches like `<*>`, so
+   * parsePatternPredicate reads it back as `<*>`.
+   */
+  masks?: string[];
 };
 
 // The TypeScript Drain port tokenizes with JS `\s`, which includes Unicode
@@ -77,6 +85,17 @@ function tokensOf(template: string, options?: PatternRegexOptions): string[] {
   return template.split(split).filter(t => t.length > 0);
 }
 
+// A template token as a regex: `<*>` and each mask become `wildcard`, the
+// rest is literal.
+function tokenRegex(word: string, masks: string[], wildcard: string): string {
+  if (word === PATTERN_WILDCARD) return wildcard;
+  if (masks.length === 0) return escapeRe2Literal(word);
+  return word
+    .split(`<${masks[0]}>`)
+    .map(part => tokenRegex(part, masks.slice(1), wildcard))
+    .join(wildcard);
+}
+
 /** Anchored RE2 regex that a value matches when it fits the Drain template. */
 export function templateToRegex(
   template: string,
@@ -84,10 +103,9 @@ export function templateToRegex(
 ): string {
   const separators = separatorClass(options);
   const separator = `[${separators}]`;
+  const nonSeparators = `[^${separators}]+`;
   const body = tokensOf(template, options)
-    .map(t =>
-      t === PATTERN_WILDCARD ? `[^${separators}]+` : escapeRe2Literal(t),
-    )
+    .map(t => tokenRegex(t, options?.masks ?? [], nonSeparators))
     .join(`${separator}+`);
   return `^${separator}*${body}${separator}*$`;
 }
@@ -114,7 +132,7 @@ const COMPACT_WILDCARD = '[^ ]+';
 // Regex over a value whose separator runs were replaced by single spaces.
 function compactRegex(template: string, options?: PatternRegexOptions): string {
   const body = tokensOf(template, options)
-    .map(t => (t === PATTERN_WILDCARD ? COMPACT_WILDCARD : escapeRe2Literal(t)))
+    .map(t => tokenRegex(t, options?.masks ?? [], COMPACT_WILDCARD))
     .join(' ');
   return `${COMPACT_START}${body}${COMPACT_END}`;
 }

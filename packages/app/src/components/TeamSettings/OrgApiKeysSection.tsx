@@ -119,8 +119,7 @@ export default function OrgApiKeysSection() {
         <Box>
           <Text size="md">Organization API keys</Text>
           <Text size="sm" c="dimmed">
-            Keys owned by the team. They keep working when the person who
-            created them leaves.
+            Keys owned by the team.
           </Text>
         </Box>
         <Button variant="primary" onClick={() => setIsCreateOpen(true)}>
@@ -133,7 +132,11 @@ export default function OrgApiKeysSection() {
           Couldn&apos;t load organization API keys
         </Text>
       ) : !isLoading && keys.length === 0 ? (
-        <EmptyState variant="card" title="No organization API keys yet" />
+        <EmptyState
+          variant="card"
+          fullWidth
+          title="No organization API keys yet"
+        />
       ) : (
         <Card>
           <Table horizontalSpacing="md" verticalSpacing="xs">

@@ -40,7 +40,9 @@ const WHERE_LANGUAGE_DESCRIPTION =
   'For exact matching, quote the value (field:"value", case-sensitive) or use SQL: WHERE field = \'value\'. ' +
   "For reliable wildcards, use SQL: WHERE field LIKE 'val%'.\n\n" +
   'Common mistake: writing Column:value (Lucene) but setting whereLanguage to "sql". ' +
-  'If your filter uses colon syntax, use "lucene".';
+  'If your filter uses colon syntax, use "lucene".\n\n' +
+  "In SQL, hasToken(col, 'x') errors unless x is only letters and digits: _ - . @ : and spaces are " +
+  'separators, so ids, emails and snake_case names fail. Search the term with Lucene instead.';
 
 // ─── Shared Zod schemas ──────────────────────────────────────────────────────
 
