@@ -143,6 +143,124 @@ describe('ConnectionForm', () => {
     );
   });
 
+  it('should ask for the password when the host is edited', async () => {
+    renderWithMantine(
+      <ConnectionForm
+        connection={{ ...baseConnection, id: 'existing-id' }}
+        isNew={false}
+      />,
+    );
+
+    expect(screen.getByTestId('update-password-button')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('connection-password-input'),
+    ).not.toBeInTheDocument();
+
+    // A trailing slash alone isn't a host change.
+    fireEvent.change(screen.getByPlaceholderText('http://localhost:8123'), {
+      target: { value: 'http://localhost:8123/' },
+    });
+    expect(screen.getByTestId('update-password-button')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('http://localhost:8123'), {
+      target: { value: 'http://other.com:8123' },
+    });
+
+    expect(
+      await screen.findByTestId('connection-password-input'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Re-enter the password to move this connection to a new host.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('update-password-button'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('cancel-password-button'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('should not crash when the host is cleared', async () => {
+    renderWithMantine(
+      <ConnectionForm
+        connection={{ ...baseConnection, id: 'existing-id' }}
+        isNew={false}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('http://localhost:8123'), {
+      target: { value: '' },
+    });
+
+    expect(
+      await screen.findByTestId('connection-password-input'),
+    ).toBeInTheDocument();
+  });
+
+  it('should not save a password typed before the host is reverted', async () => {
+    renderWithMantine(
+      <ConnectionForm
+        connection={{ ...baseConnection, id: 'existing-id' }}
+        isNew={false}
+      />,
+    );
+    const hostInput = screen.getByPlaceholderText('http://localhost:8123');
+
+    fireEvent.change(hostInput, { target: { value: 'http://other.com:8123' } });
+    fireEvent.change(
+      await screen.findByPlaceholderText('Password (default: blank)'),
+      { target: { value: 'typed-password' } },
+    );
+    fireEvent.change(hostInput, { target: { value: baseConnection.host } });
+    await screen.findByTestId('update-password-button');
+
+    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connection: expect.objectContaining({ password: '' }),
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('should show the API message when an update is rejected', async () => {
+    mockUpdateMutate.mockImplementationOnce((_args, { onError }) =>
+      onError({
+        response: {
+          status: 400,
+          json: async () => ({
+            message: 'Password is required when changing the host',
+          }),
+        },
+      }),
+    );
+
+    renderWithMantine(
+      <ConnectionForm
+        connection={{ ...baseConnection, id: 'existing-id' }}
+        isNew={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+    const { notifications } = jest.requireMock<{
+      notifications: { show: jest.Mock };
+    }>('@mantine/notifications');
+    await waitFor(() => {
+      expect(notifications.show).toHaveBeenCalledWith(
+        expect.objectContaining({
+          color: 'red',
+          message: 'Password is required when changing the host',
+        }),
+      );
+    });
+  });
+
   it('should use stripped host for test connection', async () => {
     renderWithMantine(
       <ConnectionForm connection={baseConnection} isNew={true} />,
