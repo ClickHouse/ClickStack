@@ -1,7 +1,5 @@
 import { TIME_SERIES_DISPLAY_TYPE_BY_NAME } from '@hyperdx/common-utils/dist/core/utils';
 import {
-  isAdhocFilter,
-  isAdhocFilterValue,
   isFilterBroadcastEnabled,
   isFilterRequired,
   isFilterVariableEnabled,
@@ -240,32 +238,8 @@ export function translateExternalChartToTileConfig(
   };
 }
 
-/** Filter types the external API and MCP don't expose yet. */
-type InternalOnlyDashboardFilter = Extract<DashboardFilter, { type: 'ADHOC' }>;
-export type ExternalCompatibleDashboardFilter = Exclude<
-  DashboardFilter,
-  InternalOnlyDashboardFilter
->;
-
-/** The filters the external API and MCP may read. */
-export function getExternalCompatibleFilters(
-  filters: DashboardFilter[] | undefined,
-): ExternalCompatibleDashboardFilter[] {
-  return (filters ?? []).filter(
-    (filter): filter is ExternalCompatibleDashboardFilter =>
-      !isAdhocFilter(filter),
-  );
-}
-
-/** Saved filter values the external API and MCP may read. */
-export function getExternalCompatibleFilterValues(
-  values: IDashboard['savedFilterValues'],
-): NonNullable<IDashboard['savedFilterValues']> {
-  return (values ?? []).filter(value => !isAdhocFilterValue(value));
-}
-
 export function translateFilterToExternalFilter(
-  filter: ExternalCompatibleDashboardFilter,
+  filter: DashboardFilter,
 ): ExternalDashboardFilterWithId {
   // Omitted from responses unless the filter is required, so a GET response
   // can be PUT back verbatim.
@@ -277,11 +251,33 @@ export function translateFilterToExternalFilter(
     case 'STATIC_LIST':
       return omit(filter, ...omittedKeys);
 
+    case 'ADHOC':
+      // Only sql filters read `where`; the internal API may have stored one.
+      return filter.sourceType === 'promql'
+        ? omit(filter, 'where', 'whereLanguage')
+        : filter;
+
     case 'PROMETHEUS_LABEL':
       return {
         ...omit(filter, 'source', ...omittedKeys),
         sourceId: filter.source.toString(),
       };
+
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connection', 'source', ...omittedKeys),
+        connectionId: filter.connection.toString(),
+        ...(filter.source ? { sourceId: filter.source.toString() } : {}),
+      };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connection'),
+        ...(filter.connection ? { connectionId: filter.connection } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     case 'QUERY_EXPRESSION': {
       // Ignore variableName and appliesToSourceIds if the filter is not in a mode that uses them
@@ -309,13 +305,30 @@ export function translateExternalFilterToFilter(
 ): DashboardFilter {
   switch (filter.type) {
     case 'STATIC_LIST':
+    case 'ADHOC':
       return filter;
 
     case 'PROMETHEUS_LABEL':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
 
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connectionId', 'sourceId'),
+        connection: filter.connectionId,
+        ...(filter.sourceId ? { source: filter.sourceId } : {}),
+      };
+
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connectionId'),
+        ...(filter.connectionId ? { connection: filter.connectionId } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     default:
       filter satisfies never;

@@ -254,6 +254,15 @@ const mcpSaveSourceSchema = z.object({
         'targets, used instead of SELECT * when fetching full rows. Column ' +
         'names only, no expressions or aliases. Omit to select all columns.',
     ),
+  rowKeyExpression: z
+    .string()
+    .optional()
+    .describe(
+      'Log and trace sources. Comma-separated expressions that together ' +
+        'identify one row, e.g. the partition key, primary key, _block_number ' +
+        'and _block_offset. When set, the row side panel looks rows up by ' +
+        'these only. Omit to detect keys from table metadata.',
+    ),
   orderByExpression: z
     .string()
     .optional()
@@ -465,6 +474,26 @@ const mcpSaveSourceSchema = z.object({
     .describe(
       'Log and trace sources. Rollup tables used for fast field discovery and ' +
         'value autocomplete in filters and search suggestions.',
+    ),
+  mapKeyIndexMaxParts: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      'Log and trace sources. How many data parts are read from text indexes ' +
+        'to discover attribute keys and filter values, chosen by ' +
+        'mapKeyIndexPartSelection. Raise it if keys or values are missing from ' +
+        'filters; lower it if they load slowly. Omit for the default of 20.',
+    ),
+  mapKeyIndexPartSelection: z
+    .enum(['median', 'smallest', 'largest'])
+    .optional()
+    .describe(
+      'Log and trace sources. Which data parts, by row count, are read from ' +
+        'text indexes for attribute keys and filter values: "median" (used when unset) ' +
+        'balances coverage and cost, "smallest" reads the newest unmerged ' +
+        'parts, "largest" reads the most merged data.',
     ),
 });
 

@@ -103,10 +103,12 @@ const ValueRenderer = React.memo(
         </span>
       );
     }
+    // Arrays can be sparse (hidden blanks keep their index), so count present
+    // entries rather than `length`.
     if (isArray(value)) {
       return (
         <span ref={ref} className={styles.array}>
-          {'[]'} {value.length} items
+          {'[]'} {Object.keys(value).length} items
         </span>
       );
     }
@@ -218,7 +220,7 @@ const Line = React.memo(
     const isExpandable = React.useMemo(
       () =>
         (isPlainObject(value) && Object.keys(value).length > 0) ||
-        (isArray(value) && value.length > 0) ||
+        (isArray(value) && Object.keys(value).length > 0) ||
         isStringValueValidJson,
       [isStringValueValidJson, value],
     );

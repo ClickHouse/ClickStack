@@ -11,11 +11,8 @@ import {
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 
-import {
-  DRAIN_EXTRA_DELIMITERS,
-  LEVEL_COLUMN_ALIAS,
-  useGroupedPatterns,
-} from '@/hooks/usePatterns';
+import { DRAIN_EXTRA_DELIMITERS } from '@/components/Patterns/drainDelimiters';
+import { LEVEL_COLUMN_ALIAS, useGroupedPatterns } from '@/hooks/usePatterns';
 import { getEventBody, getLevelExpression } from '@/source';
 import { getLogLevelClass, selectItemExpression } from '@/utils';
 

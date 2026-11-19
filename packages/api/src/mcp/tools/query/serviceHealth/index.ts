@@ -51,7 +51,7 @@ const DESCRIPTION =
   'For a flagged service, check its own runtime metrics (memory, GC, CPU, ' +
   'restarts by pod) on the metric source before blaming dependencies, then ' +
   'use clickstack_event_deltas and ' +
-  'clickstack_trace_top_time_consuming_operations.\n\n' +
+  'clickstack_trace_top_time_consuming_ops.\n\n' +
   'CALIBRATION: flags fire only past fixed thresholds (see `usage` in the ' +
   'response); smaller swings are usually normal variance, and no flags is ' +
   'a valid result for a routine check. Thresholds apply to service-wide ' +

@@ -15,7 +15,6 @@ import {
   isConfigTile,
   validateDashboardTiles,
 } from '@/routers/external-api/v2/utils/dashboards';
-import { getExternalCompatibleFilterValues } from '@/utils/externalApi';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 import { externalDashboardTileSchemaWithId } from '@/utils/zod';
 
@@ -202,6 +201,7 @@ export function registerPatchDashboard({
           teamId,
           tiles: [mergedTile],
           existingTiles: existingDashboard.tiles ?? [],
+          existingFilters: existingDashboard.filters,
           containers: existingDashboard.containers ?? [],
         });
         if (validationError) {
@@ -270,11 +270,7 @@ export function registerPatchDashboard({
         name: updatedDashboard.name,
         tags: updatedDashboard.tags,
         ...(savedFilterValues !== undefined
-          ? {
-              savedFilterValues: getExternalCompatibleFilterValues(
-                updatedDashboard.savedFilterValues,
-              ),
-            }
+          ? { savedFilterValues: updatedDashboard.savedFilterValues ?? [] }
           : {}),
         ...(frontendUrl
           ? { url: `${frontendUrl}/dashboards/${updatedDashboard._id}` }
