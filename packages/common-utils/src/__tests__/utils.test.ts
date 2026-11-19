@@ -15,6 +15,7 @@ import {
   getDistributedTableArgs,
   getFirstOrderingItem,
   getPercentileAggFnLevel,
+  getTextIndexDictionaryBlockSize,
   hasNonEmptyOrderBy,
   hasPositiveSeriesLimit,
   isFirstOrderByAscending,
@@ -1641,6 +1642,65 @@ describe('utils', () => {
       expect(template.filters).toEqual([
         { ...sqlFilter, connection: 'Production DB' },
       ]);
+    });
+
+    it('should remap a SQL query filter source id to a name, dropping one that no longer exists', () => {
+      const sqlFilter = {
+        id: 'filter-sql',
+        type: 'SQL_QUERY' as const,
+        name: 'Service',
+        connection: 'conn1',
+        source: 'source1',
+        sqlTemplate: 'SELECT DISTINCT ServiceName FROM $__sourceTable',
+        isBroadcastEnabled: false as const,
+        isVariableEnabled: true as const,
+      };
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'SQL Filter Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [sqlFilter, { ...sqlFilter, id: 'gone', source: 'deleted' }],
+      };
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'conn1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'logs_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+      const connections: Connection[] = [
+        {
+          id: 'conn1',
+          name: 'Production DB',
+          host: 'http://localhost:8123',
+          username: 'default',
+        },
+      ];
+
+      const template = convertToDashboardTemplate(
+        dashboard,
+        sources,
+        connections,
+      );
+
+      expect(template.filters?.[0]).toEqual({
+        ...sqlFilter,
+        connection: 'Production DB',
+        source: 'Logs',
+      });
+      // An empty name would fail the template schema's min(1) on import.
+      expect(template.filters?.[1]).toEqual({
+        ...sqlFilter,
+        id: 'gone',
+        connection: 'Production DB',
+        source: undefined,
+      });
+      expect(() => DashboardTemplateSchema.parse(template)).not.toThrow();
     });
 
     it('should convert a dashboard without filters to a dashboard template', () => {
@@ -3655,6 +3715,55 @@ describe('utils', () => {
     it('returns other select items unchanged', () => {
       const select = { aggFn: 'quantile', level: 0.5, valueExpression: 'x' };
       expect(resolvePercentileAggFn(select)).toBe(select);
+    });
+  });
+
+  describe('getTextIndexDictionaryBlockSize', () => {
+    const engineFull =
+      'MergeTree ORDER BY Timestamp SETTINGS index_granularity = 8192, text_index_dictionary_block_size = 4096';
+
+    it.each([
+      [
+        'the index argument first',
+        {
+          typeFull: "text(tokenizer = 'array', dictionary_block_size = 8192)",
+          engineFull,
+          serverMergeTreeSettings: new Map([
+            ['text_index_dictionary_block_size', '1024'],
+          ]),
+        },
+        8192,
+      ],
+      [
+        'the table setting next',
+        {
+          typeFull: "text(tokenizer = 'array')",
+          engineFull,
+          serverMergeTreeSettings: new Map([
+            ['text_index_dictionary_block_size', '1024'],
+          ]),
+        },
+        4096,
+      ],
+      [
+        'the server setting next',
+        {
+          typeFull: "text(tokenizer = 'array')",
+          engineFull: 'MergeTree ORDER BY Timestamp',
+          serverMergeTreeSettings: new Map([
+            ['text_index_dictionary_block_size', '1024'],
+          ]),
+        },
+        1024,
+      ],
+      ['512 when nothing is known', {}, 512],
+      [
+        '512 for a value that is not a positive integer',
+        { typeFull: "text(tokenizer = 'array', dictionary_block_size = 0)" },
+        512,
+      ],
+    ])('uses %s', (_, input, expected) => {
+      expect(getTextIndexDictionaryBlockSize(input)).toBe(expected);
     });
   });
 });

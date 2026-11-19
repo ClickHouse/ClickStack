@@ -55,8 +55,10 @@ jobs:
       # Whole-repo escape-hatch ratchet — runs unconditionally (not via `nx
       # affected`, and not via `make ci-lint`, which this job no longer calls),
       # so the gate can't be silently skipped for a PR that touches few projects.
-      - name: Escape-hatch ratchet tests
-        run: node --test scripts/ci/__tests__/ratchet.test.mjs
+      - name: Escape-hatch ratchet and ESLint wrapper tests
+        run:
+          node --test scripts/ci/__tests__/ratchet.test.mjs
+          scripts/ci/__tests__/eslint-warnings.test.mjs
       # Also unconditional, and against the PR's own tree. claude-code-review.yml
       # runs this file too, but from a base-branch checkout, so a PR that breaks
       # what it pins (the AGENTS.md heading every review footer links to) passes

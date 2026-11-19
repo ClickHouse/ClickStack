@@ -41,7 +41,7 @@ export const escapeJsonString = (str: string) => {
   return JSON.stringify(str).slice(1, -1);
 };
 
-const MAX_NUM_WINDOWS = 50;
+export const MAX_NUM_WINDOWS = 50;
 const maxLookbackTime = (windowSizeInMins: number) =>
   3600_000 * (windowSizeInMins < 15 ? 6 : 24);
 export function calcAlertDateRange(

@@ -16,6 +16,7 @@ import {
   whereLanguageSchema,
   whereSchema,
 } from './schemas';
+import type { SearchCoverage } from './windowedSearch';
 
 // ─── Schema ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +76,9 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
         'For pattern discovery, use clickstack_event_patterns instead.\n\n' +
         'Set denoise=true to automatically filter out high-frequency repetitive patterns, ' +
         'surfacing only unusual or interesting events.\n\n' +
+        'Scans newest-first. If time runs out (or an older part of the range fails) before the range is searched, ' +
+        'it returns the rows found so far with a `partial` block (reason, requestedRange, coveredRange, incompleteRange) ' +
+        'and a `hints` entry naming the next call.\n\n' +
         'Column naming: top-level columns are PascalCase (Duration, StatusCode). ' +
         "Map attributes use bracket syntax: SpanAttributes['http.method'].",
       inputSchema: searchSchema,
@@ -101,6 +105,7 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
         endDate,
         {
           maxResults: input.maxResults,
+          partialSearchResults: true,
         },
       );
 
@@ -117,6 +122,8 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
       let parsed: {
         result?: { data?: Record<string, unknown>[] };
         trimNotes?: string[];
+        partial?: SearchCoverage;
+        hints?: string[];
       };
       try {
         parsed = JSON.parse(resultText);
@@ -136,13 +143,25 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
       if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return result;
       }
+      // Keep the partial-result notice, and sample patterns only over the
+      // range the search actually reached.
+      const partialFields = parsed.partial
+        ? { partial: parsed.partial, hints: parsed.hints ?? [] }
+        : {};
+      const scannedStart = parsed.partial
+        ? (parsed.partial.incompleteRange?.startTime ??
+          parsed.partial.coveredRange?.startTime)
+        : undefined;
+      const denoiseStartDate = scannedStart
+        ? new Date(scannedStart)
+        : startDate;
 
       let denoised;
       try {
         denoised = await denoiseSearchResults(
           teamId.toString(),
           input.sourceId,
-          startDate,
+          denoiseStartDate,
           endDate,
           rows,
           {
@@ -176,6 +195,7 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
                     filteredRowCount: rows.length,
                     skipped: 'denoise_failed',
                   },
+                  ...partialFields,
                   ...(trimNotes.length > 0
                     ? {
                         note: 'Result was trimmed for context size. Narrow the time range or add filters to reduce data.',
@@ -219,6 +239,7 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
                   filteredRowCount: denoised.rows.length,
                   ...(denoised.skipped ? { skipped: denoised.skipped } : {}),
                 },
+                ...partialFields,
                 ...(trimNotes.length > 0
                   ? {
                       note: 'Result was trimmed for context size. Narrow the time range or add filters to reduce data.',

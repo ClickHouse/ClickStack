@@ -3425,6 +3425,7 @@ function DBDashboardPage({
           incompatibleReferenceVariablesByFilterId={
             incompatibleReferenceVariablesByFilterId
           }
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
       {/* Selection indicator */}
@@ -3604,6 +3605,7 @@ function DBDashboardPage({
           showRequiredFilterOptions
           variables={variables}
           dateRange={searchedTimeRange}
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
     </ReferenceVariablesProvider>
