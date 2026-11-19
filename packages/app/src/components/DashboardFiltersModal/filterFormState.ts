@@ -5,13 +5,16 @@ import {
   isFilterGlobalRequirement,
   isFilterRequired,
   isFilterVariableEnabled,
+  isReferenceVariableFilterType,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AdhocDashboardFilter,
   DashboardFilter,
   DashboardFilterSchema,
+  DataSourceDashboardFilter,
   PromqlLabelDashboardFilter,
   QueryExpressionDashboardFilter,
+  SqlQueryDashboardFilter,
   StaticListDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
@@ -53,7 +56,9 @@ export type FilterFormValues = {
     | 'isGlobalRequirement'
     | 'maxSelections'
   > &
-  Pick<AdhocDashboardFilter, 'sourceType' | 'sources'>;
+  Pick<AdhocDashboardFilter, 'sourceType' | 'sources'> &
+  Pick<DataSourceDashboardFilter, 'allowedSourceKinds' | 'connection'> &
+  Pick<SqlQueryDashboardFilter, 'connection' | 'sqlTemplate'>;
 
 export type FilterFormControl = Control<FilterFormValues>;
 
@@ -65,6 +70,8 @@ export const toFormValues = (
   const staticList = filter?.type === 'STATIC_LIST' ? filter : undefined;
   const promqlLabel = filter?.type === 'PROMETHEUS_LABEL' ? filter : undefined;
   const adhoc = filter?.type === 'ADHOC' ? filter : undefined;
+  const dataSource = filter?.type === 'DATA_SOURCE' ? filter : undefined;
+  const sqlQuery = filter?.type === 'SQL_QUERY' ? filter : undefined;
 
   return {
     id: filter?.id ?? crypto.randomUUID(),
@@ -79,7 +86,12 @@ export const toFormValues = (
 
     // QUERY_EXPRESSION fields
     expression: queried?.expression ?? '',
-    source: queried?.source ?? promqlLabel?.source ?? presetSourceId ?? '',
+    source:
+      queried?.source ??
+      promqlLabel?.source ??
+      sqlQuery?.source ??
+      presetSourceId ??
+      '',
     sourceMetricType: queried?.sourceMetricType,
     where: queried?.where ?? adhoc?.where ?? '',
     whereLanguage:
@@ -100,6 +112,15 @@ export const toFormValues = (
     // ADHOC fields
     sourceType: adhoc?.sourceType ?? 'sql',
     sources: adhoc?.sources ?? [],
+
+    // DATA_SOURCE fields
+    allowedSourceKinds: dataSource?.allowedSourceKinds ?? [],
+
+    // DATA_SOURCE and SQL_QUERY fields
+    connection: dataSource?.connection ?? sqlQuery?.connection ?? '',
+
+    // SQL_QUERY fields
+    sqlTemplate: sqlQuery?.sqlTemplate ?? '',
   };
 };
 
@@ -137,6 +158,40 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),
       ...selectionLimits,
+    });
+  }
+
+  if (values.type === 'SQL_QUERY') {
+    return DashboardFilterSchema.parse({
+      ...rest,
+      source: values.source || undefined,
+      sqlTemplate: values.sqlTemplate.trim(),
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: getFilterVariableName(values),
+      ...selectionLimits,
+    });
+  }
+
+  // Reference variables are always single-select and required, so only the
+  // global requirement checkbox is consulted
+  if (isReferenceVariableFilterType(values.type)) {
+    return DashboardFilterSchema.parse({
+      id: values.id,
+      type: values.type,
+      name: values.name,
+      ...(values.type === 'DATA_SOURCE'
+        ? {
+            allowedSourceKinds: values.allowedSourceKinds,
+            connection: values.connection || undefined,
+          }
+        : {}),
+      minSelections: 1,
+      maxSelections: 1,
+      ...(isGlobalRequirement ? { isGlobalRequirement: true } : {}),
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: getFilterVariableName(values),
     });
   }
 

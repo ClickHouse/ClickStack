@@ -18,6 +18,10 @@ import { ExpressionFormRow } from './ExpressionFormRow';
 import { FormRow } from './FormRow';
 import { HighlightedAttributeExpressionsFormRow } from './HighlightedAttributes';
 import {
+  MapKeyIndexMaxPartsFormRow,
+  MapKeyIndexPartSelectionFormRow,
+} from './MapKeyIndexMaxPartsFormRow';
+import {
   MaterializedViewsFormSection,
   MetadataMaterializedViewsFormSection,
 } from './MaterializedViews';
@@ -397,6 +401,8 @@ export function TraceTableModelForm(props: TableModelProps) {
         />
       </FormRow>
       <UseTextIndexFormRow control={control} />
+      <MapKeyIndexMaxPartsFormRow control={control} />
+      <MapKeyIndexPartSelectionFormRow control={control} />
       <FormRow
         label={'Displayed Timestamp Column'}
         helpText="This DateTime column is used to display and order search results."

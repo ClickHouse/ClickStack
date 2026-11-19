@@ -28,7 +28,10 @@ import {
   isJSDataTypeJSONStringifiable,
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
+import {
+  getEngineSetting,
+  splitAndTrimWithBracket,
+} from '@hyperdx/common-utils/dist/core/utils';
 import {
   BuilderChartConfigWithDateRange,
   isLogSource,
@@ -391,6 +394,7 @@ export const RawLogTable = memo(
     selectionResetKey,
     onSelectedRowsChange,
     getRowWhere,
+    rowActions,
     variant = 'default',
     onRemoveColumn,
   }: {
@@ -434,6 +438,8 @@ export const RawLogTable = memo(
     sortOrder?: SortingState;
     onSortingChange?: (v: SortingState | null) => void;
     getRowWhere?: (row: Record<string, any>) => RowWhereResult;
+    /** Hover buttons for a row, shown instead of the row copy buttons. */
+    rowActions?: (row: Record<string, unknown>) => React.ReactNode;
     variant?: DBRowTableVariant;
     onRemoveColumn?: (column: string) => void;
   }) => {
@@ -1338,7 +1344,12 @@ export const RawLogTable = memo(
                               );
                             })}
                           {/* Row-level copy buttons */}
-                          {getRowWhere && (
+                          {rowActions && (
+                            <div className={styles.rowButtons}>
+                              {rowActions(row.original)}
+                            </div>
+                          )}
+                          {getRowWhere && !rowActions && (
                             <DBRowTableRowButtons
                               row={row.original}
                               getRowWhere={getRowWhere}
@@ -1542,14 +1553,6 @@ const BLOCK_COLUMN_SETTINGS = [
   { column: '_block_number', setting: 'enable_block_number_column' },
   { column: '_block_offset', setting: 'enable_block_offset_column' },
 ];
-
-// engine_full ends with the SETTINGS clause.
-function getEngineSetting(engineFull: string, name: string) {
-  const settingsClause = engineFull.match(/ SETTINGS (.*)$/)?.[1] ?? '';
-  return splitAndTrimWithBracket(settingsClause)
-    .map(setting => setting.split(' = '))
-    .find(([key]) => key === name)?.[1];
-}
 
 function omitsBlockColumnSetting(engineFull: string) {
   return BLOCK_COLUMN_SETTINGS.some(

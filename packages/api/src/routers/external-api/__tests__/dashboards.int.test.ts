@@ -6329,13 +6329,161 @@ describe('External API v2 Dashboards - new format', () => {
         expect(response.body.message).toContain(connectionId);
       });
 
+      it('accepts a connection variable as the connection', async () => {
+        const response = await sendFilters([
+          {
+            id: new ObjectId().toString(),
+            type: 'CONNECTION',
+            name: 'Connection',
+            variableName: 'conn',
+          },
+          sqlFilterInput({ connectionId: '$conn' }),
+        ]);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.filters[1]).toMatchObject({
+          type: 'SQL_QUERY',
+          connectionId: '$conn',
+        });
+      });
+
+      it('rejects a reference that names no connection variable', async () => {
+        const response = await sendFilters([
+          sqlFilterInput({ connectionId: '$conn' }),
+        ]);
+
+        expect(response.status).toBe(400);
+        expect(response.body.message).toMatch(
+          /does not name a connection variable/,
+        );
+      });
+
       it.each([
         ['broadcast enabled', { isBroadcastEnabled: true }],
         ['not variable-enabled', { isVariableEnabled: false }],
         ['no SQL', { sqlTemplate: '' }],
-        ['a source', { sourceId: new ObjectId().toString() }],
+        [
+          'a source that does not exist',
+          { sourceId: new ObjectId().toString() },
+        ],
       ])('rejects a SQL query filter with %s', async (_label, overrides) => {
         await expectFilters([sqlFilterInput(overrides)], 400);
+      });
+
+      it('accepts a SQL query filter with a source and round-trips it through GET', async () => {
+        const sqlTemplate =
+          'SELECT DISTINCT ServiceName FROM $__sourceTable WHERE $__filters';
+        const response = await sendFilters([
+          sqlFilterInput({ sourceId: traceSource._id.toString(), sqlTemplate }),
+        ]);
+        expect(response.status).toBe(200);
+
+        const [filter] = response.body.data.filters;
+        expect(filter).toMatchObject({
+          type: 'SQL_QUERY',
+          connectionId: connection._id.toString(),
+          sourceId: traceSource._id.toString(),
+          sqlTemplate,
+        });
+        expect(filter).not.toHaveProperty('source');
+
+        const getResponse = await authRequest(
+          'get',
+          `${BASE_URL}/${response.body.data.id}`,
+        ).expect(200);
+        expect(getResponse.body.data.filters).toEqual(
+          response.body.data.filters,
+        );
+      });
+
+      it('rejects a PromQL source', async () => {
+        const response = await sendFilters([
+          sqlFilterInput({ sourceId: promqlSource._id.toString() }),
+        ]);
+
+        expect(response.status).toBe(400);
+        expect(response.body.message).toContain(promqlSource._id.toString());
+      });
+
+      it('rejects a source on a different connection', async () => {
+        const otherConnection = await Connection.create({
+          team: team._id,
+          name: 'Other',
+          host: config.CLICKHOUSE_HOST,
+          username: config.CLICKHOUSE_USER,
+          password: config.CLICKHOUSE_PASSWORD,
+        });
+
+        const response = await sendFilters([
+          sqlFilterInput({
+            connectionId: otherConnection._id.toString(),
+            sourceId: traceSource._id.toString(),
+          }),
+        ]);
+
+        expect(response.status).toBe(400);
+        expect(response.body.message).toContain(traceSource._id.toString());
+      });
+
+      const connectionVariableInput = {
+        id: new ObjectId().toString(),
+        type: 'CONNECTION',
+        name: 'Connection',
+        variableName: 'conn',
+      };
+
+      it('accepts a source with a connection variable', async () => {
+        const response = await sendFilters([
+          connectionVariableInput,
+          sqlFilterInput({
+            connectionId: '$conn',
+            sourceId: traceSource._id.toString(),
+          }),
+        ]);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.filters[1]).toMatchObject({
+          connectionId: '$conn',
+          sourceId: traceSource._id.toString(),
+        });
+      });
+
+      it('accepts a data source variable and round-trips it through GET', async () => {
+        const response = await sendFilters([
+          connectionVariableInput,
+          {
+            id: new ObjectId().toString(),
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+          },
+          sqlFilterInput({ connectionId: '$conn', sourceId: '$traces' }),
+        ]);
+        expect(response.status).toBe(200);
+        expect(response.body.data.filters[2]).toMatchObject({
+          connectionId: '$conn',
+          sourceId: '$traces',
+        });
+
+        const getResponse = await authRequest(
+          'get',
+          `${BASE_URL}/${response.body.data.id}`,
+        ).expect(200);
+        expect(getResponse.body.data.filters).toEqual(
+          response.body.data.filters,
+        );
+      });
+
+      it('rejects a reference to an unknown data source variable', async () => {
+        const response = await sendFilters([
+          sqlFilterInput({ sourceId: '$traces' }),
+        ]);
+
+        expect(response.status).toBe(400);
+        expect(JSON.stringify(response.body)).toMatch(
+          /does not name a data source variable/,
+        );
       });
     });
 
@@ -8508,6 +8656,381 @@ describe('External API v2 Dashboards - new format', () => {
           }),
         )
         .expect(400);
+    });
+  });
+
+  describe('reference variables', () => {
+    const connectionFilter = {
+      type: 'CONNECTION' as const,
+      name: 'Connection',
+      variableName: 'conn',
+    };
+    const dataSourceFilter = {
+      type: 'DATA_SOURCE' as const,
+      name: 'Traces source',
+      variableName: 'traces',
+      allowedSourceKinds: [SourceKind.Trace],
+      connectionId: '$conn',
+    };
+    const rawSqlTile = {
+      name: 'Raw SQL',
+      x: 0,
+      y: 0,
+      w: 6,
+      h: 3,
+      config: {
+        configType: 'sql',
+        displayType: 'table',
+        connectionId: '$conn',
+        sqlTemplate: 'SELECT 1',
+      },
+    };
+
+    it('round-trips the variables, their values and the tiles that use them', async () => {
+      const globalConnectionFilter = {
+        ...connectionFilter,
+        isGlobalRequirement: true,
+      };
+      const savedFilterValues = [
+        { type: 'variable', name: 'conn', values: [connection._id.toString()] },
+        {
+          type: 'variable',
+          name: 'traces',
+          values: [traceSource._id.toString()],
+        },
+      ];
+      const created = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [makeExternalTile({ sourceId: '$traces' }), rawSqlTile],
+          tags: [],
+          filters: [globalConnectionFilter, dataSourceFilter],
+          savedFilterValues,
+        })
+        .expect(200);
+
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      expect(fetched.body.data.filters).toEqual([
+        expect.objectContaining(globalConnectionFilter),
+        expect.objectContaining(dataSourceFilter),
+      ]);
+      expect(fetched.body.data.tiles.map(t => t.config)).toEqual([
+        expect.objectContaining({ sourceId: '$traces' }),
+        expect.objectContaining({ connectionId: '$conn' }),
+      ]);
+      expect(fetched.body.data.savedFilterValues).toEqual(savedFilterValues);
+
+      const echoed = await authRequest(
+        'put',
+        `${BASE_URL}/${created.body.data.id}`,
+      )
+        .send(fetched.body.data)
+        .expect(200);
+      expect(echoed.body.data.filters).toEqual(fetched.body.data.filters);
+      expect(echoed.body.data.tiles.map(t => t.config)).toEqual(
+        fetched.body.data.tiles.map(t => t.config),
+      );
+    });
+
+    it('rejects a tile referencing an undeclared variable', async () => {
+      const res = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [makeExternalTile({ sourceId: '$traces' })],
+          tags: [],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a data source variable/);
+    });
+
+    it('rejects a connection reference to an undeclared connection variable', async () => {
+      const res = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [rawSqlTile],
+          tags: [],
+          filters: [{ ...dataSourceFilter, connectionId: undefined }],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a connection variable/);
+    });
+
+    it('accepts a PromQL tile and PROMETHEUS_LABEL filter on a PromQL data source variable', async () => {
+      await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [
+            {
+              name: 'PromQL',
+              x: 0,
+              y: 0,
+              w: 6,
+              h: 3,
+              config: {
+                configType: 'promql',
+                displayType: 'line',
+                sourceId: '$prom',
+                expressions: [{ expression: 'up' }],
+              },
+            },
+          ],
+          tags: [],
+          filters: [
+            {
+              type: 'DATA_SOURCE',
+              name: 'PromQL source',
+              variableName: 'prom',
+              allowedSourceKinds: [SourceKind.Promql],
+            },
+            {
+              type: 'PROMETHEUS_LABEL',
+              name: 'Job',
+              sourceId: '$prom',
+              label: 'job',
+            },
+          ],
+        })
+        .expect(200);
+    });
+
+    it('accepts an ADHOC filter whose sources reference a data source variable', async () => {
+      const adhocFilter = {
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['$traces'],
+        appliesToSourceIds: ['$traces'],
+      };
+      await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [],
+          tags: [],
+          filters: [omit(dataSourceFilter, 'connectionId'), adhocFilter],
+        })
+        .expect(200);
+
+      const res = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [],
+          tags: [],
+          filters: [adhocFilter],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a data source variable/);
+    });
+
+    it('accepts a raw SQL tile with a fixed source on a connection variable', async () => {
+      await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [
+            {
+              ...rawSqlTile,
+              config: {
+                ...rawSqlTile.config,
+                sourceId: traceSource._id.toString(),
+              },
+            },
+          ],
+          tags: [],
+          filters: [connectionFilter],
+        })
+        .expect(200);
+    });
+
+    it("rejects a raw SQL tile whose data source variable is limited to another connection than the tile's", async () => {
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: config.CLICKHOUSE_HOST,
+        username: config.CLICKHOUSE_USER,
+        password: config.CLICKHOUSE_PASSWORD,
+      });
+
+      const res = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [
+            {
+              ...rawSqlTile,
+              config: {
+                ...rawSqlTile.config,
+                connectionId: connection._id.toString(),
+                sourceId: '$traces',
+              },
+            },
+          ],
+          tags: [],
+          filters: [
+            {
+              ...dataSourceFilter,
+              connectionId: otherConnection._id.toString(),
+            },
+          ],
+        })
+        .expect(400);
+      expect(res.body.message).toBe(
+        'The following source IDs do not match the specified connections: $traces',
+      );
+    });
+
+    it('checks a PUT without filters against the stored variables', async () => {
+      const dashboard = await createTestDashboard({
+        filters: [
+          { id: new ObjectId().toString(), ...connectionFilter },
+          {
+            id: new ObjectId().toString(),
+            ...omit(dataSourceFilter, 'connectionId'),
+            connection: '$conn',
+          },
+        ],
+      });
+
+      await authRequest('put', `${BASE_URL}/${dashboard._id}`)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [makeExternalTile({ sourceId: '$traces' })],
+          tags: [],
+        })
+        .expect(200);
+    });
+
+    // Only references an update adds are checked, so editing a variable
+    // doesn't fail on the tiles that already use it.
+    it('accepts a PUT whose filter change leaves stored references unsatisfied', async () => {
+      const variable = { ...dataSourceFilter, connectionId: undefined };
+      const created = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [makeExternalTile({ sourceId: '$traces' })],
+          tags: [],
+          filters: [variable],
+        })
+        .expect(200);
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      const url = `${BASE_URL}/${created.body.data.id}`;
+      const [storedVariable] = fetched.body.data.filters;
+
+      await authRequest('put', url)
+        .send({
+          ...fetched.body.data,
+          filters: [
+            { ...storedVariable, allowedSourceKinds: [SourceKind.Promql] },
+          ],
+        })
+        .expect(200);
+      await authRequest('put', url)
+        .send({ ...fetched.body.data, filters: [] })
+        .expect(200);
+
+      const res = await authRequest('put', url)
+        .send({
+          ...fetched.body.data,
+          filters: [],
+          tiles: [
+            ...fetched.body.data.tiles,
+            makeExternalTile({ sourceId: '$nope' }),
+          ],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a data source variable/);
+    });
+
+    it("accepts a PUT that moves a raw SQL tile's data source variable to another connection", async () => {
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: config.CLICKHOUSE_HOST,
+        username: config.CLICKHOUSE_USER,
+        password: config.CLICKHOUSE_PASSWORD,
+      });
+      const created = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [
+            {
+              ...rawSqlTile,
+              config: {
+                ...rawSqlTile.config,
+                connectionId: connection._id.toString(),
+                sourceId: '$traces',
+              },
+            },
+          ],
+          tags: [],
+          filters: [
+            { ...dataSourceFilter, connectionId: connection._id.toString() },
+          ],
+        })
+        .expect(200);
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      const [storedVariable] = fetched.body.data.filters;
+
+      await authRequest('put', `${BASE_URL}/${created.body.data.id}`)
+        .send({
+          ...fetched.body.data,
+          filters: [
+            {
+              ...storedVariable,
+              connectionId: otherConnection._id.toString(),
+            },
+          ],
+        })
+        .expect(200);
+    });
+
+    it('deletes the alert of a tile that moves to a data source variable', async () => {
+      const tile = makeExternalTile({ sourceId: traceSource._id.toString() });
+      const created = await authRequest('post', BASE_URL)
+        .send({
+          name: 'Variable Dashboard',
+          tiles: [tile],
+          tags: [],
+          filters: [connectionFilter, dataSourceFilter],
+        })
+        .expect(200);
+      const { id: dashboardId, tiles } = created.body.data;
+      const webhook = await Webhook.create({
+        name: 'Test Webhook',
+        service: WebhookService.Slack,
+        url: 'https://hooks.slack.com/test',
+        team: team._id,
+      });
+      const alert = await Alert.create({
+        team: team._id,
+        dashboard: dashboardId,
+        tileId: tiles[0].id,
+        source: AlertSource.TILE,
+        threshold: 100,
+        interval: '1h',
+        thresholdType: AlertThresholdType.ABOVE,
+        channel: { type: 'webhook', webhookId: webhook._id.toString() },
+      });
+
+      await authRequest('put', `${BASE_URL}/${dashboardId}`)
+        .send({
+          ...created.body.data,
+          tiles: [
+            {
+              ...tiles[0],
+              config: { ...tiles[0].config, sourceId: '$traces' },
+            },
+          ],
+        })
+        .expect(200);
+
+      expect(await Alert.findById(alert._id)).toBeNull();
     });
   });
 

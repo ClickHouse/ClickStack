@@ -1,9 +1,11 @@
 import {
+  getVariableReferenceError,
   validateDashboardFilterModes,
   validateDashboardFilterOptionUniqueness,
   validateDashboardFilterVariableNames,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import { isSqlQueryFilter } from '@hyperdx/common-utils/dist/filters';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   DashboardFilter,
   DashboardSchema,
@@ -65,9 +67,10 @@ const addFilterIssues = (
 };
 
 /**
- * Rejects PROMETHEUS_LABEL and ADHOC filters that reference a source that is
- * missing or of the wrong kind. Resolving these filters needs a live source of
- * the right kind, unlike other filter types. References the stored filter with
+ * Rejects PROMETHEUS_LABEL, ADHOC and SQL_QUERY filters that reference a source
+ * that is missing or of the wrong kind, and SQL_QUERY filters whose source is
+ * on another connection. Resolving these filters needs a live source of the
+ * right kind, unlike other filter types. References the stored filter with
  * the same ID already made are skipped, so a since-deleted source doesn't block
  * unrelated saves. Returns an error message, or null when there is nothing to
  * reject.
@@ -77,7 +80,10 @@ async function validateFilterSources(
   filters: DashboardFilter[] = [],
   existingFilters: DashboardFilter[] = [],
 ): Promise<string | null> {
-  const refs = getChangedFilterSourceRefs(filters, existingFilters);
+  const refs = getChangedFilterSourceRefs(filters, existingFilters).filter(
+    // Variable references are checked by validateDashboardVariableReferences
+    ref => parseVariableReference(ref.id) == null,
+  );
   if (refs.length === 0) return null;
   return getFilterSourceRefError(refs, await getSources(teamId.toString()));
 }
@@ -85,7 +91,8 @@ async function validateFilterSources(
 /**
  * Rejects SQL_QUERY filters whose connection doesn't belong to the team. As in
  * `validateFilterSources`, a connection the stored filter with the same ID
- * already used is skipped. Returns an error message, or null.
+ * already used is skipped, and so is a variable reference. Returns an error
+ * message, or null.
  */
 async function validateFilterConnections(
   teamId: ObjectId,
@@ -101,7 +108,10 @@ async function validateFilterConnections(
     filters
       .filter(isSqlQueryFilter)
       .filter(
-        filter => existingConnectionById.get(filter.id) !== filter.connection,
+        filter =>
+          // Variable references are checked by validateDashboardVariableReferences
+          parseVariableReference(filter.connection) == null &&
+          existingConnectionById.get(filter.id) !== filter.connection,
       )
       .map(filter => filter.connection),
   );
@@ -181,10 +191,9 @@ router.post(
       // dashboard to the provisioner.
       const dashboard = _.omit(req.body, 'provisioned');
 
-      const filterError = await validateFilterReferences(
-        teamId,
-        req.body.filters,
-      );
+      const filterError =
+        getVariableReferenceError(req.body.tiles, req.body.filters) ??
+        (await validateFilterReferences(teamId, req.body.filters));
       if (filterError != null) {
         return res.status(400).json({ message: filterError });
       }
@@ -229,11 +238,19 @@ router.patch(
       // null still signals field removal downstream.
       const updates = DashboardWithoutIdSchema.partial().parse(req.body);
 
-      const filterError = await validateFilterReferences(
-        teamId,
-        req.body.filters,
-        dashboard.filters,
-      );
+      const filterError =
+        // Only references this update adds are checked, so a filter edit
+        // can't fail on tiles and filters it didn't touch
+        getVariableReferenceError(
+          req.body.tiles ?? dashboard.tiles,
+          req.body.filters ?? dashboard.filters,
+          dashboard,
+        ) ??
+        (await validateFilterReferences(
+          teamId,
+          req.body.filters,
+          dashboard.filters,
+        ));
       if (filterError != null) {
         return res.status(400).json({ message: filterError });
       }

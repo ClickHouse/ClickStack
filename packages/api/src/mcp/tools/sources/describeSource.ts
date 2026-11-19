@@ -3,7 +3,10 @@ import {
   filterColumnMetaByType,
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
+import {
+  getMetadata,
+  tcFromSource,
+} from '@hyperdx/common-utils/dist/core/metadata';
 import { type MetricTable, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import SqlString from 'sqlstring';
@@ -224,10 +227,8 @@ async function describeSourceSchema(
 
   // Shared by stages 2–4 so map-key discovery can use rollup tables
   // instead of falling back to expensive main-table scans.
-  const metadataMVs =
-    'metadataMaterializedViews' in source
-      ? source.metadataMaterializedViews
-      : undefined;
+  const { metadataMVs, mapKeyIndexMaxParts, mapKeyIndexPartSelection } =
+    tcFromSource(source);
 
   const now = new Date();
   const dateRange: [Date, Date] = [
@@ -306,6 +307,8 @@ async function describeSourceSchema(
             maxKeys: 50,
             connectionId,
             metadataMVs,
+            mapKeyIndexMaxParts,
+            mapKeyIndexPartSelection,
             dateRange,
             timestampValueExpression,
             signal,
@@ -352,6 +355,8 @@ async function describeSourceSchema(
         maxValuesPerKey: MAX_LC_VALUES,
         connectionId,
         metadataMVs,
+        mapKeyIndexMaxParts,
+        mapKeyIndexPartSelection,
         dateRange,
         timestampValueExpression,
         signal,
@@ -399,6 +404,8 @@ async function describeSourceSchema(
         maxValuesPerKey: MAX_MAP_KEY_VALUES,
         connectionId,
         metadataMVs,
+        mapKeyIndexMaxParts,
+        mapKeyIndexPartSelection,
         dateRange,
         timestampValueExpression,
         signal,

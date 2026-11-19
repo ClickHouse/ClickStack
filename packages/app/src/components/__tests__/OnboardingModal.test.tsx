@@ -114,7 +114,7 @@ describe('OnboardingModal auto-detection', () => {
     expect(mockCreateSource).toHaveBeenLastCalledWith({
       source: {
         kind: SourceKind.Promql,
-        name: 'PromQL',
+        name: 'Time Series',
         connection: 'conn-1',
         from: { databaseName: 'default', tableName: 'metrics_ts' },
         timestampValueExpression: 'timestamp',

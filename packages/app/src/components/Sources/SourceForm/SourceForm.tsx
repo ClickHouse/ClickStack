@@ -62,6 +62,7 @@ import {
 
 import {
   DEFAULT_DATABASE,
+  getSourceKindLabel,
   PROMETHEUS_PLACEHOLDER,
   SOURCE_KIND_LABELS,
 } from './constants';
@@ -653,7 +654,10 @@ export function TableSourceForm({
                   {IS_PROMQL_ENABLED && (
                     <Radio
                       value={SourceKind.Promql}
-                      label={SOURCE_KIND_LABELS[SourceKind.Promql]}
+                      label={getSourceKindLabel(
+                        SourceKind.Promql,
+                        selectedConnection,
+                      )}
                     />
                   )}
                 </Group>

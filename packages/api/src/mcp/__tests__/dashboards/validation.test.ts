@@ -11,6 +11,7 @@ import {
   getRawSqlMissingSourceError,
   getRawSqlTileMacroWarnings,
   getRawSqlTilesMissingRequiredSource,
+  getSavedFilterValueWarnings,
   getTileVariableWarnings,
 } from '@/mcp/tools/dashboards/validation';
 import type {
@@ -936,9 +937,10 @@ describe('getFilterVariableWarnings', () => {
   });
 
   describe('SQL query filters', () => {
-    const sqlFilter = (sqlTemplate: string) => ({
+    const sqlFilter = (sqlTemplate: string, sourceId?: string) => ({
       name: 'Environment',
       sqlTemplate,
+      sourceId,
       isVariableEnabled: true,
       variableName: 'env',
     });
@@ -968,8 +970,19 @@ describe('getFilterVariableWarnings', () => {
         sqlFilter('SELECT env FROM $__sourceTable'),
       ]);
       expect(warnings).toEqual([
-        'Filter "Environment": SQL query filters have no source, so $__sourceTable cannot be used',
+        'Filter "Environment": SQL uses $__sourceTable but no source is selected',
       ]);
+    });
+
+    it('accepts source macros when the filter has a source', () => {
+      expect(
+        getFilterVariableWarnings([
+          sqlFilter(
+            'SELECT env FROM $__sourceTable WHERE $__filters',
+            '65f5e4a3b9e77c001a345678',
+          ),
+        ]),
+      ).toEqual([]);
     });
 
     it.each([
@@ -980,5 +993,33 @@ describe('getFilterVariableWarnings', () => {
         'Filter "Environment": Failed to parse macro arguments',
       ]);
     });
+  });
+});
+
+describe('getSavedFilterValueWarnings', () => {
+  const filters = [
+    { type: 'DATA_SOURCE' as const, name: 'Traces', variableName: 'traces' },
+    { type: 'CONNECTION' as const, name: 'Cluster', variableName: 'conn' },
+  ];
+
+  it('accepts saved values for data source and connection variables', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [
+          { type: 'variable', name: 'traces', values: ['s1'] },
+          { type: 'variable', name: 'conn', values: ['c1'] },
+        ],
+        filters,
+      ),
+    ).toEqual([]);
+  });
+
+  it('warns about a saved value no filter declares', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [{ type: 'variable', name: 'nope', values: ['x'] }],
+        filters,
+      ),
+    ).toHaveLength(1);
   });
 });

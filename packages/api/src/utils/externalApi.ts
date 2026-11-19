@@ -265,9 +265,19 @@ export function translateFilterToExternalFilter(
 
     case 'SQL_QUERY':
       return {
-        ...omit(filter, 'connection', ...omittedKeys),
+        ...omit(filter, 'connection', 'source', ...omittedKeys),
         connectionId: filter.connection.toString(),
+        ...(filter.source ? { sourceId: filter.source.toString() } : {}),
       };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connection'),
+        ...(filter.connection ? { connectionId: filter.connection } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     case 'QUERY_EXPRESSION': {
       // Ignore variableName and appliesToSourceIds if the filter is not in a mode that uses them
@@ -303,12 +313,22 @@ export function translateExternalFilterToFilter(
 
     case 'SQL_QUERY':
       return {
-        ...omit(filter, 'connectionId'),
+        ...omit(filter, 'connectionId', 'sourceId'),
         connection: filter.connectionId,
+        ...(filter.sourceId ? { source: filter.sourceId } : {}),
       };
 
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connectionId'),
+        ...(filter.connectionId ? { connection: filter.connectionId } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     default:
       filter satisfies never;

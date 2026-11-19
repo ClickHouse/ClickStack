@@ -1,4 +1,7 @@
-import { validateDashboardFilterOptionUniqueness } from '@hyperdx/common-utils/dist/dashboardValidation';
+import {
+  validateDashboardFilterOptionUniqueness,
+  validateDashboardVariableReferences,
+} from '@hyperdx/common-utils/dist/dashboardValidation';
 import {
   DashboardWithoutId,
   DashboardWithoutIdSchema,
@@ -30,8 +33,10 @@ function migrateLegacyDashboardTileColorsRaw(raw: unknown): unknown {
 }
 
 const provisionedDashboardSchema = DashboardWithoutIdSchema.superRefine(
-  (data, ctx) =>
-    validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx),
+  (data, ctx) => {
+    validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx);
+    validateDashboardVariableReferences(data.tiles, data.filters ?? [], ctx);
+  },
 );
 
 export function readDashboardFiles(dir: string): DashboardWithoutId[] {

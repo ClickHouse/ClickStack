@@ -87,9 +87,40 @@ describe('SourcesList section display', () => {
       'Traces',
       'OTel metrics',
       'Sessions',
-      'PromQL',
+      'Time Series',
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+
+  it('names a PromQL source after the connection it reads from', () => {
+    asMock(useConnections).mockReturnValue({
+      data: [
+        { id: 'conn-a', name: 'Default' },
+        { id: 'conn-prom', name: 'Thanos', isPrometheusEndpoint: true },
+      ],
+      isLoading: false,
+      refetch: jest.fn(),
+    });
+    asMock(useSources).mockReturnValue({
+      data: [
+        makeSource('a', 'A', { kind: SourceKind.Promql }),
+        makeSource('b', 'B', {
+          kind: SourceKind.Promql,
+          connection: 'conn-prom',
+        }),
+        makeSource('c', 'C', {
+          kind: SourceKind.Promql,
+          connection: 'conn-missing',
+        }),
+      ],
+      isLoading: false,
+      refetch: jest.fn(),
+    });
+    renderWithMantine(<SourcesList withCard={false} />);
+
+    expect(screen.getByText('Time Series')).toBeInTheDocument();
+    expect(screen.getByText('Prometheus')).toBeInTheDocument();
+    expect(screen.getByText('Time Series / Prometheus')).toBeInTheDocument();
   });
 });

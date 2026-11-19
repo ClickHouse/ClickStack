@@ -6,6 +6,8 @@ import {
   TIME_SERIES_DISPLAY_TYPE_BY_NAME,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
+  collectRefinementIssues,
+  getVariableReferenceError,
   validateDashboardContainersStructure,
   validateDashboardFilterFieldGating,
   validateDashboardFilterModes,
@@ -24,6 +26,10 @@ import {
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import {
+  getSourceVariableDeclarations,
+  parseVariableReference,
+} from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AggregateFunctionSchema,
   BuilderSavedChartConfig,
@@ -1319,15 +1325,20 @@ function getMissingSources(
   }
 
   for (const filter of filters ?? []) {
-    // PROMETHEUS_LABEL and ADHOC sources are checked with the stored filter's
-    // references skipped; see `validateDashboardTiles`.
+    // PROMETHEUS_LABEL, ADHOC and SQL_QUERY sources are checked with the stored
+    // filter's references skipped; see `validateDashboardTiles`.
     if (isQueryExpressionFilter(filter)) sourceIds.add(filter.sourceId);
   }
 
   const existingSourceIds = new Set(
     sources.map(source => source._id.toString()),
   );
-  return [...sourceIds].filter(sourceId => !existingSourceIds.has(sourceId));
+  // Variable references are checked by validateDashboardVariableReferences
+  return [...sourceIds].filter(
+    sourceId =>
+      parseVariableReference(sourceId) == null &&
+      !existingSourceIds.has(sourceId),
+  );
 }
 
 /**
@@ -1585,16 +1596,18 @@ async function getMissingConnections(
   filters: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[] = [],
 ): Promise<string[]> {
   const connectionIds = new Set<string>();
+  // Variable references are checked by validateDashboardVariableReferences
+  const addConnectionId = (id: string | undefined) => {
+    if (id && parseVariableReference(id) == null) connectionIds.add(id);
+  };
 
   for (const tile of tiles) {
     if (isConfigTile(tile) && isRawSqlExternalTileConfig(tile.config)) {
-      connectionIds.add(tile.config.connectionId);
+      addConnectionId(tile.config.connectionId);
     }
   }
   for (const filter of filters) {
-    if ('connectionId' in filter) {
-      connectionIds.add(filter.connectionId);
-    }
+    if ('connectionId' in filter) addConnectionId(filter.connectionId);
   }
 
   if (connectionIds.size === 0) return [];
@@ -1697,8 +1710,26 @@ export function convertExternalFiltersToInternal(
 function getSourceConnectionMismatches(
   sources: SourceForValidation[],
   tiles: ExternalDashboardTileWithId[],
+  filters: DashboardFilter[],
+  existingTiles: DashboardDocument['tiles'] = [],
 ): string[] {
+  const existingConfigById = new Map(
+    existingTiles.map(tile => [tile.id, tile.config]),
+  );
   const sourceById = new Map(sources.map(s => [s._id.toString(), s]));
+  const variableConnectionByName = new Map(
+    getSourceVariableDeclarations(filters).map(({ name, connection }) => [
+      name,
+      connection,
+    ]),
+  );
+  // A source variable's sources are on its declared connection, if any
+  const getSourceConnection = (sourceId: string) => {
+    const name = parseVariableReference(sourceId);
+    return name == null
+      ? sourceById.get(sourceId)?.connection.toString()
+      : variableConnectionByName.get(name);
+  };
 
   const mismatched: string[] = [];
   for (const tile of tiles) {
@@ -1707,9 +1738,30 @@ function getSourceConnectionMismatches(
       isRawSqlExternalTileConfig(tile.config) &&
       tile.config.sourceId
     ) {
-      const source = sourceById.get(tile.config.sourceId);
-      if (source && source.connection.toString() !== tile.config.connectionId) {
-        mismatched.push(tile.config.sourceId);
+      const { connectionId, sourceId } = tile.config;
+      // Like other variable references, one the update leaves as it was
+      // isn't checked again; the dashboard shows the mismatch instead
+      const existingConfig = tile.id
+        ? existingConfigById.get(tile.id)
+        : undefined;
+      if (
+        parseVariableReference(sourceId) != null &&
+        existingConfig != null &&
+        Reflect.get(existingConfig, 'source') === sourceId &&
+        Reflect.get(existingConfig, 'connection') === connectionId
+      ) {
+        continue;
+      }
+      const sourceConnection = getSourceConnection(sourceId);
+      // A connection reference is only known once selected, so compare two
+      // IDs, or two references, but not one of each
+      if (
+        sourceConnection != null &&
+        (parseVariableReference(sourceConnection) == null) ===
+          (parseVariableReference(connectionId) == null) &&
+        sourceConnection !== connectionId
+      ) {
+        mismatched.push(sourceId);
       }
     }
   }
@@ -1724,9 +1776,16 @@ export type TileValidationContext = {
   tiles: ExternalDashboardTileWithId[];
   /** Filters to check for missing source IDs (create/full-update paths). */
   filters?: (ExternalDashboardFilter | ExternalDashboardFilterWithId)[];
-  /** Existing internal tiles for scoping heatmap change detection (update paths). */
+  /**
+   * Existing internal tiles for scoping heatmap change detection and the
+   * variable reference check (update paths).
+   */
   existingTiles?: DashboardDocument['tiles'];
-  /** Existing filters, whose source references aren't re-checked (update paths). */
+  /**
+   * Existing internal filters (update paths). Their source references aren't
+   * re-checked, and tile variable references are checked against them when
+   * the request carries no `filters`.
+   */
   existingFilters?: DashboardFilter[];
   /** Container set to validate tile containerId/tabId refs against. */
   containers: DashboardContainer[];
@@ -1753,6 +1812,26 @@ export async function validateDashboardTiles(
     return tileRefIssues.join('; ');
   }
 
+  // Stored IDs are kept so that the references an update leaves as they were
+  // can be told apart from the ones it adds, which are the only ones checked
+  const referenceFilters = filters
+    ? convertExternalFiltersToInternal(
+        filters,
+        new Set(existingFilters?.map(filter => filter.id)),
+      )
+    : (existingFilters ?? []);
+  const variableReferenceError = getVariableReferenceError(
+    convertExternalTilesToInternal(
+      tiles,
+      new Set(existingTiles?.map(tile => tile.id)),
+    ),
+    referenceFilters,
+    existingTiles && { tiles: existingTiles, filters: existingFilters },
+  );
+  if (variableReferenceError) {
+    return variableReferenceError;
+  }
+
   // Fetch sources/connections/onClick targets in parallel.
   const [
     sources,
@@ -1777,6 +1856,8 @@ export async function validateDashboardTiles(
   const sourceConnectionMismatches = getSourceConnectionMismatches(
     sources,
     tiles,
+    referenceFilters,
+    existingTiles,
   );
   if (sourceConnectionMismatches.length > 0) {
     return `The following source IDs do not match the specified connections: ${sourceConnectionMismatches.join(', ')}`;
@@ -1816,26 +1897,27 @@ export async function validateDashboardTiles(
   // PromQL tiles query through their source's connection and TimeSeries
   // table, which only a PromQL source carries.
   const nonPromqlTileSourceIds = getInvalidSourceIds(
-    getChangedPromqlTileSourceIds(tiles, existingTiles).map(id => ({
-      id,
-      kinds: [SourceKind.Promql],
-    })),
+    getChangedPromqlTileSourceIds(tiles, existingTiles)
+      // A reference's kinds are checked by validateDashboardVariableReferences
+      .filter(id => parseVariableReference(id) == null)
+      .map(id => ({ id, kinds: [SourceKind.Promql] })),
     sources,
   );
   if (nonPromqlTileSourceIds.length > 0) {
     return `PromQL tiles require a PromQL source. The following source IDs are not PromQL sources: ${nonPromqlTileSourceIds.join(', ')}`;
   }
 
-  // PROMETHEUS_LABEL and ADHOC filters need live sources of the right kind. As
-  // in the internal API, references the stored filter already made are not
-  // re-checked, so a since-deleted source doesn't block unrelated saves.
+  // PROMETHEUS_LABEL, ADHOC and SQL_QUERY filters need live sources of the
+  // right kind. As in the internal API, references the stored filter already
+  // made are not re-checked, so a since-deleted source doesn't block unrelated
+  // saves.
+  // Create bodies carry no filter IDs; an empty one matches no stored filter.
+  const internalFilters = (filters ?? []).map(filter =>
+    translateExternalFilterToFilter({ id: '', ...filter }),
+  );
   const filterSourceError = getFilterSourceRefError(
-    getChangedFilterSourceRefs(
-      // Create bodies carry no filter IDs; an empty one matches no stored filter.
-      (filters ?? []).map(filter =>
-        translateExternalFilterToFilter({ id: '', ...filter }),
-      ),
-      existingFilters,
+    getChangedFilterSourceRefs(internalFilters, existingFilters).filter(
+      ref => parseVariableReference(ref.id) == null,
     ),
     sources,
   );
@@ -1951,15 +2033,13 @@ export function collectTileContainerRefIssues(
   containers: DashboardContainer[],
   tiles: ExternalDashboardTileWithId[],
 ): string[] {
-  const schema = z.object({}).superRefine((_, ctx) => {
-    const containerById = new Map<string, DashboardContainer>(
-      containers.map(c => [c.id, c]),
-    );
-    validateDashboardTileContainerRefs(containerById, tiles, ctx);
-  });
-  const result = schema.safeParse({});
-  if (result.success) return [];
-  return result.error.issues.map(issue => {
+  const containerById = new Map<string, DashboardContainer>(
+    containers.map(c => [c.id, c]),
+  );
+  const issues = collectRefinementIssues(ctx =>
+    validateDashboardTileContainerRefs(containerById, tiles, ctx),
+  );
+  return issues.map(issue => {
     const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
     return `${path}${issue.message}`;
   });
