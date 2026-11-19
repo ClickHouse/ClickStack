@@ -41,6 +41,7 @@ import {
   getPreviousAlertHistories,
   type LatestAlertHistory,
 } from '@/tasks/checkAlerts';
+import { findAlertEvaluator } from '@/tasks/checkAlerts/evaluators';
 import {
   type AlertDetails,
   type AlertProvider,
@@ -479,14 +480,27 @@ async function loadAlerts(): Promise<AlertTask[]> {
   }
 
   // When a value of 0 does not breach the threshold, every group whose last
-  // row is ALERT or PENDING has a row in the alert's last evaluation:
-  // processAlert writes an OK row for each such group missing from the data.
-  // A previous OK row only matters for its createdAt, which the last
-  // evaluation also has. So these alerts read only that evaluation (below),
-  // one row per group, instead of scanning every row in the lookback.
+  // row is ALERT or PENDING has a row in the alert's last evaluation: the
+  // threshold path of processAlert writes an OK row for each such group
+  // missing from the data. A previous OK row only matters for its createdAt,
+  // which the last evaluation also has. So these alerts read only that
+  // evaluation (below), one row per group, instead of scanning every row in
+  // the lookback. A registered evaluator does not run that loop, and a
+  // threshold that cannot be checked is left for processAlert to report, so
+  // both keep the scan.
+  const needsLookbackScan = (alert: IAlert) => {
+    if (findAlertEvaluator(alert)) {
+      return true;
+    }
+    try {
+      return doesExceedThreshold(alert, 0);
+    } catch {
+      return true;
+    }
+  };
   const [previousAlerts, recentHistoryMap] = await Promise.all([
     getPreviousAlertHistories(
-      dueGroupedAlerts.filter(alert => doesExceedThreshold(alert, 0)),
+      dueGroupedAlerts.filter(needsLookbackScan),
       now,
       historyQueryQueue,
     ),

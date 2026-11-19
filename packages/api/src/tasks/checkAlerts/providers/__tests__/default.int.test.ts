@@ -22,6 +22,10 @@ import { Source } from '@/models/source';
 import * as checkAlertTasks from '@/tasks/checkAlerts';
 import { getScheduledWindowStart } from '@/tasks/checkAlerts';
 import {
+  clearAlertEvaluators,
+  registerAlertEvaluator,
+} from '@/tasks/checkAlerts/evaluators';
+import {
   AlertProvider,
   AlertTaskType,
   loadProvider,
@@ -745,6 +749,7 @@ describe('DefaultAlertProvider', () => {
     describe('history fetch gating (HDX-4791)', () => {
       afterEach(() => {
         jest.restoreAllMocks();
+        clearAlertEvaluators();
       });
 
       // Alerts created by the helpers use interval '5m' with no schedule
@@ -1033,46 +1038,67 @@ describe('DefaultAlertProvider', () => {
         expect(groupA?.fired).toBe(true);
       });
 
-      it('keeps the lookback scan for a grouped alert that a value of 0 breaches', async () => {
-        const { alert } = await createValidSavedSearchAlert(
-          await createConnectionAndSource(),
-          { groupBy: 'ServiceName' },
-        );
-        await Alert.updateOne(
-          { _id: alert._id },
-          { $set: { thresholdType: AlertThresholdType.BELOW, threshold: 1 } },
-        );
-        const windowMs = 5 * 60_000;
-        const lastEvaluation = new Date(
-          currentWindowStart().getTime() - windowMs,
-        );
-        // 'gone' stopped reporting while in ALERT. A value of 0 breaches, so
-        // processAlert writes no OK row for it and only the scan finds it.
-        await AlertHistory.create({
-          alert: alert._id,
-          createdAt: new Date(lastEvaluation.getTime() - 2 * windowMs),
-          state: AlertState.ALERT,
-          group: 'gone',
-          fired: true,
-        });
-        await AlertHistory.create({
-          alert: alert._id,
-          createdAt: lastEvaluation,
-          state: AlertState.OK,
-          group: 'a',
-        });
+      it.each([
+        [
+          'a value of 0 breaches',
+          { thresholdType: AlertThresholdType.BELOW, threshold: 1 },
+        ],
+        [
+          'a registered evaluator handles',
+          { thresholdType: AlertThresholdType.ABOVE, threshold: 1 },
+          true,
+        ],
+        [
+          'has a threshold that cannot be checked',
+          { thresholdType: AlertThresholdType.BETWEEN, thresholdMax: null },
+        ],
+      ])(
+        'keeps the lookback scan for a grouped alert that %s',
+        async (_, threshold, withEvaluator = false) => {
+          const { alert } = await createValidSavedSearchAlert(
+            await createConnectionAndSource(),
+            { groupBy: 'ServiceName' },
+          );
+          await Alert.updateOne({ _id: alert._id }, { $set: threshold });
+          if (withEvaluator) {
+            registerAlertEvaluator({
+              name: 'test',
+              appliesTo: a => a.id === alert.id,
+              evaluate: async () => {},
+            });
+          }
+          const windowMs = 5 * 60_000;
+          const lastEvaluation = new Date(
+            currentWindowStart().getTime() - windowMs,
+          );
+          // 'gone' stopped reporting while in ALERT, and nothing guarantees
+          // an OK row for it in the last evaluation: only the scan finds it.
+          await AlertHistory.create({
+            alert: alert._id,
+            createdAt: new Date(lastEvaluation.getTime() - 2 * windowMs),
+            state: AlertState.ALERT,
+            group: 'gone',
+            fired: true,
+          });
+          await AlertHistory.create({
+            alert: alert._id,
+            createdAt: lastEvaluation,
+            state: AlertState.OK,
+            group: 'a',
+          });
 
-        const result = await provider.getAlertTasks();
+          const result = await provider.getAlertTasks();
 
-        const { previousMap } = result[0].alerts[0];
-        expect([...previousMap.keys()].sort()).toEqual([
-          `${alert.id}||a`,
-          `${alert.id}||gone`,
-        ]);
-        expect(previousMap.get(`${alert.id}||gone`)?.state).toBe(
-          AlertState.ALERT,
-        );
-      });
+          const { previousMap } = result[0].alerts[0];
+          expect([...previousMap.keys()].sort()).toEqual([
+            `${alert.id}||a`,
+            `${alert.id}||gone`,
+          ]);
+          expect(previousMap.get(`${alert.id}||gone`)?.state).toBe(
+            AlertState.ALERT,
+          );
+        },
+      );
 
       it('treats an alert as due when its window start cannot be computed', async () => {
         const { alert } = await createValidSavedSearchAlert(
