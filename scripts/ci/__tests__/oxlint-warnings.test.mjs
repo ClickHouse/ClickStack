@@ -3,21 +3,23 @@ import test from 'node:test';
 
 import {
   collectWarnings,
+  formatStylish,
   newWarnings,
   parseAddedLines,
   parseArgs,
-} from '../eslint-warnings.mjs';
+  toResults,
+} from '../oxlint-warnings.mjs';
 
 const ROOT = '/repo';
 
-test('parseArgs splits wrapper flags from ESLint args', () => {
-  assert.deepEqual(parseArgs(['.', '--ext', '.ts', '--max-warnings', '302']), {
-    eslintArgs: ['.', '--ext', '.ts'],
+test('parseArgs splits wrapper flags from oxlint args', () => {
+  assert.deepEqual(parseArgs(['src', '--max-warnings', '302']), {
+    oxlintArgs: ['src'],
     maxWarnings: 302,
     staged: false,
   });
   assert.deepEqual(parseArgs(['--staged', '--fix', '/repo/a.ts']), {
-    eslintArgs: ['--fix', '/repo/a.ts'],
+    oxlintArgs: ['--fix', '/repo/a.ts'],
     maxWarnings: undefined,
     staged: true,
   });
@@ -112,4 +114,77 @@ test('newWarnings falls back to changed files when no changed line warns', () =>
     warnings.map(w => w.message),
     ['new', 'old'],
   );
+});
+
+test('toResults groups oxlint diagnostics per file in ESLint shape', () => {
+  const output = {
+    diagnostics: [
+      {
+        message: 'Unsafe type assertion',
+        code: 'typescript(no-unsafe-type-assertion)',
+        severity: 'warning',
+        filename: 'src/b.ts',
+        labels: [{ span: { offset: 0, length: 1, line: 9, column: 3 } }],
+      },
+      {
+        message: 'Unexpected console statement.',
+        code: 'eslint(no-console)',
+        severity: 'error',
+        filename: 'src/a.ts',
+        labels: [{ span: { offset: 0, length: 1, line: 2, column: 1 } }],
+      },
+      {
+        message: 'Unused eslint-disable directive (no problems were reported).',
+        severity: 'warning',
+        filename: 'src/a.ts',
+        labels: [{ span: { offset: 0, length: 1, line: 1, column: 1 } }],
+      },
+    ],
+  };
+  const results = toResults(output, ROOT);
+  assert.deepEqual(
+    results.map(r => [r.filePath, r.errorCount, r.warningCount]),
+    [
+      ['/repo/src/a.ts', 1, 1],
+      ['/repo/src/b.ts', 0, 1],
+    ],
+  );
+  assert.deepEqual(
+    results[0].messages.map(m => [m.line, m.ruleId, m.severity]),
+    [
+      [1, null, 1],
+      [2, 'no-console', 2],
+    ],
+  );
+  assert.equal(
+    results[1].messages[0].ruleId,
+    'typescript/no-unsafe-type-assertion',
+  );
+});
+
+test('formatStylish prints per-file problems and a total', () => {
+  const out = formatStylish(
+    [
+      ...results,
+      {
+        filePath: '/repo/clean.ts',
+        messages: [],
+        errorCount: 0,
+        warningCount: 0,
+      },
+    ].map(r => ({
+      ...r,
+      errorCount: r.messages.filter(m => m.severity === 2).length,
+      warningCount: r.messages.filter(m => m.severity === 1).length,
+    })),
+    ROOT,
+  );
+  assert.match(
+    out,
+    /^\npackages\/api\/src\/a\.ts\n {4}3:1 {2}warning {2}new {2}r1\n/,
+  );
+  assert.match(out, / {4}3:5 {2}error {4}error {2}r2\n/);
+  assert.doesNotMatch(out, /clean\.ts/);
+  assert.match(out, /✖ 4 problems \(1 error, 3 warnings\)\n$/);
+  assert.equal(formatStylish([], ROOT), '');
 });
