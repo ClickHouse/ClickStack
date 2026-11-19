@@ -952,6 +952,11 @@ export function convertToDashboardTemplate(
     if (isStaticListFilter(filter) || isConnectionFilter(filter)) return filter;
     if (isSqlQueryFilter(filter)) {
       filter.connection = getConnectionName(filter.connection);
+      // The source is optional, so drop it rather than export an empty name
+      // the template schema would reject.
+      if (filter.source) {
+        filter.source = getSourceName(filter.source) || undefined;
+      }
       return filter;
     }
     if (isDataSourceFilter(filter)) {
@@ -1458,6 +1463,41 @@ export type TextIndexTokenizer =
       minCutoffLength?: number;
     }
   | { type: 'array' };
+
+/** Reads a setting from `system.tables.engine_full`, which ends with the SETTINGS clause. */
+export function getEngineSetting(engineFull: string, name: string) {
+  const settingsClause = engineFull.match(/ SETTINGS (.*)$/)?.[1] ?? '';
+  return splitAndTrimWithBracket(settingsClause)
+    .map(setting => setting.split(' = '))
+    .find(([key]) => key === name)?.[1];
+}
+
+const DEFAULT_TEXT_INDEX_DICTIONARY_BLOCK_SIZE = 512;
+
+/**
+ * A text index's dictionary block size: the index argument, else the table's
+ * `text_index_dictionary_block_size`, else the server's, else ClickHouse's 512.
+ */
+export function getTextIndexDictionaryBlockSize({
+  typeFull,
+  engineFull,
+  serverMergeTreeSettings,
+}: {
+  typeFull?: string;
+  engineFull?: string;
+  serverMergeTreeSettings?: Map<string, string>;
+}): number {
+  const value =
+    typeFull?.match(/\bdictionary_block_size\s*=\s*(\d+)/)?.[1] ??
+    (engineFull
+      ? getEngineSetting(engineFull, 'text_index_dictionary_block_size')
+      : undefined) ??
+    serverMergeTreeSettings?.get('text_index_dictionary_block_size');
+  const size = Number(value);
+  return Number.isInteger(size) && size > 0
+    ? size
+    : DEFAULT_TEXT_INDEX_DICTIONARY_BLOCK_SIZE;
+}
 
 /**
  * Parses the tokenizer and any associated tokenizer parameters from a text index type definition.

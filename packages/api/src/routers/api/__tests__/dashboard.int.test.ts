@@ -2181,6 +2181,156 @@ describe('dashboard router', () => {
         /does not name a connection variable/,
       );
     });
+
+    const createSqlFilterSource = (kind: SourceKind, teamId = team._id) =>
+      Source.create({
+        kind,
+        name: `Test ${kind} source`,
+        team: teamId,
+        connection: connectionId,
+        from: { databaseName: 'test_db', tableName: `${kind}_table` },
+        timestampValueExpression: 'timestamp',
+        defaultTableSelectExpression: 'body',
+      });
+
+    it('persists a SQL query filter with a source', async () => {
+      const source = await createSqlFilterSource(SourceKind.Log);
+      const filter = makeSqlFilter({
+        source: source._id.toString(),
+        sqlTemplate:
+          'SELECT DISTINCT ServiceName FROM $__sourceTable WHERE $__filters',
+      });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([filter]);
+    });
+
+    it('rejects a source that does not exist', async () => {
+      const source = new Types.ObjectId().toString();
+
+      const response = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [makeSqlFilter({ source })] })
+        .expect(400);
+
+      expect(response.body.message).toContain(source);
+    });
+
+    it("rejects another team's source", async () => {
+      const source = await createSqlFilterSource(
+        SourceKind.Log,
+        new Types.ObjectId(),
+      );
+
+      await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ source: source._id.toString() })],
+        })
+        .expect(400);
+    });
+
+    it('rejects a source on another connection', async () => {
+      const source = await createSqlFilterSource(SourceKind.Log);
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [
+            makeSqlFilter({
+              source: source._id.toString(),
+              connection: otherConnection._id.toString(),
+            }),
+          ],
+        })
+        .expect(400);
+
+      expect(response.body.message).toContain("not on the filter's connection");
+    });
+
+    it('rejects a PromQL source', async () => {
+      const source = await createSqlFilterSource(SourceKind.Promql);
+
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ source: source._id.toString() })],
+        })
+        .expect(400);
+
+      expect(response.body.message).toContain(source._id.toString());
+    });
+
+    it('accepts a source with a connection variable', async () => {
+      const source = await createSqlFilterSource(SourceKind.Log);
+      const filter = makeSqlFilter({
+        connection: '$conn',
+        source: source._id.toString(),
+      });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [connectionFilter, filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([connectionFilter, filter]);
+    });
+
+    it('accepts a data source variable', async () => {
+      const dataSourceFilter = {
+        id: new Types.ObjectId().toString(),
+        type: 'DATA_SOURCE' as const,
+        name: 'Logs source',
+        variableName: 'logs',
+        allowedSourceKinds: [SourceKind.Log],
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      };
+      const filter = makeSqlFilter({ connection: '$conn', source: '$logs' });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [connectionFilter, dataSourceFilter, filter],
+        })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([
+        connectionFilter,
+        dataSourceFilter,
+        filter,
+      ]);
+    });
+
+    it('rejects a reference to an unknown data source variable', async () => {
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ source: '$logs' })],
+        })
+        .expect(400);
+
+      expect(JSON.stringify(response.body)).toMatch(
+        /does not name a data source variable/,
+      );
+    });
   });
 
   describe('ad hoc filters', () => {

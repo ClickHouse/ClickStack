@@ -7,6 +7,7 @@ import {
   isReferenceVariableFilter,
   pairWithVariableNames,
   QUERY_EXPRESSION_FILTER_SOURCE_KINDS,
+  SQL_QUERY_FILTER_SOURCE_KINDS,
 } from '@/filters';
 import {
   ConnectionDashboardFilter,
@@ -224,8 +225,16 @@ export function getFilterReferenceFields(
         target: 'source',
         acceptedKinds: getAdhocFilterSourceKinds(filter.sourceType),
       }));
-    case 'DATA_SOURCE':
     case 'SQL_QUERY':
+      return [
+        {
+          key: 'source',
+          target: 'source',
+          acceptedKinds: SQL_QUERY_FILTER_SOURCE_KINDS,
+        },
+        { key: 'connection', target: 'connection' },
+      ];
+    case 'DATA_SOURCE':
       return [{ key: 'connection', target: 'connection' }];
     case 'STATIC_LIST':
     case 'CONNECTION':

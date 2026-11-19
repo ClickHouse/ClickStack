@@ -19,6 +19,7 @@ import {
   findNearestSeriesKey,
   formatResponseForCategoricalChart,
   formatResponseForTimeChart,
+  getSelectSeriesColors,
   getSeriesColorForGroup,
   type LineData,
 } from '@/ChartUtils';
@@ -26,7 +27,7 @@ import {
   MAX_RENDERED_TIME_CHART_SERIES,
   resolveRenderedSeriesCap,
 } from '@/defaults';
-import { COLORS } from '@/utils';
+import { COLORS, getColorFromCSSToken } from '@/utils';
 import { stripClientSideConfigFields } from '@/utils/chartConfig';
 
 // Anchor info/error to concrete hexes rather than `getChartColorInfo()` /
@@ -185,6 +186,80 @@ describe('ChartUtils', () => {
           isDashed: false,
         },
       ]);
+    });
+
+    it('pins a series to a palette token via seriesColors, overriding the positional palette', () => {
+      const res = {
+        data: [
+          { p99: 100, __hdx_time_bucket: '2025-11-26T11:12:00Z' },
+          { p99: 200, __hdx_time_bucket: '2025-11-26T11:13:00Z' },
+        ],
+        meta: [
+          { name: 'p99', type: 'Float64' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+      };
+
+      const pinned = formatResponseForTimeChart({
+        currentPeriodResponse: res,
+        dateRange: [new Date(), new Date()],
+        granularity: '1 minute',
+        generateEmptyBuckets: false,
+        seriesColors: { p99: 'chart-purple' },
+      });
+      // The pinned token wins over the default first palette hue and stays
+      // fixed regardless of where the series sorts.
+      expect(pinned.lineData[0].color).toBe(
+        getColorFromCSSToken('chart-purple'),
+      );
+      expect(pinned.lineData[0].color).not.toBe(COLORS[0]);
+
+      // Without the pin, the same single series takes the positional palette.
+      const unpinned = formatResponseForTimeChart({
+        currentPeriodResponse: res,
+        dateRange: [new Date(), new Date()],
+        granularity: '1 minute',
+        generateEmptyBuckets: false,
+      });
+      expect(unpinned.lineData[0].color).toBe(COLORS[0]);
+    });
+
+    it('does not let a pinned series consume a positional palette slot', () => {
+      // seriesHi sorts (and colors) first, since series are ordered by key. If
+      // a pinned series wrongly advanced the positional index, the one unpinned
+      // series would land on COLORS[1] instead of COLORS[0].
+      const res = {
+        data: [
+          {
+            seriesHi: 500,
+            seriesLo: 100,
+            __hdx_time_bucket: '2025-11-26T11:12:00Z',
+          },
+          {
+            seriesHi: 600,
+            seriesLo: 200,
+            __hdx_time_bucket: '2025-11-26T11:13:00Z',
+          },
+        ],
+        meta: [
+          { name: 'seriesHi', type: 'Float64' },
+          { name: 'seriesLo', type: 'Float64' },
+          { name: '__hdx_time_bucket', type: 'DateTime' },
+        ],
+      };
+
+      const actual = formatResponseForTimeChart({
+        currentPeriodResponse: res,
+        dateRange: [new Date(), new Date()],
+        granularity: '1 minute',
+        generateEmptyBuckets: false,
+        seriesColors: { seriesHi: 'chart-purple' },
+      });
+
+      const pinned = actual.lineData.find(l => l.dataKey === 'seriesHi');
+      const plain = actual.lineData.find(l => l.dataKey === 'seriesLo');
+      expect(pinned?.color).toBe(getColorFromCSSToken('chart-purple'));
+      expect(plain?.color).toBe(COLORS[0]);
     });
 
     it('should format a response with multiple value columns and a group by', () => {
@@ -1948,6 +2023,95 @@ describe('getSeriesColorForGroup', () => {
     const lineData = [line('api', '#dashed', true), line('api', '#solid')];
 
     expect(getSeriesColorForGroup(lineData, 'api')).toBe('#solid');
+  });
+});
+
+describe('getSelectSeriesColors', () => {
+  const config = (
+    select: BuilderChartConfigWithDateRange['select'],
+  ): BuilderChartConfigWithDateRange => ({
+    connection: 'conn',
+    from: { databaseName: 'default', tableName: 'otel_traces' },
+    timestampValueExpression: 'Timestamp',
+    select,
+    where: '',
+    dateRange: [new Date(0), new Date(60_000)],
+  });
+
+  it('keys each aliased select item that sets a color by its alias', () => {
+    expect(
+      getSelectSeriesColors(
+        config([
+          {
+            alias: 'Avg',
+            aggFn: 'avg',
+            aggCondition: '',
+            valueExpression: 'Duration',
+            color: 'chart-blue',
+          },
+          {
+            alias: 'P99',
+            aggFn: 'quantile',
+            level: 0.99,
+            aggCondition: '',
+            valueExpression: 'Duration',
+            color: 'chart-purple',
+          },
+          {
+            alias: 'Total',
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+          },
+        ]),
+      ),
+    ).toEqual({ Avg: 'chart-blue', P99: 'chart-purple' });
+  });
+
+  it('maps a legacy numeric token to its hue', () => {
+    expect(
+      getSelectSeriesColors(
+        config([
+          {
+            alias: 'Total',
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+            // @ts-expect-error legacy token saved before the hue-named palette
+            color: 'chart-1',
+          },
+        ]),
+      ),
+    ).toEqual({ Total: 'chart-green' });
+  });
+
+  // An unknown token would make the CSS resolver throw and fail the whole
+  // chart, so the series falls back to the positional palette instead.
+  it('skips unrecognized tokens and items without an alias', () => {
+    expect(
+      getSelectSeriesColors(
+        config([
+          {
+            alias: 'Total',
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+            // @ts-expect-error unrecognized token from a hand-edited config
+            color: 'not-a-token',
+          },
+          {
+            aggFn: 'count',
+            aggCondition: '',
+            valueExpression: '',
+            color: 'chart-blue',
+          },
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined for a SQL select string', () => {
+    expect(getSelectSeriesColors(config('count() AS Total'))).toBeUndefined();
   });
 });
 

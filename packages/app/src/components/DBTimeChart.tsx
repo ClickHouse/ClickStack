@@ -38,6 +38,7 @@ import {
   convertToTimeChartConfig,
   formatResponseForTimeChart,
   getPreviousDateRange,
+  getSelectSeriesColors,
   type LineData,
   shouldFillNullsWithZero,
   tryExpandConfigVariables,
@@ -394,6 +395,25 @@ type DBTimeChartComponentProps = {
    * with the series' group-by expressions (or PromQL labels) and values.
    */
   onFilter?: TileFilterHandler;
+  /**
+   * Anchor the first/last x-axis labels inward so they are not clipped on
+   * narrow charts (e.g. side-by-side RED metric tiles). Forwarded to the chart.
+   */
+  compactXAxisLabels?: boolean;
+  /**
+   * Cap the y-axis upper bound (e.g. 1 for a 0-100% rate) while still
+   * auto-scaling below it. Forwarded to the chart.
+   */
+  yAxisMaxDomain?: number;
+  /**
+   * Color each series with its select item's `color` (keyed by the item's
+   * alias) instead of the positional palette. Off by default: saved tiles only
+   * set `color` for table display and other display types ignore it, so a tile
+   * switched from Table to Line keeps its palette. Every group of a grouped
+   * select item would share the one color, so this is for ungrouped series
+   * whose config is built in code, like the trace RED duration percentiles.
+   */
+  applySelectColors?: boolean;
 };
 
 function DBTimeChartComponent({
@@ -421,6 +441,9 @@ function DBTimeChartComponent({
   errorVariant,
   onFocusSeries,
   onFilter,
+  compactXAxisLabels,
+  yAxisMaxDomain,
+  applySelectColors = false,
 }: DBTimeChartComponentProps) {
   const [selectedSeriesSet, setSelectedSeriesSet] = useState<Set<string>>(
     new Set(),
@@ -631,6 +654,14 @@ function DBTimeChartComponent({
   const { formatByColumn, chartFormat: axisNumberFormat } =
     useChartNumberFormats(queriedConfig, data?.meta);
 
+  // Per-series colors come from each select item's `color`, the single source
+  // of truth for pinning a series to a palette token, but only for callers
+  // that opt in (see applySelectColors), so saved tiles keep their palette.
+  const seriesColors = useMemo(
+    () => (applySelectColors ? getSelectSeriesColors(config) : undefined),
+    [applySelectColors, config],
+  );
+
   const {
     error: resultFormattingError,
     graphResults,
@@ -669,6 +700,7 @@ function DBTimeChartComponent({
         generateEmptyBuckets: shouldFillNullsWithZero(fillNulls),
         source,
         hiddenSeries,
+        seriesColors,
         previousPeriodOffsetSeconds,
         // "Load all" (from the warning / pinned tooltip) overrides everything;
         // otherwise the per-tile Series Limit drives the cap (null = default,
@@ -710,6 +742,7 @@ function DBTimeChartComponent({
     config.seriesLimit,
     previousPeriodData,
     hiddenSeries,
+    seriesColors,
     previousPeriodOffsetSeconds,
     showAllSeries,
   ]);
@@ -1168,6 +1201,8 @@ function DBTimeChartComponent({
             dateRangeEndInclusive={queriedConfig.dateRangeEndInclusive}
             fitYAxisToData={queriedConfig.fitYAxisToData}
             lineInterpolation={queriedConfig.lineInterpolation}
+            compactXAxisLabels={compactXAxisLabels}
+            yAxisMaxDomain={yAxisMaxDomain}
           />
         </>
       )}

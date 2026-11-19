@@ -17,6 +17,7 @@ import {
 import { ReferenceVariableValues } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AdhocFilterCondition,
+  BroadcastFilter,
   ChartVariable,
   DashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
@@ -193,6 +194,8 @@ interface DashboardFilterProps {
   unresolvedReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
   /** The subset of those selecting a source the filter can't use. */
   incompatibleReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
+  /** The filter selections that broadcast to a source, for `$__filters` */
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
 }
 
 const DashboardFilters = ({
@@ -207,6 +210,7 @@ const DashboardFilters = ({
   referenceVariableValues,
   unresolvedReferenceVariablesByFilterId,
   incompatibleReferenceVariablesByFilterId,
+  getDashboardFilters,
 }: DashboardFilterProps) => {
   // "Link" mode (opt-in, off by default): each dropdown's values are narrowed by
   // the others' selections. Off by default because contingent value lookups
@@ -232,6 +236,7 @@ const DashboardFilters = ({
     filters: queryableFilters,
     dateRange,
     variables,
+    getDashboardFilters,
     // Only narrow by sibling selections when linked.
     selectionByFilterId: linked ? selectionByFilterId : EMPTY_SELECTIONS,
   });
