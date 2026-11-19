@@ -14,7 +14,8 @@ export OPAMP_PORT=${HYPERDX_OPAMP_PORT:-4320}
 # Internal Services
 export HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE="${HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE:-default}"
 export CLICKHOUSE_ENDPOINT="${CLICKHOUSE_ENDPOINT:-tcp://ch-server:9000?dial_timeout=10s}"
-export MONGO_URI="mongodb://db:27017/hyperdx"
+# DocumentDB gateway; the self-signed TLS cert never leaves the container.
+export MONGO_URI="mongodb://hyperdx:hyperdx@db:10260/hyperdx?tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256"
 export OPAMP_SERVER_URL="http://127.0.0.1:${OPAMP_PORT}"
 export CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT="${CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT:-ch-server:9363}"
 
@@ -59,8 +60,16 @@ echo "Exporting data to ClickHouse:
 # Start Clickhouse Server
 /entrypoint.sh > /var/log/clickhouse.log 2>&1 &
 
-# Start Mongo Server
-mongod --quiet --dbpath /data/db > /var/log/mongod.log 2>&1 &
+# Images before DocumentDB kept MongoDB data directly in /data/db, which this image cannot read.
+if [ -f /data/db/WiredTiger ] && [ ! -f /data/db/pgdata/.documentdb-initialised ]; then
+  echo "WARNING: found MongoDB data in /data/db. This image stores metadata in DocumentDB"
+  echo "WARNING: under /data/db/pgdata and starts empty; see the release notes to migrate it."
+fi
+
+# Start DocumentDB (Postgres + Mongo wire-protocol gateway on :10260)
+DOCDB_USER=hyperdx DOCDB_PASSWORD=hyperdx PGDATA=/data/db/pgdata \
+  PATH="/usr/libexec/postgresql18:$PATH" \
+  bash /usr/local/bin/documentdb-entrypoint.sh > /var/log/documentdb.log 2>&1 &
 
 # Wait for Clickhouse to be ready
 while ! curl -s "http://ch-server:8123" > /dev/null; do

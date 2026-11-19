@@ -4,13 +4,16 @@
 # - App (Frontend)
 # For all-in-one build:
 # - Clickhouse
-# - Mongo
+# - DocumentDB (Postgres with a Mongo wire-protocol gateway)
 # - Otel Collector (otelcol)
 
 ARG NODE_VERSION=22.23.4
 ARG CLICKHOUSE_VERSION=26.10.3.7
 ARG OTEL_COLLECTOR_VERSION=0.165.0
 ARG OTEL_COLLECTOR_CORE_VERSION=1.71.0
+ARG DOCUMENTDB_VERSION=v1.2-0
+# Tags can move; the build fails unless the tag still resolves to this commit.
+ARG DOCUMENTDB_COMMIT=965b6e7ad1c49aefb983a412a3fea0ff637cd7f1
 
 # base #############################################################################################
 # == Otel Collector Image ==
@@ -152,6 +155,57 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 
 ENTRYPOINT ["sh", "/etc/local/entry.sh"]
 
+# == DocumentDB (MIT): Postgres extensions plus a Mongo wire-protocol gateway, used
+# in place of MongoDB (SSPL). Built from source because upstream ships glibc
+# packages only; Alpine 3.24 matches the all-in-one base and its PostGIS targets PG18.
+FROM alpine:3.24 AS documentdb-builder
+ARG DOCUMENTDB_VERSION
+ARG DOCUMENTDB_COMMIT
+RUN apk add --no-cache build-base cmake git curl bash tar pkgconf perl linux-headers python3 \
+      icu-dev krb5-dev openssl-dev rust cargo \
+      postgresql18 postgresql18-dev postgresql18-contrib postgresql-pg_cron postgresql-pgvector postgis
+ENV PG_CONFIG=/usr/libexec/postgresql18/pg_config INSTALL_DEPENDENCIES_ROOT=/deps
+RUN git clone --depth 1 --branch ${DOCUMENTDB_VERSION} https://github.com/documentdb/documentdb.git /src \
+ && test "$(git -C /src rev-parse HEAD)" = "${DOCUMENTDB_COMMIT}" \
+ && mkdir -p /deps
+# musl exports _init/_fini from every .so, which the duplicate-export check counts.
+RUN sed -i "s#grep -vxE '_PG_init|Pg_magic_func'#grep -vxE '_PG_init|Pg_magic_func|_init|_fini'#g" \
+      /src/pg_documentdb_extended_rum/validate_rum_core_exports.sh
+RUN cd /src/scripts && MAKE_PROGRAM=cmake bash install_setup_libbson.sh \
+ && bash install_setup_pcre2.sh && bash install_setup_intel_decimal_math_lib.sh
+# Serial make: with -j the RUM export check can run before the library is linked.
+RUN cd /src && make install-documentdb with_llvm=no PG_CONFIG=$PG_CONFIG
+RUN cd /src/pg_documentdb_gw && cargo build --release -p documentdb_gateway \
+ && install -s target/release/documentdb_gateway /usr/bin/documentdb-gateway
+# Keep only what Postgres and DocumentDB link against: no GDAL, JIT or PostGIS raster/topology.
+# Shared libraries are listed as apk packages rather than copied, so the target installs
+# its own point release instead of having its libssl, musl and libapk overwritten.
+RUN set -e; PG=/usr/libexec/postgresql18; LIB=/usr/lib/postgresql18; SH=/usr/share/postgresql18; \
+  rm -f $LIB/llvmjit*.so $LIB/postgis_raster-3.so $LIB/postgis_sfcgal-3.so $LIB/postgis_topology-3.so $LIB/address_standardizer*.so; rm -rf $LIB/bitcode; \
+  rm -f $SH/extension/postgis_raster* $SH/extension/postgis_sfcgal* $SH/extension/postgis_topology* $SH/extension/postgis_tiger* $SH/extension/address_standardizer*; rm -rf $SH/contrib/postgis*; \
+  for f in $PG/postgres $PG/pg_ctl $PG/initdb $PG/psql /usr/bin/documentdb-gateway $LIB/*.so; do ldd $f 2>/dev/null | awk '/=> \//{print $3}'; done | grep -E '^/(usr/)?lib/[^/]+$' | sort -u > /tmp/libs; \
+  mkdir -p /out/etc/documentdb/gateway; \
+  xargs apk info -W < /tmp/libs | sed -n 's/.* is owned by //p' > /tmp/owners; \
+  test "$(wc -l < /tmp/owners)" = "$(wc -l < /tmp/libs)"; \
+  sed 's/-[^-]*-r[0-9]*$//' /tmp/owners | sort -u > /out/etc/documentdb/apk-packages; \
+  tar -ch $PG/postgres $PG/pg_ctl $PG/initdb $PG/psql /usr/bin/documentdb-gateway $LIB $SH -f - | tar -x -C /out; \
+  install -m 644 /src/pg_documentdb_gw/SetupConfiguration.json /out/etc/documentdb/gateway/SetupConfiguration.json
+
+# Standalone DocumentDB used by the dev, integration and e2e compose files.
+FROM alpine:3.24 AS documentdb
+COPY --from=documentdb-builder /out/ /
+RUN apk add --no-cache bash openssl su-exec $(cat /etc/documentdb/apk-packages) \
+ && addgroup -S -g 70 postgres && adduser -S -u 70 -G postgres -h /var/lib/postgresql postgres \
+ && install -d -o postgres -g postgres /data/docdb
+COPY --chmod=755 docker/documentdb/entrypoint.sh /usr/local/bin/documentdb-entrypoint.sh
+ENV PATH=/usr/libexec/postgresql18:$PATH PGDATA=/data/docdb/pgdata
+EXPOSE 10260
+# The gateway only listens once Postgres is initialised and the user exists; the
+# psql probe catches Postgres dying under a gateway that keeps its port open.
+HEALTHCHECK --interval=2s --timeout=3s --start-period=60s --retries=30 \
+  CMD nc -z 127.0.0.1 10260 && psql -h /tmp -U postgres -d postgres -qtAX -c 'SELECT 1' >/dev/null
+ENTRYPOINT ["bash", "/usr/local/bin/documentdb-entrypoint.sh"]
+
 # all-in-one base ############################################################################################
 FROM hairyhenderson/gomplate:v5.3.1-alpine AS gomplate
 FROM clickhouse/clickhouse-server:${CLICKHOUSE_VERSION}-alpine AS all-in-one-base
@@ -198,18 +252,20 @@ COPY --from=gomplate /bin/gomplate /usr/local/bin/gomplate
 # Copy migrate binary (Go-based goose migration tool with full TLS support)
 COPY --from=migrate-builder /migrate /usr/local/bin/migrate
 
-# Install MongoDB and other dependencies (consolidated into a single RUN command).
-# libstdc++/libgcc are the Node.js runtime deps, installed before the v3.9
-# repositories are appended so they resolve from this image's own Alpine release.
-RUN apk add --no-cache libstdc++ libgcc && \
-  echo 'http://dl-cdn.alpinelinux.org/alpine/v3.9/main' >> /etc/apk/repositories && \
-  echo 'http://dl-cdn.alpinelinux.org/alpine/v3.9/community' >> /etc/apk/repositories && \
-  apk update && \
-  apk add --no-cache mongodb yaml-cpp=0.6.2-r2 ca-certificates && \
+COPY --from=documentdb-builder /out/ /
+
+# libstdc++/libgcc are the Node.js runtime deps; bash, openssl and su-exec run DocumentDB.
+# ldd fails the build if the base's Alpine release lacks a library DocumentDB was built against.
+# The gateway listens on localhost only, since its credentials are fixed.
+RUN apk add --no-cache libstdc++ libgcc ca-certificates bash openssl su-exec $(cat /etc/documentdb/apk-packages) && \
   apk add --no-cache --upgrade curl busybox && \
   addgroup -S -g ${USER_GID} otel && \
   adduser  -S -u ${USER_UID} -G otel otel && \
+  addgroup -S -g 70 postgres && adduser -S -u 70 -G postgres -h /var/lib/postgresql postgres && \
   mkdir -p /data/db && \
+  ! ldd /usr/libexec/postgresql18/postgres /usr/bin/documentdb-gateway /usr/lib/postgresql18/*.so 2>&1 | grep 'Error loading shared library' && \
+  sed -i 's/"UseLocalHost": false/"UseLocalHost": true/' /etc/documentdb/gateway/SetupConfiguration.json && \
+  grep -q '"UseLocalHost": true' /etc/documentdb/gateway/SetupConfiguration.json && \
   install -d -m 0777 -o ${USER_UID} -g ${USER_GID} /etc/otel/supervisor-data && \
   rm -rf /var/cache/apk/* && \
   rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
@@ -222,10 +278,7 @@ ENV NODE_ENV=production
 COPY --from=prod /app /app
 COPY --from=hyperdx ./refresh-env.js /etc/local/refresh-env.js
 COPY --from=hyperdx ./entry.local.base.sh /etc/local/entry.base.sh
-
-# Copy VEX exception files for Docker Scout vulnerability suppression
-# Reference via: docker scout cves --vex-location /etc/vex/ <image>
-COPY .vex/*.vex.json /etc/vex/
+COPY --chmod=755 docker/documentdb/entrypoint.sh /usr/local/bin/documentdb-entrypoint.sh
 
 WORKDIR /app
 
@@ -239,7 +292,7 @@ FROM all-in-one-base AS all-in-one-noauth
 
 LABEL org.opencontainers.image.vendor="HyperDX" \
       org.opencontainers.image.title="HyperDX All-in-One (No Auth)" \
-      org.opencontainers.image.description="HyperDX all-in-one image with ClickHouse, MongoDB, and OTel Collector (no authentication)" \
+      org.opencontainers.image.description="HyperDX all-in-one image with ClickHouse, DocumentDB, and OTel Collector (no authentication)" \
       org.opencontainers.image.source="https://github.com/ClickHouse/ClickStack" \
       org.opencontainers.image.licenses="MIT"
 
@@ -255,7 +308,7 @@ FROM all-in-one-base AS all-in-one-auth
 
 LABEL org.opencontainers.image.vendor="HyperDX" \
       org.opencontainers.image.title="HyperDX All-in-One (With Auth)" \
-      org.opencontainers.image.description="HyperDX all-in-one image with ClickHouse, MongoDB, and OTel Collector (with authentication)" \
+      org.opencontainers.image.description="HyperDX all-in-one image with ClickHouse, DocumentDB, and OTel Collector (with authentication)" \
       org.opencontainers.image.source="https://github.com/ClickHouse/ClickStack" \
       org.opencontainers.image.licenses="MIT"
 

@@ -77,7 +77,7 @@ runs:
       shell: bash
       run: |
         docker buildx create --use --driver=docker-container
-        docker buildx build docker/documentdb -t hyperdx/documentdb:local --cache-to "type=gha,mode=max,scope=documentdb" --cache-from "type=gha,scope=documentdb" --load
+        docker buildx build . -f docker/hyperdx/Dockerfile --target documentdb -t hyperdx/documentdb:local --cache-to "type=gha,mode=max,scope=documentdb" --cache-from "type=gha,scope=documentdb" --load
 
     - name: Start E2E Docker Compose
       shell: bash
