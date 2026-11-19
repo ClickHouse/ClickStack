@@ -600,7 +600,8 @@ describe('useGetKeyValues', () => {
     const allKeys = [
       "LogAttributes['a']",
       "LogAttributes['b']",
-      "LogAttributes['c']",
+      // Quoting doesn't make it a different column
+      "`LogAttributes`['c']",
       "`Resource-Attributes`['x']",
       'ServiceName',
       'SeverityText',
@@ -612,6 +613,7 @@ describe('useGetKeyValues', () => {
       "`Resource-Attributes`['x']",
       'ServiceName',
       'SeverityText',
+      'SpanName',
     ];
 
     const { result } = renderHook(
@@ -645,6 +647,79 @@ describe('useGetKeyValues', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(getKeyValuesWithMVs.mock.calls[0][0].keyConditions).toBeUndefined();
+  });
+
+  describe("'exact' mode with plain columns and nested keys", () => {
+    const mixedKeys = [
+      "LogAttributes['a']",
+      'ServiceName',
+      "ResourceAttributes['b']",
+      '`__hdx_materialized_k8s.pod.name`',
+      "`LogAttributes`['c']",
+      'Body.`user`',
+    ];
+    const renderMixed = () =>
+      renderValues({
+        mode: 'exact',
+        chartConfigs: [logsConfig],
+        keys: mixedKeys,
+      });
+
+    it('shows plain columns before the nested keys finish', async () => {
+      let releaseNested: () => void = () => {};
+      const nested = new Promise<void>(resolve => {
+        releaseNested = resolve;
+      });
+      const getKeyValuesWithMVs = jest
+        .spyOn(mockMetadata, 'getKeyValuesWithMVs')
+        .mockImplementation(async ({ keys }) => {
+          if (keys.includes('ServiceName'))
+            return [{ key: 'ServiceName', value: ['api'] }];
+          if (keys.includes("ResourceAttributes['b']"))
+            return [{ key: "ResourceAttributes['b']", value: ['y'] }];
+          await nested;
+          return [{ key: keys[0], value: ['x'] }];
+        });
+
+      const { result } = renderMixed();
+
+      await waitFor(() =>
+        expect(result.current.data).toEqual(
+          expect.arrayContaining([
+            { key: 'ServiceName', value: ['api'] },
+            { key: "ResourceAttributes['b']", value: ['y'] },
+          ]),
+        ),
+      );
+      expect(result.current.data).toHaveLength(2);
+      expect(result.current.isFetching).toBe(true);
+      expect(getKeyValuesWithMVs.mock.calls.map(([args]) => args.keys)).toEqual(
+        [
+          ['ServiceName', '`__hdx_materialized_k8s.pod.name`', 'Body.`user`'],
+          ["LogAttributes['a']", "`LogAttributes`['c']"],
+          ["ResourceAttributes['b']"],
+        ],
+      );
+
+      releaseNested();
+
+      await waitForSettled(result);
+      expect(result.current.data).toHaveLength(3);
+    });
+
+    it('errors when either group fails', async () => {
+      jest
+        .spyOn(mockMetadata, 'getKeyValuesWithMVs')
+        .mockImplementation(async ({ keys }) => {
+          if (keys.includes('ServiceName')) return [];
+          throw new Error('nested failed');
+        });
+
+      const { result } = renderMixed();
+
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(result.current.error?.message).toBe('nested failed');
+    });
   });
 
   it("retries a failed 'exact' mode lookup per the client's defaults", async () => {

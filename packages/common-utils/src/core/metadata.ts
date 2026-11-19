@@ -584,6 +584,60 @@ export class Metadata {
     return rendered;
   }
 
+  /**
+   * Groups `Map['key']` expressions by their Map column, for columns with two
+   * or more keys. Each group's `filter` keeps just those keys, so one
+   * `groupUniqArrayMap` reads them all: a separate `Map['key']` lookup per key
+   * scans the whole map every time, which made wide attribute maps dominate
+   * value queries.
+   */
+  private async groupMapSubscripts({
+    databaseName,
+    tableName,
+    connectionId,
+    keys,
+  }: {
+    databaseName: string;
+    tableName: string;
+    connectionId: string;
+    keys: string[];
+  }): Promise<{
+    filters: string[];
+    byKey: Map<string, { filter: number; literal: string }>;
+  }> {
+    const literalsByColumn = new Map<string, Map<string, string>>();
+    for (const key of keys) {
+      const path = parseKeyPath(key);
+      if (path.length < 2) continue;
+      const column = unquoteIdentifier(path[0]);
+      const literals = literalsByColumn.get(column) ?? new Map();
+      literals.set(key, `'${path[1]}'`);
+      literalsByColumn.set(column, literals);
+    }
+
+    const filters: string[] = [];
+    const byKey = new Map<string, { filter: number; literal: string }>();
+    for (const [column, literals] of literalsByColumn) {
+      const uniqueLiterals = [...new Set(literals.values())];
+      if (uniqueLiterals.length < 2) continue;
+      const columnMeta = await this.getColumn({
+        databaseName,
+        tableName,
+        column,
+        connectionId,
+      });
+      if (convertCHDataTypeToJSType(columnMeta?.type ?? '') !== JSDataType.Map)
+        continue;
+      filters.push(
+        `mapFilter((k, v) -> k IN (${uniqueLiterals.join(', ')}), ${quoteIdentifierIfNeeded(column)})`,
+      );
+      for (const [key, literal] of literals) {
+        byKey.set(key, { filter: filters.length - 1, literal });
+      }
+    }
+    return { filters, byKey };
+  }
+
   private async queryTableMetadata({
     database,
     table,
@@ -3308,6 +3362,16 @@ export class Metadata {
         });
         const renderKey = (key: string) => renderedByKey.get(key) ?? key;
         const renderedKeys = keys.map(renderKey);
+        // Faceted keys keep their own predicate, so only the rest can share a
+        // Map read.
+        const mapSubscripts = await this.groupMapSubscripts({
+          databaseName: chartConfig.from.databaseName,
+          tableName: chartConfig.from.tableName,
+          connectionId: chartConfig.connection,
+          keys: renderedKeys.filter(
+            (_, i) => !(disableRowLimit && keyConditions?.at(i)),
+          ),
+        });
 
         // When disableRowLimit is true, query directly without CTE
         // Otherwise, use CTE with row limits for sampling
@@ -3323,12 +3387,16 @@ export class Metadata {
                   // physical column than the aggregate wrapping it.
                   const condition =
                     state && filterStateToPredicate(state, renderKey);
+                  const mapSubscript = mapSubscripts.byKey.get(k);
                   // `groupUniqArrayIf` lets each key be constrained by its own
                   // predicate, so multiple faceted value lists are computed in a
                   // single scan instead of one query per key.
-                  return condition
-                    ? `groupUniqArrayIf(${limit})(${k}, ${condition}) AS param${i}`
-                    : `groupUniqArray(${limit})(${k}) AS param${i}`;
+                  if (condition)
+                    return `groupUniqArrayIf(${limit})(${k}, ${condition}) AS param${i}`;
+                  // ClickHouse computes the repeated aggregate once.
+                  if (mapSubscript)
+                    return `groupUniqArrayMap(${limit})(${mapSubscripts.filters[mapSubscript.filter]})[${mapSubscript.literal}] AS param${i}`;
+                  return `groupUniqArray(${limit})(${k}) AS param${i}`;
                 })
                 .join(', '),
             }
@@ -3338,8 +3406,14 @@ export class Metadata {
               // than selecting just the JSON paths corresponding to the given keys.
               // paramN aliases are used to avoid issues with special characters or complex expressions in keys.
               const selectExpr =
-                renderedKeys.map((k, i) => `${k} as param${i}`).join(', ') ||
-                '*';
+                [
+                  ...renderedKeys.flatMap((k, i) =>
+                    mapSubscripts.byKey.has(k) ? [] : [`${k} as param${i}`],
+                  ),
+                  ...mapSubscripts.filters.map(
+                    (filter, i) => `${filter} as mapParam${i}`,
+                  ),
+                ].join(', ') || '*';
 
               return {
                 with: [
@@ -3359,11 +3433,13 @@ export class Metadata {
                     isSubquery: true,
                   },
                 ],
-                select: keys
-                  .map(
-                    (_, i) =>
-                      `groupUniqArray(${limit})(param${i}) AS param${i}`,
-                  )
+                select: renderedKeys
+                  .map((k, i) => {
+                    const mapSubscript = mapSubscripts.byKey.get(k);
+                    return mapSubscript
+                      ? `groupUniqArrayMap(${limit})(mapParam${mapSubscript.filter})[${mapSubscript.literal}] AS param${i}`
+                      : `groupUniqArray(${limit})(param${i}) AS param${i}`;
+                  })
                   .join(', '),
                 connection: chartConfig.connection,
                 from: { databaseName: '', tableName: 'sampledData' },

@@ -190,6 +190,38 @@ describe('Metadata Integration Tests', () => {
         );
       });
 
+      it('should handle several keys on one Map column', async () => {
+        const result = await metadata.getKeyValues({
+          chartConfig,
+          keys: [
+            "ResourceAttributes['k8s.pod.name']",
+            'SeverityText',
+            "`ResourceAttributes`['env']",
+            "ResourceAttributes['missing']",
+          ],
+          disableRowLimit,
+          source,
+        });
+
+        expect(result).toEqual([
+          {
+            key: "ResourceAttributes['k8s.pod.name']",
+            value: expect.arrayContaining(['pod1', 'pod2']),
+          },
+          {
+            key: 'SeverityText',
+            value: expect.arrayContaining(['info', 'error', 'warning']),
+          },
+          {
+            key: "`ResourceAttributes`['env']",
+            value: expect.arrayContaining(['prod', 'staging']),
+          },
+          { key: "ResourceAttributes['missing']", value: [] },
+        ]);
+        expect(result[0].value).toHaveLength(2);
+        expect(result[2].value).toHaveLength(2);
+      });
+
       it('should return an empty list when no keys are provided', async () => {
         const resultEmpty = await metadata.getKeyValues({
           chartConfig,
