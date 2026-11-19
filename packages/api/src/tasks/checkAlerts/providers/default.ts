@@ -34,6 +34,7 @@ import Webhook, { IWebhook } from '@/models/webhook';
 import {
   alertHasGroupBy,
   computeHistoryMapKey,
+  doesExceedThreshold,
   getAlertWindowStart,
   getConsecutiveWindowHistories,
   getLatestAlertHistories,
@@ -477,8 +478,18 @@ async function loadAlerts(): Promise<AlertTask[]> {
     }
   }
 
+  // When a value of 0 does not breach the threshold, every group whose last
+  // row is ALERT or PENDING has a row in the alert's last evaluation:
+  // processAlert writes an OK row for each such group missing from the data.
+  // A previous OK row only matters for its createdAt, which the last
+  // evaluation also has. So these alerts read only that evaluation (below),
+  // one row per group, instead of scanning every row in the lookback.
   const [previousAlerts, recentHistoryMap] = await Promise.all([
-    getPreviousAlertHistories(dueGroupedAlerts, now, historyQueryQueue),
+    getPreviousAlertHistories(
+      dueGroupedAlerts.filter(alert => doesExceedThreshold(alert, 0)),
+      now,
+      historyQueryQueue,
+    ),
     getConsecutiveWindowHistories(dueAlertsWithHistory, now, historyQueryQueue),
   ]);
 
@@ -494,10 +505,10 @@ async function loadAlerts(): Promise<AlertTask[]> {
     });
   }
 
-  // A grouped alert whose latest row is older than its scan window gets no
-  // rows back. Read the rows of that last evaluation instead (one per group,
-  // all sharing its createdAt), so the evaluation still starts from it and
-  // every group keeps its previous state.
+  // Read the rows of the last evaluation (one per group, all sharing its
+  // createdAt) for the grouped alerts not scanned above, and for those whose
+  // latest row is older than their scan window, which get no rows back. The
+  // evaluation then starts from it and every group keeps its previous state.
   await Promise.all(
     dueGroupedAlerts.map(alert => {
       const latest = latestHistories.get(alert.id);

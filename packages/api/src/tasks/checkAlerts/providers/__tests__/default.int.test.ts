@@ -982,6 +982,98 @@ describe('DefaultAlertProvider', () => {
         );
       });
 
+      it('reads only the last evaluation for a due grouped alert that a value of 0 does not breach', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+          { groupBy: 'ServiceName' },
+        );
+        const windowMs = 5 * 60_000;
+        const lastEvaluation = new Date(
+          currentWindowStart().getTime() - windowMs,
+        );
+        // Older evaluations: 'old' last reported OK, so it has no row in the
+        // last evaluation and no state worth keeping.
+        for (let i = 2; i <= 4; i++) {
+          await AlertHistory.create({
+            alert: alert._id,
+            createdAt: new Date(lastEvaluation.getTime() - i * windowMs),
+            state: AlertState.OK,
+            group: 'old',
+          });
+        }
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: lastEvaluation,
+          state: AlertState.ALERT,
+          group: 'a',
+          fired: true,
+        });
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: lastEvaluation,
+          state: AlertState.OK,
+          group: 'b',
+        });
+
+        const findSpy = jest.spyOn(AlertHistory, 'find');
+        const result = await provider.getAlertTasks();
+
+        // One find, on the last evaluation's createdAt: no lookback scan.
+        expect(findSpy).toHaveBeenCalledTimes(1);
+        expect(findSpy.mock.calls[0][0]).toMatchObject({
+          createdAt: lastEvaluation,
+        });
+        const { previousMap } = result[0].alerts[0];
+        expect([...previousMap.keys()].sort()).toEqual([
+          `${alert.id}||a`,
+          `${alert.id}||b`,
+        ]);
+        const groupA = previousMap.get(`${alert.id}||a`);
+        expect(groupA?.state).toBe(AlertState.ALERT);
+        expect(groupA?.fired).toBe(true);
+      });
+
+      it('keeps the lookback scan for a grouped alert that a value of 0 breaches', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+          { groupBy: 'ServiceName' },
+        );
+        await Alert.updateOne(
+          { _id: alert._id },
+          { $set: { thresholdType: AlertThresholdType.BELOW, threshold: 1 } },
+        );
+        const windowMs = 5 * 60_000;
+        const lastEvaluation = new Date(
+          currentWindowStart().getTime() - windowMs,
+        );
+        // 'gone' stopped reporting while in ALERT. A value of 0 breaches, so
+        // processAlert writes no OK row for it and only the scan finds it.
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: new Date(lastEvaluation.getTime() - 2 * windowMs),
+          state: AlertState.ALERT,
+          group: 'gone',
+          fired: true,
+        });
+        await AlertHistory.create({
+          alert: alert._id,
+          createdAt: lastEvaluation,
+          state: AlertState.OK,
+          group: 'a',
+        });
+
+        const result = await provider.getAlertTasks();
+
+        const { previousMap } = result[0].alerts[0];
+        expect([...previousMap.keys()].sort()).toEqual([
+          `${alert.id}||a`,
+          `${alert.id}||gone`,
+        ]);
+        expect(previousMap.get(`${alert.id}||gone`)?.state).toBe(
+          AlertState.ALERT,
+        );
+      });
+
       it('treats an alert as due when its window start cannot be computed', async () => {
         const { alert } = await createValidSavedSearchAlert(
           await createConnectionAndSource(),
