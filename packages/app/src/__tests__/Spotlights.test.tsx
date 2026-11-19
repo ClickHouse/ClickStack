@@ -1,8 +1,14 @@
-import { renderHook } from '@testing-library/react';
+import { spotlight } from '@mantine/spotlight';
+import { act, renderHook, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { useDashboards } from '@/dashboard';
 import { useSavedSearches } from '@/savedSearch';
-import { useSpotlightActions } from '@/Spotlights';
+import { HDXSpotlightProvider, useSpotlightActions } from '@/Spotlights';
+import { useUserPreferencesModal } from '@/UserPreferencesModal';
+import { useUserPreferences } from '@/useUserPreferences';
+
+const mockPush = jest.fn();
 
 jest.mock('next/router', () => ({
   useRouter() {
@@ -11,7 +17,7 @@ jest.mock('next/router', () => ({
       pathname: '',
       query: '',
       asPath: '',
-      push: jest.fn(),
+      push: mockPush,
       events: {
         on: jest.fn(),
         off: jest.fn(),
@@ -90,6 +96,7 @@ describe('useSpotlightActions', () => {
   // Reset mocks before each test
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.clear();
     mockUseSavedSearches.mockReturnValue(mockSavedSearches);
     mockUseDashboards.mockReturnValue(mockSavedDashboard);
   });
@@ -105,5 +112,42 @@ describe('useSpotlightActions', () => {
     expect(result.current.actions[1].label).toEqual(
       mockSavedDashboard.data[0].name,
     );
+  });
+
+  const selectSpotlightAction = async (query: string, name: RegExp) => {
+    renderWithMantine(
+      <HDXSpotlightProvider>
+        <div />
+      </HDXSpotlightProvider>,
+    );
+    act(() => spotlight.open());
+    await userEvent.type(await screen.findByPlaceholderText('Search'), query);
+    await userEvent.click(await screen.findByRole('button', { name }));
+  };
+
+  it('opens the anchored team settings section', async () => {
+    await selectSpotlightAction('mcp', /MCP server/);
+
+    expect(mockPush).toHaveBeenCalledWith(
+      '/team?tab=api-agents#team-api-agents-mcp-server',
+    );
+  });
+
+  it('switches color mode without opening preferences', async () => {
+    await selectSpotlightAction('light mode', /Use light mode/);
+
+    const { result } = renderHook(() => ({
+      preferences: useUserPreferences(),
+      modal: useUserPreferencesModal(),
+    }));
+    expect(result.current.preferences.userPreferences.colorMode).toBe('light');
+    expect(result.current.modal.opened).toBe(false);
+  });
+
+  it('opens the preferences modal', async () => {
+    await selectSpotlightAction('time zone', /Preferences/);
+
+    const { result } = renderHook(() => useUserPreferencesModal());
+    expect(result.current.opened).toBe(true);
   });
 });

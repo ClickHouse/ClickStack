@@ -68,41 +68,61 @@ export function resolveSourceParam<T extends SourceForParamResolution>(
     s => !kinds?.length || kinds.includes(s.kind),
   );
 
-  const matchedById = sourcesWithValidKind.find(s => s.id === paramValue);
-  if (matchedById) return { status: 'resolved', source: matchedById };
-
-  const exactNameMatches = sourcesWithValidKind.filter(
-    s => s.name === paramValue,
-  );
-  const nameMatches = exactNameMatches.length
-    ? exactNameMatches
-    : sourcesWithValidKind.filter(
-        s => s.name.toLowerCase() === lowercasedParam,
-      );
-
-  if (nameMatches.length === 0) {
-    // Nothing this page can show matches. Separate "there is no such source"
-    // from "it exists but is the wrong kind" so the caller can say which.
-    const unusableMatch = sources.find(
-      s => s.id === paramValue || s.name.toLowerCase() === lowercasedParam,
-    );
-    return unusableMatch
-      ? { status: 'wrong-kind', source: unusableMatch }
-      : { status: 'not-found' };
+  const matched = matchIdOrNameParam(paramValue, sourcesWithValidKind);
+  if (matched) {
+    const { match, ambiguousMatchCount } = matched;
+    return {
+      status: 'resolved',
+      source: match,
+      ...(ambiguousMatchCount != null ? { ambiguousMatchCount } : {}),
+    };
   }
 
-  // Prefer enabled sources; a disabled one is picked only when it is all there
+  // Nothing this page can show matches. Separate "there is no such source"
+  // from "it exists but is the wrong kind" so the caller can say which.
+  const unusableMatch = sources.find(
+    s => s.id === paramValue || s.name.toLowerCase() === lowercasedParam,
+  );
+  return unusableMatch
+    ? { status: 'wrong-kind', source: unusableMatch }
+    : { status: 'not-found' };
+}
+
+/**
+ * Match a param that may hold either an ID or a human-written name against
+ * `items`: ID first, then an exact-case name, then a case-insensitive name.
+ *
+ * When more than one item matches by name, prefer enabled items and then the
+ * lowest ID, so the same link always resolves to the same item no matter what
+ * order the API returns them in.
+ */
+export function matchIdOrNameParam<
+  T extends { id: string; name: string; disabled?: boolean },
+>(
+  paramValue: string,
+  items: readonly T[],
+): { match: T; ambiguousMatchCount?: number } | undefined {
+  const matchedById = items.find(s => s.id === paramValue);
+  if (matchedById) return { match: matchedById };
+
+  const lowercasedParam = paramValue.toLowerCase();
+  const exactNameMatches = items.filter(s => s.name === paramValue);
+  const nameMatches = exactNameMatches.length
+    ? exactNameMatches
+    : items.filter(s => s.name.toLowerCase() === lowercasedParam);
+  if (nameMatches.length === 0) return undefined;
+
+  // Prefer enabled items; a disabled one is picked only when it is all there
   // is (a disabled source's ID in the URL has always resolved).
   const enabledMatches = nameMatches.filter(s => !s.disabled);
   const pool = enabledMatches.length ? enabledMatches : nameMatches;
-  // Sort by ID so an ambiguous name resolves to the same source on every load.
+  // Sort by ID so an ambiguous name resolves to the same item on every load.
   const picked = pool.sort((a, b) =>
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   )[0];
 
   return {
-    status: 'resolved',
-    source: picked,
+    match: picked,
     ...(pool.length > 1 ? { ambiguousMatchCount: pool.length } : {}),
   };
 }

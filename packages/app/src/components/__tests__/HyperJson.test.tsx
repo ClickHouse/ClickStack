@@ -126,3 +126,22 @@ describe('HyperJson key ordering', () => {
     expect(renderedValues(container).slice(1)).toEqual(list);
   });
 });
+
+// Hiding blank values leaves holes in arrays so each element keeps its real
+// index; counts and expandability must ignore the holes.
+describe('HyperJson sparse arrays', () => {
+  it('shows real indexes and counts only present elements', () => {
+    const list: string[] = [];
+    list[2] = 'kept';
+    const { container } = renderWithMantine(
+      <HyperJson data={{ list }} normallyExpanded />,
+    );
+
+    expect(
+      Array.from(container.querySelectorAll('.keyContainer > .key')).map(el =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(['list', '2']);
+    expect(container).toHaveTextContent('[] 1 items');
+  });
+});

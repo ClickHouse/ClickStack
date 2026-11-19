@@ -5,13 +5,16 @@ import {
   isFilterGlobalRequirement,
   isFilterRequired,
   isFilterVariableEnabled,
+  isReferenceVariableFilterType,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   AdhocDashboardFilter,
   DashboardFilter,
   DashboardFilterSchema,
+  DataSourceDashboardFilter,
   PromqlLabelDashboardFilter,
   QueryExpressionDashboardFilter,
+  SqlQueryDashboardFilter,
   StaticListDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
@@ -53,7 +56,9 @@ export type FilterFormValues = {
     | 'isGlobalRequirement'
     | 'maxSelections'
   > &
-  Pick<AdhocDashboardFilter, 'sourceType' | 'sources'>;
+  Pick<AdhocDashboardFilter, 'sourceType' | 'sources'> &
+  Pick<DataSourceDashboardFilter, 'allowedSourceKinds' | 'connection'> &
+  Pick<SqlQueryDashboardFilter, 'connection' | 'sqlTemplate'>;
 
 export type FilterFormControl = Control<FilterFormValues>;
 
@@ -65,6 +70,8 @@ export const toFormValues = (
   const staticList = filter?.type === 'STATIC_LIST' ? filter : undefined;
   const promqlLabel = filter?.type === 'PROMETHEUS_LABEL' ? filter : undefined;
   const adhoc = filter?.type === 'ADHOC' ? filter : undefined;
+  const dataSource = filter?.type === 'DATA_SOURCE' ? filter : undefined;
+  const sqlQuery = filter?.type === 'SQL_QUERY' ? filter : undefined;
 
   return {
     id: filter?.id ?? crypto.randomUUID(),
@@ -79,7 +86,12 @@ export const toFormValues = (
 
     // QUERY_EXPRESSION fields
     expression: queried?.expression ?? '',
-    source: queried?.source ?? promqlLabel?.source ?? presetSourceId ?? '',
+    source:
+      queried?.source ??
+      promqlLabel?.source ??
+      sqlQuery?.source ??
+      presetSourceId ??
+      '',
     sourceMetricType: queried?.sourceMetricType,
     where: queried?.where ?? adhoc?.where ?? '',
     whereLanguage:
@@ -100,6 +112,15 @@ export const toFormValues = (
     // ADHOC fields
     sourceType: adhoc?.sourceType ?? 'sql',
     sources: adhoc?.sources ?? [],
+
+    // DATA_SOURCE fields
+    allowedSourceKinds: dataSource?.allowedSourceKinds ?? [],
+
+    // DATA_SOURCE and SQL_QUERY fields
+    connection: dataSource?.connection ?? sqlQuery?.connection ?? '',
+
+    // SQL_QUERY fields
+    sqlTemplate: sqlQuery?.sqlTemplate ?? '',
   };
 };
 
@@ -140,6 +161,40 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
     });
   }
 
+  if (values.type === 'SQL_QUERY') {
+    return DashboardFilterSchema.parse({
+      ...rest,
+      source: values.source || undefined,
+      sqlTemplate: values.sqlTemplate.trim(),
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: getFilterVariableName(values),
+      ...selectionLimits,
+    });
+  }
+
+  // Reference variables are always single-select and required, so only the
+  // global requirement checkbox is consulted
+  if (isReferenceVariableFilterType(values.type)) {
+    return DashboardFilterSchema.parse({
+      id: values.id,
+      type: values.type,
+      name: values.name,
+      ...(values.type === 'DATA_SOURCE'
+        ? {
+            allowedSourceKinds: values.allowedSourceKinds,
+            connection: values.connection || undefined,
+          }
+        : {}),
+      minSelections: 1,
+      maxSelections: 1,
+      ...(isGlobalRequirement ? { isGlobalRequirement: true } : {}),
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: getFilterVariableName(values),
+    });
+  }
+
   const appliesTo = values.appliesToSourceIds?.filter(id => !!id?.length);
   const trimmedWhere = values.where?.trim() ?? '';
   const whereFields = {
@@ -149,7 +204,6 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
 
   // Selection limits don't apply to conditions, so they aren't stored.
   if (values.type === 'ADHOC') {
-    const isBroadcastEnabled = isFilterBroadcastEnabled(values);
     return DashboardFilterSchema.parse({
       id: values.id,
       type: values.type,
@@ -158,10 +212,8 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       sources: values.sources,
       // Only SQL suggestions can be narrowed; the input is hidden otherwise
       ...(values.sourceType === 'sql' ? whereFields : {}),
-      isBroadcastEnabled,
-      // Hidden, and so unvalidated, while broadcast is off
-      appliesToSourceIds:
-        isBroadcastEnabled && appliesTo?.length ? appliesTo : undefined,
+      isBroadcastEnabled: true,
+      appliesToSourceIds: appliesTo?.length ? appliesTo : undefined,
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),
     });
