@@ -59,6 +59,7 @@ import {
 import {
   getAlignedDateRange,
   getDistributedTableArgs,
+  getTextIndexDictionaryBlockSize,
   MetadataMVQueryOptions,
   objectHash,
   splitAndTrimWithBracket,
@@ -77,6 +78,25 @@ export const DEFAULT_MAP_KEY_INDEX_MAX_PARTS = 20;
 
 // Cap keys per dispatched query: each key is another operation for the db to fetch, and simply fetching all keys at once can be too much for the db to handle.
 export const GET_ALL_KEY_VALUES_CHUNK_SIZE = 100;
+
+// Index rows a text index values lookup reads per key. The dictionary is
+// sorted, so a key with more than this gets the most frequent among its
+// alphabetically first ones.
+const TEXT_INDEX_TOKENS_PER_KEY = 20_000;
+
+// mergeTreeTextIndex returns one row per part and token, so the cap counts a
+// value once per part it's in, and values only in parts read after it are
+// missed. That sample is enough for the top values of a filter, but "Load
+// more" (no part limit) wants every value, so its read isn't capped.
+const textIndexTokenLimit = (maxParts: number | null): ChSql =>
+  maxParts == null
+    ? chSql``
+    : chSql`LIMIT ${{ UNSAFE_RAW_SQL: String(TEXT_INDEX_TOKENS_PER_KEY) }}`;
+// Keys or columns per text index values query; see dispatchKeyValueQueries.
+const TEXT_INDEX_KEYS_PER_QUERY = 10;
+// Smallest dictionary block size that gets one read per key; see
+// getMapTextIndexKeyValues.
+const PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE = 2048;
 
 /**
  * The index read could not be scoped to the requested date range, so it was
@@ -1751,11 +1771,37 @@ export class Metadata {
     });
   }
 
+  // shortcut: parts written before a table's text_index_dictionary_block_size
+  // changed keep their old block size; good enough to pick a query shape.
+  private async getTextIndexDictionaryBlockSize({
+    databaseName,
+    tableName,
+    connectionId,
+    indexName,
+  }: TableConnection & { indexName: string }): Promise<number> {
+    const [skipIndices, tableMetadata, serverMergeTreeSettings] =
+      await Promise.all([
+        this.getSkipIndices({ databaseName, tableName, connectionId }).catch(
+          () => [] as SkipIndexMetadata[],
+        ),
+        this.getTableMetadata({ databaseName, tableName, connectionId }).catch(
+          () => undefined,
+        ),
+        this.getMergeTreeSettings({ connectionId }),
+      ]);
+    return getTextIndexDictionaryBlockSize({
+      typeFull: skipIndices.find(idx => idx.name === indexName)?.typeFull,
+      engineFull: tableMetadata?.engine_full,
+      serverMergeTreeSettings,
+    });
+  }
+
   private async getMapTextIndexKeyValues({
     databaseName,
     tableName,
     connectionId,
     queryOptions,
+    perKey,
     maxParts,
     partSelection,
     dateRange,
@@ -1763,6 +1809,8 @@ export class Metadata {
     signal,
   }: TableConnection & {
     queryOptions: TextIndexMapColumnQueryOptions;
+    /** One read per key instead of one per column; see the comment below. */
+    perKey: boolean;
     /** null reads every part in the time range. */
     maxParts: number | null;
     partSelection: MapKeyIndexPartSelection;
@@ -1771,24 +1819,11 @@ export class Metadata {
     signal?: AbortSignal;
   }): Promise<KeyValues[] | undefined> {
     const queryOptionsHash = objectHash(queryOptions);
-    const cacheKey = `${databaseName}.${tableName}.${connectionId}.${dateRange[0].toString()}.${dateRange[1].toString()}.${queryOptionsHash}.${maxParts}.${partSelection}.${timestampValueExpression}.getMapTextIndexKeyValues`;
+    const cacheKey = `${databaseName}.${tableName}.${connectionId}.${dateRange[0].toString()}.${dateRange[1].toString()}.${queryOptionsHash}.${perKey}.${maxParts}.${partSelection}.${timestampValueExpression}.getMapTextIndexKeyValues`;
     return this.cache.getOrFetch(cacheKey, async () => {
       try {
         const sqlBranches: Array<ChSql> = [];
         for (const [columnName, info] of queryOptions.entries()) {
-          const orChain = concatChSql(
-            ' OR ',
-            // Inline keys as SQL-escaped literals, not bind params: ~100
-            // per-key params exceed the web client's URL param budget and
-            // silently switch the request to a multipart body that proxies
-            // may reject. Keys are ingest-controlled, hence SqlString.escape.
-            info.keys.map(
-              k =>
-                chSql`startsWith(token, ${{
-                  UNSAFE_RAW_SQL: SqlString.escape(`${k}${info.separator}`),
-                }})`,
-            ),
-          );
           const partsFilter = await this.partsOverlapFilter({
             databaseName,
             tableName,
@@ -1798,18 +1833,50 @@ export class Metadata {
             partSelection,
           });
           const valueSql = chSql`substring(token, position(token, ${{ String: info.separator }}) + ${{ Int32: info.separator.length }})`;
-          const sql = chSql`
-        SELECT * FROM (
-          SELECT ${{ String: columnName }} as column,
+          // Inline keys as SQL-escaped literals, not bind params: ~100
+          // per-key params exceed the web client's URL param budget and
+          // silently switch the request to a multipart body that proxies
+          // may reject. Keys are ingest-controlled, hence SqlString.escape.
+          const keyPrefix = (k: string) =>
+            chSql`${{ UNSAFE_RAW_SQL: SqlString.escape(`${k}${info.separator}`) }}`;
+          // Every read of the index loads each part's sparse index, which has
+          // one entry per dictionary block. With large blocks that is cheap, so
+          // each key gets its own read whose LIMIT stops it early, and a key
+          // with a value per row can't slow down the others; `cardinality` is
+          // the token's row count in the part, so topKWeighted keeps the most
+          // frequent values among the tokens read. With small blocks
+          // (ClickHouse's default 512) the sparse index is large, so the
+          // batch's keys share one read.
+          if (!perKey) {
+            sqlBranches.push(chSql`
+          SELECT ${{ String: columnName }} AS column,
             substring(token, 1, position(token, ${{ String: info.separator }}) - 1) AS key,
-            groupUniqArray(${{ Int32: info.limit }})(${valueSql}) AS value
+            groupUniqArray(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(${valueSql}) AS value
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
-            AND (${orChain})
+            AND (${concatChSql(
+              ' OR ',
+              info.keys.map(k => chSql`startsWith(token, ${keyPrefix(k)})`),
+            )})
             AND ${valueSql} != ''
           GROUP BY column, key
-        )`;
-          sqlBranches.push(sql);
+          `);
+            continue;
+          }
+          for (const k of info.keys) {
+            sqlBranches.push(chSql`
+        SELECT ${{ String: columnName }} AS column,
+          ${{ UNSAFE_RAW_SQL: SqlString.escape(k) }} AS key,
+          topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(v, cardinality) AS value
+        FROM (
+          SELECT ${valueSql} AS v, cardinality
+          FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
+          WHERE ${partsFilter}
+            AND startsWith(token, ${keyPrefix(k)})
+            AND v != ''
+          ${textIndexTokenLimit(maxParts)}
+        )`);
+          }
         }
         const sql = concatChSql(' UNION ALL ', sqlBranches);
 
@@ -1818,14 +1885,25 @@ export class Metadata {
             query: sql.sql,
             query_params: sql.params,
             connectionId,
-            clickhouse_settings: {
-              max_rows_to_read: String(
-                this.getClickHouseSettings().max_rows_to_read ??
-                  DEFAULT_METADATA_MAX_ROWS_TO_READ,
-              ),
-              read_overflow_mode: 'break',
-              ...this.getClickHouseSettings(),
-            },
+            clickhouse_settings: perKey
+              ? {
+                  ...this.getClickHouseSettings(),
+                  // The per-key LIMIT bounds each read. A row cap would stop
+                  // the sorted dictionary read partway and leave the keys that
+                  // sort after it with no values.
+                  max_rows_to_read: '0',
+                }
+              : {
+                  // shortcut: bounds the shared read, but keys that sort after
+                  // a high-cardinality key can come back with no values; drop
+                  // it if that matters more than the read's cost.
+                  max_rows_to_read: String(
+                    this.getClickHouseSettings().max_rows_to_read ??
+                      DEFAULT_METADATA_MAX_ROWS_TO_READ,
+                  ),
+                  read_overflow_mode: 'break',
+                  ...this.getClickHouseSettings(),
+                },
             abort_signal: signal,
           })
           .then(res =>
@@ -1883,14 +1961,16 @@ export class Metadata {
             maxParts: maxParts ?? undefined,
             partSelection,
           });
+          // See getMapTextIndexKeyValues for the per-column LIMIT.
           const sql = chSql`
-        SELECT * FROM (
-          SELECT ${{ String: columnName }} AS key,
-            groupUniqArray(${{ Int32: info.limit }})(token) AS value
+        SELECT ${{ String: columnName }} AS key,
+          topKWeighted(${{ UNSAFE_RAW_SQL: inlineNonNegativeInt(info.limit, 'limit') }})(token, cardinality) AS value
+        FROM (
+          SELECT token, cardinality
           FROM mergeTreeTextIndex(${{ String: databaseName }}, ${{ String: tableName }}, ${{ String: info.indexName }})
           WHERE ${partsFilter}
             AND token != ''
-          GROUP BY key
+          ${textIndexTokenLimit(maxParts)}
         )`;
           sqlBranches.push(sql);
         }
@@ -1902,12 +1982,9 @@ export class Metadata {
             query_params: sql.params,
             connectionId,
             clickhouse_settings: {
-              max_rows_to_read: String(
-                this.getClickHouseSettings().max_rows_to_read ??
-                  DEFAULT_METADATA_MAX_ROWS_TO_READ,
-              ),
-              read_overflow_mode: 'break',
               ...this.getClickHouseSettings(),
+              // See getMapTextIndexKeyValues.
+              max_rows_to_read: '0',
             },
             abort_signal: signal,
           })
@@ -3060,28 +3137,52 @@ export class Metadata {
 
     // fire all the kv fetch queries
     const promises: Array<Promise<KeyValues[] | undefined>> = [];
-    if (mapTextIndexQueryOptions.size > 0) {
-      promises.push(
-        this.getMapTextIndexKeyValues({
-          databaseName,
-          tableName,
-          connectionId,
-          queryOptions: mapTextIndexQueryOptions,
-          maxParts: mapKeyIndexMaxParts,
-          partSelection: mapKeyIndexPartSelection,
-          dateRange,
-          timestampValueExpression,
-          signal,
-        }),
-      );
+    // Text index lookups run in small parallel batches, so a slow,
+    // high-cardinality key holds up only its own batch's values. Within a
+    // batch, large dictionary blocks get one read per key; see
+    // getMapTextIndexKeyValues.
+    // Every Map column's block size is looked up at once, not one at a time.
+    const mapColumns = await Promise.all(
+      [...mapTextIndexQueryOptions].map(async ([column, options]) => ({
+        column,
+        options,
+        perKey:
+          (await this.getTextIndexDictionaryBlockSize({
+            databaseName,
+            tableName,
+            connectionId,
+            indexName: options.indexName,
+          })) >= PER_KEY_TEXT_INDEX_MIN_DICTIONARY_BLOCK_SIZE,
+      })),
+    );
+    for (const { column, options, perKey } of mapColumns) {
+      for (const keys of chunk(options.keys, TEXT_INDEX_KEYS_PER_QUERY)) {
+        promises.push(
+          this.getMapTextIndexKeyValues({
+            databaseName,
+            tableName,
+            connectionId,
+            queryOptions: new Map([[column, { ...options, keys }]]),
+            perKey,
+            maxParts: mapKeyIndexMaxParts,
+            partSelection: mapKeyIndexPartSelection,
+            dateRange,
+            timestampValueExpression,
+            signal,
+          }),
+        );
+      }
     }
-    if (nativeTextIndexQueryOptions.size > 0) {
+    for (const entries of chunk(
+      [...nativeTextIndexQueryOptions],
+      TEXT_INDEX_KEYS_PER_QUERY,
+    )) {
       promises.push(
         this.getTextIndexKeyValues({
           databaseName,
           tableName,
           connectionId,
-          queryOptions: nativeTextIndexQueryOptions,
+          queryOptions: new Map(entries),
           maxParts: mapKeyIndexMaxParts,
           partSelection: mapKeyIndexPartSelection,
           dateRange,
