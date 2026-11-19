@@ -48,17 +48,21 @@ jobs:
     name: Build OTel Collector Image
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Get changed files
         id: changed-files
         if: github.event_name == 'pull_request'
-        uses: tj-actions/changed-files@v47.0.6
+        uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
         with:
           files: |
             docker/otel-collector/**
             packages/otel-collector/**
+            .github/actions/trivy-scan/**
       - name: Setup Docker Buildx
         if:
           github.event_name != 'pull_request' ||
@@ -75,10 +79,22 @@ jobs:
           target: prod
           platforms: linux/amd64
           push: false
+          load: true
+          tags: clickstack-otel-collector:ci
           cache-from: |
             type=gha,scope=otel-collector-nightly-amd64
             type=gha,scope=docker-build-pr-otel-collector
           cache-to: type=gha,mode=max,scope=docker-build-pr-otel-collector
+      - name: Scan image
+        if:
+          github.event_name != 'pull_request' ||
+          steps.changed-files.outputs.any_changed == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: clickstack-otel-collector:ci
+          category: otel-collector
 
   # App/prod image (API + App + common-utils Node build) — docker/hyperdx target prod.
   # This is the image the nightly css.d.ts failure surfaced in; the same builder
@@ -87,13 +103,16 @@ jobs:
     name: Build App Image
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Get changed files
         id: changed-files
         if: github.event_name == 'pull_request'
-        uses: tj-actions/changed-files@v47.0.6
+        uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
         with:
           files: |
             packages/api/**
@@ -124,6 +143,8 @@ jobs:
           target: prod
           platforms: linux/amd64
           push: false
+          load: true
+          tags: clickstack:ci
           build-contexts: |
             hyperdx=./docker/hyperdx
             api=./packages/api
@@ -134,6 +155,16 @@ jobs:
             type=gha,scope=app-nightly-amd64
             type=gha,scope=docker-build-pr-app
           cache-to: type=gha,mode=max,scope=docker-build-pr-app
+      - name: Scan image
+        if:
+          github.event_name != 'pull_request' ||
+          steps.changed-files.outputs.any_changed == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: clickstack:ci
+          category: app
 
   # All-in-one image (adds ClickHouse, MongoDB, OTel Collector to the app build)
   # — docker/hyperdx targets all-in-one-auth AND all-in-one-noauth (the Local
@@ -155,13 +186,16 @@ jobs:
     name: Build All-in-One Image
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Get changed files
         id: changed-files
         if: github.event_name == 'pull_request'
-        uses: tj-actions/changed-files@v47.0.6
+        uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
         with:
           files: |
             packages/otel-collector/**
@@ -232,3 +266,13 @@ jobs:
           steps.changed-files.outputs.any_changed == 'true'
         timeout-minutes: 10
         run: scripts/ci/smoke-all-in-one.sh hyperdx-aio-smoke:pr
+      - name: Scan image
+        if:
+          github.event_name != 'pull_request' ||
+          steps.changed-files.outputs.any_changed == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: hyperdx-aio-smoke:pr
+          category: all-in-one
