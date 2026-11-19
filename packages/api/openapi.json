@@ -862,7 +862,7 @@
           "password": {
             "type": "string",
             "writeOnly": true,
-            "description": "ClickHouse password. If omitted or empty, the existing password is kept.",
+            "description": "ClickHouse password. If omitted or empty, the existing password is kept. Required when changing `host` on a connection that has a stored password.",
             "example": "my-new-secret-password"
           },
           "hyperdxSettingPrefix": {
@@ -7772,7 +7772,7 @@
       },
       "put": {
         "summary": "Update Connection",
-        "description": "Updates an existing ClickHouse connection.\n\nField semantics: if `password` is omitted or empty the existing\npassword is kept. `hyperdxSettingPrefix` is cleared when set to null\nor an empty string, and `prometheusEndpoint` is cleared when set to\nnull; both are kept unchanged when omitted.\n",
+        "description": "Updates an existing ClickHouse connection.\n\nField semantics: if `password` is omitted or empty the existing\npassword is kept, except when `host` changes: moving a connection\nthat has a stored password to a different host requires sending the\npassword, otherwise the request fails with 400. For a Prometheus\nendpoint (`isPrometheusEndpoint: true`), which doesn't use the stored\npassword, it is cleared instead. `hyperdxSettingPrefix` is cleared when set to null\nor an empty string, and `prometheusEndpoint` is cleared when set to\nnull; both are kept unchanged when omitted.\n",
         "operationId": "updateConnection",
         "tags": [
           "Connections"

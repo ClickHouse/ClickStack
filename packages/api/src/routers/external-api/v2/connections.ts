@@ -7,6 +7,8 @@ import {
   deleteConnection,
   getConnectionById,
   getConnectionsByTeam,
+  HOST_CHANGE_PASSWORD_REQUIRED_MESSAGE,
+  resolveUpdatedPassword,
   updateConnection,
 } from '@/controllers/connection';
 import { ConnectionDocument } from '@/models/connection';
@@ -162,7 +164,7 @@ function formatExternalConnection(connection: ConnectionDocument) {
  *         password:
  *           type: string
  *           writeOnly: true
- *           description: ClickHouse password. If omitted or empty, the existing password is kept.
+ *           description: ClickHouse password. If omitted or empty, the existing password is kept. Required when changing `host` on a connection that has a stored password.
  *           example: my-new-secret-password
  *         hyperdxSettingPrefix:
  *           type: string
@@ -425,7 +427,11 @@ router.post(
  *       Updates an existing ClickHouse connection.
  *
  *       Field semantics: if `password` is omitted or empty the existing
- *       password is kept. `hyperdxSettingPrefix` is cleared when set to null
+ *       password is kept, except when `host` changes: moving a connection
+ *       that has a stored password to a different host requires sending the
+ *       password, otherwise the request fails with 400. For a Prometheus
+ *       endpoint (`isPrometheusEndpoint: true`), which doesn't use the stored
+ *       password, it is cleared instead. `hyperdxSettingPrefix` is cleared when set to null
  *       or an empty string, and `prometheusEndpoint` is cleared when set to
  *       null; both are kept unchanged when omitted.
  *     operationId: updateConnection
@@ -501,6 +507,16 @@ router.put(
         return res.sendStatus(404);
       }
 
+      const updatedPassword = resolveUpdatedPassword(
+        existingConnection,
+        req.body,
+      );
+      if (updatedPassword === undefined) {
+        return res
+          .status(400)
+          .json({ message: HOST_CHANGE_PASSWORD_REQUIRED_MESSAGE });
+      }
+
       const { hyperdxSettingPrefix, ...restBody } = req.body;
 
       const unsetFields: string[] = [];
@@ -514,10 +530,7 @@ router.put(
         {
           ...restBody,
           team: teamId,
-          // Keep the existing password when none is provided
-          password: req.body.password
-            ? req.body.password
-            : existingConnection.password,
+          password: updatedPassword,
           ...(hyperdxSettingPrefix ? { hyperdxSettingPrefix } : {}),
         },
         unsetFields,
