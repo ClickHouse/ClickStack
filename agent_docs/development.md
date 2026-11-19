@@ -170,18 +170,20 @@ without port conflicts.
 
 Port mapping (base + slot):
 
-| Service         | Default port (slot 0) | Variable          |
-| --------------- | --------------------- | ----------------- |
-| ClickHouse HTTP | 18123                 | HDX_CI_CH_PORT    |
-| MongoDB         | 39999                 | HDX_CI_MONGO_PORT |
-| API test server | 19000                 | HDX_CI_API_PORT   |
-| OpAMP           | 14320                 | HDX_CI_OPAMP_PORT |
+| Service         | Default port (slot 0) | Variable               |
+| --------------- | --------------------- | ---------------------- |
+| ClickHouse HTTP | 18123                 | HDX_CI_CH_PORT         |
+| MongoDB         | 39999                 | HDX_CI_MONGO_PORT      |
+| API test server | 19000                 | HDX_CI_API_PORT        |
+| OpAMP           | 14320                 | HDX_CI_OPAMP_PORT      |
+| Prometheus      | 19100                 | HDX_CI_PROMETHEUS_PORT |
 
 **CI Testing Notes:**
 
 - Uses separate Docker Compose configuration (`docker-compose.ci.yml`)
 - Isolated test environment with unique `-p int-<slot>` project name
-- Includes all necessary services (ClickHouse, MongoDB, OTel Collector)
+- Includes all necessary services (ClickHouse, MongoDB, OTel Collector, and a
+  Prometheus that remote-reads `default.metrics_ts` for PromQL tests)
 - Tests run against real database instances for accurate integration testing
 
 ### E2E Testing

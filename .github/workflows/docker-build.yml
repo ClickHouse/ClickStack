@@ -148,7 +148,7 @@ jobs:
   # rebuilds the entire App/prod image. To avoid duplicating that ~8-minute
   # Node build on every app change, the pull-request path filter below is
   # scoped ONLY to the incremental bundling inputs (ClickHouse / OTel / the
-  # shared Dockerfile) — NOT api/app/common-utils/deps. Those are covered by
+  # shared Dockerfile) and the smoke script — NOT api/app/common-utils/deps. Those are covered by
   # the App Image job above, and they can't break the bundling layers, which
   # only COPY the prod output. Pushes to main ignore the filter entirely.
   all-in-one-image:
@@ -169,6 +169,7 @@ jobs:
             docker/clickhouse/**
             docker/otel-collector/**
             .vex/**
+            scripts/ci/smoke-all-in-one.sh
       - name: Setup Docker Buildx
         if:
           github.event_name != 'pull_request' ||
@@ -185,6 +186,8 @@ jobs:
           target: all-in-one-auth
           platforms: linux/amd64
           push: false
+          load: true
+          tags: hyperdx-aio-auth-smoke:pr
           build-contexts: |
             clickhouse=./docker/clickhouse
             otel-collector=./docker/otel-collector
@@ -232,3 +235,11 @@ jobs:
           steps.changed-files.outputs.any_changed == 'true'
         timeout-minutes: 10
         run: scripts/ci/smoke-all-in-one.sh hyperdx-aio-smoke:pr
+      # Boot the auth image with PromQL on, remote-write one OTLP gauge into
+      # the TimeSeries table, and query it over MCP with a PromQL tile.
+      - name: Smoke test PromQL over MCP on the auth image
+        if:
+          github.event_name != 'pull_request' ||
+          steps.changed-files.outputs.any_changed == 'true'
+        timeout-minutes: 10
+        run: scripts/ci/smoke-all-in-one.sh hyperdx-aio-auth-smoke:pr --promql-mcp

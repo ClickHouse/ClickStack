@@ -289,6 +289,11 @@ export type TimeSeriesFixtureSeries = {
   /** Series window in unix seconds; ignored when the table stores no bounds. */
   startSec: number;
   endSec: number;
+  /**
+   * `[unix seconds, value]` samples. With `withSamples`, written instead of
+   * the value 1 at `startSec` and `endSec`.
+   */
+  samples?: [number, number][];
 };
 
 /**
@@ -392,7 +397,24 @@ export const seedTimeSeriesTagsTable = async ({
       );
     }
   }
-  if (withSamples) {
+  const ownSamples = series.filter(s => s.samples?.length).length;
+  if (ownSamples > 0 && ownSamples < series.length) {
+    throw new Error('give every series its own samples, or none');
+  }
+  if (withSamples && ownSamples > 0) {
+    for (const s of series) {
+      const samples = (s.samples ?? [])
+        .map(([ts, value]) => `(${ts}, ${value})`)
+        .join(', ');
+      await executeTimeSeriesSqlCommand(
+        `INSERT INTO TABLE FUNCTION timeSeriesData('${database}', '${table}')
+         SELECT id, toDateTime64(sample.1, 3) AS timestamp, sample.2 AS value
+         FROM timeSeriesTags('${database}', '${table}')
+         ARRAY JOIN [${samples}] AS sample
+         WHERE metric_name = ${quoted(s.metricName)} AND tags = ${mapLiteral(s.tags)}`,
+      );
+    }
+  } else if (withSamples) {
     const bounds = timeRanges
       ? `(SELECT id, min(min_time) AS min_time, max(max_time) AS max_time
           FROM timeSeriesTimeRanges('${database}', '${table}') GROUP BY id)`

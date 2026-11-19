@@ -10,9 +10,9 @@ include .env
 # parallel. scripts/slots.sh computes them; override the slot with
 # `make dev-int HDX_CI_SLOT=5`.
 # ---------------------------------------------------------------------------
-# One shell for all six values: this runs on every make invocation, and each
+# One shell for all seven values: this runs on every make invocation, and each
 # shell costs ~20ms.
-_hdx_ci := $(shell HDX_CI_SLOT='$(HDX_CI_SLOT)' sh -c '. ./scripts/slots.sh && hdx_ci_ports && echo "$$HDX_CI_SLOT $$HDX_CI_PROJECT $$HDX_CI_CH_PORT $$HDX_CI_MONGO_PORT $$HDX_CI_API_PORT $$HDX_CI_OPAMP_PORT"')
+_hdx_ci := $(shell HDX_CI_SLOT='$(HDX_CI_SLOT)' sh -c '. ./scripts/slots.sh && hdx_ci_ports && echo "$$HDX_CI_SLOT $$HDX_CI_PROJECT $$HDX_CI_CH_PORT $$HDX_CI_MONGO_PORT $$HDX_CI_API_PORT $$HDX_CI_OPAMP_PORT $$HDX_CI_PROMETHEUS_PORT"')
 
 HDX_CI_SLOT      := $(word 1,$(_hdx_ci))
 HDX_CI_PROJECT   := $(word 2,$(_hdx_ci))
@@ -20,8 +20,10 @@ HDX_CI_CH_PORT   := $(word 3,$(_hdx_ci))
 HDX_CI_MONGO_PORT:= $(word 4,$(_hdx_ci))
 HDX_CI_API_PORT  := $(word 5,$(_hdx_ci))
 HDX_CI_OPAMP_PORT:= $(word 6,$(_hdx_ci))
+HDX_CI_PROMETHEUS_PORT:= $(word 7,$(_hdx_ci))
 
-export HDX_CI_CH_PORT HDX_CI_MONGO_PORT HDX_CI_API_PORT HDX_CI_OPAMP_PORT
+export HDX_CI_CH_PORT HDX_CI_MONGO_PORT HDX_CI_API_PORT HDX_CI_OPAMP_PORT \
+	HDX_CI_PROMETHEUS_PORT
 
 # Log directory for dev-portal visibility (integration tests)
 HDX_CI_LOGS_DIR := $(HOME)/.config/hyperdx/dev-slots/$(HDX_CI_SLOT)/logs-int
@@ -155,7 +157,7 @@ dev-int-build:
 
 .PHONY: dev-int
 dev-int:
-	@echo "Using CI slot $(HDX_CI_SLOT) (project=$(HDX_CI_PROJECT) ch=$(HDX_CI_CH_PORT) mongo=$(HDX_CI_MONGO_PORT) api=$(HDX_CI_API_PORT))"
+	@echo "Using CI slot $(HDX_CI_SLOT) (project=$(HDX_CI_PROJECT) ch=$(HDX_CI_CH_PORT) mongo=$(HDX_CI_MONGO_PORT) api=$(HDX_CI_API_PORT) prometheus=$(HDX_CI_PROMETHEUS_PORT))"
 	@mkdir -p $(HDX_CI_LOGS_DIR)
 	@bash scripts/ensure-dev-portal.sh
 	docker compose -p $(HDX_CI_PROJECT) -f ./docker-compose.ci.yml up -d

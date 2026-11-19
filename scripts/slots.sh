@@ -70,16 +70,17 @@ hdx_dev_ports() {
 }
 
 # Integration tests (make dev-int): ClickHouse 18123+, MongoDB 39999+,
-# API 19000+, OpAMP 14320+.
+# API 19000+, Prometheus 19100+, OpAMP 14320+.
 hdx_ci_ports() {
   HDX_CI_SLOT="${HDX_CI_SLOT:-$(_hdx_default_slot "$1")}"
   HDX_CI_CH_PORT=$((18123 + HDX_CI_SLOT))
   HDX_CI_MONGO_PORT=$((39999 + HDX_CI_SLOT))
   HDX_CI_API_PORT=$((19000 + HDX_CI_SLOT))
   HDX_CI_OPAMP_PORT=$((14320 + HDX_CI_SLOT))
+  HDX_CI_PROMETHEUS_PORT=$((19100 + HDX_CI_SLOT))
   HDX_CI_PROJECT="int-${HDX_CI_SLOT}"
   export HDX_CI_SLOT HDX_CI_CH_PORT HDX_CI_MONGO_PORT HDX_CI_API_PORT \
-    HDX_CI_OPAMP_PORT HDX_CI_PROJECT
+    HDX_CI_OPAMP_PORT HDX_CI_PROMETHEUS_PORT HDX_CI_PROJECT
 }
 
 # E2E tests (make e2e): 20320-21399, plus the Playwright report server at
