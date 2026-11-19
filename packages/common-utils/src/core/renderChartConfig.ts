@@ -51,6 +51,9 @@ import {
   CteChartConfig,
   DateRange,
   DisplayType,
+  Filter,
+  isLogSource,
+  isTraceSource,
   MetricsDataType,
   PromqlChartConfig,
   QuerySettings,
@@ -61,6 +64,7 @@ import {
   SortSpecificationList,
   SqlAstFilter,
   SQLInterval,
+  TSource,
 } from '@/types';
 import { substituteChartConfigVariables } from '@/variables';
 
@@ -2668,7 +2672,16 @@ async function translateMetricChartConfig(
 
 /** Renders the config's filters into a SQL condition string */
 async function renderFiltersToSql(
-  chartConfig: RawSqlChartConfig,
+  chartConfig: Pick<
+    RawSqlChartConfig,
+    | 'filters'
+    | 'source'
+    | 'from'
+    | 'connection'
+    | 'implicitColumnExpression'
+    | 'bodyExpression'
+    | 'useTextIndexForImplicitColumn'
+  >,
   metadata: Metadata,
 ): Promise<string | undefined> {
   if (
@@ -2716,6 +2729,38 @@ async function renderFiltersToSql(
   ).filter(condition => condition !== undefined);
 
   return conditions.length > 0 ? `(${conditions.join(' AND ')})` : undefined;
+}
+
+/**
+ * The condition `$__filters` expands to for SQL that queries `source`, as for
+ * a raw SQL tile with that source.
+ */
+export function renderSourceFiltersToSql({
+  source,
+  filters,
+  metadata,
+}: {
+  source: TSource;
+  filters: Filter[];
+  metadata: Metadata;
+}): Promise<string | undefined> {
+  const isLogOrTrace = isLogSource(source) || isTraceSource(source);
+  return renderFiltersToSql(
+    {
+      filters,
+      source: source.id,
+      from: source.from,
+      connection: source.connection,
+      implicitColumnExpression: isLogOrTrace
+        ? source.implicitColumnExpression
+        : undefined,
+      bodyExpression: isLogSource(source) ? source.bodyExpression : undefined,
+      useTextIndexForImplicitColumn: isLogOrTrace
+        ? source.useTextIndexForImplicitColumn
+        : undefined,
+    },
+    metadata,
+  );
 }
 
 export async function renderRawSqlChartConfig(

@@ -63,6 +63,7 @@ import {
   Group,
   Modal,
   Paper,
+  SegmentedControl,
   Select,
   Stack,
   Text,
@@ -165,6 +166,12 @@ import DBSqlRowTableWithSideBar from './components/DBSqlRowTableWithSidebar';
 import PatternTable from './components/PatternTable';
 import { DBSearchHeatmapChart } from './components/Search/DBSearchHeatmapChart';
 import DirectTraceSidePanel from './components/Search/DirectTraceSidePanel';
+import {
+  TRACE_CHART_MODES,
+  TraceRedMetricsChart,
+} from './components/Search/TraceRedMetricsChart';
+import { useHeatmapLiveTailGuard } from './components/Search/useHeatmapLiveTailGuard';
+import { useTraceChartModeReset } from './components/Search/useTraceChartModeReset';
 import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from './components/SourceSchemaPreview';
@@ -230,6 +237,13 @@ const SearchConfigSchema = z.object({
 type SearchConfigFromSchema = z.infer<typeof SearchConfigSchema>;
 
 const QUERY_KEY_PREFIX = 'search';
+// The RED tiles are auxiliary viz, not the results query, so they key their
+// queries under a separate prefix to stay out of the `search executed`
+// telemetry (which matches [QUERY_KEY_PREFIX] only). Otherwise the slow
+// avg/p95/p99 duration query would become what the reported search latency
+// measures. The live-tail pause, on the other hand, does wait on this prefix
+// (see the pause signal below) so live ticks don't stack fresh quantile scans.
+const RED_QUERY_KEY_PREFIX = `${QUERY_KEY_PREFIX}-red`;
 
 // Clicks inside the results panel keep the row side panel open (so users can
 // scroll the table or select a different row); clicks anywhere else on the page
@@ -1120,6 +1134,13 @@ function DBSearchPageContent() {
     ]).withDefault('results'),
   );
 
+  // RED vs heatmap for the trace results chart. URL state, like the page's
+  // other view toggles, so a reload or shared link keeps the view.
+  const [traceChartMode, setTraceChartMode] = useQueryState(
+    'traceChartMode',
+    parseAsStringEnum([...TRACE_CHART_MODES]).withDefault('red'),
+  );
+
   // URL-only, not saved with the search: null uses the source default.
   const [groupByParam, setGroupByParam] = useQueryState(
     'groupBy',
@@ -1498,6 +1519,12 @@ function DBSearchPageContent() {
   // Same, for the histogram group by. Also set when a saved search switches the
   // source, since the group by isn't part of the saved search.
   const pendingGroupByReconcileRef = useRef<string | null>(null);
+  // Same, for the trace RED/Heatmap choice (see useTraceChartModeReset).
+  const { arm: armTraceChartModeReset, disarm: disarmTraceChartModeReset } =
+    useTraceChartModeReset({
+      searchedSourceId: searchedSource?.id,
+      setTraceChartMode,
+    });
 
   const watchedSourceObj = useMemo(
     () => inputSourceObjs?.find(s => s.id === watchedSource),
@@ -1565,6 +1592,11 @@ function DBSearchPageContent() {
       const isCatchingUpToConfig =
         !!watchedSource && watchedSource === searchedSource?.id;
 
+      // Re-selecting the searched source undoes a pick whose search hasn't run.
+      if (isCatchingUpToConfig) {
+        disarmTraceChartModeReset();
+      }
+
       if (isCatchingUpToConfig && savedSearchId == null) {
         prevSourceRef.current = watchedSource;
         if (rawSearchedConfig.source !== watchedSource) {
@@ -1590,6 +1622,7 @@ function DBSearchPageContent() {
         // a freshly loaded page pushes its defaults into the search config.
         if (!isCatchingUpToConfig) {
           pendingGroupByReconcileRef.current = watchedSource ?? null;
+          armTraceChartModeReset(watchedSource ?? null);
           // If the user isn't in a saved search (or the source is different from the saved search source), reset fields
           if (savedSearchId == null || savedSearch?.source !== watchedSource) {
             setValue('select', '');
@@ -1620,6 +1653,8 @@ function DBSearchPageContent() {
     searchedSource?.id,
     rawSearchedConfig.source,
     setSearchedConfig,
+    armTraceChartModeReset,
+    disarmTraceChartModeReset,
   ]);
 
   const retainCompatibleFiltersAndGroupBy = useStableCallback(
@@ -1793,6 +1828,16 @@ function DBSearchPageContent() {
       queryKey: [QUERY_KEY_PREFIX],
     }) > 0;
 
+  // Live tail also waits on the RED metric queries. They live under a separate
+  // prefix (kept out of the search-latency telemetry above), so without this
+  // each ~10s tick would fire a fresh avg/p95/p99 scan without waiting for the
+  // previous one, stacking slow quantile queries while live tail runs. Resolves
+  // to 0 when the RED tiles aren't mounted, so it's a no-op off the trace view.
+  const isRedQueryFetching =
+    useIsFetching({
+      queryKey: [RED_QUERY_KEY_PREFIX],
+    }) > 0;
+
   const { searchElapsedMs } = useSearchTelemetry({
     isAnyQueryFetching,
     isLive: isLive ?? false,
@@ -1849,9 +1894,12 @@ function DBSearchPageContent() {
     onTimeRangeSelect,
     // The save modal captures the search as it stands, so refreshing the time
     // range underneath it is both surprising and a source of query-string
-    // writes that would race the navigation to the new saved search.
+    // writes that would race the navigation to the new saved search. Live tail
+    // also waits on the RED metric queries (isRedQueryFetching) so ticks don't
+    // stack fresh quantile scans while a previous one is still in flight.
     pause:
       isAnyQueryFetching ||
+      isRedQueryFetching ||
       !queryReady ||
       !isTabVisible ||
       saveSearchModalState != null,
@@ -2078,6 +2126,17 @@ function DBSearchPageContent() {
 
   const aliasWith = useMemo(() => aliasMapToWithClauses(aliasMap), [aliasMap]);
 
+  // The trace results chart shows RED metrics only for a trace source that
+  // exposes a duration column; otherwise the single histogram stays. Derived
+  // once, as the narrowed source or null, so the callers can't drift apart on
+  // which one renders.
+  const traceRedMetricsSource =
+    searchedSource != null &&
+    isTraceSource(searchedSource) &&
+    searchedSource.durationExpression
+      ? searchedSource
+      : null;
+
   const histogramTimeChartConfig = useMemo(() => {
     if (chartConfig == null) {
       return undefined;
@@ -2136,6 +2195,43 @@ function DBSearchPageContent() {
         : histogramTimeChartConfig,
     [isCustomGroupBy, histogramTimeChartConfig, searchedSource],
   );
+
+  // The RED/Heatmap area renders only where it fits: not on a compact viewport,
+  // and not with a custom group-by, which the RED tiles' fixed grouping can't
+  // honor (the histogram can). The chart branch, the switch and the live-tail
+  // guard all read this, so they agree on which chart shows.
+  const traceChartsSource =
+    traceRedMetricsSource != null && !isCompact && !isCustomGroupBy
+      ? traceRedMetricsSource
+      : null;
+
+  // Base config for the trace heatmap, like the delta-view heatmap's. The
+  // table's sort is dropped: the chart keys its uPlot instance on the config,
+  // so sorting a column would otherwise rebuild it.
+  const traceHeatmapChartConfig = useMemo(
+    () =>
+      chartConfig == null
+        ? undefined
+        : ({
+            ...chartConfig,
+            orderBy: undefined,
+            dateRange: searchedTimeRange,
+            with: aliasWith,
+          } satisfies BuilderChartConfigWithDateRange),
+    [chartConfig, searchedTimeRange, aliasWith],
+  );
+
+  // While the heatmap shows, live tail stays off as in delta and pattern modes:
+  // the guard turns it off and the Live option and Resume Live Tail are hidden.
+  // Uses the chart branch's conditions, so a stale ?traceChartMode=heatmap or a
+  // query error that hides the chart can't take live tail away.
+  const isHeatmapChartVisible =
+    analysisMode === 'results' &&
+    traceChartsSource != null &&
+    traceChartMode === 'heatmap' &&
+    traceHeatmapChartConfig != null &&
+    !hasQueryError;
+  useHeatmapLiveTailGuard({ isHeatmapChartVisible, isLive, setIsLive });
 
   const histogramGroupBySelect = (
     <SearchGroupBySelect
@@ -2706,7 +2802,7 @@ function DBSearchPageContent() {
               setInputValue={setDisplayedTimeInputValue}
               onSearch={onTimePickerSearch}
               onRelativeSearch={onTimePickerRelativeSearch}
-              showLive={analysisMode === 'results'}
+              showLive={analysisMode === 'results' && !isHeatmapChartVisible}
               isLiveMode={isLive}
               // Default to relative time mode if the user has made changes to interval and reloaded.
               defaultRelativeTimeMode={
@@ -2929,11 +3025,34 @@ function DBSearchPageContent() {
                               totalCountConfig={totalCountConfig}
                               enableParallelQueries
                             >
-                              {histogramGroupBySelect}
+                              {/* The heatmap doesn't group. */}
+                              {isHeatmapChartVisible
+                                ? null
+                                : histogramGroupBySelect}
                             </SearchResultsCountGroup>
                             <Group gap="sm" align="center">
+                              {traceChartsSource != null && (
+                                <SegmentedControl
+                                  size="xs"
+                                  value={traceChartMode}
+                                  // RED is the default, so it clears the param
+                                  // rather than writing traceChartMode=red.
+                                  onChange={v =>
+                                    setTraceChartMode(
+                                      TRACE_CHART_MODES.find(
+                                        mode => mode === v && mode !== 'red',
+                                      ) ?? null,
+                                    )
+                                  }
+                                  data={[
+                                    { label: 'RED', value: 'red' },
+                                    { label: 'Heatmap', value: 'heatmap' },
+                                  ]}
+                                />
+                              )}
                               {shouldShowLiveModeHint &&
-                                denoiseResults != true && (
+                                denoiseResults != true &&
+                                !isHeatmapChartVisible && (
                                   <ResumeLiveTailButton
                                     handleResumeLiveTail={handleResumeLiveTail}
                                   />
@@ -2954,30 +3073,54 @@ function DBSearchPageContent() {
                             </Group>
                           </Group>
                         </Box>
-                        {!hasQueryError && (
-                          <Box
-                            className={
-                              isCompact
-                                ? `${searchPageStyles.timeChartContainer} ${searchPageStyles.timeChartContainerCompact}`
-                                : searchPageStyles.timeChartContainer
-                            }
-                            mih="0"
-                          >
-                            <DBTimeChart
-                              sourceId={searchedConfig.source ?? undefined}
-                              showLegend={isCustomGroupBy}
-                              config={histogramTimeChartConfig}
-                              enabled={isReady}
-                              showDisplaySwitcher={false}
-                              showMVOptimizationIndicator={false}
-                              showDateRangeIndicator={false}
-                              queryKeyPrefix={QUERY_KEY_PREFIX}
-                              onTimeRangeSelect={handleTimeRangeSelect}
-                              onFocusSeries={handleFocusSeries}
-                              enableParallelQueries
-                            />
-                          </Box>
-                        )}
+                        {!hasQueryError &&
+                          // RED/Heatmap where it fits, else the histogram; see
+                          // traceChartsSource for when each one renders.
+                          (traceChartsSource != null &&
+                          traceHeatmapChartConfig != null ? (
+                            <Box
+                              className={searchPageStyles.timeChartContainer}
+                              mih="0"
+                              h={240}
+                            >
+                              <TraceRedMetricsChart
+                                mode={traceChartMode}
+                                histogramTimeChartConfig={
+                                  histogramTimeChartConfig
+                                }
+                                heatmapChartConfig={traceHeatmapChartConfig}
+                                source={traceChartsSource}
+                                isReady={isReady}
+                                queryKeyPrefix={RED_QUERY_KEY_PREFIX}
+                                throughputQueryKeyPrefix={QUERY_KEY_PREFIX}
+                                onTimeRangeSelect={handleTimeRangeSelect}
+                                onFocusSeries={handleFocusSeries}
+                              />
+                            </Box>
+                          ) : (
+                            <Box
+                              className={
+                                isCompact
+                                  ? `${searchPageStyles.timeChartContainer} ${searchPageStyles.timeChartContainerCompact}`
+                                  : searchPageStyles.timeChartContainer
+                              }
+                              mih="0"
+                            >
+                              <DBTimeChart
+                                sourceId={searchedConfig.source ?? undefined}
+                                showLegend={isCustomGroupBy}
+                                config={histogramTimeChartConfig}
+                                enabled={isReady}
+                                showDisplaySwitcher={false}
+                                showMVOptimizationIndicator={false}
+                                showDateRangeIndicator={false}
+                                queryKeyPrefix={QUERY_KEY_PREFIX}
+                                onTimeRangeSelect={handleTimeRangeSelect}
+                                onFocusSeries={handleFocusSeries}
+                                enableParallelQueries
+                              />
+                            </Box>
+                          ))}
                       </>
                     )}
                   {hasQueryError && queryError ? (

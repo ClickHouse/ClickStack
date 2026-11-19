@@ -1400,7 +1400,8 @@ export class DashboardPage {
   /** Switch the add-filter form between the available value types. */
   async selectFilterType(
     label:
-      | 'Queried values'
+      | 'SQL expression values'
+      | 'SQL query values'
       | 'Static values'
       | 'PromQL label values'
       | 'Ad hoc keys and values'
@@ -1628,6 +1629,89 @@ export class DashboardPage {
     await this.setFilterRequirement(variableOptions);
     await this.page.getByTestId('save-filter-button').click();
     await this.getFilterItemByName(name).waitFor({
+      state: 'visible',
+      timeout: 10000,
+    });
+  }
+
+  /** The SQL query filter form's preview of the values its query returns. */
+  getSqlQueryFilterPreview(): Locator {
+    return this.getFilterForm().getByTestId('filter-sql-preview');
+  }
+
+  /** The values listed in that preview, joined with ", ". */
+  getSqlQueryFilterPreviewValues(): Locator {
+    return this.getFilterForm().getByTestId('filter-sql-preview-values');
+  }
+
+  /** Run the SQL query filter form's query and show its values. */
+  async previewSqlQueryFilter() {
+    await this.getFilterForm().getByTestId('filter-sql-preview-button').click();
+  }
+
+  /**
+   * Fill the open SQL query filter form. The selects carry their test ids on a
+   * wrapper, so their inputs are reached through it.
+   */
+  async fillSqlQueryFilterForm({
+    name,
+    connectionName,
+    sourceName,
+    sql,
+    variableName,
+  }: {
+    name: string;
+    connectionName: string;
+    sourceName?: string;
+    sql: string;
+    variableName?: string;
+  }) {
+    const form = this.getFilterForm();
+    await this.selectFilterType('SQL query values');
+    await this.getFilterNameInput().fill(name);
+    await form
+      .getByTestId('filter-connection-select')
+      .locator('input:visible')
+      .first()
+      .click();
+    await this.getFilterOption(connectionName).click();
+    if (sourceName !== undefined) {
+      await form
+        .getByTestId('filter-sql-source-select')
+        .locator('input:visible')
+        .first()
+        .click();
+      await this.getFilterOption(sourceName).click();
+    }
+    await form
+      .getByTestId('filter-sql-template-input')
+      .locator('.cm-content')
+      .click();
+    await this.page.keyboard.press(
+      process.platform === 'darwin' ? 'Meta+A' : 'Control+A',
+    );
+    await this.page.keyboard.press('Backspace');
+    // insertText, not type: CodeMirror's bracket auto-closing would corrupt
+    // the macro calls.
+    await this.page.keyboard.insertText(sql);
+    await dismissSqlAutocomplete(this.page);
+    if (variableName !== undefined) {
+      await this.variableNameInput.fill(variableName);
+    }
+  }
+
+  /**
+   * Add a dashboard filter whose dropdown lists the first column of a SQL
+   * query. Assumes the Edit Filters modal is already open; leaves it open on
+   * the filters list, having waited for the new filter to land there.
+   */
+  async addSqlQueryFilterToDashboard(
+    options: Parameters<DashboardPage['fillSqlQueryFilterForm']>[0],
+  ) {
+    await this.addFiltersButton.click();
+    await this.fillSqlQueryFilterForm(options);
+    await this.page.getByTestId('save-filter-button').click();
+    await this.getFilterItemByName(options.name).waitFor({
       state: 'visible',
       timeout: 10000,
     });

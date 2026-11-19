@@ -561,6 +561,33 @@ describe('MCP Query Tools', () => {
       expect(output).toHaveProperty('result');
     });
 
+    // Runs against the real ClickHouse image so a reworded error, which would
+    // silently drop the hint, fails here when the image is bumped.
+    it('hints at Lucene when a SQL filter passes a separator to hasToken', async () => {
+      const now = new Date();
+      await bulkInsertLogs([
+        {
+          Body: 'payment_failed for order',
+          ServiceName: 'billing',
+          SeverityText: 'ERROR',
+          Timestamp: new Date(now.getTime() - 60 * 1000),
+        },
+      ]);
+
+      const result = await callTool(client, 'clickstack_search', {
+        sourceId: logSource._id.toString(),
+        where: "hasToken(Body, 'payment_failed')",
+        whereLanguage: 'sql',
+        startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+        endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getFirstText(result);
+      expect(text).toContain('HINT: hasToken() takes a single token');
+      expect(text).toContain('whereLanguage:"lucene"');
+    });
+
     describe('denoise with seeded data', () => {
       const now = new Date();
       const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
