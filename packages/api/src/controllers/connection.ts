@@ -94,3 +94,34 @@ export function updateConnection(
 export function deleteConnection(team: string, connectionId: string) {
   return Connection.findOneAndDelete({ _id: connectionId, team });
 }
+
+export const HOST_CHANGE_PASSWORD_REQUIRED_MESSAGE =
+  'Password is required when changing the host';
+
+// Resolves the password to store on update, or undefined when the request
+// must be rejected. An omitted password keeps the stored one, except on a host
+// change: otherwise a caller who can update a connection but never knew its
+// password could point it at a server they control and receive the password
+// on the next query.
+export function resolveUpdatedPassword(
+  existing: { host: string; password?: string; isPrometheusEndpoint?: boolean },
+  update: { host?: string; password?: string; isPrometheusEndpoint?: boolean },
+): string | undefined {
+  if (update.password) {
+    return update.password;
+  }
+  // The app strips trailing slashes on save; don't count that as a move.
+  const normalize = (host: string) => host.replace(/\/+$/, '');
+  const hostChanged =
+    update.host != null && normalize(update.host) !== normalize(existing.host);
+  if (!hostChanged || !existing.password) {
+    return existing.password ?? '';
+  }
+  // Prometheus endpoints authenticate through the URL and never send the
+  // stored password, and the form has no password field for them, so drop it
+  // instead of rejecting. An omitted flag keeps the stored one.
+  if (update.isPrometheusEndpoint ?? existing.isPrometheusEndpoint) {
+    return '';
+  }
+  return undefined;
+}

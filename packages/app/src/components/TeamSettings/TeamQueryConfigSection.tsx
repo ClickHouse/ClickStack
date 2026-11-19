@@ -324,7 +324,7 @@ export default function TeamQueryConfigSection() {
             defaultValue={DEFAULT_FILTER_KEYS_FETCH_LIMIT}
             placeholder={`default = ${DEFAULT_FILTER_KEYS_FETCH_LIMIT}`}
             min={1}
-            max={1000}
+            max={10000}
             displayValue={displayValueWithUnit('keys')}
             description={`Default is ${DEFAULT_FILTER_KEYS_FETCH_LIMIT}`}
           />

@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Control, UseFormSetValue, useWatch } from 'react-hook-form';
 import {
-  TableConnection,
-  tcFromSource,
-} from '@hyperdx/common-utils/dist/core/metadata';
-import {
   displayTypeSupportsRawSqlAlerts,
   validateRawSqlChartConfig,
   validateRawSqlForAlert,
@@ -15,12 +11,7 @@ import {
   RawSqlChartConfig,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
-import {
-  DisplayType,
-  isLogSource,
-  isMetricSource,
-  isTraceSource,
-} from '@hyperdx/common-utils/dist/types';
+import { DisplayType, isMetricSource } from '@hyperdx/common-utils/dist/types';
 import {
   Alert,
   Box,
@@ -48,7 +39,7 @@ import { type SQLCompletion } from '@/components/SQLEditor/utils';
 import { IS_LOCAL_MODE } from '@/config';
 import useResizable from '@/hooks/useResizable';
 import { useSources } from '@/source';
-import { getAllMetricTables, usePrevious } from '@/utils';
+import { getTableConnectionsForConnection, usePrevious } from '@/utils';
 import { DEFAULT_TILE_ALERT } from '@/utils/alerts';
 import { resolveConnectionSourceSync } from '@/utils/connectionSourceSync';
 
@@ -187,33 +178,10 @@ export default function RawSqlChartEditor({
   const [isSourceSchemaPreviewOpen, setIsSourceSchemaPreviewOpen] =
     useState(false);
 
-  const tableConnections: TableConnection[] = useMemo(() => {
-    if (!sources) return [];
-    return sources
-      .filter(s => s.connection === connection && !s.disabled)
-      .flatMap(source => {
-        const tables: TableConnection[] = getAllMetricTables(source);
-
-        if (!isMetricSource(source)) {
-          tables.push(tcFromSource(source));
-        }
-
-        if (
-          (isLogSource(source) || isTraceSource(source)) &&
-          source.materializedViews
-        ) {
-          tables.push(
-            ...source.materializedViews.map(mv => ({
-              databaseName: mv.databaseName,
-              tableName: mv.tableName,
-              connectionId: source.connection,
-            })),
-          );
-        }
-
-        return tables;
-      });
-  }, [sources, connection]);
+  const tableConnections = useMemo(
+    () => getTableConnectionsForConnection(sources, connection),
+    [sources, connection],
+  );
 
   const alertTooltip =
     displayType === DisplayType.Number

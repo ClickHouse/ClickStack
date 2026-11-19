@@ -561,6 +561,33 @@ describe('MCP Query Tools', () => {
       expect(output).toHaveProperty('result');
     });
 
+    // Runs against the real ClickHouse image so a reworded error, which would
+    // silently drop the hint, fails here when the image is bumped.
+    it('hints at Lucene when a SQL filter passes a separator to hasToken', async () => {
+      const now = new Date();
+      await bulkInsertLogs([
+        {
+          Body: 'payment_failed for order',
+          ServiceName: 'billing',
+          SeverityText: 'ERROR',
+          Timestamp: new Date(now.getTime() - 60 * 1000),
+        },
+      ]);
+
+      const result = await callTool(client, 'clickstack_search', {
+        sourceId: logSource._id.toString(),
+        where: "hasToken(Body, 'payment_failed')",
+        whereLanguage: 'sql',
+        startTime: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+        endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getFirstText(result);
+      expect(text).toContain('HINT: hasToken() takes a single token');
+      expect(text).toContain('whereLanguage:"lucene"');
+    });
+
     describe('denoise with seeded data', () => {
       const now = new Date();
       const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000);
@@ -2188,6 +2215,115 @@ describe('MCP Query Tools', () => {
 
       expect(result.isError).toBeFalsy();
       expect(getFirstText(result)).not.toMatch(/UUID are empty/);
+    });
+
+    describe('clickstack_table grouped by a time expression over TimeUnix', () => {
+      const runTable = async (
+        inputs: Record<string, unknown>[],
+        seed: (now: Date) => Promise<void>,
+      ) => {
+        const metricSource = await createMetricSource();
+        // Mid-minute, so every seeded point shares one auto (5 minute) bucket.
+        const now = new Date(Math.floor(Date.now() / 60_000) * 60_000 - 30_000);
+        await seed(now);
+        return Promise.all(
+          inputs.map(async input => {
+            const result = await callTool(client, 'clickstack_table', {
+              sourceId: metricSource._id.toString(),
+              startTime: new Date(now.getTime() - 60 * 60_000).toISOString(),
+              endTime: new Date(now.getTime() + 60_000).toISOString(),
+              ...input,
+            });
+            expect(getFirstText(result)).not.toMatch(/Unknown/);
+            expect(result.isError).toBeFalsy();
+            const output: { result: { data: Record<string, unknown>[] } } =
+              JSON.parse(getFirstText(result));
+            return output.result.data.map(row => Number(row.value));
+          }),
+        );
+      };
+      // Falls within one bucket, so the bucket's last value (0.42) differs
+      // from the largest raw point (0.61).
+      const seedFallingGauge = (now: Date) =>
+        bulkInsertMetricsGauge(
+          [0.61, 0.42].map((Value, i) => ({
+            MetricName: 'system.cpu.utilization',
+            ResourceAttributes: { 'service.name': 'svc-a' },
+            ServiceName: 'svc-a',
+            TimeUnix: new Date(now.getTime() + i * 1000),
+            Value,
+          })),
+        );
+      const gauge = {
+        aggFn: 'max',
+        metricType: 'gauge',
+        metricName: 'system.cpu.utilization',
+        alias: 'value',
+      };
+      const counter = {
+        metricType: 'sum',
+        metricName: 'http.server.request.count',
+        alias: 'value',
+      };
+
+      it('aggregates a gauge per bucket, matching the same table without the time group-by', async () => {
+        const [byMinute, byService] = await runTable(
+          [
+            {
+              select: [gauge],
+              groupBy:
+                "toStartOfInterval(TimeUnix, toIntervalMinute(1)) AS m, ResourceAttributes['service.name']",
+              orderBy: 'm ASC',
+            },
+            { select: [gauge], groupBy: 'ServiceName' },
+          ],
+          seedFallingGauge,
+        );
+        expect(byMinute).toEqual([0.42]);
+        expect(byService).toEqual([0.42]);
+      });
+
+      it('splits a gauge bar chart by hour', async () => {
+        const [byHour] = await runTable(
+          [
+            {
+              select: [gauge],
+              shape: 'bar',
+              groupBy: 'toStartOfHour(TimeUnix)',
+            },
+          ],
+          seedFallingGauge,
+        );
+        expect(byHour).toEqual([0.42]);
+      });
+
+      it('sums a counter per five minutes with having', async () => {
+        const [byFiveMinutes] = await runTable(
+          [
+            {
+              select: [{ ...counter, aggFn: 'sum' }],
+              groupBy: 'toStartOfFiveMinutes(TimeUnix)',
+              having: 'value > 0',
+            },
+          ],
+          seedSum,
+        );
+        expect(byFiveMinutes).toEqual([125]);
+      });
+
+      it('takes the increase per day', async () => {
+        const [byDay] = await runTable(
+          [
+            {
+              select: [{ ...counter, aggFn: 'increase' }],
+              groupBy: 'toDate(TimeUnix)',
+              orderBy: 'toDate(TimeUnix) DESC',
+            },
+          ],
+          seedSum,
+        );
+        expect(byDay).toEqual([125]);
+      });
     });
 
     it('runs clickstack_timeseries quantile against a histogram metric source', async () => {

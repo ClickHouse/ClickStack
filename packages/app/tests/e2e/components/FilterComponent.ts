@@ -45,11 +45,21 @@ export class FilterComponent {
   }
 
   /**
-   * Open/expand a filter group (toggles — may close if already open)
+   * Open/expand a filter group. No-op if it is already open.
    */
   async openFilterGroup(filterName: string) {
     const group = this.getFilterGroup(filterName);
-    await group.click();
+    // Groups with an active filter auto-expand on load, so a blind click on the
+    // group could collapse it or land on a value row. Only click the header
+    // while the group is closed.
+    await expect(async () => {
+      if ((await group.getAttribute('data-active')) !== 'true') {
+        await group.getByTestId('filter-group-control').first().click();
+      }
+      await expect(group).toHaveAttribute('data-active', 'true', {
+        timeout: 2000,
+      });
+    }).toPass({ timeout: 20000 });
     // The group animates open or closed. A row scrolled into view mid-animation
     // can slide back out of the panel, hiding any menu anchored to it, so wait
     // until the group's height holds still.
