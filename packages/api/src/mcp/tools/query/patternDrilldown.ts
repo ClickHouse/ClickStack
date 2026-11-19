@@ -1,14 +1,11 @@
 import type { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { renderWhereExpressionStr } from '@hyperdx/common-utils/dist/core/renderChartConfig';
-import { DATE_MASK } from '@hyperdx/common-utils/dist/drain';
+import { DATE_TOKEN } from '@hyperdx/common-utils/dist/drain';
 import type {
   ChartVariable,
   UseTextIndex,
 } from '@hyperdx/common-utils/dist/types';
 import { substituteVariables } from '@hyperdx/common-utils/dist/variables';
-
-// The date mask applied before mining (common-utils drain/config.ts).
-const DATE_TOKEN = `<${DATE_MASK}>`;
 
 export const PATTERN_MATCH_SEMANTICS =
   'whereSnippet matches values with the same whitespace-separated token count as the ' +

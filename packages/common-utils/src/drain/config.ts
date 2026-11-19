@@ -18,6 +18,9 @@ const NOT_WORD_AFTER = '(?![0-9A-Za-z])';
  */
 export const DATE_MASK = 'DATE';
 
+/** How a masked date reads in a template. */
+export const DATE_TOKEN = `<${DATE_MASK}>`;
+
 /**
  * Masks the date of a timestamp (weekday, day, month, year), so the same
  * message gets the same template on any day. Every line of a day shares its
