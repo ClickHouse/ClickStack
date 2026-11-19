@@ -1,4 +1,5 @@
 import { validateChartConfigFormulas } from '@hyperdx/common-utils/dist/dashboardValidation';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   addDuplicateTileIdIssues,
   AdhocDashboardFilterSchema,
@@ -12,8 +13,10 @@ import {
   AlertThresholdType,
   BackgroundChartSchema,
   ChartPaletteTokenSchema,
+  ConnectionDashboardFilterSchema,
   DASHBOARD_CONTAINER_ID_MAX,
   DASHBOARD_MAX_TILES,
+  DataSourceDashboardFilterSchema,
   HeatmapScaleTypeSchema,
   LineInterpolationSchema,
   MAX_LEGEND_TEMPLATE_LENGTH,
@@ -53,6 +56,17 @@ import { AlertSource } from '@/models/alert';
 export const objectIdSchema = z.string().refine(val => {
   return Types.ObjectId.isValid(val);
 }, 'Invalid ObjectId');
+
+/**
+ * A source or connection field: an ObjectId, or a `$name` reference to the
+ * dashboard's data source or connection variable of that name.
+ */
+export const objectIdOrVariableReferenceSchema = z
+  .string()
+  .refine(
+    val => Types.ObjectId.isValid(val) || parseVariableReference(val) != null,
+    'Invalid ObjectId or $variable reference',
+  );
 
 /**
  * A repeatable query param. Express's parser yields a bare string for a single
@@ -175,7 +189,7 @@ export { tagsSchema };
 
 const externalQueryExpressionFilterShape =
   QueryExpressionDashboardFilterSchema.omit({ source: true }).extend({
-    sourceId: objectIdSchema,
+    sourceId: objectIdOrVariableReferenceSchema,
   });
 
 // A static filter's mode flags each accept exactly one value, so callers may
@@ -188,27 +202,50 @@ const externalStaticListFilterShape = StaticListDashboardFilterSchema.extend({
 const externalPromqlLabelFilterShape = PromqlLabelDashboardFilterSchema.omit({
   source: true,
 }).extend({
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   isBroadcastEnabled: z.literal(false).default(false),
   isVariableEnabled: z.literal(true).default(true),
 });
 
-// `connectionId` rather than `connection`, matching raw SQL tiles.
+// `connectionId`/`sourceId` rather than `connection`/`source`, matching raw SQL
+// tiles.
 const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
   connection: true,
+  source: true,
 }).extend({
-  connectionId: objectIdSchema,
+  connectionId: objectIdOrVariableReferenceSchema,
+  sourceId: objectIdOrVariableReferenceSchema.optional(),
   isBroadcastEnabled: z.literal(false).default(false),
   isVariableEnabled: z.literal(true).default(true),
 });
 
 // Field names match the stored filter, so it needs no translation.
 const externalAdhocFilterShape = AdhocDashboardFilterSchema.extend({
-  sources: z.array(objectIdSchema).min(1),
-  appliesToSourceIds: z.array(objectIdSchema).optional(),
+  sources: z.array(objectIdOrVariableReferenceSchema).min(1),
+  appliesToSourceIds: z.array(objectIdOrVariableReferenceSchema).optional(),
   isBroadcastEnabled: z.literal(true).default(true),
   isVariableEnabled: z.literal(true).default(true),
 });
+
+// Reference variables are always single-select and required, so these
+// fields, like the mode flags, accept one value each and may be omitted.
+const referenceVariableFixedFields = {
+  minSelections: z.literal(1).default(1),
+  maxSelections: z.literal(1).default(1),
+  isBroadcastEnabled: z.literal(false).default(false),
+  isVariableEnabled: z.literal(true).default(true),
+};
+
+const externalDataSourceFilterShape = DataSourceDashboardFilterSchema.omit({
+  connection: true,
+}).extend({
+  connectionId: objectIdOrVariableReferenceSchema.optional(),
+  ...referenceVariableFixedFields,
+});
+
+const externalConnectionFilterShape = ConnectionDashboardFilterSchema.extend(
+  referenceVariableFixedFields,
+);
 
 export const externalDashboardFilterSchemaWithId = z.discriminatedUnion(
   'type',
@@ -218,6 +255,8 @@ export const externalDashboardFilterSchemaWithId = z.discriminatedUnion(
     externalPromqlLabelFilterShape.strict(),
     externalSqlQueryFilterShape.strict(),
     externalAdhocFilterShape.strict(),
+    externalDataSourceFilterShape.strict(),
+    externalConnectionFilterShape.strict(),
   ],
 );
 
@@ -236,6 +275,8 @@ export const externalDashboardFilterSchema = z.discriminatedUnion('type', [
   externalPromqlLabelFilterShape.omit({ id: true }).strict(),
   externalSqlQueryFilterShape.omit({ id: true }).strict(),
   externalAdhocFilterShape.omit({ id: true }).strict(),
+  externalDataSourceFilterShape.omit({ id: true }).strict(),
+  externalConnectionFilterShape.omit({ id: true }).strict(),
 ]);
 
 export type ExternalDashboardFilter = z.infer<
@@ -356,9 +397,9 @@ export type ExternalDashboardSelectItem = z.infer<
 
 const externalDashboardRawSqlChartConfigBaseSchema = z.object({
   configType: z.literal('sql'),
-  connectionId: objectIdSchema,
+  connectionId: objectIdOrVariableReferenceSchema,
   sqlTemplate: z.string().max(100000),
-  sourceId: objectIdSchema.optional(),
+  sourceId: objectIdOrVariableReferenceSchema.optional(),
   numberFormat: NumberFormatSchema.optional(),
 });
 
@@ -381,7 +422,7 @@ const externalFormulasSchema = z.array(MetricFormulaSchema).max(10).optional();
 const externalShowOperandSeriesSchema = z.boolean().optional();
 
 const externalDashboardTimeChartConfigSchema = z.object({
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).min(1).max(20),
   groupBy: z.string().max(10000).optional(),
   asRatio: z.boolean().optional(),
@@ -452,7 +493,7 @@ const externalDashboardStackedLineRawSqlChartConfigSchema =
 
 const externalDashboardTableChartConfigSchema = z.object({
   displayType: z.literal('table'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).min(1).max(20),
   groupBy: z.string().max(10000).optional(),
   having: z.string().max(10000).optional(),
@@ -492,7 +533,7 @@ const externalDashboardCategoricalBarRawSqlChartConfigSchema =
 
 const externalDashboardNumberChartConfigSchema = z.object({
   displayType: z.literal('number'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   // Exactly one select item unless `formulas` is set: a formula number tile
   // displays the (single) formula value and its select entries are the
   // formula's operands (e.g. A / (A + B)). The one-item rule for
@@ -532,7 +573,7 @@ const externalDashboardNumberChartConfigSchema = z.object({
 
 const externalDashboardPieChartConfigSchema = z.object({
   displayType: z.literal('pie'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).length(1),
   groupBy: z.string().max(10000).optional(),
   orderBy: z.string().max(10000).optional(),
@@ -543,7 +584,7 @@ const externalDashboardPieChartConfigSchema = z.object({
 
 const externalDashboardCategoricalBarChartConfigSchema = z.object({
   displayType: z.literal('bar'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).length(1),
   groupBy: z.string().max(10000).optional(),
   orderBy: z.string().max(10000).optional(),
@@ -580,7 +621,7 @@ export type ExternalDashboardHeatmapSelectItem = z.infer<
 const externalDashboardHeatmapChartConfigSchema = z.object({
   displayType: z.literal('heatmap'),
   heatmapMode: z.literal('distribution').optional(),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardHeatmapSelectItemSchema).length(1),
   where: z.string().max(10000).optional().default(''),
   // `whereLanguageSchema` (an alias for `SearchConditionLanguageSchema`)
@@ -594,7 +635,7 @@ const externalDashboardHeatmapChartConfigSchema = z.object({
 const externalDashboardHeatmapSeriesChartConfigSchema = z.object({
   displayType: z.literal('heatmap'),
   heatmapMode: z.literal('series'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).length(1),
   groupBy: z.string().max(10000).optional(),
   numberFormat: NumberFormatSchema.optional(),
@@ -602,7 +643,7 @@ const externalDashboardHeatmapSeriesChartConfigSchema = z.object({
 
 const externalDashboardSearchChartConfigSchema = z.object({
   displayType: z.literal('search'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.string().max(10000),
   where: z.string().max(10000).optional().default(''),
   whereLanguage: whereLanguageSchema,
@@ -626,7 +667,7 @@ const externalDashboardMarkdownChartConfigSchema = z.object({
 
 const externalDashboardEventPatternsChartConfigSchema = z.object({
   displayType: z.literal('event_patterns'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.string().max(10000).optional().default(''),
   where: z.string().max(10000).optional().default(''),
   whereLanguage: whereLanguageSchema,
@@ -720,7 +761,7 @@ const externalPromqlLegendTemplateSchema = z
 
 const externalPromqlChartConfigBaseSchema = z.object({
   configType: z.literal('promql'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   // Sets the Prometheus step and `$__interval` of range queries.
   granularity: z.union([SQLIntervalSchema, z.literal('auto')]).optional(),
   numberFormat: NumberFormatSchema.optional(),

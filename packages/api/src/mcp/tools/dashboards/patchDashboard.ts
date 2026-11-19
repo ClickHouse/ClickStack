@@ -201,6 +201,7 @@ export function registerPatchDashboard({
           teamId,
           tiles: [mergedTile],
           existingTiles: existingDashboard.tiles ?? [],
+          existingFilters: existingDashboard.filters,
           containers: existingDashboard.containers ?? [],
         });
         if (validationError) {

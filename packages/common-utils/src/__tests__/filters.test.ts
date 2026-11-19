@@ -27,9 +27,11 @@ import {
   isRenderablePinnedFilter,
   mergeAdhocConditions,
   parseQuery,
+  renderSqlQueryFilterValuesQuery,
   resolveFilterValuesWhere,
   resolvePromqlLabelFilterMatch,
   serializeFilterState,
+  SQL_QUERY_FILTER_VALUES_LIMIT,
   validateDashboardFilterQueries,
   validateSavedFilterValues,
   validateSavedQuery,
@@ -743,11 +745,15 @@ describe('filters', () => {
     });
 
     describe('SQL query filters', () => {
-      const sqlFilter = (sqlTemplate: string): SqlQueryDashboardFilter => ({
+      const sqlFilter = (
+        sqlTemplate: string,
+        source?: string,
+      ): SqlQueryDashboardFilter => ({
         id: 'sql',
         type: 'SQL_QUERY',
         name: 'Environment',
         connection: 'conn-1',
+        source,
         sqlTemplate,
         isBroadcastEnabled: false,
         isVariableEnabled: true,
@@ -788,11 +794,29 @@ describe('filters', () => {
               filterName: 'Environment',
               language: 'sql',
               where: sql,
-              detail: `SQL query filters have no source, so ${macro} cannot be used`,
+              detail: `SQL uses ${macro} but no source is selected`,
             },
           ]);
         },
       );
+
+      it.each([
+        'SELECT env FROM $__sourceTable WHERE $__filters',
+        'SELECT env FROM $__sourceTable(gauge) UNION ALL SELECT env FROM $__sourceTable(sum)',
+      ])('accepts source macros when the filter has a source: %s', sql => {
+        expect(
+          validateDashboardFilterQueries([sqlFilter(sql, 'source-1')]),
+        ).toEqual([]);
+      });
+
+      // No source has both a table and metric tables.
+      it('flags a mix of bare and metric $__sourceTable calls', () => {
+        const sql =
+          'SELECT env FROM $__sourceTable UNION ALL SELECT env FROM $__sourceTable(gauge)';
+        expect(
+          validateDashboardFilterQueries([sqlFilter(sql, 'source-1')]),
+        ).toEqual([expect.objectContaining({ filterId: 'sql', where: sql })]);
+      });
 
       it.each([
         ['an undeclared variable macro', 'WHERE $__filter(env, $missing)'],
@@ -1224,6 +1248,161 @@ describe('filters', () => {
       );
       expect(resolved.match).toBe('up{job=~"$nope"}');
       expect(resolved.error).toBeUndefined();
+    });
+  });
+
+  describe('renderSqlQueryFilterValuesQuery', () => {
+    const dateRange: [Date, Date] = [new Date(1000), new Date(2000)];
+    const svc = (values: string[]): ChartVariable => ({
+      name: 'svc',
+      expression: 'ServiceName',
+      values,
+    });
+
+    it('reads the distinct first column values as strings, capped', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env, count() FROM envs GROUP BY env',
+          variables: [],
+          dateRange,
+        }),
+      ).toEqual({
+        sql: `SELECT DISTINCT toString(tupleElement(tuple(*), 1)) AS value FROM (\nSELECT env, count() FROM envs GROUP BY env\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
+        params: {},
+      });
+    });
+
+    it('sends the time range when a time macro reads it', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM envs WHERE $__timeFilter(ts)',
+          variables: [],
+          dateRange,
+        }).params,
+      ).toEqual({ startDateMilliseconds: 1000, endDateMilliseconds: 2000 });
+    });
+
+    it('sends only the time params the SQL reads', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate:
+            'SELECT env FROM envs WHERE ts >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})',
+          variables: [],
+          dateRange,
+        }).params,
+      ).toEqual({ startDateMilliseconds: 1000 });
+    });
+
+    it('strips a trailing semicolon', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: '  SELECT env FROM envs;  ',
+        variables: [],
+        dateRange,
+      });
+      expect(sql).toContain('(\nSELECT env FROM envs\n)');
+    });
+
+    it('expands time macros and other filters', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate:
+          'SELECT env FROM envs WHERE $__timeFilter(ts) AND $__filter(svc, $svc)',
+        variables: [svc(['api'])],
+        dateRange,
+      });
+      expect(sql).toContain('{startDateMilliseconds:Int64}');
+      expect(sql).toContain("svc IN ('api')");
+      expect(sql).not.toContain('$');
+    });
+
+    it('throws when the template uses a source macro without a source', () => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM $__sourceTable',
+          variables: [],
+          dateRange,
+        }),
+      ).toThrow(/no source is selected/);
+    });
+
+    it("expands source macros against the filter's source", () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: 'SELECT env FROM $__sourceTable WHERE $__filters',
+        variables: [],
+        sourceTables: { from: { databaseName: 'db', tableName: 'logs' } },
+        filtersSQL: "(ServiceName = 'api')",
+        dateRange,
+      });
+      expect(sql).toContain(
+        "SELECT env FROM `db`.`logs` WHERE (ServiceName = 'api')",
+      );
+    });
+
+    it('expands $__filters to 1=1 when no filters apply', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: 'SELECT env FROM $__sourceTable WHERE $__filters',
+        variables: [],
+        sourceTables: { from: { databaseName: 'db', tableName: 'logs' } },
+        dateRange,
+      });
+      expect(sql).toContain('WHERE (1=1');
+    });
+
+    it.each([
+      ['a bare call on a metric source', 'SELECT 1 FROM $__sourceTable', true],
+      [
+        'a metric call on a non-metric source',
+        'SELECT 1 FROM $__sourceTable(gauge)',
+        false,
+      ],
+      [
+        'a metric type the source has no table for',
+        'SELECT 1 FROM $__sourceTable(sum)',
+        true,
+      ],
+    ])('throws on %s', (_label, sqlTemplate, isMetricSource) => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate,
+          variables: [],
+          sourceTables: {
+            from: { databaseName: 'db', tableName: '' },
+            metricTables: isMetricSource
+              ? {
+                  gauge: 'metrics_gauge',
+                  histogram: '',
+                  sum: '',
+                  summary: '',
+                  'exponential histogram': '',
+                }
+              : undefined,
+          },
+          dateRange,
+        }),
+      ).toThrow(/\$__sourceTable/);
+    });
+
+    it.each([
+      'SELECT toStartOfInterval(Timestamp, INTERVAL $__interval_s second) FROM logs',
+      'SELECT $__timeInterval(Timestamp) FROM logs',
+      'SELECT $__timeInterval_ms(Timestamp) FROM logs',
+    ])('throws when the template uses an interval macro: %s', sqlTemplate => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate,
+          variables: [],
+          dateRange,
+        }),
+      ).toThrow(/have no time buckets/);
+    });
+
+    it('throws when a macro names an unknown variable', () => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM envs WHERE $__filter(env, $missing)',
+          variables: [svc([])],
+          dateRange,
+        }),
+      ).toThrow(/unknown variable/);
     });
   });
 

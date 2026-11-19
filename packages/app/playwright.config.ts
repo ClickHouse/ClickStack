@@ -114,8 +114,8 @@ export default defineConfig({
         {
           // Full UI: Alerts + Dashboards. Not local mode; Alerts enabled;
           command: USE_DEV
-            ? `${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true NEXT_PUBLIC_ENABLE_ADHOC_FILTERS=true next dev --webpack`
-            : `${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true NEXT_PUBLIC_ENABLE_ADHOC_FILTERS=true yarn build && ${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true NEXT_PUBLIC_ENABLE_ADHOC_FILTERS=true yarn start`,
+            ? `${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true next dev --webpack`
+            : `${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true yarn build && ${NO_SELF_TELEMETRY} SERVER_URL=http://localhost:${API_PORT} PORT=${APP_PORT} NEXT_DIST_DIR=.next-e2e NEXT_PUBLIC_ENABLE_ALERT_DETAILS=true NEXT_PUBLIC_ENABLE_PROMQL=true yarn start`,
           port: parseInt(APP_PORT, 10),
           reuseExistingServer: !process.env.CI,
           timeout: APP_SERVER_STARTUP_TIMEOUT_MS,
