@@ -261,7 +261,14 @@ export class DashboardPage {
    * Edit dashboard name
    */
   async editDashboardName(newName: string) {
-    await this.renameDashboard('My Dashboard', newName);
+    // The default name depends on how the dashboard was created: the list-page
+    // "Saved Dashboard" action names it "My Dashboard", while saving a
+    // temporary dashboard carries its name over ("My New Dashboard" by
+    // default). Read whatever is there rather than assuming one.
+    const nameInput = this.page.getByTestId('dashboard-name-input');
+    await expect(nameInput).not.toHaveValue('', { timeout: 10000 });
+    const currentName = await nameInput.inputValue();
+    await this.renameDashboard(currentName, newName);
   }
 
   /**

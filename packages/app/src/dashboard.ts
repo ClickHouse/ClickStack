@@ -38,6 +38,12 @@ export type Tile = {
   tabId?: string;
 };
 
+// Copied tiles must not carry alerts: saving a dashboard creates every tile's
+// alert server-side, without the user seeing an alert editor.
+export function withoutAlert(tile: Tile): Tile {
+  return { ...tile, config: { ...tile.config, alert: undefined } };
+}
+
 export type Dashboard = {
   id: string;
   name: string;
