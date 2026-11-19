@@ -51,6 +51,9 @@ import {
   CteChartConfig,
   DateRange,
   DisplayType,
+  Filter,
+  isLogSource,
+  isTraceSource,
   MetricsDataType,
   PromqlChartConfig,
   QuerySettings,
@@ -61,6 +64,7 @@ import {
   SortSpecificationList,
   SqlAstFilter,
   SQLInterval,
+  TSource,
 } from '@/types';
 import { substituteChartConfigVariables } from '@/variables';
 
@@ -525,18 +529,78 @@ export const rewriteSqlFilterWithKvItems = (
   }
 };
 
+/**
+ * Whether a min/max should aggregate `valueExpression` as-is instead of casting
+ * it to Float64. The cast turns a Date/DateTime into 0 (its string form doesn't
+ * parse as a float), so skip it when the expression is a bare date/time column.
+ * Only tables and single-series number tiles, which can show a date value, skip
+ * it. Charts plot values on a numeric axis and drop non-numeric columns, and in
+ * a time-bucketed result a second date column would be mistaken for the bucket.
+ * Number tiles show the first numeric column, so with several series a date
+ * value would be skipped in favour of another series. Ratios and formulas do
+ * arithmetic on the value, which ClickHouse rejects for dates.
+ */
+async function isMinMaxOnDateTimeColumn(
+  aggFn: string,
+  valueExpression: string,
+  chartConfig: BuilderChartConfigWithOptDateRangeEx,
+  metadata: Metadata,
+): Promise<boolean> {
+  const { databaseName, tableName } = chartConfig.from;
+  const { displayType } = chartConfig;
+  const seriesCount = Array.isArray(chartConfig.select)
+    ? chartConfig.select.length
+    : 0;
+  if (
+    (aggFn !== 'min' && aggFn !== 'max') ||
+    (displayType != null &&
+      displayType !== DisplayType.Table &&
+      displayType !== DisplayType.Number) ||
+    (displayType === DisplayType.Number && seriesCount > 1) ||
+    chartConfig.seriesReturnType === 'ratio' ||
+    (chartConfig.formulas?.length ?? 0) > 0 ||
+    isUsingGranularity(chartConfig) ||
+    hasSubqueryCte(chartConfig.with) ||
+    !databaseName ||
+    !tableName
+  ) {
+    return false;
+  }
+  try {
+    const column = await metadata.getColumn({
+      databaseName,
+      tableName,
+      column: unquoteIdentifier(valueExpression.trim()),
+      connectionId: chartConfig.connection,
+    });
+    return (
+      column != null &&
+      classifyTimestampType(stripTypeWrappers(column.type)) != null
+    );
+  } catch (e) {
+    console.warn(
+      `Column ${valueExpression} lookup failed while choosing min/max cast`,
+      e,
+    );
+    return false;
+  }
+}
+
 const aggFnExpr = ({
   fn,
   expr,
   level,
   where,
   sampleWeightExpression,
+  keepValueType = false,
 }: {
   fn: AggregateFunction | AggregateFunctionWithCombinators;
   expr?: string;
   level?: number;
   where?: string;
   sampleWeightExpression?: string;
+  /** Aggregate `expr` as-is instead of casting it to Float64. */
+  keepValueType?: boolean;
 }) => {
   const isAny = fn === 'any';
   const isNone = fn === 'none';
@@ -545,7 +609,9 @@ const aggFnExpr = ({
   // Cast to float64 because the expr might not be a number
   const unsafeExpr = {
     UNSAFE_RAW_SQL:
-      isAny || isNone ? `${expr}` : `toFloat64OrDefault(toString(${expr}))`,
+      isAny || isNone || keepValueType
+        ? `${expr}`
+        : `toFloat64OrDefault(toString(${expr}))`,
   };
   const whereWithExtraNullCheck = `${where} AND ${unsafeExpr.UNSAFE_RAW_SQL} IS NOT NULL`;
 
@@ -806,6 +872,12 @@ async function renderSelectList(
           expr: select.valueExpression,
           where: whereClause.sql,
           sampleWeightExpression: chartConfig.sampleWeightExpression,
+          keepValueType: await isMinMaxOnDateTimeColumn(
+            select.aggFn,
+            select.valueExpression,
+            chartConfig,
+            metadata,
+          ),
         });
       }
 
@@ -2638,7 +2710,16 @@ async function translateMetricChartConfig(
 
 /** Renders the config's filters into a SQL condition string */
 async function renderFiltersToSql(
-  chartConfig: RawSqlChartConfig,
+  chartConfig: Pick<
+    RawSqlChartConfig,
+    | 'filters'
+    | 'source'
+    | 'from'
+    | 'connection'
+    | 'implicitColumnExpression'
+    | 'bodyExpression'
+    | 'useTextIndexForImplicitColumn'
+  >,
   metadata: Metadata,
 ): Promise<string | undefined> {
   if (
@@ -2686,6 +2767,38 @@ async function renderFiltersToSql(
   ).filter(condition => condition !== undefined);
 
   return conditions.length > 0 ? `(${conditions.join(' AND ')})` : undefined;
+}
+
+/**
+ * The condition `$__filters` expands to for SQL that queries `source`, as for
+ * a raw SQL tile with that source.
+ */
+export function renderSourceFiltersToSql({
+  source,
+  filters,
+  metadata,
+}: {
+  source: TSource;
+  filters: Filter[];
+  metadata: Metadata;
+}): Promise<string | undefined> {
+  const isLogOrTrace = isLogSource(source) || isTraceSource(source);
+  return renderFiltersToSql(
+    {
+      filters,
+      source: source.id,
+      from: source.from,
+      connection: source.connection,
+      implicitColumnExpression: isLogOrTrace
+        ? source.implicitColumnExpression
+        : undefined,
+      bodyExpression: isLogSource(source) ? source.bodyExpression : undefined,
+      useTextIndexForImplicitColumn: isLogOrTrace
+        ? source.useTextIndexForImplicitColumn
+        : undefined,
+    },
+    metadata,
+  );
 }
 
 export async function renderRawSqlChartConfig(

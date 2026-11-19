@@ -318,6 +318,58 @@ describe('errorHint', () => {
     expect(hint).not.toContain('clickstack_list_sources');
   });
 
+  it('explains hasToken separators in agent-written SQL filters', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Needle must not contain whitespace or separator characters: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+    );
+    expect(hint).toContain('hasToken() takes a single token');
+    expect(hint).toContain('lucene');
+    expect(hint).toContain('hasAllTokens');
+  });
+
+  it('keeps the hasToken hint if ClickHouse rewords the message', () => {
+    const message =
+      "Token argument contains a separator: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'";
+    const cause = new ClickHouseError({
+      message,
+      code: '36',
+      type: 'BAD_ARGUMENTS',
+    });
+    const hint = errorHint(message, new Error(message, { cause }));
+    expect(hint).toContain('hasToken() takes a single token');
+  });
+
+  it('keeps the hasToken hint when BAD_ARGUMENTS is only in the message text', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Token argument contains a separator: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+    );
+    expect(hint).toContain('hasToken() takes a single token');
+  });
+
+  it('does not show the hasToken hint for a non-BAD_ARGUMENTS hasToken error', () => {
+    const hint = errorHint(
+      'Code: 42. DB::Exception: Number of arguments for function hasToken does not match: passed 1, should be 2. (NUMBER_OF_ARGUMENTS_DOESNT_MATCH)',
+    );
+    expect(hint ?? '').not.toContain('hasToken() takes a single token');
+  });
+
+  it('gives raw SQL callers a SQL-only hasToken hint', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Needle must not contain whitespace or separator characters: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+      undefined,
+      { rawSql: true },
+    );
+    expect(hint).toContain("Use position(col, 'payment_failed') > 0");
+    expect(hint).toContain('If the column has a text index');
+    expect(hint).not.toContain('whereLanguage');
+  });
+
+  it('does not show the hasToken hint for other BAD_ARGUMENTS errors', () => {
+    const message =
+      "Code: 36. DB::Exception: Argument for function 'splitByChar' must be a single character. (BAD_ARGUMENTS)";
+    expect(errorHint(message) ?? '').not.toContain('hasToken');
+  });
+
   it('should NOT match lowercase "as" in cast expressions', () => {
     const hint = errorHint(
       'Syntax error: cannot cast as Float64 near token...',

@@ -8,10 +8,13 @@ import {
   deleteConnection,
   getConnectionById,
   getConnectionsByTeam,
+  HOST_CHANGE_PASSWORD_REQUIRED_MESSAGE,
+  resolveUpdatedPassword,
   updateConnection,
 } from '@/controllers/connection';
 import { connectionServesPrometheusHttpApi } from '@/controllers/promql';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
+import { Api400Error } from '@/utils/errors';
 import { objectIdSchema } from '@/utils/zod';
 
 const router = express.Router();
@@ -73,11 +76,17 @@ router.put(
       const connection = await getConnectionById(
         teamId.toString(),
         req.params.id,
+        true,
       );
 
       if (!connection) {
         res.status(404).send();
         return;
+      }
+
+      const updatedPassword = resolveUpdatedPassword(connection, req.body);
+      if (updatedPassword === undefined) {
+        throw new Api400Error(HOST_CHANGE_PASSWORD_REQUIRED_MESSAGE);
       }
 
       const shouldUnsetPrefix =
@@ -92,11 +101,7 @@ router.put(
       const newConnection = {
         ...restBody,
         team: teamId,
-        ...(req.body.password
-          ? { password: req.body.password }
-          : {
-              password: connection.password,
-            }),
+        password: updatedPassword,
         ...(!shouldUnsetPrefix && hyperdxSettingPrefix
           ? { hyperdxSettingPrefix }
           : {}),

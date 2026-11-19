@@ -3971,6 +3971,297 @@ describe('renderChartConfig', () => {
     expect(sql).toContain("hasToken(lower(Body), lower('denied'))");
   });
 
+  describe('min/max on date and time columns', () => {
+    const baseTraceConfig: ChartConfigWithOptDateRange = {
+      displayType: DisplayType.Table,
+      connection: 'test-connection',
+      from: {
+        databaseName: 'default',
+        tableName: 'otel_traces',
+      },
+      select: [],
+      where: '',
+      whereLanguage: 'sql',
+      timestampValueExpression: 'Timestamp',
+      dateRange: [new Date('2025-02-12'), new Date('2025-02-14')],
+    };
+
+    beforeEach(() => {
+      const columns = [
+        { name: 'Timestamp', type: "DateTime64(9, 'UTC')" },
+        { name: 'TimestampTime', type: 'DateTime' },
+        { name: 'EventDate', type: 'Nullable(Date)' },
+        { name: 'Duration', type: 'UInt64' },
+        { name: 'ServiceName', type: 'LowCardinality(String)' },
+        { name: 'SpanAttributes', type: 'Map(LowCardinality(String), String)' },
+      ];
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockImplementation(async ({ column }) =>
+          columns.find(col => col.name === column),
+        );
+    });
+
+    const render = async (config: ChartConfigWithOptDateRange) =>
+      parameterizedQueryToSql(
+        await renderChartConfig(config, mockMetadata, querySettings),
+      ).replace(/\s+/g, ' ');
+
+    it('keeps the column type for min and max on a DateTime64 column', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'min', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('SELECT min( Timestamp ),max( Timestamp ) FROM');
+      expect(actual).not.toContain('toFloat64OrDefault(toString(Timestamp))');
+    });
+
+    it('keeps the column type for DateTime, Date, and quoted identifiers', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'min', valueExpression: 'TimestampTime', aggCondition: '' },
+          { aggFn: 'max', valueExpression: 'EventDate', aggCondition: '' },
+          { aggFn: 'max', valueExpression: '`Timestamp`', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('min( TimestampTime )');
+      expect(actual).toContain('max( EventDate )');
+      expect(actual).toContain('max( `Timestamp` )');
+      expect(actual).not.toContain('toFloat64OrDefault');
+    });
+
+    it('keeps the column type with an aggCondition', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          {
+            aggFn: 'max',
+            valueExpression: 'Timestamp',
+            aggCondition: "ServiceName = 'api'",
+            aggConditionLanguage: 'sql',
+          },
+        ],
+      });
+      expect(actual).toContain(
+        "maxIf( Timestamp, ServiceName = 'api' AND Timestamp IS NOT NULL )",
+      );
+    });
+
+    it('keeps the column type with sampleWeightExpression', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        sampleWeightExpression: 'SampleRate',
+        select: [
+          { aggFn: 'min', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('min( Timestamp )');
+      expect(actual).not.toContain('toFloat64OrDefault');
+    });
+
+    it('still casts numeric and string-typed values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'min', valueExpression: 'Duration', aggCondition: '' },
+          {
+            aggFn: 'max',
+            valueExpression: "SpanAttributes['http.status_code']",
+            aggCondition: '',
+          },
+          { aggFn: 'max', valueExpression: 'NotAColumn', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('min( toFloat64OrDefault(toString(Duration)) )');
+      expect(actual).toContain(
+        "max( toFloat64OrDefault(toString(SpanAttributes['http.status_code'])) )",
+      );
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(NotAColumn)) )',
+      );
+    });
+
+    it('still casts other aggregations on a DateTime column', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'avg', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'avg( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it.each([DisplayType.Pie, DisplayType.Bar])(
+      'still casts in %s charts, which need a numeric value',
+      async displayType => {
+        const actual = await render({
+          ...baseTraceConfig,
+          displayType,
+          select: [
+            { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          ],
+        });
+        expect(actual).toContain(
+          'max( toFloat64OrDefault(toString(Timestamp)) )',
+        );
+      },
+    );
+
+    it('keeps the column type for LowCardinality-wrapped date columns', async () => {
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockResolvedValue({ name: 'Day', type: 'LowCardinality(Date)' });
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [{ aggFn: 'max', valueExpression: 'Day', aggCondition: '' }],
+      });
+      expect(actual).toContain('max( Day )');
+    });
+
+    it('keeps the raw column in the null check with sampleWeightExpression and an aggCondition', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        sampleWeightExpression: 'SampleRate',
+        select: [
+          {
+            aggFn: 'min',
+            valueExpression: 'Timestamp',
+            aggCondition: "ServiceName = 'api'",
+            aggConditionLanguage: 'sql',
+          },
+        ],
+      });
+      expect(actual).toContain(
+        "minIf( Timestamp, ServiceName = 'api' AND Timestamp IS NOT NULL )",
+      );
+    });
+
+    it('still casts when the column lookup fails', async () => {
+      const getColumn = mockMetadata.getColumn;
+      mockMetadata.getColumn = jest.fn().mockImplementation(async args => {
+        // Only this select's lookup fails; the time filter's still resolves.
+        if (args.column === 'TimestampTime') {
+          throw new Error('DESCRIBE failed');
+        }
+        return getColumn(args);
+      });
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'max', valueExpression: 'TimestampTime', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(TimestampTime)) )',
+      );
+    });
+
+    it('still casts in a ratio, which divides the values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        seriesReturnType: 'ratio',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'count', valueExpression: '', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'divide(max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts when formulas do arithmetic on the values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        formulas: [{ expression: 'B - A', alias: 'span' }],
+        select: [
+          { aggFn: 'min', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'min( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+      expect(actual).not.toContain('min( Timestamp )');
+    });
+
+    it('still casts in a number tile with several series', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        displayType: DisplayType.Number,
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'count', valueExpression: '', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts in a time-bucketed table', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        granularity: '1 minute',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts when reading from a subquery CTE', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        with: [
+          {
+            name: 'Recent',
+            sql: chSql`SELECT Timestamp FROM default.otel_traces`,
+          },
+        ],
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('keeps the column type in number tiles', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        displayType: DisplayType.Number,
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('max( Timestamp )');
+    });
+
+    it('still casts in time-bucketed charts, which plot numeric values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        displayType: DisplayType.Line,
+        granularity: '1 minute',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+  });
+
   describe('percentile shorthand aggFn', () => {
     const baseTraceConfig: ChartConfigWithOptDateRange = {
       displayType: DisplayType.Table,

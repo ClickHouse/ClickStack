@@ -166,7 +166,9 @@ export function getRawSqlTileMacroWarnings(
  */
 export type FilterForVariableValidation = FilterForVariableDeclaration &
   Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>> &
-  Partial<Pick<SqlQueryDashboardFilter, 'sqlTemplate'>>;
+  Partial<Pick<SqlQueryDashboardFilter, 'sqlTemplate'>> & {
+    sourceId?: string;
+  };
 
 /**
  * Non-blocking checks on the dashboard variables references in a filter's `where`.
@@ -225,7 +227,11 @@ export function getFilterVariableWarnings(
 
     if (sqlTemplate) {
       // Also reports variable macro errors, which `result` already holds.
-      const detail = validateSqlQueryFilterTemplate(sqlTemplate, variables);
+      // Source tables aren't loaded here, so a source only allows its macros.
+      const detail = validateSqlQueryFilterTemplate(sqlTemplate, {
+        variables,
+        sourceTables: filter.sourceId ? 'unknown' : undefined,
+      });
       if (detail && !issues.includes(detail)) issues.push(detail);
     }
 
