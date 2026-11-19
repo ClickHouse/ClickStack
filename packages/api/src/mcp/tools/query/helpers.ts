@@ -42,7 +42,10 @@ import {
   isConfigTile,
 } from '@/routers/external-api/v2/utils/dashboards';
 import { isQueryTimeoutError } from '@/tasks/checkAlerts/errors';
-import { isClickHouseError } from '@/utils/clickhouseErrors';
+import {
+  getClickHouseErrorType,
+  isClickHouseError,
+} from '@/utils/clickhouseErrors';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 import { externalDashboardTileSchemaWithId } from '@/utils/zod';
@@ -1029,6 +1032,33 @@ export function errorHint(
       'this works for both DateTime and DateTime64 columns. For the sql tool, prefer ' +
       '`$__timeFilter(Timestamp)` which handles casting automatically. ' +
       'Bare ISO 8601 strings will NOT auto-cast to DateTime/DateTime64.'
+    );
+  }
+  // hasToken() accepts one token of ASCII letters and digits; '_', '-', '.',
+  // '@', ':' and spaces are separators. Agents reach for it in SQL filters
+  // with ids, emails and snake_case names. The BAD_ARGUMENTS + hasToken
+  // fallback keeps the hint if ClickHouse rewords the message.
+  if (
+    /Needle must not contain whitespace or separator characters/i.test(msg) ||
+    (/\bhasToken\b/.test(msg) &&
+      (getClickHouseErrorType(error) === 'BAD_ARGUMENTS' ||
+        /BAD_ARGUMENTS|Code: 36\b/.test(msg)))
+  ) {
+    // position() works on every ClickHouse version and, unlike LIKE, has no '_'
+    // wildcard. hasAllTokens() is newer and only worth adding with a text index.
+    const sqlAlternatives =
+      "position(col, 'payment_failed') > 0 for the exact term. If the column " +
+      "has a text index, prefix it with hasAllTokens(col, 'payment_failed') AND " +
+      'so the index can skip granules.';
+    return (
+      'hasToken() takes a single token of letters and digits; "_", "-", ".", ' +
+      '"@", ":" and spaces all split tokens, so a needle like payment_failed, ' +
+      'a UUID or an email is rejected. ' +
+      (options?.rawSql
+        ? `Use ${sqlAlternatives}`
+        : 'Put the term in a Lucene filter (whereLanguage:"lucene", e.g. ' +
+          '"payment_failed"), which splits it into tokens and still uses the ' +
+          `text index. In SQL, use ${sqlAlternatives}`)
     );
   }
   if (/Syntax error.*\bAS\b/.test(msg)) {
