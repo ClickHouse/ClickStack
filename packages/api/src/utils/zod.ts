@@ -57,6 +57,13 @@ export const objectIdSchema = z.string().refine(val => {
   return Types.ObjectId.isValid(val);
 }, 'Invalid ObjectId');
 
+export const mutedUntilSchema = z
+  .string()
+  .datetime({ offset: true })
+  .refine(val => new Date(val) > new Date(), {
+    message: 'mutedUntil must be in the future',
+  });
+
 /**
  * A source or connection field: an ObjectId, or a `$name` reference to the
  * dashboard's data source or connection variable of that name.
