@@ -28,7 +28,7 @@ import { ErrorBoundary } from '@/components/Error/ErrorBoundary';
 import { CheckBoxControlled } from '@/components/InputControlled';
 import SelectControlled from '@/components/SelectControlled';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
-import { IS_ADHOC_FILTERS_ENABLED, IS_PROMQL_ENABLED } from '@/config';
+import { IS_PROMQL_ENABLED } from '@/config';
 import { useConfirm } from '@/useConfirm';
 import { useZIndex } from '@/zIndex';
 
@@ -62,14 +62,7 @@ const FILTER_TYPE_OPTIONS = [
         },
       ]
     : []),
-  ...(IS_ADHOC_FILTERS_ENABLED
-    ? [
-        {
-          value: DashboardFilterType.enum.ADHOC,
-          label: 'Ad hoc keys and values',
-        },
-      ]
-    : []),
+  { value: DashboardFilterType.enum.ADHOC, label: 'Ad hoc keys and values' },
   { value: DashboardFilterType.enum.DATA_SOURCE, label: 'Data source' },
   { value: DashboardFilterType.enum.CONNECTION, label: 'Connection' },
 ];
