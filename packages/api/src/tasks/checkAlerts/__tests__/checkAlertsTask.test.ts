@@ -44,8 +44,6 @@ const buildPartitionTask = (
   alerts: { id: string; previousMap: Map<string, TestHistory> }[],
   teamId = new mongoose.Types.ObjectId(),
 ): AlertTask =>
-  // The partition tests only read id, team, and previousMap.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   ({
     alerts: alerts.map(({ id, previousMap }) => ({
       alert: {

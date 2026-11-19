@@ -64,8 +64,6 @@ function Line({
       <span
         className={styles.line}
         style={
-          // Custom properties are not part of CSSProperties.
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           {
             '--chars': text.length,
             '--delay': `${delay}s`,
