@@ -21,8 +21,10 @@ FROM otel/opentelemetry-collector-opampsupervisor:${OTEL_COLLECTOR_VERSION} AS o
 # include custom receiver/processor components alongside the standard contrib ones.
 # Note: The official OCB image may ship an older Go than the contrib modules require,
 # so we copy the ocb binary into a golang base with a newer toolchain.
+# The golang image is pinned by digest: a floating tag invalidates the multi-minute
+# OCB compile whenever upstream republishes it. Bump the tag and digest together.
 FROM otel/opentelemetry-collector-builder:${OTEL_COLLECTOR_VERSION} AS ocb-bin
-FROM golang:1.26-alpine AS ocb-builder
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS ocb-builder
 ARG OTEL_COLLECTOR_VERSION
 ARG OTEL_COLLECTOR_CORE_VERSION
 COPY --from=ocb-bin /usr/local/bin/ocb /usr/local/bin/ocb
@@ -34,7 +36,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=ocb-gomod \
     CGO_ENABLED=0 ocb --config=builder-config.yaml
 
 # Build the Go migration tool with full TLS support for ClickHouse
-FROM golang:1.26-alpine AS migrate-builder
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS migrate-builder
 WORKDIR /build
 COPY packages/otel-collector/go.mod packages/otel-collector/go.sum ./
 RUN go mod download
