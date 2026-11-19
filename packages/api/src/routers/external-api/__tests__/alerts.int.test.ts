@@ -1353,17 +1353,20 @@ describe('External API Alerts', () => {
         email: 'other-team@deploysentinel.com',
         team: otherTeam._id,
       });
-      const otherRequest = (method: 'post' | 'delete') =>
-        request(server.getHttpServer())
-          [method](`${ALERTS_BASE_URL}/${alert.id}/silenced`)
-          .set('Authorization', `Bearer ${otherUser.accessKey}`);
+      const silencedUrl = `${ALERTS_BASE_URL}/${alert.id}/silenced`;
+      const otherAuth = `Bearer ${otherUser.accessKey}`;
 
-      const silenceResponse = await otherRequest('post')
+      const silenceResponse = await request(server.getHttpServer())
+        .post(silencedUrl)
+        .set('Authorization', otherAuth)
         .send({ mutedUntil: futureDate().toISOString() })
         .expect(404);
       expect(silenceResponse.body).toEqual({ message: 'Alert not found' });
 
-      const unsilenceResponse = await otherRequest('delete').expect(404);
+      const unsilenceResponse = await request(server.getHttpServer())
+        .delete(silencedUrl)
+        .set('Authorization', otherAuth)
+        .expect(404);
       expect(unsilenceResponse.body).toEqual({ message: 'Alert not found' });
 
       const stored = await Alert.findById(alert.id);
