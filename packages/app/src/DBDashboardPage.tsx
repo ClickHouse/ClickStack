@@ -3000,7 +3000,8 @@ function DBDashboardPage({
       <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
         {dashboard.createdBy && (
           <span>
-            Created by {dashboard.createdBy.name || dashboard.createdBy.email}.{' '}
+            Created by {dashboard.createdBy.name || dashboard.createdBy.email}
+            .{' '}
           </span>
         )}
         {dashboard.updatedAt && (

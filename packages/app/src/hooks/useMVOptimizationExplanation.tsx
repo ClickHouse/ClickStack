@@ -18,8 +18,8 @@ import { useSource } from '@/source';
 import { useMetadataWithSettings } from './useMetadata';
 
 export interface MVOptimizationExplanationResult<
-  C extends
-    BuilderChartConfigWithOptDateRange = BuilderChartConfigWithOptDateRange,
+  C extends BuilderChartConfigWithOptDateRange =
+    BuilderChartConfigWithOptDateRange,
 > {
   optimizedConfig?: C;
   explanations: MVOptimizationExplanation[];

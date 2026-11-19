@@ -3,9 +3,8 @@
 export async function register() {
   // The edge build drops this branch, so it never bundles the Node.js SDK
   if (process.env.NEXT_RUNTIME === 'nodejs') {
-    const { startNextServerTelemetry } = await import(
-      '@/utils/nextServerTelemetry'
-    );
+    const { startNextServerTelemetry } =
+      await import('@/utils/nextServerTelemetry');
     await startNextServerTelemetry();
   }
 }
