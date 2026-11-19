@@ -38,6 +38,8 @@ yarn dev        # or equivalently: make dev
   `mongodb://hyperdx:hyperdx@localhost:<HDX_DEV_MONGO_PORT>/?tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256`.
   Everything works except Compass's Performance tab (the gateway doesn't
   implement `serverStatus` or `top`).
+  For the Postgres underneath (documents are BSON rows in `documentdb_data`),
+  run `docker exec -it -u postgres hdx-dev-<slot>-db-1 psql -h /tmp -U postgres -d postgres`.
   Dev data lives in `.volumes/docdb_dev_<slot>`; data from the old MongoDB
   volumes (`.volumes/db_dev_<slot>`) is not migrated, so the dev stack starts empty.
 - Hot reload enabled for all services in development
