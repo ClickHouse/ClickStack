@@ -265,8 +265,9 @@ export function translateFilterToExternalFilter(
 
     case 'SQL_QUERY':
       return {
-        ...omit(filter, 'connection', ...omittedKeys),
+        ...omit(filter, 'connection', 'source', ...omittedKeys),
         connectionId: filter.connection.toString(),
+        ...(filter.source ? { sourceId: filter.source.toString() } : {}),
       };
 
     case 'DATA_SOURCE':
@@ -312,8 +313,9 @@ export function translateExternalFilterToFilter(
 
     case 'SQL_QUERY':
       return {
-        ...omit(filter, 'connectionId'),
+        ...omit(filter, 'connectionId', 'sourceId'),
         connection: filter.connectionId,
+        ...(filter.sourceId ? { source: filter.sourceId } : {}),
       };
 
     case 'QUERY_EXPRESSION':

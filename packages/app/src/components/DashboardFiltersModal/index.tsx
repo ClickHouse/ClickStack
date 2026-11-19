@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  BroadcastFilter,
   ChartVariable,
   DashboardFilter,
   TSource,
@@ -22,6 +23,8 @@ interface DashboardFiltersEditModalProps {
   variables?: ChartVariable[];
   /** The dashboard's date range, which filter previews run over */
   dateRange?: [Date, Date];
+  /** The filter selections that broadcast to a source, for filter previews */
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
   onClose: () => void;
   onSaveFilter: (filter: DashboardFilter) => void;
   onRemoveFilter: (id: string) => void;
@@ -36,6 +39,7 @@ const DashboardFiltersModal = ({
   showRequiredFilterOptions,
   variables,
   dateRange,
+  getDashboardFilters,
   onClose,
   onSaveFilter,
   onRemoveFilter,
@@ -78,6 +82,7 @@ const DashboardFiltersModal = ({
         showRequiredFilterOptions={showRequiredFilterOptions}
         variables={variables}
         dateRange={dateRange}
+        getDashboardFilters={getDashboardFilters}
         onSave={handleSaveFilter}
         onCancel={stopEditing}
         onClose={onClose}

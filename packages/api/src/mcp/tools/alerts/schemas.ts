@@ -19,6 +19,7 @@ import {
   mcpSqlTileSchema,
   mcpStackedLineTileSchema,
 } from '@/mcp/tools/dashboards/schemas';
+import { mcpUnion } from '@/mcp/utils/errors';
 
 // ---------------------------------------------------------------------------
 // MCP-compatible flat Zod schema for clickstack_save_alert.
@@ -75,47 +76,45 @@ const rejectedRawSqlAlertWhereField = z
     'Not supported on Raw SQL alert configs. Filter inside the sqlTemplate.',
   );
 
-const mcpAlertChartConfigSchema = z
-  .union([
-    mcpLineTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpBarTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpStackedLineTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpNumberTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpSqlTileSchema.shape.config.omit({ onClick: true }).extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: rejectedRawSqlAlertWhereField,
-      whereLanguage: rejectedRawSqlAlertWhereField,
-      displayType: z
-        .enum(['line', 'stacked_bar', 'stacked_line', 'number'])
-        .describe(
-          'How to render the SQL results. Alerts evaluate line, stacked_bar, stacked_line, or number charts only.',
-        ),
-    }),
-  ])
-  .describe(
-    'Chart configuration for inline alerts (required when source is "inline"). ' +
-      'Same shape as a dashboard tile config, limited to displayType line, ' +
-      'stacked_bar, stacked_line, or number. Omit configType for the builder variant ' +
-      '(sourceId + select); set configType to "sql" for the Raw SQL variant ' +
-      '(connectionId + sqlTemplate; the template must use the $__timeFilter ' +
-      'and $__timeInterval macros so each evaluation window can be queried).',
-  );
+const mcpAlertChartConfigSchema = mcpUnion([
+  mcpLineTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpBarTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpStackedLineTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpNumberTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpSqlTileSchema.shape.config.omit({ onClick: true }).extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: rejectedRawSqlAlertWhereField,
+    whereLanguage: rejectedRawSqlAlertWhereField,
+    displayType: z
+      .enum(['line', 'stacked_bar', 'stacked_line', 'number'])
+      .describe(
+        'How to render the SQL results. Alerts evaluate line, stacked_bar, stacked_line, or number charts only.',
+      ),
+  }),
+]).describe(
+  'Chart configuration for inline alerts (required when source is "inline"). ' +
+    'Same shape as a dashboard tile config, limited to displayType line, ' +
+    'stacked_bar, stacked_line, or number. Omit configType for the builder variant ' +
+    '(sourceId + select); set configType to "sql" for the Raw SQL variant ' +
+    '(connectionId + sqlTemplate; the template must use the $__timeFilter ' +
+    'and $__timeInterval macros so each evaluation window can be queried).',
+);
 
 const mcpAlertChannelSchema = z
   .object({

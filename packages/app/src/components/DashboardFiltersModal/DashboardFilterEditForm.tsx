@@ -6,6 +6,7 @@ import {
   isReferenceVariableFilterType,
 } from '@hyperdx/common-utils/dist/filters';
 import {
+  BroadcastFilter,
   ChartVariable,
   DashboardFilter,
   DashboardFilterType,
@@ -18,6 +19,7 @@ import {
   Divider,
   Group,
   Modal,
+  Select,
   Stack,
   TextInput,
 } from '@mantine/core';
@@ -25,9 +27,8 @@ import { IconAlertTriangle } from '@tabler/icons-react';
 
 import { ErrorBoundary } from '@/components/Error/ErrorBoundary';
 import { CheckBoxControlled } from '@/components/InputControlled';
-import SelectControlled from '@/components/SelectControlled';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
-import { IS_ADHOC_FILTERS_ENABLED, IS_PROMQL_ENABLED } from '@/config';
+import { IS_PROMQL_ENABLED } from '@/config';
 import { useConfirm } from '@/useConfirm';
 import { useZIndex } from '@/zIndex';
 
@@ -49,10 +50,10 @@ import { VariableNameInput } from './VariableNameInput';
 const FILTER_TYPE_OPTIONS = [
   {
     value: DashboardFilterType.enum.QUERY_EXPRESSION,
-    label: 'Queried values',
+    label: 'SQL expression values',
   },
-  { value: DashboardFilterType.enum.STATIC_LIST, label: 'Static values' },
   { value: DashboardFilterType.enum.SQL_QUERY, label: 'SQL query values' },
+  { value: DashboardFilterType.enum.STATIC_LIST, label: 'Static values' },
   ...(IS_PROMQL_ENABLED
     ? [
         {
@@ -61,14 +62,7 @@ const FILTER_TYPE_OPTIONS = [
         },
       ]
     : []),
-  ...(IS_ADHOC_FILTERS_ENABLED
-    ? [
-        {
-          value: DashboardFilterType.enum.ADHOC,
-          label: 'Ad hoc keys and values',
-        },
-      ]
-    : []),
+  { value: DashboardFilterType.enum.ADHOC, label: 'Ad hoc keys and values' },
   { value: DashboardFilterType.enum.DATA_SOURCE, label: 'Data source' },
   { value: DashboardFilterType.enum.CONNECTION, label: 'Connection' },
 ];
@@ -88,6 +82,8 @@ interface DashboardFilterEditFormProps {
   variables?: ChartVariable[];
   /** The dashboard's date range, which filter previews run over */
   dateRange?: [Date, Date];
+  /** The dashboard filter selections that broadcast to the given source */
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
   onSave: (filter: DashboardFilter) => void;
   onClose: () => void;
   onCancel: () => void;
@@ -107,6 +103,7 @@ export const DashboardFilterEditForm = ({
   showRequiredFilterOptions,
   variables,
   dateRange,
+  getDashboardFilters,
   onSave,
   onClose,
   onCancel,
@@ -119,9 +116,27 @@ export const DashboardFilterEditForm = ({
     setValue,
     setError,
     trigger,
+    getValues,
   } = useForm<FilterFormValues>({
     defaultValues: toFormValues(filter, presetSource?.id),
   });
+
+  // react-hook-form keeps a field's rules after its input unmounts, and merges
+  // the next input's rules over them. Without this, the previous editor's rules
+  // (say, PromQL's required source) would still apply to the next editor's
+  // input for the same field. Runs on the type change itself, before the next
+  // editor registers its own rules.
+  const changeType = (type: FilterFormValues['type']) => {
+    const values = getValues();
+    if (type === values.type) return;
+    const fields = Object.keys(values).filter(
+      (key): key is keyof FilterFormValues => key in values,
+    );
+    for (const field of fields) {
+      register(field, { required: false, validate: undefined });
+    }
+    setValue('type', type, { shouldDirty: true });
+  };
 
   const confirm = useConfirm();
   // Read during render so react-hook-form subscribes this component to it.
@@ -242,9 +257,11 @@ export const DashboardFilterEditForm = ({
         <Stack>
           {showTypeInput && (
             <CustomInputWrapper label="Type">
-              <SelectControlled
-                control={control}
-                name="type"
+              <Select
+                value={formFilterType}
+                onChange={value =>
+                  value && changeType(DashboardFilterType.parse(value))
+                }
                 data={FILTER_TYPE_OPTIONS}
                 data-testid="filter-type-picker"
                 allowDeselect={false}
@@ -294,8 +311,10 @@ export const DashboardFilterEditForm = ({
               <SqlVariablesProvider variables={otherVariables}>
                 <SqlQueryFilterEditForm
                   control={control}
+                  setValue={setValue}
                   otherFilters={otherFilters}
                   dateRange={dateRange}
+                  getDashboardFilters={getDashboardFilters}
                 />
               </SqlVariablesProvider>
             ) : formFilterType === 'PROMETHEUS_LABEL' ? (

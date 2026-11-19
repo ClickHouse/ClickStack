@@ -24,7 +24,13 @@
     "ci:lint": {
       "cache": true,
       "dependsOn": ["^ci:build"],
-      "inputs": ["default", "^production", { "runtime": "node --version" }]
+      "inputs": [
+        "default",
+        "^production",
+        // Each package's `lint` runs ESLint through this wrapper.
+        "{workspaceRoot}/scripts/ci/eslint-warnings.mjs",
+        { "runtime": "node --version" }
+      ]
     },
     // Unit tests import the compiled `dist` of workspace dependencies (e.g.
     // `@hyperdx/common-utils/dist/types`), so they need the same `^ci:build`
