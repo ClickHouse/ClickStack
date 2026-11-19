@@ -1,8 +1,8 @@
 import { useState } from 'react';
+import { Separator } from '@clickhouse/click-ui';
 import {
   ActionIcon,
   Checkbox,
-  Divider,
   Flex,
   Popover,
   Text,
@@ -80,7 +80,7 @@ export function FilterSettingsPanel({
         <Text size="sm" fw={500}>
           Filter Settings
         </Text>
-        <Divider />
+        <Separator size="xs" />
         <Checkbox
           label="Show Shared Filters"
           labelPosition="left"
@@ -119,7 +119,7 @@ export function FilterSettingsPanel({
         </Tooltip>
         {showResetSection && (
           <>
-            <Divider />
+            <Separator size="xs" />
             {hasPersonalPins && (
               <ResetAction
                 label="Reset My Pins"

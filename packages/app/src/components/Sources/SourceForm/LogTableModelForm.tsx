@@ -1,24 +1,30 @@
 import { useState } from 'react';
 import { useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
-import { Anchor, Box, Button, Divider, Group, Stack } from '@mantine/core';
+import { Anchor, Box, Button, Group, Stack } from '@mantine/core';
 import { IconSettings } from '@tabler/icons-react';
 
+import { useBrandDisplayName } from '@/brand';
 import { SourceSelectControlled } from '@/components/SourceSelect';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { useColumns } from '@/hooks/useMetadata';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 
 import {
   DEFAULT_DATABASE,
   EVENT_NAME_EXPRESSION_HELP_TEXT,
   KNOWN_COLUMNS_EXPRESSION_HELP_TEXT,
+  ROW_KEY_EXPRESSION_HELP_TEXT,
   SERVICE_VERSION_EXPRESSION_HELP_TEXT,
   SEVERITY_NUMBER_EXPRESSION_HELP_TEXT,
 } from './constants';
 import { ExpressionFormRow } from './ExpressionFormRow';
 import { FormRow } from './FormRow';
 import { HighlightedAttributeExpressionsFormRow } from './HighlightedAttributes';
+import {
+  MapKeyIndexMaxPartsFormRow,
+  MapKeyIndexPartSelectionFormRow,
+} from './MapKeyIndexMaxPartsFormRow';
 import {
   MaterializedViewsFormSection,
   MetadataMaterializedViewsFormSection,
@@ -110,7 +116,7 @@ export function LogTableModelForm(props: TableModelProps) {
           display: showOptionalFields ? 'flex' : 'none',
         }}
       >
-        <Divider />
+        <Separator size="xs" />
         <ExpressionFormRow
           control={control}
           setValue={setValue}
@@ -209,7 +215,7 @@ export function LogTableModelForm(props: TableModelProps) {
             disableKeywordAutocomplete
           />
         </FormRow>
-        <Divider />
+        <Separator size="xs" />
         <FormRow
           label={'Correlated Metric Source'}
           helpText={`${brandName} Source for metrics associated with logs. Optional`}
@@ -244,7 +250,7 @@ export function LogTableModelForm(props: TableModelProps) {
           tableConnection={tableConnection}
         />
 
-        <Divider />
+        <Separator size="xs" />
         {/* <FormRow label={'Table Filter Expression'}>
           <SQLInlineEditorControlled
             tableConnection={{
@@ -284,8 +290,26 @@ export function LogTableModelForm(props: TableModelProps) {
             disableKeywordAutocomplete
           />
         </FormRow>
+        <FormRow
+          label="Row key expression"
+          helpText={ROW_KEY_EXPRESSION_HELP_TEXT}
+        >
+          <SQLInlineEditorControlled
+            tableConnection={{
+              databaseName,
+              tableName,
+              connectionId,
+            }}
+            control={control}
+            name="rowKeyExpression"
+            placeholder="ServiceName, Timestamp, _block_number, _block_offset"
+            disableKeywordAutocomplete
+          />
+        </FormRow>
         <UseTextIndexFormRow control={control} />
-        <Divider />
+        <MapKeyIndexMaxPartsFormRow control={control} />
+        <MapKeyIndexPartSelectionFormRow control={control} />
+        <Separator size="xs" />
         <HighlightedAttributeExpressionsFormRow
           {...props}
           name="highlightedRowAttributeExpressions"
@@ -298,11 +322,11 @@ export function LogTableModelForm(props: TableModelProps) {
           label="Highlighted Trace Attributes"
           helpText="Expressions defining trace-level attributes which are displayed in the trace view for the selected trace."
         />
-        <Divider />
+        <Separator size="xs" />
         <MaterializedViewsFormSection {...props} />
-        <Divider />
+        <Separator size="xs" />
         <MetadataMaterializedViewsFormSection {...props} />
-        <Divider />
+        <Separator size="xs" />
         <OrderByFormRow
           control={control}
           databaseName={databaseName}

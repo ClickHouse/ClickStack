@@ -4,6 +4,7 @@ import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { parseTimeRange, runConfigTile } from '@/mcp/tools/query/helpers';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
 import Dashboard from '@/models/dashboard';
 import { convertToExternalDashboard } from '@/routers/external-api/v2/utils/dashboards';
 import { objectIdSchema } from '@/utils/zod';
@@ -12,7 +13,12 @@ import {
   getRawSqlTileMacroWarnings,
   getTileVariableWarnings,
 } from './validation';
-import { mcpVariableValuesParam, resolveDashboardVariables } from './variables';
+import {
+  getReferenceTargets,
+  mcpVariableValuesParam,
+  resolveDashboardVariables,
+  resolveTileVariableReferences,
+} from './variables';
 
 export function registerQueryTile({
   context,
@@ -76,10 +82,10 @@ export function registerQueryTile({
       }
 
       const externalDashboard = convertToExternalDashboard(dashboard, {
-        hidePromqlTiles: true,
+        hidePromql: !isPromqlEnabled(context),
       });
-      const tile = externalDashboard.tiles.find(t => t.id === tileId);
-      if (!tile) {
+      const storedTile = externalDashboard.tiles.find(t => t.id === tileId);
+      if (!storedTile) {
         return mcpUserError(
           `Tile not found: ${tileId}. Available tile IDs: ${externalDashboard.tiles.map(t => t.id).join(', ')}`,
         );
@@ -92,6 +98,18 @@ export function registerQueryTile({
       if ('error' in resolvedVariables) {
         return mcpUserError(resolvedVariables.error);
       }
+
+      const resolvedTile = resolveTileVariableReferences(
+        storedTile,
+        externalDashboard.filters,
+        variableValues,
+        externalDashboard.savedFilterValues,
+        await getReferenceTargets(teamId.toString()),
+      );
+      if ('error' in resolvedTile) {
+        return mcpUserError(resolvedTile.error);
+      }
+      const { tile } = resolvedTile;
 
       const result = await runConfigTile(
         teamId.toString(),

@@ -296,6 +296,8 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
           'implicitColumnExpression' in source
             ? source.implicitColumnExpression
             : undefined,
+        bodyExpression:
+          source.kind === SourceKind.Log ? source.bodyExpression : undefined,
         orderBy: stableSampleExpr,
         limit: { limit: sampleSize },
         dateRange: [startDate, endDate],
@@ -463,12 +465,17 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
           'are dropped by default — set includeHidden:true to inspect them.',
       };
 
-      const { data: trimmedOutput, isTrimmed } = trimToolResponse(output);
+      const {
+        data: trimmedOutput,
+        isTrimmed,
+        notes: trimNotes,
+      } = trimToolResponse(output);
 
       const finalOutput = isTrimmed
         ? {
             ...trimmedOutput,
             note: 'Result was trimmed for context size. Narrow the time range, add filters, or reduce topN/topValuesPerProperty to reduce data.',
+            trimNotes,
           }
         : trimmedOutput;
 

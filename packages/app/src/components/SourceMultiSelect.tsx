@@ -10,21 +10,25 @@ import {
 import { IconCheck } from '@tabler/icons-react';
 
 import {
-  SOURCE_KIND_ICONS,
+  getSourceOptionIcon,
   useFilteredSortedSourceItems,
   useSourceKindMap,
+  useWithSourceVariableItems,
 } from '@/components/sourceSelectUtils';
 import { useSources } from '@/source';
 
 function SourceMultiSelectControlledComponent({
   allowedSourceKinds,
   connectionId,
+  allowSourceVariables = false,
   size,
   placeholder,
   ...props
 }: {
   allowedSourceKinds?: SourceKind[];
   connectionId?: string;
+  /** Whether to offer the dashboard's data source variables. */
+  allowSourceVariables?: boolean;
   size?: string;
   placeholder?: string;
 } & UseControllerProps<any> &
@@ -37,10 +41,14 @@ function SourceMultiSelectControlledComponent({
 
   const sourceKindMap = useSourceKindMap(data);
 
-  const items = useFilteredSortedSourceItems({
+  const sourceItems = useFilteredSortedSourceItems({
     sources: data,
     allowedSourceKinds,
     connectionId,
+  });
+  const items = useWithSourceVariableItems(sourceItems, {
+    enabled: allowSourceVariables,
+    allowedSourceKinds,
   });
 
   // Mantine passes `checked` to renderOption for MultiSelect items; show a
@@ -48,7 +56,7 @@ function SourceMultiSelectControlledComponent({
   // without forcing the user to scan pills above.
   const renderOption = useCallback(
     ({ option, checked }: { option: ComboboxItem; checked?: boolean }) => {
-      const icon = SOURCE_KIND_ICONS[sourceKindMap.get(option.value) ?? ''];
+      const icon = getSourceOptionIcon(option.value, sourceKindMap);
       return (
         <Group gap="xs" wrap="nowrap" w="100%">
           {icon}

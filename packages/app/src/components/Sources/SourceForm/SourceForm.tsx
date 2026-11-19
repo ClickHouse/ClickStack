@@ -62,6 +62,7 @@ import {
 
 import {
   DEFAULT_DATABASE,
+  getSourceKindLabel,
   PROMETHEUS_PLACEHOLDER,
   SOURCE_KIND_LABELS,
 } from './constants';
@@ -653,7 +654,10 @@ export function TableSourceForm({
                   {IS_PROMQL_ENABLED && (
                     <Radio
                       value={SourceKind.Promql}
-                      label={SOURCE_KIND_LABELS[SourceKind.Promql]}
+                      label={getSourceKindLabel(
+                        SourceKind.Promql,
+                        selectedConnection,
+                      )}
                     />
                   )}
                 </Group>
@@ -734,7 +738,7 @@ export function TableSourceForm({
             variant="secondary"
             size="sm"
             color="gray"
-            mt="md"
+            mt={querySettingFields.length ? 'md' : 0}
             disabled={querySettingFields.length >= 10}
             onClick={() => {
               if (querySettingFields.length < 10) {
@@ -752,6 +756,7 @@ export function TableSourceForm({
         setValue={setValue}
         kind={kind}
         sourceId={sourceId}
+        isPrometheusEndpoint={isPrometheusOnlyConnection}
       />
       <Group justify="flex-end" mt="lg">
         {onCancel && (

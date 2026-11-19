@@ -91,6 +91,7 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
       },
       found: true,
       propertyType: 'json',
+      columnType: 'JSON',
       isArray: false,
     });
     const field2 = 'ResourceAttributesJSON.test.nest';
@@ -104,6 +105,7 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
       },
       found: true,
       propertyType: 'json',
+      columnType: 'JSON',
       isArray: false,
     });
   });
@@ -362,7 +364,7 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
     },
     {
       lucene: 'foo:[1 TO 5]',
-      sql: '((foo BETWEEN 1 AND 5))',
+      sql: '((ifNull(toFloat64OrNull(foo) BETWEEN 1 AND 5, 0)))',
       english: 'foo is between 1 and 5',
     },
     {
@@ -763,6 +765,96 @@ describe('CustomSchemaSQLSerializerV2 - json', () => {
         "((hasToken(lower(Body), lower('user')) AND hasToken(lower(Body), lower('service')) AND (lower(Body) LIKE lower('%user\\\\_service%'))))",
       );
     });
+  });
+});
+
+describe('CustomSchemaSQLSerializerV2 - numeric range bounds on String values', () => {
+  const metadata = getMetadata(
+    new ClickhouseClient({ host: 'http://localhost:8123' }),
+  );
+  // The OTel schema's attribute maps hold every value as a String.
+  metadata.getColumn = jest.fn().mockImplementation(async ({ column }) => {
+    if (column === 'LogAttributes') {
+      return {
+        name: 'LogAttributes',
+        type: 'Map(LowCardinality(String), String)',
+      };
+    } else if (column === 'Duration') {
+      return { name: 'Duration', type: 'UInt64' };
+    } else if (column === 'ServiceName') {
+      return { name: 'ServiceName', type: 'LowCardinality(String)' };
+    } else if (column === 'Severity') {
+      return { name: 'Severity', type: "Enum8('debug' = 1, 'info' = 5)" };
+    }
+    return undefined;
+  });
+  metadata.getMaterializedColumnsLookupTable = jest
+    .fn()
+    .mockImplementation(async () => new Map());
+
+  const serializer = new CustomSchemaSQLSerializerV2({
+    metadata,
+    databaseName: 'testName',
+    tableName: 'testTable',
+    connectionId: 'testId',
+    implicitColumnExpression: 'Body',
+  });
+
+  const attr = "toFloat64OrNull(`LogAttributes`['gc_pause_ms'])";
+  const hint = "indexHint(mapContains(`LogAttributes`, 'gc_pause_ms'))";
+
+  it.each([
+    {
+      lucene: 'LogAttributes.gc_pause_ms:[10 TO 20]',
+      sql: `((ifNull(${attr} BETWEEN 10 AND 20, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:[-2.5 TO 1e3]',
+      sql: `((ifNull(${attr} BETWEEN -2.5 AND 1000, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:{10 TO 20}',
+      sql: `((ifNull(${attr} > 10, 0) AND ifNull(${attr} < 20, 0) AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.gc_pause_ms:[10 TO *]',
+      sql: `((ifNull(${attr} >= 10, 0) AND ${hint}))`,
+    },
+    {
+      lucene: '-LogAttributes.gc_pause_ms:[10 TO 20]',
+      sql: `((NOT ifNull(${attr} BETWEEN 10 AND 20, 0)))`,
+    },
+    {
+      lucene: 'ServiceName:[1 TO 5]',
+      sql: '((ifNull(toFloat64OrNull(ServiceName) BETWEEN 1 AND 5, 0)))',
+    },
+  ])('compares "$lucene" as numbers', async ({ lucene, sql }) => {
+    const builder = new SearchQueryBuilder(lucene, serializer);
+    expect(await builder.build()).toBe(sql);
+  });
+
+  it.each([
+    {
+      // Comparisons stay lexical: fixed-width values such as dates rely on it.
+      lucene: 'LogAttributes.gc_pause_ms:>100',
+      sql: `((\`LogAttributes\`['gc_pause_ms'] > '100' AND ${hint}))`,
+    },
+    {
+      lucene: 'LogAttributes.version:[a TO m]',
+      sql: "((`LogAttributes`['version'] BETWEEN 'a' AND 'm' AND indexHint(mapContains(`LogAttributes`, 'version'))))",
+    },
+    {
+      lucene: 'Duration:[10 TO 20]',
+      sql: '((Duration BETWEEN 10 AND 20))',
+    },
+    {
+      // Enum compares to numbers already; toFloat64OrNull would reject it.
+      lucene: 'Severity:[1 TO 5]',
+      sql: '((Severity BETWEEN 1 AND 5))',
+    },
+  ])('leaves "$lucene" unchanged', async ({ lucene, sql }) => {
+    const builder = new SearchQueryBuilder(lucene, serializer);
+    expect(await builder.build()).toBe(sql);
   });
 });
 
@@ -2433,6 +2525,7 @@ describe('CustomSchemaSQLSerializerV2 - Array and Nested Fields', () => {
       column: 'Events.Name',
       found: true,
       propertyType: JSDataType.String,
+      columnType: 'Array(String)',
       isArray: true,
     });
 
@@ -2442,6 +2535,7 @@ describe('CustomSchemaSQLSerializerV2 - Array and Nested Fields', () => {
       column: 'Events.Count',
       found: true,
       propertyType: JSDataType.Number,
+      columnType: 'Array(UInt64)',
       isArray: true,
     });
 
@@ -2451,6 +2545,7 @@ describe('CustomSchemaSQLSerializerV2 - Array and Nested Fields', () => {
       column: 'Events.IsAvailable',
       found: true,
       propertyType: JSDataType.Bool,
+      columnType: 'Array(Bool)',
       isArray: true,
     });
   });

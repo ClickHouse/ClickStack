@@ -59,14 +59,19 @@ test.describe(
           dashboardPage.getAdhocFilterSourceTypeControl(),
         ).toBeVisible();
         await expect(dashboardPage.getAdhocFilterSourcesInput()).toBeVisible();
-        await expect(dashboardPage.broadcastFilterCheckbox).toBeChecked();
+        // Always broadcasts, so the scope is shown without a checkbox.
+        await expect(dashboardPage.broadcastFilterCheckbox).toHaveCount(0);
         await expect(dashboardPage.appliesToSourceSelector).toBeVisible();
-        // Always a variable, so the name is asked for rather than unlocked by
-        // a checkbox.
         await expect(dashboardPage.variableNameInput).toBeVisible();
+        await expect(
+          form.getByText('Unique name', { exact: true }),
+        ).toBeVisible();
 
         await expect(form.getByTestId('source-selector')).toHaveCount(0);
-        await expect(form.locator('div.cm-editor')).toHaveCount(0);
+        await expect(form.getByText('Filter expression')).toHaveCount(0);
+        await expect(
+          form.getByText('Keys and values filter', { exact: true }),
+        ).toBeVisible();
         await expect(
           form.getByTestId('filter-variable-enabled-checkbox'),
         ).toHaveCount(0);
@@ -111,7 +116,8 @@ test.describe(
         await expect(item).toContainText(
           `${DEFAULT_LOGS_SOURCE_NAME}, ${DEFAULT_TRACES_SOURCE_NAME}`,
         );
-        await expect(item).toContainText('($conds)');
+        // The name isn't a variable, so the list doesn't present it as one.
+        await expect(item).not.toContainText('$conds');
         await expect(
           dashboardPage.getFilterBroadcastTarget('Conditions'),
         ).toHaveText(
@@ -124,9 +130,8 @@ test.describe(
         await page.reload();
         await dashboardPage.waitForLoaded();
         await dashboardPage.openEditFiltersModal();
-        await expect(
-          dashboardPage.getFilterItemByName('Conditions'),
-        ).toContainText('($conds)');
+        await dashboardPage.openEditFilterForm('Conditions');
+        await expect(dashboardPage.variableNameInput).toHaveValue('conds');
       });
     });
 
@@ -167,33 +172,18 @@ test.describe(
         await page.getByTestId('save-filter-button').click();
 
         await expect(
-          dashboardPage.getFilterItemByName('Conditions'),
-        ).toContainText('($where_clause)');
-        await expect(
           dashboardPage.getFilterBroadcastTarget('Conditions'),
         ).toHaveText(DEFAULT_TRACES_SOURCE_NAME);
-      });
-
-      await test.step('Turning broadcast off drops the broadcast attribute', async () => {
-        await dashboardPage.openEditFilterForm('Conditions');
-        await dashboardPage.broadcastFilterCheckbox.uncheck();
-        await expect(dashboardPage.appliesToSourceSelector).toHaveCount(0);
-        await page.getByTestId('save-filter-button').click();
-
-        await expect(
-          dashboardPage.getFilterItemByName('Conditions'),
-        ).toBeVisible();
-        await expect(
-          dashboardPage.getFilterBroadcastTarget('Conditions'),
-        ).toHaveCount(0);
       });
 
       await test.step('The edits survive a reload', async () => {
         await page.reload();
         await dashboardPage.waitForLoaded();
         await dashboardPage.openEditFiltersModal();
+        await expect(
+          dashboardPage.getFilterBroadcastTarget('Conditions'),
+        ).toHaveText(DEFAULT_TRACES_SOURCE_NAME);
         await dashboardPage.openEditFilterForm('Conditions');
-        await expect(dashboardPage.broadcastFilterCheckbox).not.toBeChecked();
         await expect(dashboardPage.variableNameInput).toHaveValue(
           'where_clause',
         );
@@ -219,6 +209,10 @@ test.describe(
         await dashboardPage.selectAdhocFilterSourceType('Prometheus');
         await expect(
           form.getByText(DEFAULT_LOGS_SOURCE_NAME, { exact: true }),
+        ).toHaveCount(0);
+        // Only SQL suggestions can be narrowed by a condition.
+        await expect(
+          form.getByText('Keys and values filter', { exact: true }),
         ).toHaveCount(0);
       });
 
@@ -433,6 +427,75 @@ test.describe(
         await expect(pills).toHaveText([
           'ServiceName = accounting',
           'SeverityText = error',
+        ]);
+      });
+    });
+
+    /** Open the editor, pick `key`, and wait for `value` to be suggested. */
+    const openValueSuggestions = async (
+      filterName: string,
+      key: string,
+      value: string,
+    ) => {
+      await dashboardPage.openAddAdhocCondition(filterName);
+      await dashboardPage.getAdhocConditionInput(filterName, 'key').fill(key);
+      await dashboardPage.getAdhocConditionInput(filterName, 'value').click();
+      await expect(
+        dashboardPage.getAdhocConditionOption(filterName, value),
+      ).toBeVisible({ timeout: 30000 });
+    };
+
+    test('suggests only from the rows its keys and values filter matches', async () => {
+      const filterName = 'Accounting';
+
+      await createDashboardWithAdhocFilter(
+        filterName,
+        [DEFAULT_LOGS_SOURCE_NAME],
+        { where: { value: "ServiceName = 'accounting'", language: 'sql' } },
+      );
+
+      await openValueSuggestions(filterName, 'ServiceName', 'accounting');
+      expect(await dashboardPage.getOpenFilterDropdownOptions()).toEqual([
+        'accounting',
+      ]);
+    });
+
+    test('waits for a required filter its keys and values filter references', async ({
+      page,
+    }) => {
+      const filterName = 'Conditions';
+      const addButton = page.getByTestId(`adhoc-filter-add-${filterName}`);
+
+      await test.step('Narrow an ad hoc filter by a required filter', async () => {
+        await dashboardPage.createNewDashboard();
+        await dashboardPage.openEditFiltersModal();
+        await dashboardPage.addStaticListFilterToDashboard(
+          'Service',
+          ['accounting', 'ad'],
+          { variableName: 'svc', required: true },
+        );
+        await dashboardPage.addAdhocFilterToDashboard(
+          filterName,
+          [DEFAULT_LOGS_SOURCE_NAME],
+          { where: { value: 'ServiceName IN ($svc)', language: 'sql' } },
+        );
+        await dashboardPage.closeFiltersModal();
+      });
+
+      await test.step('Adding a condition waits for a service', async () => {
+        await expect(addButton).toHaveAttribute('aria-disabled', 'true');
+        await addButton.hover();
+        await expect(
+          page.getByText('This filter depends on: Service'),
+        ).toBeVisible();
+      });
+
+      await test.step('A selected service unblocks it and narrows its suggestions', async () => {
+        await dashboardPage.toggleFilterValue('Service', 'ad');
+        await expect(addButton).not.toHaveAttribute('aria-disabled', 'true');
+        await openValueSuggestions(filterName, 'ServiceName', 'ad');
+        expect(await dashboardPage.getOpenFilterDropdownOptions()).toEqual([
+          'ad',
         ]);
       });
     });

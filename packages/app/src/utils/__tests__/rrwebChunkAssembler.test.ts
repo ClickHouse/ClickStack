@@ -9,6 +9,7 @@ function chunkRows(
   event: object,
   total: number,
   eventId: number,
+  ts?: string,
 ): RRWebStreamRow[] {
   const body = JSON.stringify(event);
   const size = Math.ceil(body.length / total);
@@ -17,6 +18,7 @@ function chunkRows(
     ck: String(i + 1), // ClickHouse map values come back as strings
     tcks: String(total),
     ev: String(eventId),
+    ts,
   }));
 }
 
@@ -63,7 +65,7 @@ describe('createRrwebChunkAssembler', () => {
   });
 
   it('reassembles multi-chunk events arriving out of order', () => {
-    // The regression from hyperdxio/hyperdx#2569: all chunks of an event
+    // The regression from ClickHouse/ClickStack#2569: all chunks of an event
     // share one timestamp, so ClickHouse may return them in any order.
     const { assembler, events, errors } = makeAssembler();
     const event = { type: 2, timestamp: 4, data: { text: 'y'.repeat(500) } };
@@ -130,7 +132,8 @@ describe('createRrwebChunkAssembler', () => {
   });
 
   it('drops a stale incomplete event when its id is reused', () => {
-    // The rr-web.event counter resets on page reload, so an id can recur.
+    // Rows without a timestamp only have rr-web.event, which older SDKs reset
+    // on page reload, so an id can recur.
     const { assembler, events, errors } = makeAssembler();
     const event = { type: 2, timestamp: 10, data: { text: 'c'.repeat(300) } };
     const [stale1] = chunkRows({ type: 2, timestamp: 1 }, 2, 5);
@@ -144,6 +147,85 @@ describe('createRrwebChunkAssembler', () => {
     expect(errors).toEqual([
       expect.objectContaining({ reason: 'duplicate-chunk', eventId: 5 }),
     ]);
+  });
+
+  it('keeps an orphaned chunk from completing a later page load event', () => {
+    // Older SDKs restart rr-web.event per page load. Page A's chunks 1-2 of
+    // event 2 were lost when it closed; page B's event 2 has 2 chunks.
+    // Keyed by id alone, A's 3/3 opened an entry expecting 3 chunks that B's
+    // two chunks then filled, joining B's JSON with A's fragment.
+    const { assembler, events, errors } = makeAssembler();
+    const pageB = { type: 2, timestamp: 20, data: { text: 'f'.repeat(300) } };
+    const orphan = chunkRows(
+      { type: 2, timestamp: 10, data: { text: 'g'.repeat(300) } },
+      3,
+      2,
+      '2026-11-09 10:00:00.100000000',
+    )[2];
+    const pageBRows = chunkRows(pageB, 2, 2, '2026-11-09 10:00:00.900000000');
+    for (const row of [orphan, ...pageBRows]) {
+      assembler.push(row);
+    }
+    assembler.end();
+
+    expect(events).toEqual([pageB]);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        reason: 'incomplete-event',
+        eventId: 2,
+        timestamp: '2026-11-09 10:00:00.100000000',
+        chunksReceived: 1,
+        totalChunks: 3,
+      }),
+    ]);
+    expect(errors).not.toContainEqual(
+      expect.objectContaining({ reason: 'parse-error' }),
+    );
+  });
+
+  it('keeps an orphaned last chunk from completing an event of the same size', () => {
+    // A check that totalChunks differs from the pending entry misses this.
+    const { assembler, events, errors } = makeAssembler();
+    const pageB = { type: 2, timestamp: 20, data: { text: 'h'.repeat(300) } };
+    const orphan = chunkRows(
+      { type: 2, timestamp: 10, data: { text: 'i'.repeat(300) } },
+      2,
+      2,
+      '2026-11-09 10:00:00.100000000',
+    )[1];
+    const pageBRows = chunkRows(pageB, 2, 2, '2026-11-09 10:00:00.900000000');
+    for (const row of [orphan, ...pageBRows]) {
+      assembler.push(row);
+    }
+    assembler.end();
+
+    expect(events).toEqual([pageB]);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        reason: 'incomplete-event',
+        eventId: 2,
+        chunksReceived: 1,
+        totalChunks: 2,
+      }),
+    ]);
+  });
+
+  it('keys large event ids from newer SDKs without losing precision', () => {
+    // clickstack-browser 1.2.1 starts event numbers at a random value below
+    // 2^52, which needs more than 32 bits.
+    const { assembler, events, errors } = makeAssembler();
+    const eventA = { type: 2, timestamp: 1, data: { text: 'j'.repeat(300) } };
+    const eventB = { type: 3, timestamp: 1, data: { text: 'k'.repeat(300) } };
+    const ts = '2026-11-09T10:00:00.100000000Z';
+    const [a1, a2] = chunkRows(eventA, 2, 2 ** 52 - 1, ts);
+    const [b1, b2] = chunkRows(eventB, 2, 2 ** 52, ts);
+    for (const row of [a1, b1, b2, a2]) {
+      assembler.push(row);
+    }
+    assembler.end();
+
+    expect(events).toEqual([eventB, eventA]);
+    expect(errors).toEqual([]);
   });
 
   it('reports incomplete events at end of stream', () => {

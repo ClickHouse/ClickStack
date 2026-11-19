@@ -1,15 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Badge } from '@clickhouse/click-ui';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import { TMetricSource } from '@hyperdx/common-utils/dist/types';
-import {
-  Box,
-  Divider,
-  Group,
-  Loader,
-  ScrollArea,
-  Stack,
-  Text,
-} from '@mantine/core';
+import { Box, Group, Loader, ScrollArea, Stack, Text } from '@mantine/core';
 import { IconChartLine } from '@tabler/icons-react';
 
 import EmptyState from '@/components/EmptyState';
@@ -155,7 +147,7 @@ function MetricDetail({
         </Stack>
       </Box>
 
-      <Divider />
+      <Separator size="xs" />
 
       <Group gap="xs">
         <Text size="xs" fw={600}>

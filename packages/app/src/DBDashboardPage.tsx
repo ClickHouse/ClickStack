@@ -28,11 +28,9 @@ import {
 } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   convertToDashboardTemplate,
-  displayTypeSupportsBuilderAlerts,
-  displayTypeSupportsPromQLAlerts,
-  displayTypeSupportsRawSqlAlerts,
   Granularity,
   isTimeSeriesDisplayType,
+  savedChartConfigSupportsAlerts,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
   getAdhocFilterTargetsForTile,
@@ -44,6 +42,7 @@ import {
 } from '@hyperdx/common-utils/dist/filters';
 import {
   displayTypeRequiresSource,
+  getSavedConfigAllowedSourceKinds,
   isBuilderChartConfig,
   isBuilderSavedChartConfig,
   isPromqlChartConfig,
@@ -56,6 +55,11 @@ import {
   isImportableDashboard,
 } from '@hyperdx/common-utils/dist/iac';
 import { isMissingFiltersMacro } from '@hyperdx/common-utils/dist/macros';
+import {
+  getConfigReferenceVariables,
+  resolveConfigReferences,
+  restoreConfigReferences,
+} from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AlertState,
   BroadcastFilter,
@@ -161,6 +165,7 @@ import ResourceTerraformPopover from '@/components/Iac/ResourceTerraformPopover'
 import { InlineNameInput } from '@/components/InlineNameInput/InlineNameInput';
 import { PageHeader } from '@/components/PageHeader';
 import { PageLayout } from '@/components/PageLayout';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
 import { TimePicker } from '@/components/TimePicker';
 import {
@@ -207,8 +212,8 @@ import { Tags } from './components/Tags';
 import useDashboardFilters from './hooks/useDashboardFilters';
 import { useDashboardRefresh } from './hooks/useDashboardRefresh';
 import useTileSelection from './hooks/useTileSelection';
-import { usePageTitle } from './theme/ThemeProvider';
 import { parseAsJsonEncoded, parseAsStringEncoded } from './utils/queryParsers';
+import { usePageTitle } from './brand';
 import {
   buildDashboardReplaySearchUrl,
   buildEventsSearchUrl,
@@ -236,7 +241,12 @@ import {
   parseRelativeTimeQuery,
   useDefaultTimeRange,
   useNewTimeQuery,
+  useTimeRangeInputText,
 } from './timeQuery';
+import {
+  TimeZoneOverrideProvider,
+  useTimeZoneLinkParam,
+} from './timeZoneOverride';
 import { useConfirm } from './useConfirm';
 import { useDisplayTimeZone } from './useDisplayTimeZone';
 import { FormatTime } from './useFormatTime';
@@ -278,6 +288,7 @@ function HeatmapTile({
   );
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const addTimeZone = useTimeZoneLinkParam();
   const eventDeltasUrl = useMemo(() => {
     // Search page event deltas only supports trace sources and distribution mode
     if (
@@ -294,8 +305,8 @@ function HeatmapTile({
     });
     if (!url) return null;
     const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}mode=delta`;
-  }, [source, mode, queriedConfig, dateRange]);
+    return addTimeZone(`${url}${separator}mode=delta`);
+  }, [source, mode, queriedConfig, dateRange, addTimeZone]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -449,6 +460,7 @@ const Tile = ({
   filters,
   variables,
   unsatisfiedRequiredFilters,
+  referenceVariableNames,
   showAlertAnnotations,
   showReleaseAnnotations,
   isLive,
@@ -483,6 +495,12 @@ const Tile = ({
   variables?: ChartVariable[];
   /** The dashboard's required filters that have nothing selected. */
   unsatisfiedRequiredFilters?: DashboardFilter[];
+  /**
+   * The data source and connection variables the tile's stored config
+   * references. `chart` carries their selections, or the references while
+   * unselected.
+   */
+  referenceVariableNames?: string[];
   // When true, draw alert firing/recovery annotations on this tile's chart.
   showAlertAnnotations?: boolean;
   // When true, draw release markers on this tile's chart.
@@ -540,9 +558,8 @@ const Tile = ({
   // changing them does not propagate up to the dashboard.
   const [fullscreenDateRange, setFullscreenDateRange] =
     useState<[Date, Date]>(dateRange);
-  const [fullscreenInputValue, setFullscreenInputValue] = useState<string>(() =>
-    dateRangeToString(dateRange, timeZone),
-  );
+  const [fullscreenInputValue, setFullscreenInputValue] =
+    useTimeRangeInputText(fullscreenDateRange);
   const [fullscreenGranularity, setFullscreenGranularity] = useState<
     Granularity | 'auto' | undefined
   >(() => (granularity as Granularity | undefined) ?? 'auto');
@@ -556,7 +573,7 @@ const Tile = ({
       (granularity as Granularity | undefined) ?? 'auto',
     );
     setIsFullscreen(true);
-  }, [dateRange, granularity, timeZone]);
+  }, [dateRange, granularity, timeZone, setFullscreenInputValue]);
 
   const handleFullscreenSearch = useCallback(
     (value: string) => {
@@ -599,8 +616,23 @@ const Tile = ({
     id: chart.config.source,
   });
 
+  const usesReferenceVariable = !!referenceVariableNames?.length;
+
   const isSourceMissing =
     !!chart.config.source && isSourceFetched && source == null;
+  // A data source or connection variable can select a source on another
+  // connection than the one a raw SQL tile queries.
+  const isSourceOnOtherConnection =
+    usesReferenceVariable &&
+    source != null &&
+    isRawSqlSavedChartConfig(chart.config) &&
+    source.connection !== chart.config.connection;
+  // A variable's kinds can change after tiles use it, and saves don't check a
+  // source's kind against the tile's display type.
+  const isSourceKindUnsupported =
+    usesReferenceVariable &&
+    source != null &&
+    !getSavedConfigAllowedSourceKinds(chart.config).includes(source.kind);
   const isSourceUnset =
     !!chart.config &&
     isBuilderSavedChartConfig(chart.config) &&
@@ -650,9 +682,15 @@ const Tile = ({
           sourceId: chart.config.source,
           unsatisfiedRequiredFilters,
           referencedVariables: tileVariables,
+          referenceVariableNames,
         }),
       ),
-    [unsatisfiedRequiredFilters, chart.config, tileVariables],
+    [
+      unsatisfiedRequiredFilters,
+      chart.config,
+      tileVariables,
+      referenceVariableNames,
+    ],
   );
   const missingRequiredFilterNames = useMemo<string[]>(
     () => JSON.parse(serializedMissingRequiredFilterNames),
@@ -914,24 +952,23 @@ const Tile = ({
     );
   }, [sqlFilters, queriedConfig, source]);
 
+  const addTimeZone = useTimeZoneLinkParam();
   const replaySearchUrl = useMemo(() => {
-    return buildDashboardReplaySearchUrl({
+    const url = buildDashboardReplaySearchUrl({
       source,
       config: queriedConfig,
       dateRange,
     });
-  }, [dateRange, queriedConfig, source]);
+    return url && addTimeZone(url);
+  }, [dateRange, queriedConfig, source, addTimeZone]);
+
+  // An alert must query one fixed source and connection
+  const supportsAlerts =
+    !usesReferenceVariable && savedChartConfigSupportsAlerts(chart.config);
 
   const hoverToolbar = useMemo(() => {
     if (readOnly) return null;
 
-    const isRawSql = isRawSqlSavedChartConfig(chart.config);
-    const isPromQL = isPromqlSavedChartConfig(chart.config);
-    const displayTypeSupportsAlerts = isRawSql
-      ? displayTypeSupportsRawSqlAlerts(chart.config.displayType)
-      : isPromQL
-        ? displayTypeSupportsPromQLAlerts(chart.config.displayType)
-        : displayTypeSupportsBuilderAlerts(chart.config.displayType);
     const canMoveToGroup =
       onMoveToGroup && moveTargets && moveTargets.length > 0;
     return (
@@ -961,7 +998,7 @@ const Tile = ({
           </Tooltip>
         )}
 
-        {displayTypeSupportsAlerts &&
+        {supportsAlerts &&
           (alert ? (
             // Existing alert: bell with a colored status dot indicator.
             <Indicator
@@ -1066,7 +1103,7 @@ const Tile = ({
     alertTooltip,
     moveTargets,
     replaySearchUrl,
-    chart.config,
+    supportsAlerts,
     chart.id,
     chart.containerId,
     chart.tabId,
@@ -1084,13 +1121,6 @@ const Tile = ({
   const collapsedMenuItems = useMemo(() => {
     if (readOnly) return null;
 
-    const isRawSql = isRawSqlSavedChartConfig(chart.config);
-    const isPromQL = isPromqlSavedChartConfig(chart.config);
-    const showAlerts = isRawSql
-      ? displayTypeSupportsRawSqlAlerts(chart.config.displayType)
-      : isPromQL
-        ? displayTypeSupportsPromQLAlerts(chart.config.displayType)
-        : displayTypeSupportsBuilderAlerts(chart.config.displayType);
     const canMoveToGroup =
       onMoveToGroup && moveTargets && moveTargets.length > 0;
     return (
@@ -1106,7 +1136,7 @@ const Tile = ({
             Replay search
           </Menu.Item>
         )}
-        {showAlerts && (
+        {supportsAlerts && (
           <>
             <Menu.Item
               leftSection={
@@ -1157,7 +1187,7 @@ const Tile = ({
     alertTooltip,
     moveTargets,
     replaySearchUrl,
-    chart.config,
+    supportsAlerts,
     chart.containerId,
     chart.tabId,
     onDeleteClick,
@@ -1248,7 +1278,7 @@ const Tile = ({
               toolbarItems={toolbar}
               data-testid="tile-missing-required-filters"
             >
-              {`Missing required filters: ${missingRequiredFilterNames.join(
+              {`Missing required filters or variables: ${missingRequiredFilterNames.join(
                 ', ',
               )}. Select a value for each to load this tile.`}
             </TilePlaceholder>
@@ -1261,6 +1291,20 @@ const Tile = ({
             <TilePlaceholder title={title} toolbarItems={toolbar}>
               The data source for this tile is not set. Edit the tile to select
               a data source.
+            </TilePlaceholder>
+          ) : isSourceOnOtherConnection ? (
+            <TilePlaceholder title={title} toolbarItems={toolbar}>
+              The selected data source is on a different connection than this
+              tile&apos;s query. Select a source on the same connection.
+            </TilePlaceholder>
+          ) : isSourceKindUnsupported ? (
+            <TilePlaceholder
+              title={title}
+              toolbarItems={toolbar}
+              data-testid="tile-unsupported-source-kind"
+            >
+              The selected data source can&apos;t be used with this chart type.
+              Select a different source.
             </TilePlaceholder>
           ) : (
             <>
@@ -1311,13 +1355,15 @@ const Tile = ({
                     variant="default"
                     getRowSearchLink={
                       isBuilderChartConfig(effectiveQueriedConfig)
-                        ? row =>
-                            buildTableRowSearchUrl({
+                        ? row => {
+                            const url = buildTableRowSearchUrl({
                               row,
                               source,
                               config: effectiveQueriedConfig,
                               dateRange: effectiveDateRange,
-                            })
+                            });
+                            return url && addTimeZone(url);
+                          }
                         : undefined
                     }
                     onFilter={onFilter}
@@ -1478,6 +1524,7 @@ const Tile = ({
       );
     },
     [
+      addTimeZone,
       hoverToolbar,
       queriedConfig,
       title,
@@ -1491,6 +1538,8 @@ const Tile = ({
       filterWarning,
       isSourceMissing,
       isSourceUnset,
+      isSourceOnOtherConnection,
+      isSourceKindUnsupported,
       isBlockedByRequiredFilters,
       missingRequiredFilterNames,
       hasBeenVisible,
@@ -1890,28 +1939,6 @@ function DBDashboardPage({
   const { data: allDashboards } = useDashboards();
 
   const [highlightedTileId] = useQueryState('highlightedTileId');
-  const tableConnections = useMemo(() => {
-    if (!dashboard) return [];
-    const tc: TableConnection[] = [];
-
-    for (const { config } of dashboard.tiles) {
-      if (!isBuilderSavedChartConfig(config)) continue;
-      const source = sources?.find(v => v.id === config.source);
-      if (!source || source.disabled) continue;
-      // TODO: will need to update this when we allow for multiple metrics per chart
-      const firstSelect = config.select[0];
-      const metricType =
-        typeof firstSelect !== 'string' ? firstSelect?.metricType : undefined;
-      const tableName = getMetricTableName(source, metricType);
-      if (!tableName) continue;
-      tc.push({
-        ...tcFromSource(source),
-        tableName,
-      });
-    }
-
-    return tc;
-  }, [dashboard, sources]);
 
   const [granularity, setGranularity] = useQueryState(
     'granularity',
@@ -1956,8 +1983,61 @@ function DBDashboardPage({
     ignoredVariableNames,
     getFilterQueriesForSource,
     variables,
+    referenceVariableValues,
+    resolvedFilters,
+    unresolvedReferenceVariablesByFilterId,
+    incompatibleReferenceVariablesByFilterId,
     unsatisfiedRequiredFilters,
-  } = useDashboardFilters(filters);
+  } = useDashboardFilters(filters, { sources, connections });
+  // Tiles as they query, by ID: source and connection variable references
+  // replaced by the selections. Edits and saves read `dashboard.tiles`, so the
+  // stored references survive.
+  const resolvedTiles = useMemo(
+    () =>
+      new Map(
+        (dashboard?.tiles ?? []).map(tile => {
+          const config = resolveConfigReferences(
+            tile.config,
+            referenceVariableValues,
+          );
+          return [tile.id, config === tile.config ? tile : { ...tile, config }];
+        }),
+      ),
+    [dashboard?.tiles, referenceVariableValues],
+  );
+  // Kept apart from `resolvedTiles` so a tile's list only changes with its config
+  const referenceVariableNamesByTileId = useMemo(
+    () =>
+      new Map(
+        (dashboard?.tiles ?? []).map(tile => [
+          tile.id,
+          getConfigReferenceVariables(tile.config),
+        ]),
+      ),
+    [dashboard?.tiles],
+  );
+
+  const tableConnections = useMemo(() => {
+    const tc: TableConnection[] = [];
+
+    for (const { config } of resolvedTiles.values()) {
+      if (!isBuilderSavedChartConfig(config)) continue;
+      const source = sources?.find(v => v.id === config.source);
+      if (!source || source.disabled) continue;
+      // TODO: will need to update this when we allow for multiple metrics per chart
+      const firstSelect = config.select[0];
+      const metricType =
+        typeof firstSelect !== 'string' ? firstSelect?.metricType : undefined;
+      const tableName = getMetricTableName(source, metricType);
+      if (!tableName) continue;
+      tc.push({
+        ...tcFromSource(source),
+        tableName,
+      });
+    }
+
+    return tc;
+  }, [resolvedTiles, sources]);
 
   const dashboardReady =
     !!dashboard?.id &&
@@ -2396,10 +2476,10 @@ function DBDashboardPage({
     // The filter bar is hidden in kiosk mode, so a click would add conditions
     // the viewer can't see or remove.
     if (isKioskMode) return handlers;
-    for (const tile of dashboard?.tiles ?? []) {
+    for (const tile of resolvedTiles.values()) {
       const sourceId = 'source' in tile.config ? tile.config.source : undefined;
       const targetIds = getAdhocFilterTargetsForTile(
-        filters,
+        resolvedFilters,
         tile.config,
         sourceId,
       ).map(filter => filter.id);
@@ -2410,19 +2490,23 @@ function DBDashboardPage({
       }
     }
     return handlers;
-  }, [isKioskMode, dashboard?.tiles, filters, applyAdhocAction]);
+  }, [isKioskMode, resolvedTiles, resolvedFilters, applyAdhocAction]);
 
   const renderTileComponent = useCallback(
     (chart: Tile) => {
+      const resolvedChart = resolvedTiles.get(chart.id) ?? chart;
       // Resolve the tile's source ID so per-source-scoped filters can be
       // narrowed to only the tiles they target. Builder and RawSQL configs
       // both carry a `source` field; markdown / other configs don't.
       const tileSourceId =
-        'source' in chart.config ? chart.config.source : undefined;
+        'source' in resolvedChart.config
+          ? resolvedChart.config.source
+          : undefined;
       return (
         <Tile
           key={chart.id}
-          chart={chart}
+          chart={resolvedChart}
+          referenceVariableNames={referenceVariableNamesByTileId.get(chart.id)}
           dateRange={searchedTimeRange}
           onEditClick={() => setEditedTile(chart)}
           readOnly={isKioskMode}
@@ -2449,7 +2533,14 @@ function DBDashboardPage({
                         c => c.id === chart.id,
                       );
                       if (chartIndex === -1) return;
-                      draft.tiles[chartIndex] = newChart;
+                      // Keep the source as stored, not as resolved for display
+                      draft.tiles[chartIndex] = {
+                        ...newChart,
+                        config: restoreConfigReferences(
+                          newChart.config,
+                          chart.config,
+                        ),
+                      };
                     }),
                   );
                 }
@@ -2522,6 +2613,8 @@ function DBDashboardPage({
       );
     },
     [
+      resolvedTiles,
+      referenceVariableNamesByTileId,
       dashboard,
       searchedTimeRange,
       isRefreshEnabled,
@@ -3214,7 +3307,10 @@ function DBDashboardPage({
   // `<PageLayout>` return shallow and prevents the tile-grid tree below
   // from being wrapped in an extra indentation level.
   const dashboardBody = (
-    <>
+    <ReferenceVariablesProvider
+      filters={filters}
+      values={referenceVariableValues}
+    >
       <Head>
         <title>{title}</title>
       </Head>
@@ -3314,13 +3410,22 @@ function DBDashboardPage({
         )}
       {!isKioskMode && (
         <DashboardFilters
-          filters={filters}
+          filters={resolvedFilters}
           selectionByFilterId={selectionByFilterId}
           onSetFilterValue={setFilterValue}
           adhocConditionsByFilterId={adhocConditionsByFilterId}
           onSetAdhocConditions={setAdhocConditions}
           dateRange={searchedTimeRange}
           variables={variables}
+          unsatisfiedRequiredFilters={unsatisfiedRequiredFilters}
+          referenceVariableValues={referenceVariableValues}
+          unresolvedReferenceVariablesByFilterId={
+            unresolvedReferenceVariablesByFilterId
+          }
+          incompatibleReferenceVariablesByFilterId={
+            incompatibleReferenceVariablesByFilterId
+          }
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
       {/* Selection indicator */}
@@ -3499,9 +3604,11 @@ function DBDashboardPage({
           showVariableOptions
           showRequiredFilterOptions
           variables={variables}
+          dateRange={searchedTimeRange}
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
-    </>
+    </ReferenceVariablesProvider>
   );
 
   return (
@@ -3568,9 +3675,19 @@ function DBDashboardPageGuarded({
   );
 }
 
-const DBDashboardPageDynamic = dynamic(async () => DBDashboardPageGuarded, {
-  ssr: false,
-});
+// Outside DBDashboardPageGuarded, which formats the saved range in the zone.
+function DBDashboardPageWithTimeZone(props: { presetConfig?: Dashboard }) {
+  return (
+    <TimeZoneOverrideProvider>
+      <DBDashboardPageGuarded {...props} />
+    </TimeZoneOverrideProvider>
+  );
+}
+
+const DBDashboardPageDynamic = dynamic(
+  async () => DBDashboardPageWithTimeZone,
+  { ssr: false },
+);
 
 // @ts-expect-error for getLayout
 DBDashboardPageDynamic.getLayout = withAppNavForSurface('dashboard');

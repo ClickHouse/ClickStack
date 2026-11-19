@@ -30,13 +30,14 @@ import ConnectionsSection from './components/TeamSettings/ConnectionsSection';
 import IacMigrationSection from './components/TeamSettings/IacMigrationSection';
 import IntegrationsSection from './components/TeamSettings/IntegrationsSection';
 import McpServerSection from './components/TeamSettings/McpServerSection';
+import OrgApiKeysSection from './components/TeamSettings/OrgApiKeysSection';
 import SecurityPoliciesSection from './components/TeamSettings/SecurityPoliciesSection';
 import SourcesSection from './components/TeamSettings/SourcesSection';
 import TeamMembersSection from './components/TeamSettings/TeamMembersSection';
 import TeamQueryConfigSection from './components/TeamSettings/TeamQueryConfigSection';
-import { usePageTitle } from './theme/ThemeProvider';
 import api from './api';
-import { IS_IAC_EXPORT_ENABLED } from './config';
+import { usePageTitle } from './brand';
+import { IS_IAC_EXPORT_ENABLED, IS_LOCAL_MODE } from './config';
 import { APP_CONTENT_SCROLL_CONTAINER_ID, withAppNav } from './layout';
 
 type TeamTab = {
@@ -61,6 +62,22 @@ function TeamTabContent({
   sections: TeamTab['sections'];
   active: boolean;
 }) {
+  // Deep links like `?tab=api-agents#team-api-agents-mcp-server` (spotlight,
+  // onboarding) land before the team has loaded, so Next's own hash scroll
+  // finds no element.
+  const { asPath } = useRouter();
+  const hash = asPath.split('#')[1];
+  const scrollTargetId =
+    active && sections.some(section => section.id === hash) ? hash : null;
+  useEffect(() => {
+    if (!scrollTargetId) return;
+    requestAnimationFrame(() => {
+      document
+        .getElementById(scrollTargetId)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [scrollTargetId]);
+
   return (
     <Stack gap="lg" pt="lg">
       {sections.map(section => (
@@ -166,6 +183,15 @@ export default function TeamPage() {
           id: 'team-api-agents-api-keys',
           content: () => <ApiKeysSection />,
         },
+        // Org keys are stored by the API, which local mode doesn't run.
+        ...(IS_LOCAL_MODE
+          ? []
+          : [
+              {
+                id: 'team-api-agents-org-api-keys',
+                content: () => <OrgApiKeysSection />,
+              },
+            ]),
         {
           id: 'team-api-agents-mcp-server',
           content: () => <McpServerSection />,

@@ -55,8 +55,10 @@ jobs:
       # Whole-repo escape-hatch ratchet — runs unconditionally (not via `nx
       # affected`, and not via `make ci-lint`, which this job no longer calls),
       # so the gate can't be silently skipped for a PR that touches few projects.
-      - name: Escape-hatch ratchet tests
-        run: node --test scripts/ci/__tests__/ratchet.test.mjs
+      - name: Escape-hatch ratchet and ESLint wrapper tests
+        run:
+          node --test scripts/ci/__tests__/ratchet.test.mjs
+          scripts/ci/__tests__/eslint-warnings.test.mjs
       # Also unconditional, and against the PR's own tree. claude-code-review.yml
       # runs this file too, but from a base-branch checkout, so a PR that breaks
       # what it pins (the AGENTS.md heading every review footer links to) passes
@@ -194,10 +196,9 @@ jobs:
         id: changed-files
         uses: tj-actions/changed-files@v47.0.6
         with:
-          # The ClickHouse config is mounted into both ch-server (via
-          # docker-compose.ci.yml) and ch-server-compat, which pins an older
-          # ClickHouse -- a config feature the old server rejects takes the
-          # whole suite down, so changes to it run these tests.
+          # The ClickHouse config is mounted into ch-server (via
+          # docker-compose.ci.yml) -- a config change the server rejects takes
+          # the whole suite down, so changes to it run these tests.
           files: |
             docker/otel-collector/**
             smoke-tests/otel-collector/**
