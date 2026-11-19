@@ -7,7 +7,11 @@ import {
   renderOnClickExternal,
   renderOnClickSearch,
 } from '@hyperdx/common-utils/dist/core/linkUrlBuilder';
-import { isSearchableSource, OnClick } from '@hyperdx/common-utils/dist/types';
+import {
+  DashboardFilter,
+  isSearchableSource,
+  OnClick,
+} from '@hyperdx/common-utils/dist/types';
 import { notifications } from '@mantine/notifications';
 
 import { useDashboards } from '@/dashboard';
@@ -99,19 +103,26 @@ export function useOnClickLinkBuilder({
     return [idsByName, ids, namesById];
   }, [sources]);
 
-  const [dashboardIdsByName, dashboardIds, dashboardNamesById] = useMemo(() => {
+  const [
+    dashboardIdsByName,
+    dashboardIds,
+    dashboardNamesById,
+    dashboardFiltersById,
+  ] = useMemo(() => {
     const idsByName = new Map<string, string[]>();
     const ids = new Set<string>();
     const namesById = new Map<string, string>();
+    const filtersById = new Map<string, DashboardFilter[]>();
     for (const d of dashboards ?? []) {
       ids.add(d.id);
       namesById.set(d.id, d.name);
+      filtersById.set(d.id, d.filters ?? []);
 
       const existing = idsByName.get(d.name);
       if (existing) existing.push(d.id);
       else idsByName.set(d.name, [d.id]);
     }
-    return [idsByName, ids, namesById];
+    return [idsByName, ids, namesById, filtersById];
   }, [dashboards]);
 
   return useMemo(() => {
@@ -147,6 +158,7 @@ export function useOnClickLinkBuilder({
                 row,
                 dashboardIds,
                 dashboardIdsByName,
+                dashboardFiltersById,
                 ...linkContext,
               })
             : renderOnClickExternal({ onClick, row, ...linkContext });
@@ -193,5 +205,6 @@ export function useOnClickLinkBuilder({
     dashboardIds,
     dashboardIdsByName,
     dashboardNamesById,
+    dashboardFiltersById,
   ]);
 }

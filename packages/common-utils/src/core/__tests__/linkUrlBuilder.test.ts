@@ -1340,6 +1340,57 @@ describe('link template globals', () => {
     ]);
   });
 
+  it("replaces a carried-over variable selection for the row's expression", () => {
+    const result = renderOnClickDashboard({
+      onClick: {
+        type: 'dashboard',
+        target: { mode: 'id', id: 'dash_1' },
+        whereLanguage: 'sql',
+        includeCurrentFilters: true,
+        filters: [
+          {
+            kind: 'expressionTemplate',
+            expression: 'ServiceName',
+            template: '{{ServiceName}}',
+          },
+        ],
+      },
+      row: { ServiceName: 'new' },
+      dashboardIds,
+      dashboardIdsByName,
+      dashboardFiltersById: new Map([
+        [
+          'dash_1',
+          [
+            {
+              id: 'f1',
+              type: 'QUERY_EXPRESSION',
+              name: 'Service',
+              expression: 'ServiceName',
+              source: 'src_1',
+              isVariableEnabled: true,
+              variableName: 'service',
+            },
+          ],
+        ],
+      ]),
+      dateRange,
+      currentFilters: [
+        { type: 'variable', name: 'service', values: ['old'] },
+        { type: 'variable', name: 'env', values: ['prod'] },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const params = new URLSearchParams(result.url.split('?')[1]);
+    expect(JSON.parse(decodeURIComponent(params.get('filters') ?? ''))).toEqual(
+      [
+        { type: 'sql', condition: "ServiceName IN ('new')" },
+        { type: 'variable', name: 'env', values: ['prod'] },
+      ],
+    );
+  });
+
   it('leaves current filters behind unless asked to include them', () => {
     expect(
       dashboardFilters({

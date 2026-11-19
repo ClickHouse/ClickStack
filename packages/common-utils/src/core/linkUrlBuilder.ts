@@ -1,10 +1,12 @@
 import {
+  filterSelectionKey,
   parseDashboardFilterValues,
   serializeDashboardFilterValues,
   VariableEntryValue,
 } from '@/dashboardFilterValues';
-import { FilterState, filtersToQuery } from '@/filters';
+import { FilterState, filtersToQuery, getFilterExpression } from '@/filters';
 import type {
+  DashboardFilter,
   DashboardFilterValue,
   Filter,
   OnClick,
@@ -138,12 +140,15 @@ function renderFilterTemplates(
  * Render a dashboard link's filter templates into `filters=` entries, on top
  * of `baseFilters` (the current dashboard's selections, when carried over).
  * A key the templates set replaces its base selection; templates sharing a
- * key merge into one selection.
+ * key merge into one selection. `targetFilters` (the destination's filter
+ * definitions) lets an expression template also replace a base selection the
+ * destination stores under a variable name, which it would otherwise prefer.
  */
 function renderDashboardFilterTemplates(
   templates: OnClickDashboardFilterTemplate[] | undefined,
   input: TemplateInput,
   baseFilters: DashboardFilterValue[] | undefined,
+  targetFilters: DashboardFilter[] | undefined,
 ):
   | { ok: true; filters: DashboardFilterValue[] }
   | { ok: false; error: string } {
@@ -169,6 +174,15 @@ function renderDashboardFilterTemplates(
 
   for (const [expression, included] of rendered.expressions) {
     byExpression[expression] = { included, excluded: new Set() };
+    for (const filter of targetFilters ?? []) {
+      const key = filterSelectionKey(filter);
+      if (
+        key.kind === 'variable' &&
+        getFilterExpression(filter) === expression
+      ) {
+        byVariable.delete(key.name);
+      }
+    }
   }
   for (const [name, values] of rendered.variables) {
     byVariable.set(name, { type: 'variable', values: Array.from(values) });
@@ -281,12 +295,15 @@ export function renderOnClickDashboard({
   row,
   dashboardIds,
   dashboardIdsByName,
+  dashboardFiltersById,
   ...linkContext
 }: {
   onClick: OnClickDashboard;
   row: Record<string, unknown>;
   dashboardIds: Set<string>;
   dashboardIdsByName: Map<string, string[]>;
+  /** Each dashboard's filter definitions, to key carried-over filters the way the destination reads them. */
+  dashboardFiltersById?: Map<string, DashboardFilter[]>;
 } & LinkContext): LinkBuildResult {
   const { dateRange, currentFilters } = linkContext;
   const input = { row, globals: getLinkTemplateGlobals(linkContext) };
@@ -354,6 +371,7 @@ export function renderOnClickDashboard({
     onClick.filters,
     input,
     onClick.includeCurrentFilters ? currentFilters : undefined,
+    dashboardFiltersById?.get(dashboardId),
   );
   if (!filterRenderResult.ok) return filterRenderResult;
 
