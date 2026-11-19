@@ -6,6 +6,7 @@ import type { SetStateAction } from 'react';
 import TimestampNano from 'timestamp-nano';
 import {
   TableConnection,
+  tcFromSource,
   unquoteIdentifier,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
@@ -13,6 +14,9 @@ import {
   CATEGORICAL_PALETTE_TOKENS,
   ChartPaletteToken,
   ColorCondition,
+  isLogSource,
+  isMetricSource,
+  isTraceSource,
   NumericUnit,
   SourceKind,
   TMetricSource,
@@ -1403,6 +1407,41 @@ export function getAllMetricTables(source: TSource): TableConnection[] {
           connectionId: source.connection,
         }) satisfies TableConnection,
     );
+}
+
+/**
+ * Tables of the enabled sources on a connection, including metric tables and
+ * materialized views, for SQL editor autocomplete.
+ */
+export function getTableConnectionsForConnection(
+  sources: TSource[] | undefined,
+  connectionId: string | undefined,
+): TableConnection[] {
+  if (!sources || !connectionId) return [];
+  return sources
+    .filter(s => s.connection === connectionId && !s.disabled)
+    .flatMap(source => {
+      const tables: TableConnection[] = getAllMetricTables(source);
+
+      if (!isMetricSource(source)) {
+        tables.push(tcFromSource(source));
+      }
+
+      if (
+        (isLogSource(source) || isTraceSource(source)) &&
+        source.materializedViews
+      ) {
+        tables.push(
+          ...source.materializedViews.map(mv => ({
+            databaseName: mv.databaseName,
+            tableName: mv.tableName,
+            connectionId: source.connection,
+          })),
+        );
+      }
+
+      return tables;
+    });
 }
 
 /**
