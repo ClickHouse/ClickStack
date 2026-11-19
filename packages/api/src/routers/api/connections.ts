@@ -1,5 +1,6 @@
 import { ConnectionSchema } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
+import z from 'zod';
 import { validateRequest } from 'zod-express-middleware';
 
 import {
@@ -9,7 +10,9 @@ import {
   getConnectionsByTeam,
   updateConnection,
 } from '@/controllers/connection';
+import { connectionServesPrometheusHttpApi } from '@/controllers/promql';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
+import { objectIdSchema } from '@/utils/zod';
 
 const router = express.Router();
 
@@ -112,6 +115,35 @@ router.put(
       }
 
       res.status(200).send();
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+// Whether the connection answers PromQL over ClickHouse's Prometheus HTTP API.
+// Onboarding uses it to pin a new PromQL source to that API.
+router.get(
+  '/:id/prometheus-http-api',
+  validateRequest({ params: z.object({ id: objectIdSchema }) }),
+  async (req, res, next) => {
+    try {
+      const { teamId } = getNonNullUserWithTeam(req);
+
+      const connection = await getConnectionById(
+        teamId.toString(),
+        req.params.id,
+        true,
+      );
+
+      if (!connection) {
+        res.status(404).send();
+        return;
+      }
+
+      res.json({
+        supported: await connectionServesPrometheusHttpApi(connection),
+      });
     } catch (e) {
       next(e);
     }

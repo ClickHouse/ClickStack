@@ -127,6 +127,8 @@ const makeLogSource = (opts: { withMVs: boolean }) => ({
 type SourceQueryResult = ReturnType<typeof sourceModule.useSource>;
 type AllFieldsResult = ReturnType<typeof useMetadataModule.useAllFields>;
 type KeyValuesResult = ReturnType<typeof useMetadataModule.useGetKeyValues>;
+type ColumnsResult = ReturnType<typeof useMetadataModule.useColumns>;
+type JsonColumnsResult = ReturnType<typeof useMetadataModule.useJsonColumns>;
 type MetadataWithSettings = ReturnType<
   typeof useMetadataModule.useMetadataWithSettings
 >;
@@ -775,6 +777,63 @@ describe('useFetchFacets', () => {
       expect(result.current.extraFacetKeys.has('ServiceName')).toBe(false);
 
       consoleErrorSpy.mockRestore();
+    });
+
+    it('scopes the load-more query with a JSON-column filter in JSON form, not Map brackets', async () => {
+      setupDefaultMocks({ withMVs: false });
+      useColumns.mockReturnValue({
+        data: [
+          { name: 'Timestamp', type: 'DateTime' },
+          { name: 'ServiceName', type: 'String' },
+          { name: 'message', type: 'JSON' },
+        ],
+        isLoading: false,
+      } as unknown as ColumnsResult);
+      useJsonColumns.mockReturnValue({
+        data: ['message'],
+      } as unknown as JsonColumnsResult);
+      // filtersToQuery reads this as a Map; the default mock is an array.
+      useDateTimeColumns.mockReturnValue(new Map());
+      const { escapeFilterStateKeys } =
+        jest.requireActual<typeof searchFiltersModule>('@/searchFilters');
+      jest
+        .mocked(searchFiltersModule.escapeFilterStateKeys)
+        .mockImplementationOnce(escapeFilterStateKeys);
+      const getKeyValuesWithMVs = jest
+        .fn()
+        .mockResolvedValue([{ key: 'ServiceName', value: ['api'] }]);
+      mockMetadata({ getKeyValuesWithMVs });
+
+      const filterState: FilterState = {
+        'message.email': {
+          included: new Set(['user@example.test']),
+          excluded: new Set(),
+        },
+      };
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useFetchFacets({
+            chartConfig: CHART_CONFIG,
+            sourceId: 'source1',
+            dateRange: DATE_RANGE,
+            mode: 'exact',
+            filterState,
+          }),
+        { wrapper },
+      );
+
+      await act(async () => {
+        await result.current.loadMoreFacetsForKey('ServiceName');
+      });
+
+      expect(getKeyValuesWithMVs).toHaveBeenCalledTimes(1);
+      expect(getKeyValuesWithMVs.mock.calls[0][0].chartConfig.filters).toEqual([
+        {
+          type: 'sql',
+          condition: "toString(`message`.`email`) IN ('user@example.test')",
+        },
+      ]);
     });
   });
 

@@ -930,6 +930,86 @@ describe('sources router', () => {
     });
   });
 
+  describe('promqlBackend on a PromQL source', () => {
+    it('POST / - creates a PromQL source with promqlBackend and it round-trips', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const response = await agent
+        .post('/sources')
+        .send({ ...MOCK_PROMQL_SOURCE, promqlBackend: 'clickhouse-http' })
+        .expect(200);
+
+      expect(response.body.promqlBackend).toBe('clickhouse-http');
+
+      const sources = await Source.find({}).lean();
+      expect(sources).toHaveLength(1);
+      expect(sources[0]).toHaveProperty('promqlBackend', 'clickhouse-http');
+    });
+
+    it('POST / - leaves promqlBackend unset when the request omits it', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const response = await agent
+        .post('/sources')
+        .send(MOCK_PROMQL_SOURCE)
+        .expect(200);
+
+      expect(response.body).not.toHaveProperty('promqlBackend');
+      expect(await Source.find({}).lean()).toEqual([
+        expect.not.objectContaining({ promqlBackend: expect.anything() }),
+      ]);
+    });
+
+    it('POST / - rejects a promqlBackend that is not one of the known backends', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      await agent
+        .post('/sources')
+        .send({ ...MOCK_PROMQL_SOURCE, promqlBackend: 'http' })
+        .expect(400);
+
+      expect(await Source.countDocuments()).toBe(0);
+    });
+
+    it('PUT /:id - updates promqlBackend', async () => {
+      const { agent, team } = await getLoggedInAgent(server);
+      const promqlSource = await Source.create({
+        ...MOCK_PROMQL_SOURCE,
+        promqlBackend: 'clickhouse-http',
+        team: team._id,
+      });
+
+      await agent
+        .put(`/sources/${promqlSource._id}`)
+        .send({
+          id: promqlSource._id.toString(),
+          ...MOCK_PROMQL_SOURCE,
+          promqlBackend: 'table-function',
+        })
+        .expect(200);
+
+      const updatedSource = await Source.findById(promqlSource._id).lean();
+      expect(updatedSource).toHaveProperty('promqlBackend', 'table-function');
+    });
+
+    it('PUT /:id - removes promqlBackend when omitted from the update payload', async () => {
+      const { agent, team } = await getLoggedInAgent(server);
+      const promqlSource = await Source.create({
+        ...MOCK_PROMQL_SOURCE,
+        promqlBackend: 'clickhouse-http',
+        team: team._id,
+      });
+
+      await agent
+        .put(`/sources/${promqlSource._id}`)
+        .send({ id: promqlSource._id.toString(), ...MOCK_PROMQL_SOURCE })
+        .expect(200);
+
+      const updatedSource = await Source.findById(promqlSource._id).lean();
+      expect(updatedSource).not.toHaveProperty('promqlBackend');
+    });
+  });
+
   it('DELETE /:id - deletes a source', async () => {
     const { agent, team } = await getLoggedInAgent(server);
 

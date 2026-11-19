@@ -1390,6 +1390,7 @@ describe('utils', () => {
           {
             id: 'filter-scoped',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Scoped',
             sourceType: 'sql',
             sources: ['source1', 'source2'],
@@ -1400,6 +1401,7 @@ describe('utils', () => {
           {
             id: 'filter-unresolved',
             type: 'ADHOC',
+            isBroadcastEnabled: true,
             name: 'Unresolved',
             sourceType: 'sql',
             sources: ['source1'],
@@ -1416,6 +1418,7 @@ describe('utils', () => {
         {
           id: 'filter-scoped',
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           name: 'Scoped',
           sourceType: 'sql',
           sources: ['Logs', 'Traces'],
@@ -1426,6 +1429,7 @@ describe('utils', () => {
         {
           id: 'filter-unresolved',
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           name: 'Unresolved',
           sourceType: 'sql',
           sources: ['Logs'],
@@ -1604,6 +1608,98 @@ describe('utils', () => {
         convertToDashboardDocument({ ...template, filters: template.filters })
           .filters?.[0],
       ).toEqual(staticFilter);
+    });
+
+    it('should export a SQL query filter with its connection id remapped to a name', () => {
+      const sqlFilter = {
+        id: 'filter-sql',
+        type: 'SQL_QUERY' as const,
+        name: 'Environment',
+        connection: 'conn1',
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+        isBroadcastEnabled: false as const,
+        isVariableEnabled: true as const,
+      };
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'SQL Filter Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [sqlFilter],
+      };
+      const connections: Connection[] = [
+        {
+          id: 'conn1',
+          name: 'Production DB',
+          host: 'http://localhost:8123',
+          username: 'default',
+        },
+      ];
+
+      const template = convertToDashboardTemplate(dashboard, [], connections);
+
+      expect(template.filters).toEqual([
+        { ...sqlFilter, connection: 'Production DB' },
+      ]);
+    });
+
+    it('should remap a SQL query filter source id to a name, dropping one that no longer exists', () => {
+      const sqlFilter = {
+        id: 'filter-sql',
+        type: 'SQL_QUERY' as const,
+        name: 'Service',
+        connection: 'conn1',
+        source: 'source1',
+        sqlTemplate: 'SELECT DISTINCT ServiceName FROM $__sourceTable',
+        isBroadcastEnabled: false as const,
+        isVariableEnabled: true as const,
+      };
+      const dashboard: z.infer<typeof DashboardSchema> = {
+        id: 'dashboard1',
+        name: 'SQL Filter Dashboard',
+        tags: [],
+        tiles: [],
+        filters: [sqlFilter, { ...sqlFilter, id: 'gone', source: 'deleted' }],
+      };
+      const sources: TSource[] = [
+        {
+          id: 'source1',
+          name: 'Logs',
+          connection: 'conn1',
+          kind: SourceKind.Log,
+          from: { databaseName: 'db1', tableName: 'logs_table' },
+          timestampValueExpression: 'Timestamp',
+          defaultTableSelectExpression: '',
+        },
+      ];
+      const connections: Connection[] = [
+        {
+          id: 'conn1',
+          name: 'Production DB',
+          host: 'http://localhost:8123',
+          username: 'default',
+        },
+      ];
+
+      const template = convertToDashboardTemplate(
+        dashboard,
+        sources,
+        connections,
+      );
+
+      expect(template.filters?.[0]).toEqual({
+        ...sqlFilter,
+        connection: 'Production DB',
+        source: 'Logs',
+      });
+      // An empty name would fail the template schema's min(1) on import.
+      expect(template.filters?.[1]).toEqual({
+        ...sqlFilter,
+        id: 'gone',
+        connection: 'Production DB',
+        source: undefined,
+      });
+      expect(() => DashboardTemplateSchema.parse(template)).not.toThrow();
     });
 
     it('should convert a dashboard without filters to a dashboard template', () => {

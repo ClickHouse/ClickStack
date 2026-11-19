@@ -31,6 +31,8 @@ import {
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
 import {
   BuilderChartConfigWithDateRange,
+  isLogSource,
+  isTraceSource,
   SelectList,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
@@ -389,6 +391,7 @@ export const RawLogTable = memo(
     selectionResetKey,
     onSelectedRowsChange,
     getRowWhere,
+    rowActions,
     variant = 'default',
     onRemoveColumn,
   }: {
@@ -432,6 +435,8 @@ export const RawLogTable = memo(
     sortOrder?: SortingState;
     onSortingChange?: (v: SortingState | null) => void;
     getRowWhere?: (row: Record<string, any>) => RowWhereResult;
+    /** Hover buttons for a row, shown instead of the row copy buttons. */
+    rowActions?: (row: Record<string, unknown>) => React.ReactNode;
     variant?: DBRowTableVariant;
     onRemoveColumn?: (column: string) => void;
   }) => {
@@ -1336,7 +1341,12 @@ export const RawLogTable = memo(
                               );
                             })}
                           {/* Row-level copy buttons */}
-                          {getRowWhere && (
+                          {rowActions && (
+                            <div className={styles.rowButtons}>
+                              {rowActions(row.original)}
+                            </div>
+                          )}
+                          {getRowWhere && !rowActions && (
                             <DBRowTableRowButtons
                               row={row.original}
                               getRowWhere={getRowWhere}
@@ -1576,15 +1586,27 @@ function getSelectLength(select: SelectList): number {
   }
 }
 
+function getRowKeyExpression(source: TSource | undefined): string | undefined {
+  return source && (isLogSource(source) || isTraceSource(source))
+    ? source.rowKeyExpression?.trim() || undefined
+    : undefined;
+}
+
 export function useConfigWithAdditionalSelect(
   config: BuilderChartConfigWithDateRange,
   sourceId?: string,
+  rowKeyExpression?: string,
 ) {
-  const { data: tableMetadata } = useTableMetadata({
-    databaseName: config.from.databaseName,
-    tableName: config.from.tableName,
-    connectionId: config.connection,
-  });
+  const hasRowKeyOverride = !!sourceId && !!rowKeyExpression;
+
+  const { data: tableMetadata } = useTableMetadata(
+    {
+      databaseName: config.from.databaseName,
+      tableName: config.from.tableName,
+      connectionId: config.connection,
+    },
+    hasRowKeyOverride ? { enabled: false } : undefined,
+  );
 
   // Only check for row-ID columns for row-level queries (sourceId present).
   // Skip for aggregate queries (e.g. patterns) where extra keys are irrelevant.
@@ -1594,12 +1616,13 @@ export function useConfigWithAdditionalSelect(
       tableName: config.from.tableName,
       connectionId: config.connection,
     },
-    { enabled: !!sourceId },
+    { enabled: !!sourceId && !hasRowKeyOverride },
   );
 
   const engineFull = tableMetadata?.engine_full ?? '';
   const needsMergeTreeSettings =
     !!sourceId &&
+    !hasRowKeyOverride &&
     !!tableMetadata?.engine?.includes('MergeTree') &&
     omitsBlockColumnSetting(engineFull);
 
@@ -1612,6 +1635,19 @@ export function useConfigWithAdditionalSelect(
   const partitionKey = tableMetadata?.partition_key;
 
   return useMemo(() => {
+    if (sourceId && rowKeyExpression) {
+      const { select, additionalKeysLength } = appendSelectWithAdditionalKeys(
+        config.select,
+        rowKeyExpression,
+        '',
+      );
+      const rowKeyColumns = new Set([
+        ...splitAndTrimWithBracket(rowKeyExpression),
+        ...extractColumnReferencesFromKey(rowKeyExpression),
+      ]);
+      return { ...config, select, additionalKeysLength, rowKeyColumns };
+    }
+
     // Wait for settings to avoid querying twice.
     if (
       primaryKey == null ||
@@ -1674,6 +1710,7 @@ export function useConfigWithAdditionalSelect(
     columns,
     mergeTreeSettings,
     sourceId,
+    rowKeyExpression,
   ]);
 }
 
@@ -1821,7 +1858,12 @@ function DBSqlRowTableComponent({
     return base;
   }, [me, config, orderByArray]);
 
-  const mergedConfig = useConfigWithAdditionalSelect(mergedConfigObj, sourceId);
+  const { data: source } = useSource({ id: sourceId });
+  const mergedConfig = useConfigWithAdditionalSelect(
+    mergedConfigObj,
+    sourceId,
+    getRowKeyExpression(source),
+  );
 
   const { data, fetchNextPage, hasNextPage, isFetching, isError, error } =
     useOffsetPaginatedQuery(mergedConfig ?? config, {
@@ -1943,7 +1985,6 @@ function DBSqlRowTableComponent({
     }
   }, [data?.meta, onResolvedColumnsChange]);
 
-  const { data: source } = useSource({ id: sourceId });
   const denoised = useDenoisedRows({
     config,
     source,

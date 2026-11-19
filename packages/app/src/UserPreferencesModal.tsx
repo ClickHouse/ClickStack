@@ -1,9 +1,20 @@
 import * as React from 'react';
+import { atom, useAtom } from 'jotai';
 import { Badge } from '@clickhouse/click-ui';
-import { Divider, Group, Modal, Select, Stack, Text } from '@mantine/core';
+import {
+  Divider,
+  Group,
+  Modal,
+  Select,
+  Stack,
+  Switch,
+  Text,
+} from '@mantine/core';
 
+import { CrtUnlockReveal } from './components/CrtUnlockReveal';
 import { TimeZoneSelect, TimeZoneShortcuts } from './components/TimeZoneSelect';
 import { isContentFontSize, OPTIONS_CONTENT_FONT_SIZE } from './config/fonts';
+import { useKonamiCode } from './hooks/useKonamiCode';
 import {
   DEFAULT_ROW_CLICK_ACTION,
   RowClickAction,
@@ -22,6 +33,16 @@ const OPTIONS_ROW_CLICK_ACTION: { label: string; value: RowClickAction }[] = [
   { label: 'Open side panel', value: 'sidePanel' },
   { label: 'Expand inline', value: 'expand' },
 ];
+
+const userPreferencesModalOpenedAtom = atom(false);
+
+/** Shared so the spotlight can open the modal that AppNav renders. */
+export const useUserPreferencesModal = () => {
+  const [opened, setOpened] = useAtom(userPreferencesModalOpenedAtom);
+  const open = React.useCallback(() => setOpened(true), [setOpened]);
+  const close = React.useCallback(() => setOpened(false), [setOpened]);
+  return { opened, open, close };
+};
 
 const SettingContainer = ({
   label,
@@ -56,6 +77,36 @@ export const UserPreferencesModal = ({
 }) => {
   const { userPreferences, setUserPreference } = useUserPreferences();
   const { contentFontSize } = useContentFontSize();
+  const [crtUnlocked, setCrtUnlocked] = React.useState(false);
+  // AppNav keeps this component mounted while closed, so gate on `opened`.
+  useKonamiCode(
+    React.useCallback(() => opened && setCrtUnlocked(true), [opened]),
+  );
+  // Stays true once CRT mode has been on while the modal is open, so turning
+  // the switch off does not remove it mid-click.
+  const [crtVisible, setCrtVisible] = React.useState(false);
+  React.useEffect(() => {
+    if (!opened) {
+      setCrtUnlocked(false);
+      setCrtVisible(false);
+    } else if (userPreferences.crtMode) {
+      setCrtVisible(true);
+    }
+  }, [opened, userPreferences.crtMode]);
+
+  const crtSetting = (
+    <SettingContainer
+      label="CRT mode"
+      description="Make the screen look like an old CRT monitor"
+    >
+      <Switch
+        data-testid="crt-mode-switch"
+        aria-label="CRT mode"
+        checked={!!userPreferences.crtMode}
+        onChange={e => setUserPreference({ crtMode: e.currentTarget.checked })}
+      />
+    </SettingContainer>
+  );
 
   return (
     <Modal
@@ -169,6 +220,12 @@ export const UserPreferencesModal = ({
             allowDeselect={false}
           />
         </SettingContainer>
+
+        {crtUnlocked ? (
+          <CrtUnlockReveal>{crtSetting}</CrtUnlockReveal>
+        ) : (
+          crtVisible && crtSetting
+        )}
       </Stack>
     </Modal>
   );

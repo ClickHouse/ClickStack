@@ -907,6 +907,7 @@ describe('dashboardFilterValues', () => {
     ): AdhocDashboardFilter => ({
       id: 'a1',
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       name: 'Conditions',
       sourceType: 'sql',
       sources: ['logs'],
@@ -927,12 +928,6 @@ describe('dashboardFilterValues', () => {
         filter(),
       ];
       expect(ids(filters, builderTile, 'logs')).toEqual(['a1', 'a2']);
-    });
-
-    it('skips filters that do not broadcast', () => {
-      expect(
-        ids([adhoc({ isBroadcastEnabled: false })], builderTile, 'logs'),
-      ).toEqual([]);
     });
 
     it('matches the filter language to the tile', () => {

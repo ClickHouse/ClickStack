@@ -19,6 +19,16 @@ export const getPendingVariablesTooltip = (
   } no selected value.`;
 };
 
+/** Explain a filter whose data source variable selects a source it can't use. */
+export const getIncompatibleVariablesTooltip = (
+  incompatibleVariables: string[],
+): string => {
+  const names = incompatibleVariables.map(name => `$${name}`).join(', ');
+  return `This filter can't use the source ${names} ${
+    incompatibleVariables.length === 1 ? 'selects' : 'select'
+  }. Select a different source.`;
+};
+
 /** One of the caution icons a filter's label row can carry, with its tooltip. */
 export const FilterCaution = ({
   label,

@@ -5,6 +5,7 @@ import {
   supportsDirectReadMap,
   supportsMergeTreeIndex,
   supportsPrometheusHttpApi,
+  supportsPrometheusLabelsApi,
 } from '@/core/clickhouseVersion';
 
 type ClickHouseVersionTuple = readonly [number, number, number, number];
@@ -299,5 +300,27 @@ describe('supportsPrometheusHttpApi', () => {
 
   it('returns false when the version is unknown', () => {
     expect(supportsPrometheusHttpApi(undefined)).toBe(false);
+  });
+});
+
+describe('supportsPrometheusLabelsApi', () => {
+  it.each<readonly [ClickHouseVersionTuple]>([
+    [[26, 9, 0, 0]],
+    [[26, 10, 3, 7]],
+    [[27, 0, 0, 0]],
+  ])('accepts %j', version => {
+    expect(supportsPrometheusLabelsApi(version)).toBe(true);
+  });
+
+  it.each<readonly [ClickHouseVersionTuple]>([
+    [[26, 8, 36, 3]],
+    [[26, 6, 0, 0]],
+    [[25, 12, 0, 0]],
+  ])('rejects %j', version => {
+    expect(supportsPrometheusLabelsApi(version)).toBe(false);
+  });
+
+  it('returns false when the version is unknown', () => {
+    expect(supportsPrometheusLabelsApi(undefined)).toBe(false);
   });
 });
