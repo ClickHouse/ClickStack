@@ -1042,28 +1042,37 @@ describe('DefaultAlertProvider', () => {
         [
           'a value of 0 breaches',
           { thresholdType: AlertThresholdType.BELOW, threshold: 1 },
+          undefined,
         ],
         [
           'a registered evaluator handles',
           { thresholdType: AlertThresholdType.ABOVE, threshold: 1 },
-          true,
+          () => true,
+        ],
+        [
+          'throws in the evaluator lookup',
+          { thresholdType: AlertThresholdType.ABOVE, threshold: 1 },
+          () => {
+            throw new Error('evaluator lookup failed');
+          },
         ],
         [
           'has a threshold that cannot be checked',
           { thresholdType: AlertThresholdType.BETWEEN, thresholdMax: null },
+          undefined,
         ],
       ])(
         'keeps the lookback scan for a grouped alert that %s',
-        async (_, threshold, withEvaluator = false) => {
+        async (_, threshold, appliesTo?: () => boolean) => {
           const { alert } = await createValidSavedSearchAlert(
             await createConnectionAndSource(),
             { groupBy: 'ServiceName' },
           );
           await Alert.updateOne({ _id: alert._id }, { $set: threshold });
-          if (withEvaluator) {
+          if (appliesTo) {
             registerAlertEvaluator({
               name: 'test',
-              appliesTo: a => a.id === alert.id,
+              appliesTo,
               evaluate: async () => {},
             });
           }

@@ -485,16 +485,17 @@ async function loadAlerts(): Promise<AlertTask[]> {
   // missing from the data. A previous OK row only matters for its createdAt,
   // which the last evaluation also has. So these alerts read only that
   // evaluation (below), one row per group, instead of scanning every row in
-  // the lookback. A registered evaluator does not run that loop, and a
-  // threshold that cannot be checked is left for processAlert to report, so
-  // both keep the scan.
+  // the lookback. A registered evaluator does not run that loop, and an
+  // evaluator lookup or threshold check that throws is left for processAlert
+  // to report, so these keep the scan.
   const needsLookbackScan = (alert: IAlert) => {
-    if (findAlertEvaluator(alert)) {
-      return true;
-    }
     try {
-      return doesExceedThreshold(alert, 0);
-    } catch {
+      return findAlertEvaluator(alert) != null || doesExceedThreshold(alert, 0);
+    } catch (e) {
+      logger.error(
+        { alertId: alert.id, error: serializeError(e) },
+        'Failed to check whether a grouped alert needs the history scan',
+      );
       return true;
     }
   };
