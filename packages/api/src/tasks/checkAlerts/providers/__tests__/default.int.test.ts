@@ -884,6 +884,47 @@ describe('DefaultAlertProvider', () => {
         expect(details.previousMap.get(alert.id)).toBeUndefined();
       });
 
+      it('skips a grouped alert already evaluated this window, from the sentinel alone', async () => {
+        const { alert } = await createValidSavedSearchAlert(
+          await createConnectionAndSource(),
+          { groupBy: 'ServiceName' },
+        );
+        // Use a 1d interval so the current window (start of the UTC day)
+        // cannot roll over mid-test.
+        await Alert.updateOne({ _id: alert._id }, { $set: { interval: '1d' } });
+        const windowStart = getScheduledWindowStart(new Date(), 1440, 0);
+        for (const group of ['ServiceName:a', 'ServiceName:b']) {
+          await AlertHistory.create({
+            alert: alert._id,
+            createdAt: windowStart,
+            state: AlertState.ALERT,
+            group,
+            fired: true,
+          });
+        }
+
+        const [task] = checkAlertTasks.partitionPreviousMapsByAlert(
+          await provider.getAlertTasks(),
+        );
+        const details = task.alerts[0];
+        // No per-group rows were loaded, only the sentinel.
+        expect([...details.previousMap.keys()]).toEqual([alert.id]);
+
+        const clickhouseClient = await provider.getClickHouseClient(task.conn);
+        const querySpy = jest.spyOn(clickhouseClient, 'queryChartConfig');
+        await checkAlertTasks.processAlert(
+          task.now,
+          details,
+          clickhouseClient,
+          task.conn.id,
+          provider,
+          new Map(),
+        );
+
+        expect(querySpy).not.toHaveBeenCalled();
+        expect(await AlertHistory.countDocuments({ alert: alert._id })).toBe(2);
+      });
+
       it('reads the last evaluation for a grouped alert whose latest rows are older than the scan window', async () => {
         const { alert } = await createValidSavedSearchAlert(
           await createConnectionAndSource(),
