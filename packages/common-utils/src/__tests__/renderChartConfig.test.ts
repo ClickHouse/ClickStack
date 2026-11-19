@@ -253,6 +253,138 @@ describe('renderChartConfig', () => {
     },
   );
 
+  describe('group-by over the raw time column (Unknown identifier TimeUnix)', () => {
+    const metricTables = gaugeConfiguration.metricTables;
+    const tableConfig = (
+      metricType: MetricsDataType,
+      aggFn: 'max' | 'count' | 'sum' | 'increase',
+      groupBy: string,
+      extra: Partial<BuilderChartConfig> = {},
+    ): ChartConfigWithOptDateRange => ({
+      displayType: DisplayType.Table,
+      connection: 'test-connection',
+      metricTables,
+      from: { databaseName: 'default', tableName: '' },
+      select: [
+        {
+          aggFn,
+          aggCondition: '',
+          valueExpression: 'Value',
+          alias: 'v',
+          metricName: 'm',
+          metricType,
+        },
+      ],
+      where: '',
+      whereLanguage: 'sql',
+      timestampValueExpression: 'TimeUnix',
+      dateRange: [new Date('2025-02-12'), new Date('2025-02-19')],
+      groupBy,
+      ...extra,
+    });
+    const render = async (config: ChartConfigWithOptDateRange) =>
+      parameterizedQueryToSql(
+        await renderChartConfig(config, mockMetadata, querySettings),
+      ).replace(/\s+/g, ' ');
+
+    const gaugeBucketStart =
+      'Bucketed AS (SELECT *, __hdx_time_bucket2 AS `TimeUnix` FROM ( SELECT';
+    const gaugePerBucket =
+      'FROM Source GROUP BY AttributesHash, __hdx_time_bucket2 ORDER BY';
+    const sumBucketStart =
+      'IsMonotonic, `__hdx_time_bucket2` AS `TimeUnix` FROM ( SELECT';
+    const sumPerBucket =
+      'FROM Source GROUP BY AttributesHash, `__hdx_time_bucket2` ORDER BY';
+
+    it.each([
+      'toStartOfInterval(TimeUnix, INTERVAL 1 MINUTE)',
+      "ResourceAttributes['k8s.pod.name'], toStartOfInterval(TimeUnix, toIntervalSecond(10))",
+      "toStartOfInterval(TimeUnix, toIntervalMinute(1)) AS m, Attributes['queue']",
+      'toDate(TimeUnix)',
+    ])(
+      'exposes the gauge bucket start as TimeUnix for group-by %p',
+      async groupBy => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Gauge, 'max', groupBy),
+        );
+        expect(sql).toContain(gaugeBucketStart);
+        expect(sql).toContain(gaugePerBucket);
+      },
+    );
+
+    it('exposes the gauge bucket start in a pie chart split by time', async () => {
+      const sql = await render(
+        convertToCategoricalChartConfig(
+          tableConfig(MetricsDataType.Gauge, 'max', 'toStartOfHour(TimeUnix)', {
+            displayType: DisplayType.Pie,
+          }) as Parameters<typeof convertToCategoricalChartConfig>[0],
+        ),
+      );
+      expect(sql).toContain(gaugeBucketStart);
+      expect(sql).toContain(gaugePerBucket);
+    });
+
+    it('keeps the per-bucket delta of an isDelta gauge grouped by time', async () => {
+      const sql = await render(
+        tableConfig(MetricsDataType.Gauge, 'max', 'toStartOfHour(TimeUnix)', {
+          select: [
+            {
+              aggFn: 'max',
+              aggCondition: '',
+              valueExpression: 'Value',
+              metricName: 'm',
+              metricType: MetricsDataType.Gauge,
+              isDelta: true,
+            },
+          ],
+        }),
+      );
+      expect(sql).toContain(gaugeBucketStart);
+      expect(sql).toContain(gaugePerBucket);
+      expect(sql).toContain('argMax(Value, TimeUnix)');
+    });
+
+    it.each([
+      ['sum', 'toStartOfFiveMinutes(TimeUnix)'],
+      [
+        'increase',
+        "concat(Attributes['outcome'], ' ', toString(toStartOfInterval(TimeUnix, toIntervalHour(6))))",
+      ],
+    ] as const)(
+      'exposes the sum bucket start as TimeUnix for %s grouped by %p',
+      async (aggFn, groupBy) => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Sum, aggFn, groupBy, {
+            having: 'v > 0',
+            havingLanguage: 'sql',
+          }),
+        );
+        expect(sql).toContain(sumBucketStart);
+        expect(sql).toContain(sumPerBucket);
+      },
+    );
+
+    it.each(['toDate(TimeUnix)', 'ServiceName, toStartOfHour(TimeUnix)'])(
+      'keeps every time bucket of an increase grouped by %p',
+      async groupBy => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Sum, 'increase', groupBy),
+        );
+        expect(sql).not.toContain('TopGroups');
+      },
+    );
+
+    it.each(['StartTimeUnix', "Attributes['TimeUnix']", 'ServiceName'])(
+      'leaves Bucketed per bucket for group-by %p',
+      async groupBy => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Gauge, 'max', groupBy),
+        );
+        expect(sql).not.toContain('AS `TimeUnix`');
+      },
+    );
+  });
+
   it('should generate sql for a single gauge metric with a delta() function applied', async () => {
     const generatedSql = await renderChartConfig(
       {

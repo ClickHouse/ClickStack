@@ -2000,6 +2000,11 @@ const SUM_BUCKETED_COLUMNS = [
  * Names the CTE already defines are skipped to avoid a clash. Grouped-by ones
  * join the bucket GROUP BY instead of `any()`, so rows with different values
  * stay apart; AttributesHash is left alone because the sum windows use it.
+ *
+ * Bucketed has one row per series and time bucket, so it has no raw time
+ * column. `timeColumn` is the time column's name when the group-by references
+ * it (e.g. `toStartOfHour(TimeUnix)`), and empty otherwise; Bucketed then
+ * exposes its bucket start under that name.
  */
 async function getComputedMetricColumns(
   metadata: Metadata,
@@ -2010,6 +2015,7 @@ async function getComputedMetricColumns(
     reservedNames,
     bucketedColumns,
     groupBy,
+    timestampValueExpression,
   }: {
     databaseName: string;
     tableName: string;
@@ -2017,11 +2023,13 @@ async function getComputedMetricColumns(
     reservedNames: string[];
     bucketedColumns: string[];
     groupBy: BuilderChartConfigWithOptDateRangeEx['groupBy'];
+    timestampValueExpression: string | undefined;
   },
 ): Promise<{
   select: string;
   aggregate: string;
   groupBy: string;
+  timeColumn: string;
   project: (c: string) => { UNSAFE_RAW_SQL: string };
 }> {
   let columnNames: string[] = [];
@@ -2078,15 +2086,35 @@ async function getComputedMetricColumns(
   const extra = columnNames.filter(c => !bucketedColumns.includes(c));
   const project = (c: string) =>
     grouped.has(c) ? escape(c) : `any(${escape(c)}) AS ${escape(c)}`;
+  const rawTimeColumn = getFirstTimestampValueExpression(
+    timestampValueExpression || DEFAULT_METRIC_TABLE_TIME_COLUMN,
+  );
   return {
     select: columnNames.map(c => `, ${escape(c)}`).join(''),
     aggregate: extra.map(c => `, ${project(c)}`).join(''),
     groupBy: [...grouped].map(c => `, ${escape(c)}`).join(''),
+    timeColumn: referenced.has(rawTimeColumn) ? escape(rawTimeColumn) : '',
     // Names come from the fixed OTel lists, so they need no quoting.
     project: (c: string) => ({
       UNSAFE_RAW_SQL: grouped.has(c) ? c : `any(${c}) AS ${c}`,
     }),
   };
+}
+
+/**
+ * Exposes the gauge Bucketed query's bucket start under the time column's
+ * name, so a group-by such as `toStartOfHour(TimeUnix)` resolves while Bucketed
+ * keeps one row per series and bucket. The wrapper avoids an alias cycle: the
+ * bucket expression itself reads the raw time column.
+ */
+function withBucketStartAsTime(
+  timeColumn: string,
+  timeBucketCol: string,
+  bucketed: ChSql,
+): ChSql {
+  return timeColumn
+    ? chSql`SELECT *, ${timeBucketCol} AS ${timeColumn} FROM (${bucketed})`
+    : bucketed;
 }
 
 /**
@@ -2214,6 +2242,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'LastValue', timeBucketCol],
       bucketedColumns: GAUGE_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     return {
@@ -2231,7 +2260,10 @@ async function translateMetricChartConfig(
         },
         {
           name: 'Bucketed',
-          sql: chSql`
+          sql: withBucketStartAsTime(
+            computedColumns.timeColumn,
+            timeBucketCol,
+            chSql`
             SELECT
               ${timeExpr},
               AttributesHash,
@@ -2253,6 +2285,7 @@ async function translateMetricChartConfig(
             GROUP BY AttributesHash, ${timeBucketCol}${{ UNSAFE_RAW_SQL: computedColumns.groupBy }}
             ORDER BY AttributesHash, ${timeBucketCol}
           `,
+          ),
         },
       ],
       select: [
@@ -2326,6 +2359,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'Rate', 'Sum', timeBucketCol],
       bucketedColumns: SUM_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     /**
@@ -2394,7 +2428,7 @@ async function translateMetricChartConfig(
               StartTimeUnix,
               Flags,
               AggregationTemporality,
-              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}
+              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}${{ UNSAFE_RAW_SQL: computedColumns.timeColumn ? `, \`${timeBucketCol}\` AS ${computedColumns.timeColumn}` : '' }}
             FROM (
               SELECT
                 ${timeExpr},
@@ -2435,8 +2469,12 @@ async function translateMetricChartConfig(
     // groups (mirrors v1's MAX_NUM_GROUPS). Ranking is done in a separate
     // CTE rather than a window, since ClickHouse can't reference a
     // window-aggregate inside another window's ORDER BY.
+    // Skipped for a group-by over the raw time column: ranking would keep only
+    // the 20 largest time buckets and silently drop the rest.
     const shouldApplyIncreaseGroupLimit =
-      _select.aggFn === 'increase' && isUsingGroupBy(chartConfig);
+      _select.aggFn === 'increase' &&
+      isUsingGroupBy(chartConfig) &&
+      !computedColumns.timeColumn;
 
     let outerWhere: string = '';
 
