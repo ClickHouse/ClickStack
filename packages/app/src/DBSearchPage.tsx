@@ -1305,30 +1305,24 @@ function DBSearchPageContent() {
 
   const [displayedTimeInputValue, setDisplayedTimeInputValue] =
     useState('Live Tail');
+  // The last time input the time query wrote, i.e. the applied range. User
+  // typing goes through setDisplayedTimeInputValue, so it differs once edited.
+  const [appliedTimeInputValue, setAppliedTimeInputValue] =
+    useState('Live Tail');
+  const setAppliedTimeInput = useCallback((value: string) => {
+    setDisplayedTimeInputValue(value);
+    setAppliedTimeInputValue(value);
+  }, []);
+  const isTimeInputEdited = displayedTimeInputValue !== appliedTimeInputValue;
 
   const { isReady, searchedTimeRange, onSearch, onTimeRangeSelect } =
     useNewTimeQuery({
       initialDisplayValue: 'Live Tail',
       initialTimeRange: defaultTimeRange,
       showRelativeInterval: isLive ?? true,
-      setDisplayedTimeInputValue,
+      setDisplayedTimeInputValue: setAppliedTimeInput,
       updateInput: !isLive,
     });
-
-  // The time input as of the last applied range, so a submit can tell whether
-  // the user has typed a new range since.
-  const searchedRangeKey = `${searchedTimeRange[0].getTime()}-${searchedTimeRange[1].getTime()}`;
-  const [appliedTime, setAppliedTime] = useState({
-    rangeKey: searchedRangeKey,
-    input: displayedTimeInputValue,
-  });
-  if (appliedTime.rangeKey !== searchedRangeKey) {
-    setAppliedTime({
-      rangeKey: searchedRangeKey,
-      input: displayedTimeInputValue,
-    });
-  }
-  const isTimeInputEdited = displayedTimeInputValue !== appliedTime.input;
 
   // Sync url state back with form state
   // (ex. for history navigation)
@@ -1879,12 +1873,15 @@ function DBSearchPageContent() {
     parseAsInteger.withDefault(DEFAULT_REFRESH_FREQUENCY),
   );
 
-  const updateRelativeTimeInputValue = useCallback((interval: number) => {
-    const label = getRelativeTimeOptionLabel(interval);
-    if (label) {
-      setDisplayedTimeInputValue(label);
-    }
-  }, []);
+  const updateRelativeTimeInputValue = useCallback(
+    (interval: number) => {
+      const label = getRelativeTimeOptionLabel(interval);
+      if (label) {
+        setAppliedTimeInput(label);
+      }
+    },
+    [setAppliedTimeInput],
+  );
 
   useEffect(() => {
     if (isReady && isLive) {
@@ -2018,8 +2015,8 @@ function DBSearchPageContent() {
       }
       // Keep the current time range unless the user typed a new one:
       // re-resolving a relative range would refetch the histogram for a
-      // column change. Live tail refetches on every tick anyway, and its ticks
-      // would mark a typed range as applied, so it always re-resolves.
+      // column change. Live tail refetches on every tick anyway, so it always
+      // re-resolves.
       onSubmit({ resolveTimeRange: !!isLive || isTimeInputEdited });
     },
     [
