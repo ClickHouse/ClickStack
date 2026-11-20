@@ -39,6 +39,16 @@ export class SavedSearchModalComponent {
   }
 
   /**
+   * Assert what the saved search will open with
+   * (e.g. "Opens in live tail", "Opens with the past 1 day")
+   */
+  async expectOpensWith(text: string) {
+    await expect(this.modal.getByTestId('save-search-time-range')).toHaveText(
+      text,
+    );
+  }
+
+  /**
    * Submit the save search form
    */
   async submit() {
