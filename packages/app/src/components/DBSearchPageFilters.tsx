@@ -1227,8 +1227,8 @@ const DBSearchPageFiltersComponent = ({
     'hdx-show-all-filter-values',
     null,
   );
-  const showAllValues =
-    userShowAllValues ?? !me?.team?.filterValuesExactByDefault;
+  const teamShowAllValues = !me?.team?.filterValuesExactByDefault;
+  const showAllValues = userShowAllValues ?? teamShowAllValues;
   const { size, startResize } = useResizable(16, 'left');
 
   const { data: source } = useSource({ id: sourceId });
@@ -1814,6 +1814,9 @@ const DBSearchPageFiltersComponent = ({
                 }}
                 showAllValues={showAllValues}
                 onShowAllValuesChange={setShowAllValues}
+                teamShowAllValues={teamShowAllValues}
+                isShowAllValuesOverridden={userShowAllValues != null}
+                onResetShowAllValues={() => setShowAllValues(null)}
               />
               {onCollapse && (
                 <Tooltip label="Hide filters" position="bottom">
