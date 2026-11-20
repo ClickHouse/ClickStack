@@ -41,6 +41,9 @@ export function FilterSettingsPanel({
   onResetSharedFilters,
   showAllValues,
   onShowAllValuesChange,
+  teamShowAllValues,
+  isShowAllValuesOverridden,
+  onResetShowAllValues,
 }: {
   isSharedFiltersVisible: boolean;
   onSharedFiltersVisibilityChange: (visible: boolean) => void;
@@ -52,6 +55,9 @@ export function FilterSettingsPanel({
   onResetSharedFilters: VoidFunction;
   showAllValues: boolean;
   onShowAllValuesChange: (show: boolean) => void;
+  teamShowAllValues: boolean;
+  isShowAllValuesOverridden: boolean;
+  onResetShowAllValues: VoidFunction;
 }) {
   const showResetSection = hasPersonalPins || hasSharedPins;
 
@@ -117,6 +123,18 @@ export function FilterSettingsPanel({
             onChange={e => onShowAllValuesChange(e.currentTarget.checked)}
           />
         </Tooltip>
+        <Flex justify="space-between" mt={-6} pl="sm">
+          <Text size="xxs" c="dimmed">
+            Team default: {teamShowAllValues ? 'All' : 'Exact'}
+          </Text>
+          {isShowAllValuesOverridden && (
+            <UnstyledButton onClick={onResetShowAllValues}>
+              <Text size="xxs" c="dimmed" td="underline">
+                Use team default
+              </Text>
+            </UnstyledButton>
+          )}
+        </Flex>
         {showResetSection && (
           <>
             <Separator size="xs" />
