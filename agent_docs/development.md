@@ -33,7 +33,8 @@ yarn dev        # or equivalently: make dev
 - Docker Compose manages ClickHouse, DocumentDB, OTel Collector
 - The metadata store is [DocumentDB](https://github.com/documentdb/documentdb)
   (Postgres plus a Mongo wire-protocol gateway), built from
-  `docker/documentdb/Dockerfile`. The API still talks to it through Mongoose.
+  the `documentdb` stage of `docker/hyperdx/Dockerfile`, the same build the
+  all-in-one image ships. The API still talks to it through Mongoose.
   To browse it with MongoDB Compass or `mongosh`, connect to
   `mongodb://hyperdx:hyperdx@localhost:<HDX_DEV_MONGO_PORT>/?tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256`.
   Everything works except Compass's Performance tab (the gateway doesn't
