@@ -1315,6 +1315,21 @@ function DBSearchPageContent() {
       updateInput: !isLive,
     });
 
+  // The time input as of the last applied range, so a submit can tell whether
+  // the user has typed a new range since.
+  const searchedRangeKey = `${searchedTimeRange[0].getTime()}-${searchedTimeRange[1].getTime()}`;
+  const [appliedTime, setAppliedTime] = useState({
+    rangeKey: searchedRangeKey,
+    input: displayedTimeInputValue,
+  });
+  if (appliedTime.rangeKey !== searchedRangeKey) {
+    setAppliedTime({
+      rangeKey: searchedRangeKey,
+      input: displayedTimeInputValue,
+    });
+  }
+  const isTimeInputEdited = displayedTimeInputValue !== appliedTime.input;
+
   // Sync url state back with form state
   // (ex. for history navigation)
   // TODO: Check if there are any bad edge cases here
@@ -2001,9 +2016,10 @@ function DBSearchPageContent() {
           setValue('orderBy', nextOrderBy);
         }
       }
-      // Keep the current time range: re-resolving a relative range would
-      // refetch the histogram for a column change.
-      onSubmit({ resolveTimeRange: false });
+      // Keep the current time range unless the user typed a new one:
+      // re-resolving a relative range would refetch the histogram for a
+      // column change.
+      onSubmit({ resolveTimeRange: isTimeInputEdited });
     },
     [
       displayedColumns,
@@ -2012,6 +2028,7 @@ function DBSearchPageContent() {
       getValues,
       defaultSearchConfig.orderBy,
       onSubmit,
+      isTimeInputEdited,
     ],
   );
 
