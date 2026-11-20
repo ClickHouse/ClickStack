@@ -53,6 +53,7 @@ import {
   IconSitemap,
 } from '@tabler/icons-react';
 
+import api from '@/api';
 import { IS_CLICKHOUSE_BUILD } from '@/config';
 import {
   useColumns,
@@ -1220,10 +1221,14 @@ const DBSearchPageFiltersComponent = ({
     'hdx-shared-filters-expanded',
     true,
   );
-  const [showAllValues, setShowAllValues] = useLocalStorage(
+  const { data: me } = api.useMe();
+  // null = user hasn't chosen, so fall back to the team default
+  const [userShowAllValues, setShowAllValues] = useLocalStorage<boolean | null>(
     'hdx-show-all-filter-values',
-    true,
+    null,
   );
+  const showAllValues =
+    userShowAllValues ?? !me?.team?.filterValuesExactByDefault;
   const { size, startResize } = useResizable(16, 'left');
 
   const { data: source } = useSource({ id: sourceId });
