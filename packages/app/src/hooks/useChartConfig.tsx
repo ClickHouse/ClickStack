@@ -360,6 +360,22 @@ async function* fetchDataInChunks({
     ? { readonly: '2' }
     : {};
 
+  // When some windows read a materialized view and others the source table,
+  // give every chunk the first chunk's column names, so each series keeps one
+  // name across the whole range.
+  const readsSeveralTables = new Set(windows.map(w => w.config)).size > 1;
+  let referenceMeta: TChunk['chunk']['meta'];
+  const withAlignedColumns = (chunk: TChunk['chunk']): TChunk['chunk'] => {
+    if (!readsSeveralTables) {
+      return chunk;
+    }
+    if (referenceMeta == null) {
+      referenceMeta = chunk.meta;
+      return chunk;
+    }
+    return alignChunkColumns(chunk, referenceMeta);
+  };
+
   if (enableParallelQueries) {
     // fetch in parallel
     const promises = windows.map(async (w, index) => {
@@ -393,7 +409,10 @@ async function* fetchDataInChunks({
       while (bufferedChunks.length > 0 && bufferedChunks[0] !== undefined) {
         // remove data from front so that it always arrives in order
         const chunk = bufferedChunks.shift();
-        yield { chunk, isComplete: bufferedChunks.length === 0 };
+        yield {
+          chunk: withAlignedColumns(chunk),
+          isComplete: bufferedChunks.length === 0,
+        };
         flushed += 1;
       }
     }
@@ -413,8 +432,49 @@ async function* fetchDataInChunks({
       querySettings,
     });
 
-    yield { chunk: result, isComplete: i === windows.length - 1 };
+    yield {
+      chunk: withAlignedColumns(result),
+      isComplete: i === windows.length - 1,
+    };
   }
+}
+
+/**
+ * Renames a chunk's columns, by position, to the given reference columns.
+ * A materialized view names an unaliased aggregate differently from the source
+ * table (`SUM(...)` of the view's count column instead of `count()`), so chunks
+ * of one chart read from both would otherwise carry the same series under two
+ * names. The two queries share a select list, so position identifies a column.
+ * Exported for tests.
+ */
+export function alignChunkColumns(
+  chunk: TChunk['chunk'],
+  referenceMeta: TChunk['chunk']['meta'],
+): TChunk['chunk'] {
+  const meta = chunk.meta ?? [];
+  if (
+    referenceMeta == null ||
+    referenceMeta.length !== meta.length ||
+    meta.every((column, i) => column.name === referenceMeta[i].name)
+  ) {
+    return chunk;
+  }
+
+  const renamed = new Map(
+    meta.map((column, i) => [column.name, referenceMeta[i].name]),
+  );
+  return {
+    ...chunk,
+    meta: meta.map((column, i) => ({ ...column, name: referenceMeta[i].name })),
+    data: chunk.data?.map(row =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [
+          renamed.get(key) ?? key,
+          value,
+        ]),
+      ),
+    ),
+  };
 }
 
 /**

@@ -18,6 +18,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { prometheusApi } from '@/api';
 import { useClickhouseClient } from '@/clickhouse';
 import {
+  alignChunkColumns,
   appendChunk,
   getGranularityAlignedTimeWindows,
   getMinGranularitySeconds,
@@ -2602,20 +2603,38 @@ describe('useChartConfig', () => {
         }),
       );
 
-      // One row per query, named after the table and window it came from
+      // One row per query, named after the table and window it came from. The
+      // view names the unaliased count after its own merge expression, as
+      // ClickHouse does.
+      const viewCountColumn = 'SUM(toFloat64OrDefault(toString(count)))';
       mockClickhouseClient.queryChartConfig.mockImplementation(
         async ({ config: queried }) => {
           const range = queried.dateRange;
           if (!isBuilderChartConfig(queried) || !range) {
             throw new Error('Expected a builder config with a date range');
           }
-          return createMockQueryResponse([
+          const response = createMockQueryResponse([
             {
               'count()': '1',
               SeverityText: queried.from.tableName,
               __hdx_time_bucket: range[0].toISOString(),
             },
           ]);
+          if (queried.from.tableName !== 'otel_logs_1m') {
+            return response;
+          }
+          return {
+            ...response,
+            meta: response.meta?.map(column =>
+              column.name === 'count()'
+                ? { ...column, name: viewCountColumn }
+                : column,
+            ),
+            data: response.data.map(({ 'count()': count, ...row }) => ({
+              ...row,
+              [viewCountColumn]: count,
+            })),
+          };
         },
       );
 
@@ -2649,6 +2668,62 @@ describe('useChartConfig', () => {
         'otel_logs_1m',
         'otel_logs',
       ]);
+      // One name for the count across both tables
+      expect(result.current.data?.data.map(row => row['count()'])).toEqual([
+        '1',
+        '1',
+        '1',
+      ]);
+      expect(
+        result.current.data?.data.some(row => viewCountColumn in row),
+      ).toBe(false);
+      expect(result.current.data?.meta?.map(column => column.name)).toEqual([
+        'count()',
+        'SeverityText',
+        '__hdx_time_bucket',
+      ]);
+    });
+  });
+
+  describe('alignChunkColumns', () => {
+    const reference = [
+      { name: 'count()', type: 'UInt64' },
+      { name: 'ServiceName', type: 'LowCardinality(String)' },
+    ];
+
+    it('renames columns by position to the reference names', () => {
+      const chunk = {
+        meta: [
+          { name: 'SUM(count)', type: 'Float64' },
+          { name: 'ServiceName', type: 'LowCardinality(String)' },
+        ],
+        data: [{ 'SUM(count)': 4, ServiceName: 'api' }],
+        rows: 1,
+      };
+      expect(alignChunkColumns(chunk, reference)).toEqual({
+        meta: [
+          { name: 'count()', type: 'Float64' },
+          { name: 'ServiceName', type: 'LowCardinality(String)' },
+        ],
+        data: [{ 'count()': 4, ServiceName: 'api' }],
+        rows: 1,
+      });
+    });
+
+    it('leaves a chunk alone when the names already match or the shapes differ', () => {
+      const matching = {
+        meta: reference,
+        data: [{ 'count()': '4', ServiceName: 'api' }],
+        rows: 1,
+      };
+      expect(alignChunkColumns(matching, reference)).toBe(matching);
+
+      const otherShape = {
+        meta: [{ name: 'SUM(count)', type: 'Float64' }],
+        data: [{ 'SUM(count)': 4 }],
+        rows: 1,
+      };
+      expect(alignChunkColumns(otherShape, reference)).toBe(otherShape);
     });
   });
 
