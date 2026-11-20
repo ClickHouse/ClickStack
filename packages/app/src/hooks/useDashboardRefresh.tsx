@@ -4,17 +4,68 @@ import React from 'react';
 import {
   convertDateRangeToGranularityString,
   convertGranularityToSeconds,
+  Granularity,
 } from '@hyperdx/common-utils/dist/core/utils';
 import { useDocumentVisibility } from '@mantine/hooks';
+
+const MIN_REFRESH_INTERVAL_SECONDS = 30;
+
+// Every interval convertDateRangeToGranularityString can return at or above the
+// minimum, so the date range's default interval is always one of the choices.
+const REFRESH_INTERVAL_CHOICES = [
+  Granularity.ThirtySecond,
+  Granularity.OneMinute,
+  Granularity.FiveMinute,
+  Granularity.FifteenMinute,
+  Granularity.ThirtyMinute,
+  Granularity.OneHour,
+  Granularity.TwoHour,
+  Granularity.SixHour,
+  Granularity.TwelveHour,
+  Granularity.OneDay,
+  Granularity.TwoDay,
+  Granularity.SevenDay,
+  Granularity.ThirtyDay,
+];
+
+/**
+ * Refresh intervals a live dashboard offers, fastest first: from 30s up to the
+ * date range's default interval. A default faster than 30s is the only choice.
+ */
+export function getRefreshIntervalOptions(
+  defaultInterval: Granularity,
+): Granularity[] {
+  const maxSeconds = convertGranularityToSeconds(defaultInterval);
+  if (maxSeconds < MIN_REFRESH_INTERVAL_SECONDS) {
+    return [defaultInterval];
+  }
+  return REFRESH_INTERVAL_CHOICES.filter(
+    interval => convertGranularityToSeconds(interval) <= maxSeconds,
+  );
+}
+
+/** The chosen interval while it is still offered, otherwise the default. */
+export function resolveRefreshInterval(
+  selected: Granularity | undefined,
+  defaultInterval: Granularity,
+): Granularity {
+  return selected != null &&
+    getRefreshIntervalOptions(defaultInterval).includes(selected)
+    ? selected
+    : defaultInterval;
+}
 
 export const useDashboardRefresh = ({
   searchedTimeRange,
   onTimeRangeSelect,
   isLive,
+  selectedRefreshInterval,
 }: {
   onTimeRangeSelect: (start: Date, end: Date) => void;
   searchedTimeRange: [Date, Date];
   isLive: boolean;
+  /** Overrides the date range's default refresh interval while it is offered. */
+  selectedRefreshInterval?: Granularity;
 }) => {
   const [manualRefreshCooloff, setManualRefreshCooloff] = React.useState(false);
 
@@ -41,6 +92,15 @@ export const useDashboardRefresh = ({
   const granularityOverride =
     convertDateRangeToGranularityString(searchedTimeRange);
 
+  const refreshIntervalOptions = React.useMemo(
+    () => getRefreshIntervalOptions(granularityOverride),
+    [granularityOverride],
+  );
+  const refreshInterval = resolveRefreshInterval(
+    selectedRefreshInterval,
+    granularityOverride,
+  );
+
   // Auto-refresh interval
   const intervalRef = React.useRef<number | null>(null);
   React.useEffect(() => {
@@ -52,7 +112,7 @@ export const useDashboardRefresh = ({
         () => {
           refresh();
         },
-        convertGranularityToSeconds(granularityOverride) * 1000,
+        convertGranularityToSeconds(refreshInterval) * 1000,
       );
     } else {
       if (intervalRef.current) {
@@ -64,12 +124,14 @@ export const useDashboardRefresh = ({
         window.clearInterval(intervalRef.current);
       }
     };
-  }, [isRefreshEnabled, granularityOverride, refresh]);
+  }, [isRefreshEnabled, refreshInterval, refresh]);
 
   return {
     granularityOverride,
     isRefreshEnabled,
     manualRefreshCooloff,
     refresh,
+    refreshInterval,
+    refreshIntervalOptions,
   };
 };

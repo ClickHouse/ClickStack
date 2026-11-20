@@ -153,6 +153,7 @@ import {
   type DragHandleProps,
 } from '@/components/DashboardDndContext';
 import { DashboardKioskHeader } from '@/components/DashboardKioskHeader';
+import { DashboardLiveButton } from '@/components/DashboardLiveButton';
 import DashboardTableOfContents from '@/components/DashboardTableOfContents';
 import EditTimeChartForm from '@/components/DBEditTimeChartForm';
 import DBNumberChart from '@/components/DBNumberChart';
@@ -2131,6 +2132,9 @@ function DBDashboardPage({
   };
 
   const [isLive, setIsLive] = useState(false);
+  const [selectedRefreshInterval, setSelectedRefreshInterval] = useState<
+    Granularity | undefined
+  >();
 
   const { control, setValue, getValues, handleSubmit } = useForm<{
     granularity: SQLInterval | 'auto';
@@ -2173,11 +2177,25 @@ function DBDashboardPage({
     isRefreshEnabled,
     manualRefreshCooloff,
     refresh,
+    refreshInterval,
+    refreshIntervalOptions,
   } = useDashboardRefresh({
     searchedTimeRange,
     onTimeRangeSelect,
     isLive: isLive || isKioskMode,
+    selectedRefreshInterval,
   });
+
+  const onRefreshIntervalChange = useCallback(
+    (interval: Granularity) => {
+      // Picking the default follows the date range again as it changes.
+      setSelectedRefreshInterval(
+        interval === granularityOverride ? undefined : interval,
+      );
+      setIsLive(true);
+    },
+    [granularityOverride],
+  );
 
   const onSubmit = useCallback(() => {
     onSearch(displayedTimeInputValue);
@@ -3290,25 +3308,14 @@ function DBDashboardPage({
         }}
       />
       <GranularityPickerControlled control={control} name="granularity" />
-      <Tooltip
-        withArrow
-        label={
-          isRefreshEnabled
-            ? `Auto-refreshing with ${granularityOverride} interval`
-            : 'Enable auto-refresh'
-        }
-        fz="xs"
-        color="gray"
-      >
-        <Button
-          onClick={() => setIsLive(prev => !prev)}
-          size="sm"
-          variant={isLive ? 'primary' : 'secondary'}
-          title={isLive ? 'Disable auto-refresh' : 'Enable auto-refresh'}
-        >
-          Live
-        </Button>
-      </Tooltip>
+      <DashboardLiveButton
+        isLive={isLive}
+        onToggleLive={() => setIsLive(prev => !prev)}
+        refreshInterval={refreshInterval}
+        defaultRefreshInterval={granularityOverride}
+        refreshIntervalOptions={refreshIntervalOptions}
+        onRefreshIntervalChange={onRefreshIntervalChange}
+      />
       <Tooltip withArrow label="Refresh dashboard" fz="xs" color="gray">
         <ActionIcon
           onClick={refresh}
