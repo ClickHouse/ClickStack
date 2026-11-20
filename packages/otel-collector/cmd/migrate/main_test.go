@@ -1001,27 +1001,38 @@ func TestPlanReplicated(t *testing.T) {
 	cases := []struct {
 		name            string
 		enabled, exists bool
+		database        string
 		engine          string
-		want, warns     bool
+		want            bool
+		wantWarning     []string // substrings; nil means no warning
 	}{
-		{"flag off", false, true, "Atomic", false, false},
-		{"flag off, database missing", false, false, "", false, false},
-		{"flag off, database Replicated", false, true, "Replicated", false, false},
-		{"database missing", true, false, "", true, false},
-		{"database Replicated", true, true, "Replicated", true, false},
-		{"database Atomic", true, true, "Atomic", false, true},
-		{"database Shared", true, true, "Shared", false, true},
+		{"flag off", false, true, "otel", "Atomic", false, nil},
+		{"flag off, database missing", false, false, "otel", "", false, nil},
+		{"flag off, database Replicated", false, true, "otel", "Replicated", false, nil},
+		{"database missing", true, false, "otel", "", true, nil},
+		{"database Replicated", true, true, "otel", "Replicated", true, nil},
+		{"database Atomic", true, true, "otel", "Atomic", false,
+			[]string{"database otel", "engine Atomic", "set HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE to a new database name"}},
+		{"database Shared", true, true, "otel", "Shared", false, []string{"database otel", "engine Shared"}},
+		{"fallback Replicated", true, true, "default", "Replicated", true, nil},
+		{"fallback Atomic", true, true, "default", "Atomic", false,
+			[]string{"fallback database default", "engine Atomic", "clear HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE", "Replicated database otel"}},
 	}
 	for _, c := range cases {
-		got, warning := planReplicated(c.enabled, c.exists, "otel", c.engine)
+		got, warning := planReplicated(c.enabled, c.exists, "otel", c.database, c.engine)
 		if got != c.want {
 			t.Errorf("%s: replicated = %v; want %v", c.name, got, c.want)
 		}
-		if (warning != "") != c.warns {
-			t.Errorf("%s: warning = %q; want warning=%v", c.name, warning, c.warns)
+		if c.wantWarning == nil && warning != "" {
+			t.Errorf("%s: unexpected warning %q", c.name, warning)
 		}
-		if c.warns && (!strings.Contains(warning, c.engine) || !strings.Contains(warning, "otel")) {
-			t.Errorf("%s: warning should name the database and engine: %q", c.name, warning)
+		if c.wantWarning != nil && warning == "" {
+			t.Errorf("%s: want a warning", c.name)
+		}
+		for _, sub := range c.wantWarning {
+			if !strings.Contains(warning, sub) {
+				t.Errorf("%s: warning %q should contain %q", c.name, warning, sub)
+			}
 		}
 	}
 }

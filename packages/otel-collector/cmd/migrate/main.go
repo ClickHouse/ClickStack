@@ -628,13 +628,17 @@ func processSchemaDir(schemaDir, database string, replicated, replicatedTimeSeri
 // planReplicated decides whether to seed Replicated engines. Argument-less
 // Replicated* table engines only work inside a Replicated database and an
 // existing database cannot change engine, so only a missing or already
-// Replicated database qualifies. Returns a warning when the flag cannot apply.
-func planReplicated(enabled, exists bool, database, engine string) (bool, string) {
+// Replicated database qualifies. Returns a warning when the flag cannot apply;
+// database differs from target when the fallback was chosen instead.
+func planReplicated(enabled, exists bool, target, database, engine string) (bool, string) {
 	switch {
 	case !enabled:
 		return false, ""
 	case !exists, engine == "Replicated":
 		return true, ""
+	case database != target:
+		return false, fmt.Sprintf("fallback database %s has engine %s, so tables use non-replicated engines; "+
+			"clear HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE to seed a Replicated database %s instead", database, engine, target)
 	default:
 		return false, fmt.Sprintf("database %s already exists with engine %s, so tables use non-replicated engines; "+
 			"set HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE to a new database name to seed a Replicated database", database, engine)
@@ -1012,7 +1016,7 @@ func main() {
 			log.Fatalf("Failed to check database engine: %v", err)
 		}
 	}
-	replicated, warning := planReplicated(cfg.Replicated, dbExists, database, dbEngine)
+	replicated, warning := planReplicated(cfg.Replicated, dbExists, cfg.Database, database, dbEngine)
 	if warning != "" {
 		log.Printf("WARNING: %s", warning)
 	}
