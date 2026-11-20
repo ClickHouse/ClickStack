@@ -27,10 +27,10 @@
     "knip": "^6.19.0",
     "lint-staged": "^13.1.2",
     "nx": "23.3.2",
+    "oxfmt": "^0.78.0",
     "oxlint": "^1.92.0",
     "oxlint-plugin-eslint": "^1.93.0",
     "oxlint-tsgolint": "^7.0.2006",
-    "prettier": "3.3.3",
     "tslib": "^2.6.0"
   },
   "scripts": {
@@ -60,16 +60,16 @@
   },
   "lint-staged": {
     "packages/api/src/{routers/external-api/**/*.ts,utils/swagger.ts}": [
-      "prettier --write --ignore-unknown",
+      "oxfmt --no-error-on-unmatched-pattern",
       "node scripts/ci/oxlint-warnings.mjs --staged --fix",
       "sh -c 'cd packages/api && yarn run lint:openapi && git add openapi.json'"
     ],
     "**/*.{ts,tsx}": [
-      "prettier --write --ignore-unknown",
+      "oxfmt --no-error-on-unmatched-pattern",
       "node scripts/ci/oxlint-warnings.mjs --staged --fix"
     ],
-    "**/*.{mdx,json,yml}": [
-      "prettier --write --ignore-unknown"
+    "**/*.{mdx,json,yml,css,scss}": [
+      "oxfmt --no-error-on-unmatched-pattern"
     ]
   },
   "packageManager": "yarn@4.13.0",

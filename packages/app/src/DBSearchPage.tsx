@@ -2571,7 +2571,8 @@ function DBSearchPageContent() {
               {savedSearch.createdBy && (
                 <span>
                   Created by{' '}
-                  {savedSearch.createdBy.name || savedSearch.createdBy.email}.{' '}
+                  {savedSearch.createdBy.name || savedSearch.createdBy.email}
+                  .{' '}
                 </span>
               )}
               {savedSearch.updatedAt && (

@@ -4,7 +4,6 @@
     "clinyong.vscode-css-modules",
     "streetsidesoftware.code-spell-checker",
     "oxc.oxc-vscode",
-    "stylelint.vscode-stylelint",
-    "esbenp.prettier-vscode"
+    "stylelint.vscode-stylelint"
   ]
 }
