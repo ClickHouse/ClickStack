@@ -103,10 +103,7 @@ describe('getChangedFilterSourceRefs', () => {
   it('checks a filter without an ID, or with a new one', () => {
     const { id: _id, ...withoutId } = adhoc();
     expect(
-      getChangedFilterSourceRefs(
-        [withoutId as DashboardFilter, adhoc({ id: 'new' })],
-        [adhoc()],
-      ),
+      getChangedFilterSourceRefs([withoutId, adhoc({ id: 'new' })], [adhoc()]),
     ).toEqual([
       { id: 'logs', kinds: sql },
       { id: 'logs', kinds: sql },

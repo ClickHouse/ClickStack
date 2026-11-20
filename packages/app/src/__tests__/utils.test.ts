@@ -29,9 +29,11 @@ import {
   mapKeyBy,
   mergePath,
   orderByAfterRemovingSelectItem,
+  orderByAfterRemovingSelectItems,
   orderByStringToSortingState,
   parseTimestampToMs,
   resolveConditionalColor,
+  selectItemsWithRemovedAlias,
   sortingStateToOrderByString,
   stripTrailingSlash,
   useQueryHistory,
@@ -1671,6 +1673,129 @@ describe('orderByAfterRemovingSelectItem', () => {
         'Timestamp DESC',
       ),
     ).toBe('"http.method" DESC');
+  });
+
+  it('drops a sort on an alias written without quotes', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '`message` ASC, Timestamp DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+  });
+
+  it('keeps a sort when the alias is still in the new SELECT', () => {
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) AS message'],
+        'lower(Body) AS message',
+      ),
+    ).toEqual([]);
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) as message'],
+        'upper(Body) AS message',
+      ),
+    ).toEqual([]);
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) AS message'],
+        'lower(Body) AS "message"',
+      ),
+    ).toEqual([]);
+    expect(
+      orderByAfterRemovingSelectItems(
+        selectItemsWithRemovedAlias(
+          ['upper(Body) AS message'],
+          'lower(Body) AS message',
+        ),
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('message DESC');
+    expect(
+      selectItemsWithRemovedAlias(
+        ['upper(Body) AS message', 'Body'],
+        'lower(Body) AS note',
+      ),
+    ).toEqual(['upper(Body) AS message', 'Body']);
+  });
+
+  it('keeps a sort on an alias the default SELECT still defines after Reset', () => {
+    const defaultSelect = 'upper(Body) AS message, Timestamp';
+    expect(
+      orderByAfterRemovingSelectItems(
+        selectItemsWithRemovedAlias(['lower(Body) AS message'], defaultSelect),
+        'message DESC',
+        '',
+        'Timestamp DESC',
+      ),
+    ).toBe('message DESC');
+  });
+
+  it('does not restore a saved sort that still names the removed alias', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        'message DESC',
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        'message DESC',
+        'message DESC, ServiceName ASC',
+        'Timestamp DESC',
+      ),
+    ).toBe('ServiceName ASC');
+  });
+
+  it('strips a saved sort when the form sort is empty', () => {
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '',
+        'message DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '',
+        'message DESC, ServiceName ASC',
+        'Timestamp DESC',
+      ),
+    ).toBe('ServiceName ASC');
+    expect(
+      orderByAfterRemovingSelectItem(
+        'upper(Body) AS message',
+        '',
+        'Timestamp DESC',
+        'ServiceName ASC',
+      ),
+    ).toBe('');
+  });
+
+  it('strips every removed alias from the saved sort at once', () => {
+    expect(
+      orderByAfterRemovingSelectItems(
+        ['upper(Body) AS message', 'lower(ServiceName) AS service'],
+        'message DESC',
+        'message DESC, service DESC',
+        'Timestamp DESC',
+      ),
+    ).toBe('Timestamp DESC');
   });
 
   it('keeps a comma inside a backtick-quoted sort name', () => {

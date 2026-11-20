@@ -11,9 +11,11 @@ const mockSetSearchedConfig = jest
   .fn()
   .mockResolvedValue(new URLSearchParams());
 const mockCreateSavedSearch = jest.fn();
+const mockUpdateSavedSearch = jest.fn();
 
 let mockSearchedConfig: Record<string, any> = {};
 let mockSources: any[] = [];
+let mockSavedSearch: Record<string, any> | undefined;
 
 jest.mock('@/layout', () => ({
   withAppNav: (component: unknown) => component,
@@ -98,8 +100,11 @@ jest.mock('@/savedSearch', () => ({
     isPending: false,
   }),
   useDeleteSavedSearch: () => ({ mutate: jest.fn() }),
-  useSavedSearch: () => ({ data: undefined }),
-  useUpdateSavedSearch: () => ({ mutate: jest.fn(), isPending: false }),
+  useSavedSearch: () => ({ data: mockSavedSearch }),
+  useUpdateSavedSearch: () => ({
+    mutate: (...args: unknown[]) => mockUpdateSavedSearch(...args),
+    isPending: false,
+  }),
 }));
 
 jest.mock('@/searchFilters', () => ({
@@ -232,10 +237,21 @@ jest.mock('@tanstack/react-query', () => ({
   useIsFetching: () => 0,
 }));
 
+// The page loads column options for the Columns popover. This suite is about
+// saving a search, and its React Query mock does not cover that lookup.
+jest.mock('@/components/SearchResultsToolbar/useClauseFieldOptions', () => ({
+  useClauseFieldOptions: () => [],
+}));
+
+jest.mock('@/useConfirm', () => ({
+  useConfirm: () => jest.fn(),
+}));
+
 describe('DBSearchPage save search flow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCreateSavedSearch.mockResolvedValue({ id: 'new-saved-search' });
+    mockSavedSearch = undefined;
     mockSearchedConfig = {
       source: 'log-source',
       where: 'level:error',
@@ -280,6 +296,50 @@ describe('DBSearchPage save search flow', () => {
     await waitFor(() => {
       expect(mockRouterPush).toHaveBeenCalledWith(
         '/search/new-saved-search?from=100&to=200&isLive=false',
+      );
+    });
+  });
+
+  it('keeps a saved search clause when Update follows a blank Apply', async () => {
+    window.history.pushState(
+      {},
+      '',
+      '/search/saved-1?from=100&to=200&isLive=false',
+    );
+    mockSavedSearch = {
+      id: 'saved-1',
+      name: 'Errors',
+      source: 'log-source',
+      select: 'Body',
+      where: 'level:error',
+      whereLanguage: 'lucene',
+      orderBy: 'Body DESC',
+      filters: [],
+      tags: [],
+    };
+    // Apply stores "" when the draft matches the default, which on a saved
+    // search is its own clause.
+    mockSearchedConfig = {
+      ...mockSearchedConfig,
+      select: '',
+      orderBy: '',
+    };
+    const user = userEvent.setup();
+    render(<DBSearchPage />, {
+      wrapper: ({ children }) => <MantineProvider>{children}</MantineProvider>,
+    });
+
+    await user.click(await screen.findByTestId('update-search-button'));
+    await user.click(await screen.findByTestId('save-search-submit-button'));
+
+    await waitFor(() => {
+      expect(mockUpdateSavedSearch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'saved-1',
+          select: 'Body',
+          orderBy: 'Body DESC',
+        }),
+        expect.anything(),
       );
     });
   });

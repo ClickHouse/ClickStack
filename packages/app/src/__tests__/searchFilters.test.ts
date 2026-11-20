@@ -12,6 +12,23 @@ enableMapSet();
 
 type ConditionFilter = { type: 'sql' | 'lucene'; condition: string };
 
+function filterConditions(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error('expected a filter list');
+  }
+  return value.map(filter => {
+    if (
+      typeof filter !== 'object' ||
+      filter == null ||
+      !('condition' in filter) ||
+      typeof filter.condition !== 'string'
+    ) {
+      throw new Error('expected a condition filter');
+    }
+    return filter.condition;
+  });
+}
+
 describe('searchFilters', () => {
   describe('parseQuery', () => {
     it('empty query', () => {
@@ -1013,9 +1030,7 @@ describe('searchFilters', () => {
         result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
       });
 
-      const conditions = (
-        onFilterChange.mock.lastCall![0] as ConditionFilter[]
-      ).map(f => f.condition);
+      const conditions = filterConditions(onFilterChange.mock.lastCall?.[0]);
       // Re-persisting must not rewrite the existing key into Map bracket form
       // (`message['email']`), which ClickHouse rejects for a JSON column.
       expect(conditions).toContain(
@@ -1041,9 +1056,7 @@ describe('searchFilters', () => {
         result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
       });
 
-      const conditions = (
-        onFilterChange.mock.lastCall![0] as ConditionFilter[]
-      ).map(f => f.condition);
+      const conditions = filterConditions(onFilterChange.mock.lastCall?.[0]);
       expect(conditions).toContain(arrayPathCondition);
     });
 

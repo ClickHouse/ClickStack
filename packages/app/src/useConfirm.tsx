@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useRouter } from 'next/router';
-import { Button, Group, Modal, Text } from '@mantine/core';
+import { Button, getDefaultZIndex, Group, Modal, Text } from '@mantine/core';
 
 type ConfirmOptions = {
   variant?: 'primary' | 'danger';
@@ -71,6 +71,9 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
         onClose={state?.onClose ?? (() => {})}
         centered
         withCloseButton={false}
+        // Popovers render above the default modal layer, so a confirm opened
+        // from one would sit behind the dropdown.
+        zIndex={getDefaultZIndex('overlay')}
       >
         <Text size="sm" opacity={0.7}>
           {state?.message}

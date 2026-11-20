@@ -15,6 +15,7 @@ import SQLInlineEditor from '@/components/SQLEditor/SQLInlineEditor';
 
 import {
   clauseApplyDisabled,
+  clauseDirty,
   ClausePopover,
   clauseResetDisabled,
   storedClause,
@@ -112,6 +113,7 @@ export function SortPopover({
       }}
       resetDisabled={clauseResetDisabled(draft, defaultValue)}
       applyDisabled={clauseApplyDisabled(draft)}
+      dirty={clauseDirty(draft, value, defaultValue)}
       onApply={() => onApply(storedClause(draft, value, defaultValue))}
       data-testid="search-sort-button"
       renderPick={() => (
