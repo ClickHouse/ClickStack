@@ -1,0 +1,18 @@
+// Only here so that oxlint run from the repo root (editors, lint-staged)
+// accepts the options below, which oxlint reads from the top-level config
+// only. Packages get their rules, and the same options, from their own
+// .oxlintrc.json via oxlint/base.jsonc. Files outside a package are not linted.
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "options": { "typeAware": true, "reportUnusedDisableDirectives": "warn" },
+  "plugins": [],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  }
+}
