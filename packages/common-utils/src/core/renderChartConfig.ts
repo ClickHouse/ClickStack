@@ -590,6 +590,7 @@ const aggFnExpr = ({
   fn,
   expr,
   level,
+  sketchParams,
   where,
   sampleWeightExpression,
   keepValueType = false,
@@ -597,6 +598,8 @@ const aggFnExpr = ({
   fn: AggregateFunction | AggregateFunctionWithCombinators;
   expr?: string;
   level?: number;
+  /** Parameters of a quantile sketch state that precede the level, for -Merge. */
+  sketchParams?: number[];
   where?: string;
   sampleWeightExpression?: string;
   /** Aggregate `expr` as-is instead of casting it to Float64. */
@@ -620,9 +623,17 @@ const aggFnExpr = ({
 
     const shouldParameterizeWithLevel =
       level && (fn.startsWith('quantile') || fn.startsWith('histogram'));
+    // A sketch built with an accuracy (quantileDD, quantileGK) merges with
+    // that accuracy ahead of the level, e.g. quantileDDMerge(0.01, 0.95).
+    const mergeParams = [
+      ...(fn.startsWith('quantile') ? (sketchParams ?? []) : []),
+      level,
+    ];
     const renderedFnArgsWithQuantileLevel = shouldParameterizeWithLevel
       ? chSql`(${{
-          UNSAFE_RAW_SQL: Number.isFinite(level) ? `${level}` : '0',
+          UNSAFE_RAW_SQL: mergeParams
+            .map(param => (Number.isFinite(param) ? `${param}` : '0'))
+            .join(', '),
         }})`
       : [];
 
@@ -863,6 +874,7 @@ async function renderSelectList(
           expr: select.valueExpression,
           // @ts-expect-error (TS doesn't know that we've already checked for quantile)
           level: select.level,
+          sketchParams: select.sketchParams,
           where: whereClause.sql,
           sampleWeightExpression: chartConfig.sampleWeightExpression,
         });
