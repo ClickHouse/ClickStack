@@ -34,6 +34,7 @@ import {
   isMetricSource,
   isPromqlSource,
   QuerySettings,
+  SQLInterval,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import {
@@ -85,6 +86,13 @@ interface AdditionalUseQueriedChartConfigOptions {
 type TimeWindow = {
   dateRange: [Date, Date];
   dateRangeEndInclusive?: boolean;
+  dateRangeStartInclusive?: boolean;
+};
+
+/** One query of a chart: the config to run and, when split, its time window. */
+type QueryWindow = {
+  config: ChartConfigWithOptDateRange;
+  window?: TimeWindow;
 };
 
 type TQueryFnData = ChartQueryResult;
@@ -180,8 +188,119 @@ export const getGranularityAlignedTimeWindows = (
   return windows;
 };
 
+/** Rounds a date up to the next bucket boundary, or keeps it when on one. */
+const ceilToInterval = (date: Date, granularity: SQLInterval): Date => {
+  const floored = toStartOfInterval(date, granularity);
+  return floored.getTime() < date.getTime()
+    ? new Date(
+        floored.getTime() + convertGranularityToSeconds(granularity) * 1000,
+      )
+    : floored;
+};
+
+const chunkedQueryWindows = (
+  config: ChartConfigWithOptDateRange,
+  enableQueryChunking: boolean,
+): QueryWindow[] =>
+  enableQueryChunking && shouldUseChunking(config)
+    ? getGranularityAlignedTimeWindows(config).map(window => ({
+        config,
+        window,
+      }))
+    : [{ config }];
+
+/**
+ * The queries that fetch a chart, newest first.
+ *
+ * A materialized view only holds whole buckets of its granularity, and the
+ * optimizer widens the range to them. That suits aligned charts, but a caller
+ * that asked for the exact range (`alignDateRangeToGranularity: false`, e.g.
+ * search counts that must match the results table) would count rows from
+ * outside its selection. For those, the partial first and last chart buckets
+ * are read from the source table with the exact bounds, and only the whole
+ * buckets in between from the view. Each bucket comes from one table, so
+ * counts, averages and percentiles all stay exact.
+ *
+ * Exported for tests.
+ */
+export function getQueryWindows({
+  config,
+  mvConfig,
+  enableQueryChunking = false,
+}: {
+  config: ChartConfigWithOptDateRange;
+  /** The config rewritten to read from a materialized view, if one fits. */
+  mvConfig?: ChartConfigWithOptDateRange;
+  enableQueryChunking?: boolean;
+}): QueryWindow[] {
+  if (mvConfig == null) {
+    return chunkedQueryWindows(config, enableQueryChunking);
+  }
+  const { dateRange } = config;
+  if (
+    config.alignDateRangeToGranularity !== false ||
+    dateRange == null ||
+    !isBuilderChartConfig(config) ||
+    !isUsingGranularity(config)
+  ) {
+    return chunkedQueryWindows(mvConfig, enableQueryChunking);
+  }
+
+  const [start, end] = dateRange;
+  const granularity =
+    config.granularity === 'auto'
+      ? convertDateRangeToGranularityString(
+          dateRange,
+          undefined,
+          config.minGranularitySeconds,
+        )
+      : config.granularity;
+  const interiorStart = ceilToInterval(start, granularity);
+  const interiorEnd = toStartOfInterval(end, granularity);
+  // Less than one whole bucket: nothing for the view to serve.
+  if (interiorStart >= interiorEnd) {
+    return chunkedQueryWindows(config, enableQueryChunking);
+  }
+
+  const windows: QueryWindow[] = [];
+  // The last bucket's start to the exact end. A range that ends on a bucket
+  // boundary still needs it when the end is inclusive.
+  if (interiorEnd < end || config.dateRangeEndInclusive) {
+    windows.push({
+      config,
+      window: {
+        dateRange: [interiorEnd, end],
+        dateRangeStartInclusive: true,
+        dateRangeEndInclusive: config.dateRangeEndInclusive,
+      },
+    });
+  }
+  windows.push(
+    ...chunkedQueryWindows(
+      {
+        ...mvConfig,
+        dateRange: [interiorStart, interiorEnd],
+        dateRangeStartInclusive: true,
+        dateRangeEndInclusive: false,
+      },
+      enableQueryChunking,
+    ),
+  );
+  if (start < interiorStart) {
+    windows.push({
+      config,
+      window: {
+        dateRange: [start, interiorStart],
+        dateRangeEndInclusive: false,
+      },
+    });
+  }
+  return windows;
+}
+
 async function* fetchDataInChunks({
   config,
+  mvConfig,
   clickhouseClient,
   signal,
   enableQueryChunking = false,
@@ -190,6 +309,7 @@ async function* fetchDataInChunks({
   querySettings,
 }: {
   config: ChartConfigWithOptDateRange;
+  mvConfig?: ChartConfigWithOptDateRange;
   clickhouseClient: ClickhouseClient;
   signal: AbortSignal;
   enableQueryChunking?: boolean;
@@ -197,10 +317,7 @@ async function* fetchDataInChunks({
   metadata: Metadata;
   querySettings: QuerySettings | undefined;
 }) {
-  const windows =
-    enableQueryChunking && shouldUseChunking(config)
-      ? getGranularityAlignedTimeWindows(config)
-      : [undefined];
+  const windows = getQueryWindows({ config, mvConfig, enableQueryChunking });
 
   // Every chunk must rank the __hdx_series_limit CTE over the same fixed
   // range, or each window keeps its own top-N and the union across chunks
@@ -208,24 +325,28 @@ async function* fetchDataInChunks({
   // chart range) to bound the ranking scan; the trade-off is that series
   // are picked by recent activity, so groups with no events in the newest
   // window are dropped from the chart.
-  const rankingDateRange = windows[0]?.dateRange;
+  const rankingDateRange = windows[0]?.window?.dateRange;
   // Only a positive seriesLimit emits the __hdx_series_limit CTE (0 = unlimited,
   // null = default), so only then does the ranking need a pinned date range.
   const seriesLimit =
     isBuilderChartConfig(config) && hasPositiveSeriesLimit(config.seriesLimit)
       ? config.seriesLimit
       : undefined;
-  const windowedConfigFor = (w: (typeof windows)[number]) => ({
-    ...config,
-    ...(w ?? {}),
-    ...(w != null && seriesLimit != null && rankingDateRange != null
+  const windowedConfigFor = ({
+    config: windowConfig,
+    window,
+  }: QueryWindow) => ({
+    ...windowConfig,
+    ...(window ?? {}),
+    ...(window != null && seriesLimit != null && rankingDateRange != null
       ? { seriesLimitDateRange: rankingDateRange }
       : {}),
   });
 
-  if (IS_MTVIEWS_ENABLED && isBuilderChartConfig(config)) {
+  const queriedConfig = mvConfig ?? config;
+  if (IS_MTVIEWS_ENABLED && isBuilderChartConfig(queriedConfig)) {
     const { dataTableDDL, mtViewDDL, renderMTViewConfig } =
-      await buildMTViewSelectQuery(config, metadata, querySettings);
+      await buildMTViewSelectQuery(queriedConfig, metadata, querySettings);
     // TODO: show the DDLs in the UI so users can run commands manually
     // eslint-disable-next-line no-console
     console.log('dataTableDDL:', dataTableDDL);
@@ -425,10 +546,9 @@ export function useQueriedChartConfig(
         );
       }
 
-      const optimizedConfig = {
-        ...(mvOptimizationData?.optimizedConfig ?? config),
-        minGranularitySeconds,
-      };
+      const mvConfig = mvOptimizationData?.optimizedConfig
+        ? { ...mvOptimizationData.optimizedConfig, minGranularitySeconds }
+        : undefined;
       const query = queryClient
         .getQueryCache()
         .find({ queryKey: context.queryKey, exact: true });
@@ -442,7 +562,8 @@ export function useQueriedChartConfig(
       };
 
       const chunks = fetchDataInChunks({
-        config: optimizedConfig,
+        config: { ...config, minGranularitySeconds },
+        mvConfig,
         clickhouseClient,
         signal: context.signal,
         enableQueryChunking: options?.enableQueryChunking,
