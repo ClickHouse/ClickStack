@@ -143,12 +143,18 @@ export function setBusinessContext(context: BusinessContext): void {
   const activeSpan = opentelemetry.trace.getActiveSpan();
   activeSpan?.setAttributes(attributes);
 
-  // The HTTP instrumentation keeps the server span in the request context's
-  // RPC metadata. There is none outside a request, as in scheduled tasks.
-  const serverSpan = getRPCMetadata(opentelemetry.context.active())?.span;
+  const serverSpan = getServerSpan();
   if (serverSpan && serverSpan !== activeSpan && serverSpan.isRecording()) {
     serverSpan.setAttributes(attributes);
   }
+}
+
+/**
+ * The current request's HTTP server span, which the HTTP instrumentation keeps
+ * in the context's RPC metadata. None outside a request, as in scheduled tasks.
+ */
+export function getServerSpan(): Span | undefined {
+  return getRPCMetadata(opentelemetry.context.active())?.span;
 }
 
 /**

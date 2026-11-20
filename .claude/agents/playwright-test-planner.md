@@ -63,6 +63,6 @@ HyperDX is an observability platform. Key pages: `/search` (logs/traces), `/dash
 - Components: `packages/app/tests/e2e/components/`
 
 ### Plan Requirements for HyperDX
-- Scenarios must be independent and assume a fresh DB state (the test runner clears MongoDB before each run)
+- Scenarios must be independent and assume a fresh DB state (the test runner clears DocumentDB before each run)
 - Note when a scenario creates shared resources (e.g. webhooks, saved searches) that could conflict with parallel runs — flag these for data isolation
 - Reference existing page objects when describing steps so the generator agent knows what abstractions are available
