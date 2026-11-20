@@ -119,8 +119,13 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
+// Matches DOCDB_USER/DOCDB_PASSWORD in docker-compose.dev.yml and MONGO_URI in .env.development.
+const DEV_DOCDB_AUTH = 'hyperdx:hyperdx';
+const DEV_DOCDB_OPTIONS =
+  'tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256';
+
 /**
- * Mongo URI of this worktree's dev stack. `yarn seed:alerts` runs through
+ * URI of this worktree's dev DocumentDB. `yarn seed:alerts` runs through
  * scripts/with-slots.sh, which sets HDX_DEV_MONGO_PORT.
  */
 function devSlotMongoUri(): string {
@@ -130,7 +135,7 @@ function devSlotMongoUri(): string {
       'HDX_DEV_MONGO_PORT is not set. Run this with `yarn seed:alerts`, or pass --mongo-uri.',
     );
   }
-  return `mongodb://localhost:${port}/hyperdx`;
+  return `mongodb://${DEV_DOCDB_AUTH}@localhost:${port}/hyperdx?${DEV_DOCDB_OPTIONS}`;
 }
 
 function randomInt(minInclusive: number, maxInclusive: number): number {

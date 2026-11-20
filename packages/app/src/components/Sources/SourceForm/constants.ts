@@ -1,4 +1,5 @@
 import {
+  MapKeyIndexPartSelection,
   type PromqlSourceBackend,
   SourceKind,
   UseTextIndex,
@@ -16,8 +17,23 @@ export const SOURCE_KIND_LABELS: Record<SourceKind, string> = {
   [SourceKind.Trace]: 'Traces',
   [SourceKind.Metric]: 'OTel metrics',
   [SourceKind.Session]: 'Sessions',
-  [SourceKind.Promql]: 'PromQL',
+  [SourceKind.Promql]: 'Time Series / Prometheus',
 };
+
+/**
+ * The kind label for a source on a known connection. A PromQL source reads a
+ * ClickHouse TimeSeries table or an external Prometheus API, depending on the
+ * connection, so it is named after which one it uses.
+ */
+export function getSourceKindLabel(
+  kind: SourceKind,
+  connection?: { isPrometheusEndpoint?: boolean },
+): string {
+  if (kind !== SourceKind.Promql || connection == null) {
+    return SOURCE_KIND_LABELS[kind];
+  }
+  return connection.isPrometheusEndpoint ? 'Prometheus' : 'Time Series';
+}
 
 export const KNOWN_COLUMNS_EXPRESSION_HELP_TEXT =
   'For Distributed table sources whose target tables have non-matching column sets. Provide a list of columns supported across all target tables; it is used instead of SELECT * when fetching full row data (e.g. the row side panel). Leave blank to select all columns. This should be a comma-separated list of column names - do not include non-column expressions or aliases.';
@@ -79,4 +95,10 @@ export const USE_TEXT_INDEX_OPTIONS = [
     value: UseTextIndex.Disabled,
     label: 'Force disable',
   },
+];
+
+export const MAP_KEY_INDEX_PART_SELECTION_OPTIONS = [
+  { value: MapKeyIndexPartSelection.Median, label: 'Median (default)' },
+  { value: MapKeyIndexPartSelection.Smallest, label: 'Smallest' },
+  { value: MapKeyIndexPartSelection.Largest, label: 'Largest' },
 ];

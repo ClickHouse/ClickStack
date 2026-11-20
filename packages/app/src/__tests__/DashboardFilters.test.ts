@@ -115,11 +115,12 @@ describe('getFilterEffect', () => {
     ).toEqual('Available as variable ($svc)');
   });
 
-  it('counts the sources an ad hoc filter broadcasts to', () => {
+  it('counts the sources an ad hoc filter broadcasts to, without a variable', () => {
     expect(
       getFilterEffect({
         id: 'adhoc1',
         type: 'ADHOC',
+        isBroadcastEnabled: true,
         name: 'Conditions',
         sourceType: 'sql',
         sources: ['logs', 'traces'],
@@ -128,7 +129,7 @@ describe('getFilterEffect', () => {
       }),
     ).toEqual({
       hasEffect: true,
-      tooltip: 'Filters 2 sources, available as variable ($conds)',
+      tooltip: 'Filters 2 sources',
     });
   });
 });

@@ -6,12 +6,17 @@ import {
   type Granularity,
   splitAndTrimWithBracket,
 } from '@hyperdx/common-utils/dist/core/utils';
-import { minePatterns } from '@hyperdx/common-utils/dist/drain';
+import {
+  buildPatternPredicate,
+  DATE_MASK,
+  MAX_PREDICATE_TEMPLATE_LENGTH,
+  minePatterns,
+} from '@hyperdx/common-utils/dist/drain';
 import type {
   ChartConfigWithDateRange,
   ChartVariable,
 } from '@hyperdx/common-utils/dist/types';
-import { DisplayType } from '@hyperdx/common-utils/dist/types';
+import { DisplayType, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 
 import { ClickhouseClient } from '@/clickhouse';
@@ -34,8 +39,6 @@ import {
 } from './helpers';
 import {
   andSql,
-  buildPatternPredicate,
-  MAX_PREDICATE_TEMPLATE_LENGTH,
   PATTERN_MATCH_SEMANTICS,
   userWhereAsSql,
 } from './patternDrilldown';
@@ -168,6 +171,8 @@ export async function mineWindowPatterns(
     'implicitColumnExpression' in source
       ? source.implicitColumnExpression
       : undefined;
+  const bodyExpression =
+    source.kind === SourceKind.Log ? source.bodyExpression : undefined;
   const useTextIndexForImplicitColumn =
     'useTextIndexForImplicitColumn' in source
       ? source.useTextIndexForImplicitColumn
@@ -190,6 +195,7 @@ export async function mineWindowPatterns(
     connection: source.connection.toString(),
     timestampValueExpression: source.timestampValueExpression,
     implicitColumnExpression: implicitColumn,
+    bodyExpression,
     useTextIndexForImplicitColumn,
     orderBy: [{ ordering: 'DESC' as const, valueExpression: 'rand()' }],
     limit: { limit: sampleSize, offset: 0 },
@@ -211,6 +217,7 @@ export async function mineWindowPatterns(
     connection: source.connection.toString(),
     timestampValueExpression: source.timestampValueExpression,
     implicitColumnExpression: implicitColumn,
+    bodyExpression,
     useTextIndexForImplicitColumn,
     limit: { limit: 1, offset: 0 },
     dateRange: [startDate, endDate] as [Date, Date],
@@ -232,6 +239,7 @@ export async function mineWindowPatterns(
           tableName: source.from.tableName,
           connectionId: source.connection.toString(),
           implicitColumnExpression: implicitColumn,
+          bodyExpression,
           useTextIndexForImplicitColumn,
         }).catch(err => {
           if (queriesFailed || options.abortSignal?.aborted) return null;
@@ -463,7 +471,9 @@ export async function runEventPatterns(
   const slicedPatterns = rawPatterns.slice(0, topN);
 
   const patterns = slicedPatterns.map((p, i) => {
-    const predicate = buildPatternPredicate(bodyColumn, p.pattern);
+    const predicate = buildPatternPredicate(bodyColumn, p.pattern, {
+      masks: [DATE_MASK],
+    });
     const whereSnippet =
       predicate == null ? '' : andSql(drilldown?.where, predicate);
 

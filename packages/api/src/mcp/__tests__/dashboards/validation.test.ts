@@ -11,6 +11,7 @@ import {
   getRawSqlMissingSourceError,
   getRawSqlTileMacroWarnings,
   getRawSqlTilesMissingRequiredSource,
+  getSavedFilterValueWarnings,
   getTileVariableWarnings,
 } from '@/mcp/tools/dashboards/validation';
 import type {
@@ -594,9 +595,22 @@ describe('mcpFiltersParam variable fields', () => {
       options: ['prod', 'staging'],
       variableName,
     }),
+    SQL_QUERY: (variableName: string) => ({
+      type: 'SQL_QUERY',
+      name: 'Environment',
+      connectionId: sourceId,
+      sqlTemplate: 'SELECT DISTINCT env FROM envs',
+      variableName,
+    }),
   };
 
-  describe.each(['QUERY_EXPRESSION', 'STATIC_LIST'] as const)('%s', type => {
+  const variableFilterTypes = [
+    'QUERY_EXPRESSION',
+    'STATIC_LIST',
+    'SQL_QUERY',
+  ] as const;
+
+  describe.each(variableFilterTypes)('%s', type => {
     it.each([
       ['a space', 'has space'],
       ['a leading digit', '1service'],
@@ -920,5 +934,92 @@ describe('getFilterVariableWarnings', () => {
     expect(joined).toContain('Filter "Endpoint"');
     expect(joined).toContain("unknown variable 'tenant'");
     expect(joined).toContain('Available variables: service');
+  });
+
+  describe('SQL query filters', () => {
+    const sqlFilter = (sqlTemplate: string, sourceId?: string) => ({
+      name: 'Environment',
+      sqlTemplate,
+      sourceId,
+      isVariableEnabled: true,
+      variableName: 'env',
+    });
+
+    it('accepts a query guarded by $__filter', () => {
+      expect(
+        getFilterVariableWarnings([
+          serviceFilter,
+          sqlFilter(
+            'SELECT env FROM envs WHERE $__filter(service, $service) AND $__timeFilter(ts)',
+          ),
+        ]),
+      ).toEqual([]);
+    });
+
+    it('checks the query as SQL', () => {
+      const warnings = getFilterVariableWarnings([
+        serviceFilter,
+        sqlFilter('SELECT env FROM envs WHERE $__filter(service, $tenant)'),
+      ]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("unknown variable 'tenant'");
+    });
+
+    it('warns about a macro that needs a source', () => {
+      const warnings = getFilterVariableWarnings([
+        sqlFilter('SELECT env FROM $__sourceTable'),
+      ]);
+      expect(warnings).toEqual([
+        'Filter "Environment": SQL uses $__sourceTable but no source is selected',
+      ]);
+    });
+
+    it('accepts source macros when the filter has a source', () => {
+      expect(
+        getFilterVariableWarnings([
+          sqlFilter(
+            'SELECT env FROM $__sourceTable WHERE $__filters',
+            '65f5e4a3b9e77c001a345678',
+          ),
+        ]),
+      ).toEqual([]);
+    });
+
+    it.each([
+      ['a source macro', 'SELECT env FROM $__sourceTable(gauge'],
+      ['a time macro', 'SELECT env FROM envs WHERE $__timeFilter(ts'],
+    ])('warns about an unclosed %s instead of throwing', (_label, sql) => {
+      expect(getFilterVariableWarnings([sqlFilter(sql)])).toEqual([
+        'Filter "Environment": Failed to parse macro arguments',
+      ]);
+    });
+  });
+});
+
+describe('getSavedFilterValueWarnings', () => {
+  const filters = [
+    { type: 'DATA_SOURCE' as const, name: 'Traces', variableName: 'traces' },
+    { type: 'CONNECTION' as const, name: 'Cluster', variableName: 'conn' },
+  ];
+
+  it('accepts saved values for data source and connection variables', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [
+          { type: 'variable', name: 'traces', values: ['s1'] },
+          { type: 'variable', name: 'conn', values: ['c1'] },
+        ],
+        filters,
+      ),
+    ).toEqual([]);
+  });
+
+  it('warns about a saved value no filter declares', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [{ type: 'variable', name: 'nope', values: ['x'] }],
+        filters,
+      ),
+    ).toHaveLength(1);
   });
 });

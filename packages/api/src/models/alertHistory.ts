@@ -169,11 +169,12 @@ AlertHistorySchema.index(
   { expireAfterSeconds: ms('30d') / 1000 },
 );
 
-// Used by getRecentAlertHistories (matches on alert, sorts by createdAt)
+// Used by all alert/task reads: getRecentAlertHistories,
+// getAlertTransitionsInRange, getLatestAlertHistories,
+// getPreviousAlertHistories, and getConsecutiveWindowHistories — all match on
+// alert equality with a createdAt range/sort, which this index serves with
+// tight bounds.
 AlertHistorySchema.index({ alert: 1, createdAt: -1 });
-
-// Used by getPreviousAlertHistories (groups by {alert, group}, sorts by createdAt)
-AlertHistorySchema.index({ alert: 1, group: 1, createdAt: -1 });
 
 export default mongoose.model<IAlertHistory>(
   'AlertHistory',

@@ -1,6 +1,10 @@
 import React from 'react';
 import { useForm } from 'react-hook-form';
-import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import {
+  DataSourceDashboardFilter,
+  SourceKind,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -8,6 +12,7 @@ import {
   SourceManagementMenu,
   SourceSelectControlled,
 } from '@/components/SourceSelect';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { useSources } from '@/source';
 
 jest.mock('@/source', () => ({
@@ -183,10 +188,14 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
 
   function SelectHarness({
     isSourceAllowed,
+    defaultSource,
   }: {
     isSourceAllowed?: (source: TSource) => boolean;
+    defaultSource?: string;
   } = {}) {
-    const { control } = useForm();
+    const { control } = useForm({
+      defaultValues: { source: defaultSource },
+    });
     return (
       <SourceSelectControlled
         control={control}
@@ -233,6 +242,32 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
     expect(screen.queryByText('Control Plane Prod')).not.toBeInTheDocument();
   });
 
+  it('selects the current label on a focusing click so typing replaces it', async () => {
+    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
+    const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
+    expect(input).toHaveValue('Billing Logs');
+
+    await userEvent.click(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe('Billing Logs'.length);
+
+    await userEvent.keyboard('prod');
+    expect(input).toHaveValue('prod');
+    expect(await screen.findByText('Prod Logs')).toBeInTheDocument();
+    expect(screen.queryByText('Billing Logs')).not.toBeInTheDocument();
+  });
+
+  it('places the caret normally on a click into an already focused input', async () => {
+    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
+    const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
+
+    await userEvent.click(input);
+    await userEvent.click(input);
+    expect(input.selectionStart).toBe(input.selectionEnd);
+  });
+
   it('hides sources rejected by isSourceAllowed, along with sections left empty', async () => {
     asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
     renderWithMantine(
@@ -263,5 +298,107 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
     expect(await screen.findByText('Apple Traces')).toBeInTheDocument();
     expect(screen.getByText('Zebra Logs')).toBeInTheDocument();
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
+  });
+});
+
+describe('SourceSelectControlled (data source variables)', () => {
+  const SOURCES = [makeSource('logs', 'Logs', SourceKind.Log)];
+  const sourceVariable = (
+    variableName: string,
+    allowedSourceKinds: SourceKind[],
+    connection?: string,
+  ): DataSourceDashboardFilter => ({
+    id: variableName,
+    type: 'DATA_SOURCE',
+    name: variableName,
+    variableName,
+    allowedSourceKinds,
+    connection,
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  });
+  const VARIABLES = [
+    sourceVariable('logs_source', [SourceKind.Log]),
+    sourceVariable('any_source', [SourceKind.Log, SourceKind.Promql]),
+    sourceVariable('prom_source', [SourceKind.Promql]),
+  ];
+
+  function VariableHarness({
+    allowSourceVariables,
+  }: {
+    allowSourceVariables?: boolean;
+  }) {
+    const { control } = useForm();
+    return (
+      <ReferenceVariablesProvider filters={VARIABLES} values={new Map()}>
+        <SourceSelectControlled
+          control={control}
+          name="source"
+          allowedSourceKinds={[SourceKind.Log, SourceKind.Trace]}
+          allowSourceVariables={allowSourceVariables}
+        />
+      </ReferenceVariablesProvider>
+    );
+  }
+
+  it('offers only variables with at least one kind the picker allows', async () => {
+    asMock(useSources).mockReturnValue({ data: SOURCES });
+    renderWithMantine(<VariableHarness allowSourceVariables />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Variables')).toBeInTheDocument();
+    expect(screen.getByText('$logs_source')).toBeInTheDocument();
+    expect(screen.getByText('$any_source')).toBeInTheDocument();
+    expect(screen.queryByText('$prom_source')).not.toBeInTheDocument();
+  });
+
+  it('puts unsectioned sources under their own header after the variables', async () => {
+    asMock(useSources).mockReturnValue({ data: SOURCES });
+    renderWithMantine(<VariableHarness allowSourceVariables />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Variables')).toBeInTheDocument();
+    expect(screen.getByText('Sources')).toBeInTheDocument();
+  });
+
+  it('offers only variables unlimited or limited to its connection', async () => {
+    asMock(useSources).mockReturnValue({ data: SOURCES });
+    function ConnectionHarness() {
+      const { control } = useForm();
+      return (
+        <ReferenceVariablesProvider
+          filters={[
+            sourceVariable('any', [SourceKind.Log]),
+            sourceVariable('mine', [SourceKind.Log], '$conn'),
+            sourceVariable('other', [SourceKind.Log], 'conn-b'),
+          ]}
+          values={new Map()}
+        >
+          <SourceSelectControlled
+            control={control}
+            name="source"
+            allowSourceVariables
+            variableConnection="$conn"
+          />
+        </ReferenceVariablesProvider>
+      );
+    }
+    renderWithMantine(<ConnectionHarness />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('$any')).toBeInTheDocument();
+    expect(screen.getByText('$mine')).toBeInTheDocument();
+    expect(screen.queryByText('$other')).not.toBeInTheDocument();
+  });
+
+  it('offers no variables unless the picker opts in', async () => {
+    asMock(useSources).mockReturnValue({ data: SOURCES });
+    renderWithMantine(<VariableHarness />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Logs')).toBeInTheDocument();
+    expect(screen.queryByText('$logs_source')).not.toBeInTheDocument();
   });
 });
