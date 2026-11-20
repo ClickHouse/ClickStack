@@ -1421,8 +1421,13 @@ function DBSearchPageContent() {
   // completes "Explore your data". An explicit arg, not a shared ref, so
   // concurrent submits can't consume each other's suppression.
   const onSubmit = useCallback(
-    ({ recordExploration = true }: { recordExploration?: boolean } = {}) => {
-      onSearch(displayedTimeInputValue);
+    ({
+      recordExploration = true,
+      resolveTimeRange = true,
+    }: { recordExploration?: boolean; resolveTimeRange?: boolean } = {}) => {
+      if (resolveTimeRange) {
+        onSearch(displayedTimeInputValue);
+      }
       handleSubmit(
         ({ select, where, whereLanguage, source, filters, orderBy }) => {
           setSearchedConfig({
@@ -1984,24 +1989,21 @@ function DBSearchPageContent() {
             ...displayedColumns,
             withMapKeyAlias(column, displayedColumns, knownColumns),
           ];
-      const select = newSelectArray.join(', ');
-      setValue('select', select);
-      const orderBy = getValues('orderBy') ?? '';
-      const nextOrderBy = selected
-        ? orderByAfterRemovingSelectItem(
-            selected,
-            orderBy,
-            defaultSearchConfig.orderBy ?? '',
-          )
-        : orderBy;
-      // Apply only the column change: a full submit re-resolves a relative
-      // time range, which refetches the histogram for nothing.
-      if (nextOrderBy !== orderBy) {
-        setValue('orderBy', nextOrderBy);
-        setSearchedConfig({ select, orderBy: nextOrderBy });
-      } else {
-        setSearchedConfig({ select });
+      setValue('select', newSelectArray.join(', '));
+      if (selected) {
+        const orderBy = getValues('orderBy') ?? '';
+        const nextOrderBy = orderByAfterRemovingSelectItem(
+          selected,
+          orderBy,
+          defaultSearchConfig.orderBy ?? '',
+        );
+        if (nextOrderBy !== orderBy) {
+          setValue('orderBy', nextOrderBy);
+        }
       }
+      // Keep the current time range: re-resolving a relative range would
+      // refetch the histogram for a column change.
+      onSubmit({ resolveTimeRange: false });
     },
     [
       displayedColumns,
@@ -2009,7 +2011,7 @@ function DBSearchPageContent() {
       setValue,
       getValues,
       defaultSearchConfig.orderBy,
-      setSearchedConfig,
+      onSubmit,
     ],
   );
 
