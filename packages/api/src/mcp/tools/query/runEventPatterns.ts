@@ -515,8 +515,7 @@ export async function runEventPatterns(
         ? {
             drilldownUnavailable:
               `Template is longer than ${MAX_PREDICATE_TEMPLATE_LENGTH} characters, so ` +
-              'whereSnippet is empty. Do not search with it; it would match every row. ' +
-              'Pass maxBodyChars to mine a shorter prefix of each body.',
+              'whereSnippet is empty. Do not search with it; it would match every row.',
           }
         : {}),
       ...(formattedTrend ? { trend: formattedTrend } : {}),
