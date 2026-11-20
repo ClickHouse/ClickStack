@@ -3477,9 +3477,10 @@ export class Metadata {
         return Object.entries(json?.data?.[0]).map(([key, value]) => ({
           key: keys[parseInt(key.replace('param', ''))],
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          value: value?.filter(v => v != null && v !== '') as  // remove nulls and empty strings
-            | string[]
-            | number[],
+          value: value?.filter(
+            v => v != null && v !== '',
+          ) as // remove nulls and empty strings
+            string[] | number[],
         }));
       },
     );

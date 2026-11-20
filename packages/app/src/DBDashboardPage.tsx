@@ -2991,8 +2991,8 @@ function DBDashboardPage({
   const hasTiles = dashboard && dashboard.tiles.length > 0;
   const hasSavedDefaults = Boolean(
     dashboard?.savedQuery ||
-      dashboard?.savedFilterValues?.length ||
-      dashboard?.savedDateRange,
+    dashboard?.savedFilterValues?.length ||
+    dashboard?.savedDateRange,
   );
 
   const dashboardMeta =
@@ -3000,7 +3000,8 @@ function DBDashboardPage({
       <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
         {dashboard.createdBy && (
           <span>
-            Created by {dashboard.createdBy.name || dashboard.createdBy.email}.{' '}
+            Created by {dashboard.createdBy.name || dashboard.createdBy.email}
+            .{' '}
           </span>
         )}
         {dashboard.updatedAt && (

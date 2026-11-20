@@ -70,7 +70,8 @@ the OpenAPI spec and `yarn lint:openapi` to validate it.
 
 `scripts/ci/check-openapi-sync.sh` (run by `make ci-lint` and by CI) fails if the
 committed spec is stale. `swaggerOptions` in `src/utils/swagger.ts` is also an
-input, and the spec is in `.prettierignore` because docgen owns its formatting.
+input, and the spec is in `ignorePatterns` in `.oxfmtrc.json` because docgen owns
+its formatting.
 
 ### MCP Server (`src/mcp/`)
 

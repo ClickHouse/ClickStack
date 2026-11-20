@@ -580,11 +580,9 @@ export function TableSourceForm({
 
   return (
     <div
-      style={
-        {
-          // maxWidth: 700
-        }
-      }
+      style={{
+        // maxWidth: 700
+      }}
     >
       <Stack gap="md" mb="md">
         <Flex justify="space-between" align="center" mb="lg">
