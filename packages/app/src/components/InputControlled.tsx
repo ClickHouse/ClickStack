@@ -14,7 +14,8 @@ import {
 } from '@mantine/core';
 
 interface InputControlledProps<T extends FieldValues>
-  extends Omit<InputProps, 'name' | 'style'>,
+  extends
+    Omit<InputProps, 'name' | 'style'>,
     Omit<React.InputHTMLAttributes<HTMLInputElement>, 'name' | 'size'> {
   name: Path<T>;
   control: Control<T>;
@@ -22,7 +23,8 @@ interface InputControlledProps<T extends FieldValues>
 }
 
 interface PasswordInputControlledProps<T extends FieldValues>
-  extends Omit<PasswordInputProps, 'name' | 'style'>,
+  extends
+    Omit<PasswordInputProps, 'name' | 'style'>,
     Omit<React.InputHTMLAttributes<HTMLInputElement>, 'name' | 'size'> {
   name: Path<T>;
   control: Control<T>;
@@ -30,7 +32,8 @@ interface PasswordInputControlledProps<T extends FieldValues>
 }
 
 interface TextInputControlledProps<T extends FieldValues>
-  extends Omit<TextInputProps, 'name' | 'style'>,
+  extends
+    Omit<TextInputProps, 'name' | 'style'>,
     Omit<React.InputHTMLAttributes<HTMLInputElement>, 'name' | 'size'> {
   name: Path<T>;
   control: Control<T>;
@@ -38,7 +41,8 @@ interface TextInputControlledProps<T extends FieldValues>
 }
 
 interface CheckboxControlledProps<T extends FieldValues>
-  extends Omit<CheckboxProps, 'name' | 'style'>,
+  extends
+    Omit<CheckboxProps, 'name' | 'style'>,
     Omit<
       React.InputHTMLAttributes<HTMLInputElement>,
       'name' | 'size' | 'color'
@@ -51,8 +55,10 @@ interface CheckboxControlledProps<T extends FieldValues>
 // Autocomplete already extends the native input attributes (minus its own
 // value-based onChange and size), so it carries maxLength/placeholder without
 // a second InputHTMLAttributes extend that would clash on onChange.
-interface AutocompleteControlledProps<T extends FieldValues>
-  extends Omit<AutocompleteProps, 'name' | 'style'> {
+interface AutocompleteControlledProps<T extends FieldValues> extends Omit<
+  AutocompleteProps,
+  'name' | 'style'
+> {
   name: Path<T>;
   control: Control<T>;
   rules?: Parameters<Control<T>['register']>[1];

@@ -12,7 +12,6 @@
       "project": ["src/**/*.{ts,tsx}", "pages/**/*.{ts,tsx}"],
       "ignore": [".storybook/public/**"],
       "ignoreDependencies": [
-        "eslint-config-next",
         "@chromatic-com/storybook",
         "@storybook/addon-themes",
         "react-is"

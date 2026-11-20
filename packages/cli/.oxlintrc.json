@@ -1,0 +1,29 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "extends": ["../../oxlint/base.jsonc"],
+  "globals": {
+    "console": "readonly",
+    "process": "readonly",
+    "setTimeout": "readonly",
+    "clearTimeout": "readonly",
+    "setInterval": "readonly",
+    "clearInterval": "readonly",
+    "React": "readonly",
+    "fetch": "readonly",
+    "Response": "readonly",
+    "URL": "readonly",
+    "URLSearchParams": "readonly",
+    "Headers": "readonly",
+    "RequestInfo": "readonly",
+    "RequestInit": "readonly",
+    "ReadableStream": "readonly",
+    "Buffer": "readonly"
+  },
+  "ignorePatterns": [
+    "node_modules/**",
+    "dist/**",
+    "**/*.config.cjs",
+    "**/*.config.mjs",
+    "**/*.config.ts"
+  ]
+}

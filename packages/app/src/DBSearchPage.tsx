@@ -76,9 +76,9 @@ import {
 } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowBarToRight,
   IconBolt,
   IconCode,
+  IconLayoutSidebarLeftExpand,
   IconPlayerPlay,
   IconPlus,
   IconStack2,
@@ -356,7 +356,7 @@ function ExpandFiltersButton({ onExpand }: { onExpand: () => void }) {
         onClick={onExpand}
         aria-label="Show filters"
       >
-        <IconArrowBarToRight size={14} />
+        <IconLayoutSidebarLeftExpand size={14} />
       </ActionIcon>
     </Tooltip>
   );
@@ -763,7 +763,6 @@ function useLiveUpdate({
   const [refreshOnVisible, setRefreshOnVisible] = useState(false);
 
   const refresh = useCallback(() => {
-    // eslint-disable-next-line no-restricted-syntax
     onTimeRangeSelect(new Date(Date.now() - interval), new Date(), null);
   }, [onTimeRangeSelect, interval]);
 
@@ -2572,7 +2571,8 @@ function DBSearchPageContent() {
               {savedSearch.createdBy && (
                 <span>
                   Created by{' '}
-                  {savedSearch.createdBy.name || savedSearch.createdBy.email}.{' '}
+                  {savedSearch.createdBy.name || savedSearch.createdBy.email}
+                  .{' '}
                 </span>
               )}
               {savedSearch.updatedAt && (

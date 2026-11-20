@@ -514,9 +514,7 @@ const appliesToSourceKinds = (
  * The source kinds a filter of this type can read its dropdown values from, or
  * `undefined` for a filter that reads no source at all.
  */
-const filterSourceKinds = (
-  filter: DashboardFilter,
-): SourceKind[] | undefined =>
+const filterSourceKinds = (filter: DashboardFilter): SourceKind[] | undefined =>
   isPrometheusLabelFilter(filter)
     ? [SourceKind.Promql]
     : isQueryExpressionFilter(filter)
