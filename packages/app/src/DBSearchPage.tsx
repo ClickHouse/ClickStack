@@ -2018,8 +2018,9 @@ function DBSearchPageContent() {
       }
       // Keep the current time range unless the user typed a new one:
       // re-resolving a relative range would refetch the histogram for a
-      // column change.
-      onSubmit({ resolveTimeRange: isTimeInputEdited });
+      // column change. Live tail refetches on every tick anyway, and its ticks
+      // would mark a typed range as applied, so it always re-resolves.
+      onSubmit({ resolveTimeRange: !!isLive || isTimeInputEdited });
     },
     [
       displayedColumns,
@@ -2028,6 +2029,7 @@ function DBSearchPageContent() {
       getValues,
       defaultSearchConfig.orderBy,
       onSubmit,
+      isLive,
       isTimeInputEdited,
     ],
   );
