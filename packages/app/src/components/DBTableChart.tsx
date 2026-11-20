@@ -76,6 +76,18 @@ export default function DBTableChart({
 }) {
   const [sort, setSort] = useState<SortingState>([]);
 
+  // A header sort only overrides the Order By it was clicked against. Clear it
+  // when the config's own Order By changes (e.g. the tile was edited), so it
+  // can't come back if the Order By is later changed back.
+  const configOrderByKey = JSON.stringify(
+    isBuilderChartConfig(config) ? (config.orderBy ?? null) : null,
+  );
+  const [sortOrderByKey, setSortOrderByKey] = useState(configOrderByKey);
+  if (sortOrderByKey !== configOrderByKey) {
+    setSortOrderByKey(configOrderByKey);
+    setSort([]);
+  }
+
   const { data: source } = useSource({
     id: config.source,
   });
