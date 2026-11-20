@@ -142,4 +142,15 @@ describe('TraceRedMetricsChart', () => {
       ),
     ).toEqual(new Set(['Duration']));
   });
+
+  it('shows the acceleration indicator on every RED tile, without the date-range one', () => {
+    renderChart('red');
+
+    expect(mockTimeChartProps.length).toBeGreaterThan(0);
+    for (const props of mockTimeChartProps) {
+      // Left unset, DBTimeChart shows the indicator, as on dashboard tiles.
+      expect(props.showMVOptimizationIndicator).not.toBe(false);
+      expect(props.showDateRangeIndicator).toBe(false);
+    }
+  });
 });

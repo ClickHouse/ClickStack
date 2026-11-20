@@ -144,7 +144,8 @@ export function TraceRedMetricsChart({
     sourceId: source.id,
     enabled: isReady,
     showDisplaySwitcher: false,
-    showMVOptimizationIndicator: false,
+    // Same acceleration indicator dashboard tiles show. The date-range one
+    // stays off: the search range is exact even when a view serves the tile.
     showDateRangeIndicator: false,
     queryKeyPrefix,
     onTimeRangeSelect,
