@@ -487,6 +487,7 @@ const Tile = ({
   dateRange,
   onDuplicateClick,
   onEditClick,
+  onAlertClick,
   onDeleteClick,
   onUpdateChart,
   onMoveToGroup,
@@ -519,7 +520,7 @@ const Tile = ({
   dateRange: [Date, Date];
   onDuplicateClick: () => void;
   onEditClick: () => void;
-  onAddAlertClick?: () => void;
+  onAlertClick: () => void;
   onDeleteClick: () => void;
   onUpdateChart?: (chart: Tile) => void;
   onMoveToGroup?: (containerId: string | undefined, tabId?: string) => void;
@@ -1049,7 +1050,7 @@ const Tile = ({
                   data-testid={`tile-alerts-button-${chart.id}`}
                   variant="subtle"
                   size="sm"
-                  onClick={onEditClick}
+                  onClick={onAlertClick}
                 >
                   <IconBell size={16} />
                 </ActionIcon>
@@ -1063,7 +1064,7 @@ const Tile = ({
                 data-testid={`tile-alerts-button-${chart.id}`}
                 variant="subtle"
                 size="sm"
-                onClick={onEditClick}
+                onClick={onAlertClick}
                 mr={4}
               >
                 <IconBellPlus size={16} />
@@ -1146,6 +1147,7 @@ const Tile = ({
     onDeleteClick,
     onDuplicateClick,
     onEditClick,
+    onAlertClick,
     onMoveToGroup,
     openFullscreen,
     readOnly,
@@ -1178,7 +1180,7 @@ const Tile = ({
               leftSection={
                 alert ? <IconBell size={14} /> : <IconBellPlus size={14} />
               }
-              onClick={onEditClick}
+              onClick={onAlertClick}
             >
               {alertTooltip}
             </Menu.Item>
@@ -1229,6 +1231,7 @@ const Tile = ({
     onDeleteClick,
     onDuplicateClick,
     onEditClick,
+    onAlertClick,
     onMoveToGroup,
     openFullscreen,
     readOnly,
@@ -1693,6 +1696,7 @@ const Tile = ({
 const EditTileModal = ({
   dashboardId,
   chart,
+  defaultAlertPanelOpened,
   onClose,
   onSave,
   isSaving,
@@ -1703,6 +1707,7 @@ const EditTileModal = ({
 }: {
   dashboardId?: string;
   chart: Tile | undefined;
+  defaultAlertPanelOpened?: boolean;
   onClose: () => void;
   dateRange: [Date, Date];
   isSaving?: boolean;
@@ -1789,6 +1794,7 @@ const EditTileModal = ({
                   onDirtyChange={setHasUnsavedChanges}
                   isDashboardForm
                   autoRun
+                  defaultAlertPanelOpened={defaultAlertPanelOpened}
                 />
               </SqlVariablesProvider>
             </IsolatedChartSyncProvider>
@@ -2320,6 +2326,7 @@ function DBDashboardPage({
   }, [dashboard, isLocalDashboard, setDashboard]);
 
   const [editedTile, setEditedTile] = useState<undefined | Tile>();
+  const [isEditingTileAlert, setIsEditingTileAlert] = useState(false);
 
   const containers = useMemo(
     () => dashboard?.containers ?? [],
@@ -2525,7 +2532,14 @@ function DBDashboardPage({
           chart={resolvedChart}
           referenceVariableNames={referenceVariableNamesByTileId.get(chart.id)}
           dateRange={searchedTimeRange}
-          onEditClick={() => setEditedTile(chart)}
+          onEditClick={() => {
+            setIsEditingTileAlert(false);
+            setEditedTile(chart);
+          }}
+          onAlertClick={() => {
+            setIsEditingTileAlert(true);
+            setEditedTile(chart);
+          }}
           readOnly={isKioskMode}
           isLive={isRefreshEnabled}
           granularity={
@@ -2830,6 +2844,7 @@ function DBDashboardPage({
       return !t.containerId;
     });
     const pos = calculateNextTilePosition(targetTiles, newW);
+    setIsEditingTileAlert(false);
     setEditedTile({
       id: makeId(),
       x: pos.x,
@@ -3365,6 +3380,7 @@ function DBDashboardPage({
         <EditTileModal
           dashboardId={dashboardId}
           chart={editedTile}
+          defaultAlertPanelOpened={isEditingTileAlert}
           onClose={() => {
             if (!isSaving) setEditedTile(undefined);
           }}

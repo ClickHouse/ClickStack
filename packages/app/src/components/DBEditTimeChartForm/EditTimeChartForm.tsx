@@ -17,6 +17,7 @@ import {
   displayTypeSupportsBuilderAlerts,
   displayTypeSupportsRawSqlAlerts,
   isTimeSeriesDisplayType,
+  savedChartConfigSupportsAlerts,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
   displayTypeRequiresSource,
@@ -103,7 +104,7 @@ import {
   useResolvedReference,
   useSourceVariableDeclarations,
 } from '@/components/sourceSelectUtils';
-import { IS_PROMQL_ENABLED } from '@/config';
+import { IS_LOCAL_MODE, IS_PROMQL_ENABLED } from '@/config';
 import HDXMarkdownChart from '@/HDXMarkdownChart';
 import {
   getDurationMsExpression,
@@ -111,7 +112,10 @@ import {
   useSource,
   useSources,
 } from '@/source';
-import { normalizeNoOpAlertScheduleFields } from '@/utils/alerts';
+import {
+  DEFAULT_TILE_ALERT,
+  normalizeNoOpAlertScheduleFields,
+} from '@/utils/alerts';
 
 import { AlertPanelPrimaryAction } from './AlertPanelPrimaryAction';
 import { ChartActionBar, DashboardFiltersToggleProps } from './ChartActionBar';
@@ -173,6 +177,11 @@ type EditTimeChartFormProps = {
   isSavingAlert?: boolean;
   /** Hides the alert editor's remove control, for surfaces that require one. */
   isAlertRequired?: boolean;
+  /**
+   * Opens with the alert panel showing, as the alert button does: on the
+   * chart's alert, or on a new draft where the editor offers alerts.
+   */
+  defaultAlertPanelOpened?: boolean;
   /** Whether to offer "Save to dashboard". Defaults to "outside a dashboard". */
   showSaveToDashboard?: boolean;
 };
@@ -274,12 +283,32 @@ export default function EditTimeChartForm({
   saveAlertLabel,
   isSavingAlert,
   isAlertRequired = false,
+  defaultAlertPanelOpened = false,
   showSaveToDashboard,
 }: EditTimeChartFormProps) {
-  const formValue: ChartEditorFormState = useMemo(
+  const savedFormValue = useMemo(
     () => convertSavedChartConfigToFormState(chartConfig),
     [chartConfig],
   );
+  // Opened from a tile's alert button, a chart without an alert starts on a
+  // new one where the editor offers alerts, as if Add alert were clicked.
+  const opensOnNewAlert =
+    defaultAlertPanelOpened &&
+    chartConfig.alert == null &&
+    (enableAlerts ?? dashboardId != null) &&
+    getFormReferenceVariables(savedFormValue).length === 0 &&
+    !IS_LOCAL_MODE &&
+    savedChartConfigSupportsAlerts(chartConfig);
+  const formValue: ChartEditorFormState = useMemo(() => {
+    if (!opensOnNewAlert) return savedFormValue;
+    return {
+      ...savedFormValue,
+      alert: {
+        ...DEFAULT_TILE_ALERT,
+        ...(savedFormValue.name && { displayName: savedFormValue.name }),
+      },
+    };
+  }, [savedFormValue, opensOnNewAlert]);
 
   const {
     control,
@@ -759,9 +788,12 @@ export default function EditTimeChartForm({
     ],
   );
 
+  // Until the chart has run, a new alert from a tile's alert button doesn't
+  // stop it running: the alert has no webhook yet.
+  const ignoresNewAlert = opensOnNewAlert && queriedConfig == null;
   const onSubmit = useCallback(
     (suppressErrorNotification: boolean = false) => {
-      handleSubmit(form => {
+      const runChart = (form: ChartEditorFormState) => {
         const { errors, config } = validateAndNormalize(form);
         if (errors.length > 0) {
           if (!suppressErrorNotification) {
@@ -798,11 +830,25 @@ export default function EditTimeChartForm({
             isRawSqlChart ? undefined : tableSource,
           );
         }
-      })();
+      };
+      handleSubmit(
+        runChart,
+        // The resolver only checks the alert. The chart runs without it, and
+        // the alert's errors are neither shown nor focused.
+        ignoresNewAlert
+          ? () => {
+              clearErrors('alert');
+              runChart({ ...getValues(), alert: undefined });
+            }
+          : undefined,
+      )();
     },
     [
       validateAndNormalize,
       handleSubmit,
+      ignoresNewAlert,
+      clearErrors,
+      getValues,
       setChartConfig,
       setQueriedConfigAndSource,
       tableSource,
@@ -1260,10 +1306,11 @@ export default function EditTimeChartForm({
 
   return (
     // The panel opens on request, except where the alert is what is being
-    // edited (the inline-alert modal).
+    // edited (the inline-alert modal) or what the editor was opened for.
     <AlertPanelLayout
       data-testid={dataTestId}
-      defaultOpened={isAlertRequired}
+      defaultOpened={isAlertRequired || defaultAlertPanelOpened}
+      defaultIsDraft={opensOnNewAlert}
       onOpen={snapshotAlert}
       onCancel={cancelAlertChanges}
       actions={
