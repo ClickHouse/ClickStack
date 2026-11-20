@@ -7,7 +7,10 @@ import {
   displayTypeSupportsReducer,
   getQueriedPromqlSeries,
 } from '@hyperdx/common-utils/dist/core/promql';
-import { isTimeSeriesDisplayType } from '@hyperdx/common-utils/dist/core/utils';
+import {
+  isTimeSeriesDisplayType,
+  splitAndTrimWithBracket,
+} from '@hyperdx/common-utils/dist/core/utils';
 import {
   configConsumesBroadcastFilters,
   getBlockingRequiredFilters,
@@ -44,6 +47,7 @@ import {
   validateAlertScheduleOffsetMinutes,
 } from '@hyperdx/common-utils/dist/types';
 import { filterReferencedVariables } from '@hyperdx/common-utils/dist/variables';
+import type { SortingState } from '@tanstack/react-table';
 
 import {
   convertToCategoricalChartConfig,
@@ -66,6 +70,7 @@ import {
   extendDateRangeToInterval,
   intervalToGranularity,
 } from '@/utils/alerts';
+import { parseAsSortingStateString } from '@/utils/queryParsers';
 
 export const isQueryReady = (
   queriedConfig: ChartConfigWithDateRange | undefined,
@@ -609,4 +614,23 @@ export function buildGroupByConnectionProps({
   return connections.length > 0
     ? { tableConnections: connections, intersectFields: true }
     : { tableConnection };
+}
+
+/**
+ * Sort state for the preview table's headers. An Order By that doesn't parse
+ * (no trailing direction, trailing modifiers, empty, more than one key) yields
+ * `[]` rather than `undefined`, so DBTableChart doesn't fall back to a stale
+ * header sort and the typed Order By is queried as written.
+ */
+export function orderByToTableSortState(orderBy: string): SortingState {
+  // The parser would read `a DESC, b ASC` as one key with the last direction,
+  // and pagination takes its time direction from that, not from `a DESC`.
+  if (splitAndTrimWithBracket(orderBy).length > 1) return [];
+  const sort = parseAsSortingStateString.parse(orderBy);
+  return sort ? [sort] : [];
+}
+
+export function tableSortStateToOrderBy(sort: SortingState | null): string {
+  const first = sort?.at(0);
+  return first ? parseAsSortingStateString.serialize(first) : '';
 }

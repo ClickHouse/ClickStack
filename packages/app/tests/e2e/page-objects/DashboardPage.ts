@@ -2131,6 +2131,30 @@ export class DashboardPage {
       .waitFor({ state: 'visible', timeout: 15000 });
   }
 
+  /** The sort button in the header of column `name` in a table tile. */
+  getTileSortButton(tileIndex: number, name: string) {
+    return this.getTile(tileIndex)
+      .getByTestId('raw-log-table-sort-button')
+      .filter({ hasText: name });
+  }
+
+  /** Cell values of column `name` in a table tile, top to bottom. */
+  async getTileColumnValues(
+    tileIndex: number,
+    name: string,
+  ): Promise<string[]> {
+    const table = this.getTile(tileIndex).locator('table').first();
+    const headers = (await table.locator('thead th').allTextContents()).map(h =>
+      h.trim(),
+    );
+    const index = headers.findIndex(h => h === name);
+    if (index === -1) return [];
+    const cells = table.locator(
+      `tbody tr[data-index] td:nth-child(${index + 1})`,
+    );
+    return (await cells.allTextContents()).map(c => c.trim());
+  }
+
   /**
    * Get the `title` attribute of a cell (by column index) in the first row of
    * a table tile. The <td> title mirrors the cell's stringified value, useful

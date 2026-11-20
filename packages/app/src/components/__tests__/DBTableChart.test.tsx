@@ -1,4 +1,6 @@
 import React from 'react';
+import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
+import { act } from '@testing-library/react';
 
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import DBTableChart from '@/components/DBTableChart';
@@ -614,6 +616,73 @@ describe('DBTableChart', () => {
       expect(columns.find(c => c.dataKey === 'Value')?.numberFormat).toEqual({
         output: 'number',
       });
+    });
+  });
+
+  describe('header sort without a controlled sort prop', () => {
+    const queriedOrderBy = () => {
+      const config = jest.mocked(useOffsetPaginatedQuery).mock.calls.at(-1)![0];
+      return isBuilderChartConfig(config) ? config.orderBy : undefined;
+    };
+    const clickHeaderSort = () =>
+      act(() => {
+        jest
+          .mocked(Table)
+          .mock.calls.at(-1)![0]
+          .onSortingChange?.([{ id: 'ServiceName', desc: false }]);
+      });
+    const headerSortOrderBy = [
+      { valueExpression: 'ServiceName', ordering: 'ASC' },
+    ];
+
+    it('overrides the config Order By while it is unchanged', () => {
+      const config = { ...baseTestConfig, orderBy: 'Duration DESC' };
+      const { rerender } = renderWithMantine(<DBTableChart config={config} />);
+      clickHeaderSort();
+      expect(queriedOrderBy()).toEqual(headerSortOrderBy);
+
+      rerender(
+        <TestProviders>
+          <DBTableChart config={{ ...config }} />
+        </TestProviders>,
+      );
+      expect(queriedOrderBy()).toEqual(headerSortOrderBy);
+    });
+
+    it('is dropped when the config Order By changes', () => {
+      const { rerender } = renderWithMantine(
+        <DBTableChart
+          config={{ ...baseTestConfig, orderBy: 'Duration DESC' }}
+        />,
+      );
+      clickHeaderSort();
+
+      rerender(
+        <TestProviders>
+          <DBTableChart
+            config={{ ...baseTestConfig, orderBy: 'ServiceName DESC' }}
+          />
+        </TestProviders>,
+      );
+      expect(queriedOrderBy()).toBe('ServiceName DESC');
+    });
+
+    it('stays dropped when the config Order By changes back', () => {
+      const { rerender } = renderWithMantine(
+        <DBTableChart
+          config={{ ...baseTestConfig, orderBy: 'Duration DESC' }}
+        />,
+      );
+      clickHeaderSort();
+
+      for (const orderBy of ['ServiceName DESC', 'Duration DESC']) {
+        rerender(
+          <TestProviders>
+            <DBTableChart config={{ ...baseTestConfig, orderBy }} />
+          </TestProviders>,
+        );
+      }
+      expect(queriedOrderBy()).toBe('Duration DESC');
     });
   });
 

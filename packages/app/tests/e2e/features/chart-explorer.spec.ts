@@ -159,6 +159,77 @@ test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
     });
   });
 
+  test('should query an edited Order By instead of the last header sort on a table', async () => {
+    const { chartEditor } = chartExplorerPage;
+    let headerSortValues: string[] = [];
+    let headerSortDesc = false;
+
+    await test.step('Query a table grouped by ServiceName', async () => {
+      await expect(chartExplorerPage.form).toBeVisible();
+      await chartExplorerPage.page.waitForLoadState('networkidle');
+      await chartEditor.setChartType(DisplayType.Table);
+      await chartEditor.setGroupBy('ServiceName');
+      await chartEditor.runQuery(false);
+      await expect(
+        chartExplorerPage.getTableSortButton('ServiceName'),
+      ).toBeVisible({ timeout: 15000 });
+    });
+
+    await test.step('Sort by clicking the ServiceName header', async () => {
+      await chartExplorerPage.getTableSortButton('ServiceName').click();
+      await expect
+        .poll(() => chartExplorerPage.getOrderByText(), { timeout: 10000 })
+        .toMatch(/^ServiceName (ASC|DESC)$/);
+      headerSortDesc = (await chartExplorerPage.getOrderByText()).endsWith(
+        'DESC',
+      );
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(1);
+
+      await expect
+        .poll(
+          async () =>
+            (await chartExplorerPage.getTableColumnValues('ServiceName'))
+              .length,
+          { timeout: 10000 },
+        )
+        .toBeGreaterThan(1);
+      headerSortValues =
+        await chartExplorerPage.getTableColumnValues('ServiceName');
+    });
+
+    await test.step('Edit the Order By to the opposite direction with a trailing modifier', async () => {
+      // "NULLS LAST" has no trailing ASC/DESC, so the table can't show it as a
+      // header sort; it must still be queried as typed.
+      await chartEditor.setOrderBy(
+        `ServiceName ${headerSortDesc ? 'ASC' : 'DESC'} NULLS LAST`,
+      );
+      await chartEditor.runQuery(false);
+
+      await expect
+        .poll(() => chartExplorerPage.getTableColumnValues('ServiceName'), {
+          timeout: 10000,
+        })
+        .toEqual([...headerSortValues].reverse());
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(0);
+    });
+
+    await test.step('Clear the Order By and verify the header sort is not restored', async () => {
+      await chartEditor.setOrderBy('');
+      await chartEditor.runQuery(false);
+
+      await expect
+        .poll(
+          async () =>
+            (await chartExplorerPage.getTableColumnValues('ServiceName'))
+              .length,
+          { timeout: 10000 },
+        )
+        .toBeGreaterThan(1);
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(0);
+      expect(await chartExplorerPage.getOrderByText()).toBe('');
+    });
+  });
+
   test('should apply a custom ORDER BY on a categorical pie chart', async () => {
     let ascendingLabels: string[] = [];
     let descendingLabels: string[] = [];
