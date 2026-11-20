@@ -1020,26 +1020,28 @@ func TestLoadConfig_FallbackDatabase(t *testing.T) {
 
 func TestResolveDatabase(t *testing.T) {
 	cases := []struct {
-		name                          string
-		target, fallback              string
-		targetExists, legacyHasTables bool
-		want                          string
-		wantWarning                   []string // substrings; nil means no warning
+		name                                           string
+		target, fallback                               string
+		targetExists, targetHasTables, legacyHasTables bool
+		want                                           string
+		wantWarning                                    []string // substrings; nil means no warning
 	}{
-		{"no fallback, target default", "default", "", true, true, "default", nil},
-		{"no fallback, legacy tables in default", "otel", "", false, true, "otel",
+		{"no fallback, target default", "default", "", true, true, true, "default", nil},
+		{"no fallback, legacy tables in default", "otel", "", false, false, true, "otel",
 			[]string{"database default has existing ClickStack tables", "not migrated to otel", "HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE=default"}},
-		{"no fallback, default empty", "otel", "", false, false, "otel", nil},
-		{"fallback, target missing, fallback seeded", "otel", "default", false, true, "default",
+		{"no fallback, target and default both seeded", "otel", "", true, true, true, "otel", nil},
+		{"no fallback, default empty", "otel", "", false, false, false, "otel", nil},
+		{"fallback, target missing, fallback seeded", "otel", "default", false, false, true, "default",
 			[]string{"database otel does not exist", "staying on default", "HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE=default", "clear HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE to move to otel"}},
-		{"fallback, target exists, fallback seeded", "otel", "default", true, true, "otel",
+		{"fallback, target exists empty, fallback seeded", "otel", "default", true, false, true, "otel",
 			[]string{"database default has existing ClickStack tables", "not migrated to otel"}},
-		{"fallback, target missing, fallback empty", "otel", "default", false, false, "otel", nil},
-		{"fallback equals target", "default", "default", true, true, "default", nil},
-		{"custom fallback", "otel", "legacy", false, true, "legacy", []string{"staying on legacy"}},
+		{"fallback, target and fallback both seeded", "otel", "default", true, true, true, "otel", nil},
+		{"fallback, target missing, fallback empty", "otel", "default", false, false, false, "otel", nil},
+		{"fallback equals target", "default", "default", true, true, true, "default", nil},
+		{"custom fallback", "otel", "legacy", false, false, true, "legacy", []string{"staying on legacy"}},
 	}
 	for _, c := range cases {
-		got, warning := resolveDatabase(c.target, c.fallback, c.targetExists, c.legacyHasTables)
+		got, warning := resolveDatabase(c.target, c.fallback, c.targetExists, c.targetHasTables, c.legacyHasTables)
 		if got != c.want {
 			t.Errorf("%s: database = %q; want %q", c.name, got, c.want)
 		}

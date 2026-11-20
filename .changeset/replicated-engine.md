@@ -10,8 +10,14 @@ creates the target database with the `Replicated` engine and seeds
 `MergeTree` / `SummingMergeTree`. If the database already exists with another
 engine, it logs a warning and seeds the plain engines as before. Off by default.
 
-The migrate tool also warns when it targets a database other than `default`
-while `default` still holds ClickStack tables, since those are not migrated.
+The database is created only on the node migrate connects to. On a cluster, run
+migrate against every replica, or create the `Replicated` database on each node
+first (for example with `ON CLUSTER`); otherwise inserts that reach a node
+without the database fail.
+
+The migrate tool also warns when it targets a database other than `default` that
+has no ClickStack tables yet while `default` still holds them, since those are
+not migrated.
 
 With `HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE` set (off by default),
 a target database that does not exist yet yields to the fallback database when

@@ -664,11 +664,12 @@ func hasClickStackTables(ctx context.Context, db *sql.DB, database string) (bool
 // fallback set, a target that does not exist yet yields to a fallback that
 // already holds ClickStack tables, so an upgrade that switched databases keeps
 // writing where HyperDX sources read. Otherwise legacy tables only warrant a
-// warning, as they are not migrated.
-func resolveDatabase(target, fallback string, targetExists, legacyHasTables bool) (string, string) {
+// warning, as they are not migrated, and only until the target holds
+// ClickStack tables of its own: after that the move was already made.
+func resolveDatabase(target, fallback string, targetExists, targetHasTables, legacyHasTables bool) (string, string) {
 	legacy := legacyDatabase(fallback)
 	switch {
-	case legacy == target || !legacyHasTables:
+	case legacy == target || !legacyHasTables || targetHasTables:
 		return target, ""
 	case fallback != "" && !targetExists:
 		return fallback, fmt.Sprintf("database %s does not exist and %s already has ClickStack tables, so staying on %s. "+
@@ -962,10 +963,14 @@ func main() {
 		cfg.LogsTTL, cfg.TracesTTL, cfg.MetricsTTL, cfg.SessionsTTL, cfg.TablesTTL)
 
 	// The legacy tables check is best effort unless the fallback depends on it.
-	var legacyHasTables bool
+	// A failed target check only means the legacy warning may still show.
+	var legacyHasTables, targetHasTables bool
 	if legacy := legacyDatabase(cfg.FallbackDatabase); legacy != cfg.Database {
 		if legacyHasTables, err = hasClickStackTables(ctx, db, legacy); err != nil && cfg.FallbackDatabase != "" {
 			log.Fatalf("Failed to check fallback database: %v", err)
+		}
+		if legacyHasTables {
+			targetHasTables, _ = hasClickStackTables(ctx, db, cfg.Database)
 		}
 	}
 
@@ -976,21 +981,23 @@ func main() {
 			log.Fatalf("Failed to check database engine: %v", err)
 		}
 	}
-	database, warning := resolveDatabase(cfg.Database, cfg.FallbackDatabase, dbExists, legacyHasTables)
+	database, warning := resolveDatabase(cfg.Database, cfg.FallbackDatabase, dbExists, targetHasTables, legacyHasTables)
 	if warning != "" {
 		log.Printf("WARNING: %s", warning)
 	}
 
-	// A fallback database keeps the plain engines it was seeded with.
-	replicated := false
-	if database == cfg.Database {
-		replicated, warning = planReplicated(cfg.Replicated, dbExists, database, dbEngine)
-		if warning != "" {
-			log.Printf("WARNING: %s", warning)
+	// A fallback already exists, so only its own engine can make it Replicated.
+	if cfg.Replicated && database != cfg.Database {
+		if dbEngine, dbExists, err = getDatabaseEngine(ctx, db, database); err != nil {
+			log.Fatalf("Failed to check database engine: %v", err)
 		}
-		if replicated {
-			log.Printf("Using Replicated database and table engines for %s", database)
-		}
+	}
+	replicated, warning := planReplicated(cfg.Replicated, dbExists, database, dbEngine)
+	if warning != "" {
+		log.Printf("WARNING: %s", warning)
+	}
+	if replicated {
+		log.Printf("Using Replicated database and table engines for %s", database)
 	}
 
 	// Process schema directory (replace ${DATABASE}, ${DATABASE_ENGINE}, ${ENGINE_PREFIX} and ${*_TTL} macros)
