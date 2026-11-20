@@ -9,6 +9,8 @@ creates the target database with the `Replicated` engine and seeds
 `ReplicatedMergeTree` / `ReplicatedSummingMergeTree` tables instead of
 `MergeTree` / `SummingMergeTree`. If the database already exists with another
 engine, it logs a warning and seeds the plain engines as before. Off by default.
+With `ENABLE_PROMQL=true` on ClickHouse 26.10 or later, the inner tables of the
+PromQL `metrics_ts` table are Replicated too; older servers keep plain ones.
 
 The database is created only on the node migrate connects to. On a cluster, run
 migrate against every replica, or create the `Replicated` database on each node

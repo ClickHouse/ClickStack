@@ -561,7 +561,7 @@ func TestProcessSchemaDir_Subdirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "testdb", false, map[string]string{"TABLES_TTL": "toIntervalHour(48)"})
+	tempDir, err := processSchemaDir(schemaDir, "testdb", false, false, map[string]string{"TABLES_TTL": "toIntervalHour(48)"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func TestProcessSchemaDir_MultipleReplacements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "db", false, map[string]string{"TABLES_TTL": "toIntervalDay(7)"})
+	tempDir, err := processSchemaDir(schemaDir, "db", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(7)"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +607,7 @@ func TestProcessSchemaDir_NoMacros(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "db", false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
+	tempDir, err := processSchemaDir(schemaDir, "db", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +623,7 @@ func TestProcessSchemaDir_NoMacros(t *testing.T) {
 }
 
 func TestProcessSchemaDir_NonexistentDir(t *testing.T) {
-	_, err := processSchemaDir("/nonexistent/schema", "db", false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
+	_, err := processSchemaDir("/nonexistent/schema", "db", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent schema dir")
 	}
@@ -822,7 +822,7 @@ func TestProcessSchemaDir_PerSignalMacros(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(schemaDir, "001.sql"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	tempDir, err := processSchemaDir(schemaDir, "db", false, map[string]string{
+	tempDir, err := processSchemaDir(schemaDir, "db", false, false, map[string]string{
 		"LOGS_TTL":     "toIntervalDay(180)",
 		"TRACES_TTL":   "toIntervalDay(180)",
 		"METRICS_TTL":  "toIntervalDay(30)",
@@ -869,20 +869,23 @@ func TestLoadConfig_Replicated(t *testing.T) {
 func TestProcessSchemaDir_ReplicatedMacros(t *testing.T) {
 	schemaDir := t.TempDir()
 	content := "CREATE DATABASE IF NOT EXISTS ${DATABASE}${DATABASE_ENGINE};\n" +
-		"ENGINE = ${ENGINE_PREFIX}MergeTree; ENGINE = ${ENGINE_PREFIX}SummingMergeTree; ENGINE = TimeSeries"
+		"ENGINE = ${ENGINE_PREFIX}MergeTree; ENGINE = ${ENGINE_PREFIX}SummingMergeTree; ENGINE = TimeSeries${TIMESERIES_ENGINES}"
 	if err := os.WriteFile(filepath.Join(schemaDir, "001.sql"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
-		replicated bool
-		want       string
+		replicated, replicatedTimeSeries bool
+		want                             string
 	}{
-		{false, "CREATE DATABASE IF NOT EXISTS otel;\n" +
+		{false, false, "CREATE DATABASE IF NOT EXISTS otel;\n" +
 			"ENGINE = MergeTree; ENGINE = SummingMergeTree; ENGINE = TimeSeries"},
-		{true, "CREATE DATABASE IF NOT EXISTS otel ENGINE = Replicated('/clickhouse/databases/otel', '{shard}', '{replica}');\n" +
+		{true, false, "CREATE DATABASE IF NOT EXISTS otel ENGINE = Replicated('/clickhouse/databases/otel', '{shard}', '{replica}');\n" +
 			"ENGINE = ReplicatedMergeTree; ENGINE = ReplicatedSummingMergeTree; ENGINE = TimeSeries"},
+		{true, true, "CREATE DATABASE IF NOT EXISTS otel ENGINE = Replicated('/clickhouse/databases/otel', '{shard}', '{replica}');\n" +
+			"ENGINE = ReplicatedMergeTree; ENGINE = ReplicatedSummingMergeTree; ENGINE = TimeSeries" +
+			"\nDATA ENGINE = ReplicatedMergeTree\nTAGS ENGINE = ReplicatedReplacingMergeTree\nMETRICS ENGINE = ReplicatedReplacingMergeTree"},
 	} {
-		tempDir, err := processSchemaDir(schemaDir, "otel", c.replicated, map[string]string{})
+		tempDir, err := processSchemaDir(schemaDir, "otel", c.replicated, c.replicatedTimeSeries, map[string]string{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -892,15 +895,29 @@ func TestProcessSchemaDir_ReplicatedMacros(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(got) != c.want {
-			t.Errorf("replicated=%v: got %q, want %q", c.replicated, string(got), c.want)
+			t.Errorf("replicated=%v replicatedTimeSeries=%v: got %q, want %q", c.replicated, c.replicatedTimeSeries, string(got), c.want)
+		}
+	}
+}
+
+func TestSupportsReplicatedTimeSeries(t *testing.T) {
+	for _, c := range []struct {
+		major, minor int
+		want         bool
+	}{
+		{25, 12, false}, {26, 4, false}, {26, 8, false}, {26, 10, true}, {26, 11, true}, {27, 1, true},
+	} {
+		if got := supportsReplicatedTimeSeries(c.major, c.minor); got != c.want {
+			t.Errorf("supportsReplicatedTimeSeries(%d, %d) = %v; want %v", c.major, c.minor, got, c.want)
 		}
 	}
 }
 
 // Guards the real seed files: every MergeTree-family engine must use the
 // ${ENGINE_PREFIX} macro and take no arguments (a Replicated database rejects
-// explicit Keeper path/replica arguments), and the database must be created
-// with the Replicated engine only when enabled.
+// explicit Keeper path/replica arguments), every TimeSeries table must get
+// Replicated inner engines exactly when replicated, and the database must be
+// created with the Replicated engine only when enabled.
 func TestSeedSchemaEngines(t *testing.T) {
 	seedDir := filepath.Join("..", "..", "..", "..", "docker", "otel-collector", "schema", "seed")
 	ttlExprs := map[string]string{}
@@ -908,8 +925,9 @@ func TestSeedSchemaEngines(t *testing.T) {
 		ttlExprs[m] = "toIntervalDay(30)"
 	}
 	engineRe := regexp.MustCompile(`(?im)^\s*ENGINE\s*=\s*(.*)$`)
+	innerEngineRe := regexp.MustCompile(`(?im)^\s*(?:DATA|TAGS|METRICS)\s+ENGINE\s*=\s*(\w+)`)
 	for _, replicated := range []bool{false, true} {
-		tempDir, err := processSchemaDir(seedDir, "otel", replicated, ttlExprs)
+		tempDir, err := processSchemaDir(seedDir, "otel", replicated, replicated, ttlExprs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -918,7 +936,7 @@ func TestSeedSchemaEngines(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mergeTrees := 0
+		mergeTrees, timeSeries := 0, 0
 		for _, f := range files {
 			content, err := os.ReadFile(filepath.Join(tempDir, f))
 			if err != nil {
@@ -927,9 +945,11 @@ func TestSeedSchemaEngines(t *testing.T) {
 			if strings.Contains(string(content), "${") {
 				t.Errorf("replicated=%v: %s has an unreplaced macro", replicated, f)
 			}
+			fileTimeSeries := 0
 			for _, m := range engineRe.FindAllStringSubmatch(string(content), -1) {
 				engine := strings.TrimSpace(m[1])
 				if engine == "TimeSeries" {
+					fileTimeSeries++
 					continue
 				}
 				mergeTrees++
@@ -940,9 +960,27 @@ func TestSeedSchemaEngines(t *testing.T) {
 					t.Errorf("replicated=%v: %s has engine %q", replicated, f, engine)
 				}
 			}
+			// Without replication, inner engines stay unnamed so each server keeps its own defaults.
+			inner := innerEngineRe.FindAllStringSubmatch(string(content), -1)
+			wantInner := 0
+			if replicated {
+				wantInner = 3 * fileTimeSeries
+			}
+			if len(inner) != wantInner {
+				t.Errorf("replicated=%v: %s has %d TimeSeries inner engines; want %d", replicated, f, len(inner), wantInner)
+			}
+			for _, m := range inner {
+				if !strings.HasPrefix(m[1], "Replicated") || !strings.HasSuffix(m[1], "MergeTree") {
+					t.Errorf("%s: TimeSeries inner engine %q must be Replicated*MergeTree", f, m[1])
+				}
+			}
+			timeSeries += fileTimeSeries
 		}
 		if mergeTrees == 0 {
 			t.Errorf("replicated=%v: no MergeTree engines found in %s", replicated, seedDir)
+		}
+		if timeSeries == 0 {
+			t.Errorf("replicated=%v: no TimeSeries engines found in %s", replicated, seedDir)
 		}
 
 		createDB, err := os.ReadFile(filepath.Join(tempDir, "00001_create_database.sql"))
@@ -1496,7 +1534,7 @@ SETTINGS ttl_only_drop_parts = 1;`
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "mydb", false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
+	tempDir, err := processSchemaDir(schemaDir, "mydb", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -546,22 +546,34 @@ func reconcileTableTTLs(ctx context.Context, db *sql.DB, database string, ttlExp
 	return nil
 }
 
+// replicatedTimeSeriesEngines makes every TimeSeries inner table Replicated:
+// DATA covers samples and recentsamples, TAGS covers tags and timeranges, and
+// METRICS covers metricfamilies. Naming an inner engine pins its family, so
+// these match the ClickHouse 26.10 defaults; older servers use other layouts.
+const replicatedTimeSeriesEngines = "\nDATA ENGINE = ReplicatedMergeTree" +
+	"\nTAGS ENGINE = ReplicatedReplacingMergeTree" +
+	"\nMETRICS ENGINE = ReplicatedReplacingMergeTree"
+
 // processSchemaDir creates a temporary directory with SQL files that have the
-// ${DATABASE}, ${DATABASE_ENGINE}, ${ENGINE_PREFIX} and per-signal ${*_TTL}
-// macros replaced with actual values. When replicated is set, the database is
-// created with the Replicated engine and MergeTree becomes ReplicatedMergeTree;
-// otherwise both macros are empty.
+// ${DATABASE}, ${DATABASE_ENGINE}, ${ENGINE_PREFIX}, ${TIMESERIES_ENGINES} and
+// per-signal ${*_TTL} macros replaced with actual values. When replicated is
+// set, the database is created with the Replicated engine and MergeTree
+// becomes ReplicatedMergeTree; replicatedTimeSeries also makes the TimeSeries
+// inner tables Replicated. Unset macros are empty.
 // ttlExprs maps a macro name (e.g. "LOGS_TTL") to its ClickHouse interval expr.
-func processSchemaDir(schemaDir, database string, replicated bool, ttlExprs map[string]string) (string, error) {
+func processSchemaDir(schemaDir, database string, replicated, replicatedTimeSeries bool, ttlExprs map[string]string) (string, error) {
 	tempDir, err := os.MkdirTemp("", "schema-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	databaseEngine, enginePrefix := "", ""
+	databaseEngine, enginePrefix, timeSeriesEngines := "", "", ""
 	if replicated {
 		databaseEngine = fmt.Sprintf(" ENGINE = Replicated('/clickhouse/databases/%s', '{shard}', '{replica}')", database)
 		enginePrefix = "Replicated"
+	}
+	if replicatedTimeSeries {
+		timeSeriesEngines = replicatedTimeSeriesEngines
 	}
 
 	// Walk through the schema directory and process SQL files
@@ -592,6 +604,7 @@ func processSchemaDir(schemaDir, database string, replicated bool, ttlExprs map[
 		processedContent := strings.ReplaceAll(string(content), "${DATABASE}", database)
 		processedContent = strings.ReplaceAll(processedContent, "${DATABASE_ENGINE}", databaseEngine)
 		processedContent = strings.ReplaceAll(processedContent, "${ENGINE_PREFIX}", enginePrefix)
+		processedContent = strings.ReplaceAll(processedContent, "${TIMESERIES_ENGINES}", timeSeriesEngines)
 		for macro, expr := range ttlExprs {
 			processedContent = strings.ReplaceAll(processedContent, "${"+macro+"}", expr)
 		}
@@ -742,6 +755,13 @@ func getClickHouseVersion(ctx context.Context, db *sql.DB) (major, minor int, er
 // full text search indexes (TYPE text). This requires ClickHouse >= 26.2.
 func supportsFullTextSearch(major, minor int) bool {
 	return major > 26 || (major == 26 && minor >= 2)
+}
+
+// supportsReplicatedTimeSeries returns true if replicatedTimeSeriesEngines
+// matches the server's TimeSeries inner table layout. This requires ClickHouse
+// >= 26.10; 26.4, for one, drops the default ORDER BY of a named inner engine.
+func supportsReplicatedTimeSeries(major, minor int) bool {
+	return major > 26 || (major == 26 && minor >= 10)
 }
 
 // textIndexTables are the seeded tables with text indexes.
@@ -999,10 +1019,14 @@ func main() {
 	if replicated {
 		log.Printf("Using Replicated database and table engines for %s", database)
 	}
+	replicatedTimeSeries := replicated && supportsReplicatedTimeSeries(chMajor, chMinor)
+	if replicated && !replicatedTimeSeries && os.Getenv("ENABLE_PROMQL") == "true" {
+		log.Printf("WARNING: ClickHouse %d.%d < 26.10, so the PromQL metrics_ts inner tables are not replicated", chMajor, chMinor)
+	}
 
-	// Process schema directory (replace ${DATABASE}, ${DATABASE_ENGINE}, ${ENGINE_PREFIX} and ${*_TTL} macros)
+	// Process schema directory (replace ${DATABASE}, ${DATABASE_ENGINE}, ${ENGINE_PREFIX}, ${TIMESERIES_ENGINES} and ${*_TTL} macros)
 	log.Printf("Preparing SQL files with database: %s", database)
-	tempDir, err := processSchemaDir(cfg.SchemaDir, database, replicated, ttlExprs)
+	tempDir, err := processSchemaDir(cfg.SchemaDir, database, replicated, replicatedTimeSeries, ttlExprs)
 	if err != nil {
 		log.Fatalf("Failed to process schema directory: %v", err)
 	}
