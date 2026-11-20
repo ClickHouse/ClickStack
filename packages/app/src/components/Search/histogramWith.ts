@@ -1,8 +1,8 @@
 import { BuilderChartConfig } from '@hyperdx/common-utils/dist/types';
 
 /**
- * Keeps only the alias WITH clauses that `texts` (the where, filters and
- * group by) reference, directly or through another kept alias. The histogram
+ * Keeps only the alias WITH clauses that `texts` (the query outside the
+ * table's select) reference, directly or through another kept alias. The histogram
  * doesn't select the table's columns, so the rest only change its query key
  * and refetch it whenever a column is added or removed.
  */

@@ -2179,11 +2179,11 @@ function DBSearchPageContent() {
       granularity: 'auto',
       dateRange: searchedTimeRange,
       displayType: DisplayType.StackedBar,
+      // Everything but the table's select and sort can reference an alias,
+      // including the body, timestamp and sample-weight expressions.
       with: getReferencedWithClauses(aliasWith, [
-        chartConfig.where,
-        JSON.stringify(chartConfig.filters ?? []),
+        JSON.stringify({ ...chartConfig, select: '', orderBy: '' }),
         groupBy ?? '',
-        chartConfig.implicitColumnExpression ?? '',
       ]),
       // Preserve the original table select string for "View Events" links.
       // convertToTimeChartConfig drops it from the query key.
