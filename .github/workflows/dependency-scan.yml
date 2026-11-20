@@ -12,6 +12,7 @@ on:
       - packages/otel-collector/go.mod
       - packages/otel-collector/go.sum
       - packages/otel-collector/cmd/**
+      - docker/otel-collector/Dockerfile
       - .github/workflows/dependency-scan.yml
   push:
     branches: [main]
@@ -76,8 +77,13 @@ jobs:
         id: go-version
         working-directory: .
         run: |
-          echo "version=$(sed -nE 's/^FROM golang:([0-9.]+)-.* AS migrate-builder$/\1/p' \
-            docker/otel-collector/Dockerfile)" >> "$GITHUB_OUTPUT"
+          version=$(sed -nE 's/^FROM golang:([0-9.]+)-.* AS migrate-builder$/\1/p' \
+            docker/otel-collector/Dockerfile)
+          if [ -z "$version" ]; then
+            echo "::error::No golang version found on the migrate-builder FROM line in docker/otel-collector/Dockerfile"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
