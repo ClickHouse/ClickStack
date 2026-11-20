@@ -2164,16 +2164,16 @@ function DBSearchPageContent() {
 
   // The histogram, trace heatmap and filter queries don't select the table's
   // columns, so they only take the aliases they use. The rest would refetch
-  // them whenever a column is added or removed.
+  // them whenever a column is added or removed. Everything but the table's
+  // select and sort can reference an alias, including the body, timestamp and
+  // sample-weight expressions.
   const referencedAliasWith = useMemo(
     () =>
       chartConfig == null
         ? undefined
         : getReferencedWithClauses(aliasWith, [
-            chartConfig.where,
-            JSON.stringify(chartConfig.filters ?? []),
+            JSON.stringify({ ...chartConfig, select: '', orderBy: '' }),
             histogramGroupBy ?? '',
-            chartConfig.implicitColumnExpression ?? '',
           ]),
     [chartConfig, aliasWith, histogramGroupBy],
   );
