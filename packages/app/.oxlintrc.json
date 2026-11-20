@@ -198,10 +198,6 @@
     "eslint-js/no-restricted-syntax": [
       "error",
       {
-        "selector": "Literal[value=/\\bbi-\\b/i]",
-        "message": "Please update to use @tabler/icons-react instead"
-      },
-      {
         "selector": "JSXElement[openingElement.name.name=\"Button\"] JSXAttribute[name.name=\"variant\"][value.value=\"light\"]",
         "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for Button. See agent_docs/code_style.md"
       },
