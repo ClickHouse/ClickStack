@@ -81,8 +81,7 @@
     ],
     "sharedGlobals": [
       "{workspaceRoot}/tsconfig.base.json",
-      "{workspaceRoot}/.prettierrc",
-      "{workspaceRoot}/.prettierignore",
+      "{workspaceRoot}/.oxfmtrc.json",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/yarn.lock",
       "{workspaceRoot}/.nvmrc"

@@ -103,7 +103,6 @@
   --click-global-color-title-default: rgb(97.5% 97.5% 97.5%);
   --click-global-color-title-muted: #b3b6bd;
   --click-global-color-outline-default: #faff69;
-  --click-field-color-background-default: #2d2d2d;
 
   /* Backgrounds - Using Click UI tokens */
   --color-bg-body: var(--click-global-color-background-default);
@@ -132,7 +131,7 @@
      (Select/Combobox options, Menu items, popover/dropdown lists) when it is
      hovered or is the currently-selected entry. */
   --color-bg-option-active: var(--palette-neutral-712);
-  --color-bg-field: var(--click-field-color-background-default);
+  --color-bg-field: rgb(255 255 255 / 6%);
   --color-bg-field-highlighted: var(--palette-neutral-650);
   --color-bg-field-addon: var(--palette-neutral-712);
   --color-bg-neutral: #4d4f66;
@@ -328,7 +327,6 @@
   --click-global-color-title-default: lch(11.126% 1.374 305.43deg);
   --click-global-color-title-muted: #696e79;
   --click-global-color-outline-default: #437eef;
-  --click-field-color-background-default: #fbfcff;
 
   /* Backgrounds - Using Click UI tokens */
   --color-bg-body: var(--click-global-color-background-default);
@@ -358,7 +356,7 @@
      (Select/Combobox options, Menu items, popover/dropdown lists) when it is
      hovered or is the currently-selected entry. */
   --color-bg-option-active: var(--click-global-color-background-muted);
-  --color-bg-field: var(--click-field-color-background-default);
+  --color-bg-field: #fbfcff;
   --color-bg-field-highlighted: var(--click-global-color-background-default);
   --color-bg-field-addon: var(--click-global-color-background-default);
   --color-bg-neutral: #adb5bd;

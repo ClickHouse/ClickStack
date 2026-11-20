@@ -330,7 +330,7 @@ async function seed(count: number, tag: string) {
     name: string;
     tags: string[];
   }[] = [];
-  for (let remaining = savedSearchAlertTotal; remaining > 0; ) {
+  for (let remaining = savedSearchAlertTotal; remaining > 0;) {
     const alerts = Math.min(
       remaining,
       randomInt(1, MAX_ALERTS_PER_SAVED_SEARCH),
@@ -381,7 +381,7 @@ async function seed(count: number, tag: string) {
     alertedTiles: { id: string; displayName: string }[];
     tags: string[];
   }[] = [];
-  for (let remaining = tileAlertTotal; remaining > 0; ) {
+  for (let remaining = tileAlertTotal; remaining > 0;) {
     const index = dashboardPlans.length;
     const tileCount = randomInt(1, MAX_TILES_PER_DASHBOARD);
     const tiles = Array.from({ length: tileCount }, (_, tileIndex) =>

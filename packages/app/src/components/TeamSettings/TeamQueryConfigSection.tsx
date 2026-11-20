@@ -329,6 +329,13 @@ export default function TeamQueryConfigSection() {
             description={`Default is ${DEFAULT_FILTER_KEYS_FETCH_LIMIT}`}
           />
           <ClickhouseSettingForm
+            settingKey="filterValuesExactByDefault"
+            label="Default filter values"
+            tooltip="Default for the search page's Show All Values filter setting. All shows every known value; Exact shows only values matching the current query. Users can still override this in their filter settings."
+            type="boolean"
+            displayValue={value => (value ? 'Exact' : 'All')}
+          />
+          <ClickhouseSettingForm
             settingKey="fieldMetadataDisabled"
             label="Field Metadata Queries"
             tooltip="Enable to fetch field metadata from ClickHouse"
