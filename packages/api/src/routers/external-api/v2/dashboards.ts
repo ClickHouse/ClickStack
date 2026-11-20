@@ -2019,6 +2019,32 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             variables in `{{column}}` form (e.g. `{{ServiceName}}`).
  *           example: "{{ServiceName}}"
  *
+ *     OnClickVariableTemplate:
+ *       type: object
+ *       description: >
+ *         A templated filter applied to a link-out destination dashboard, matched
+ *         by the destination filter's variable name rather than its expression.
+ *         Required for static list filters, which have no expression.
+ *       required: [kind, variableName, template]
+ *       properties:
+ *         kind:
+ *           type: string
+ *           enum: [variableTemplate]
+ *           description: Filter template kind.
+ *           example: "variableTemplate"
+ *         variableName:
+ *           type: string
+ *           minLength: 1
+ *           description: The destination dashboard filter's variable name, without the `$`.
+ *           example: "tier"
+ *         template:
+ *           type: string
+ *           minLength: 1
+ *           description: >
+ *             Value template rendered against the clicked row; supports row column
+ *             variables in `{{column}}` form.
+ *           example: "{{Tier}}"
+ *
  *     OnClickTarget:
  *       description: >
  *         Identifies the source (for type=search) or dashboard (for type=dashboard)
@@ -2105,7 +2131,21 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           type: array
  *           description: Optional dashboard filter templates rendered against the clicked row.
  *           items:
- *             $ref: '#/components/schemas/OnClickFilterTemplate'
+ *             oneOf:
+ *               - $ref: '#/components/schemas/OnClickFilterTemplate'
+ *               - $ref: '#/components/schemas/OnClickVariableTemplate'
+ *             discriminator:
+ *               propertyName: kind
+ *               mapping:
+ *                 expressionTemplate: '#/components/schemas/OnClickFilterTemplate'
+ *                 variableTemplate: '#/components/schemas/OnClickVariableTemplate'
+ *         includeCurrentFilters:
+ *           type: boolean
+ *           description: >
+ *             Carry the current dashboard's filter selections over to the
+ *             destination. A filter set by `filters` replaces the carried-over
+ *             selection for the same expression or variable.
+ *           example: true
  *
  *     OnClickExternal:
  *       type: object
@@ -2124,8 +2164,10 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           minLength: 1
  *           description: >
  *             Handlebars template rendered against the clicked row; supports
- *             `{{column}}` variables. The rendered value must be an absolute
- *             http(s) URL.
+ *             `{{column}}` variables, plus the globals `{{__from}}` and
+ *             `{{__to}}` (epoch ms), `{{__timezone}}`, `{{__url_time_range}}`,
+ *             `{{__all_variables}}`, and the `{{date <value> "iso"}}` helper.
+ *             The rendered value must be an absolute http(s) URL.
  *           example: "https://example.com/d/abc?var-service={{ServiceName}}"
  *
  *     OnClick:

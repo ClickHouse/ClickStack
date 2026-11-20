@@ -12,9 +12,14 @@ import { useSources } from '@/source';
 import { TimeZoneOverrideProvider } from '@/timeZoneOverride';
 
 let mockTz: string | null = null;
+let mockFilters: unknown = null;
 jest.mock('nuqs', () => ({
   parseAsString: {},
-  useQueryState: () => [mockTz, jest.fn()],
+  createParser: () => ({}),
+  useQueryState: (key: string) => [
+    key === 'tz' ? mockTz : key === 'filters' ? mockFilters : null,
+    jest.fn(),
+  ],
 }));
 
 jest.mock('@/source', () => ({
@@ -144,6 +149,24 @@ describe('useOnClickLinkBuilder', () => {
     );
     expect(action.external).toBe(true);
     expect(action.onClickError).toBeUndefined();
+  });
+
+  it("passes the page's time range and filters to link templates", () => {
+    mockFilters = [{ type: 'variable', name: 'env', values: ['prod'] }];
+    const onClick: OnClickExternal = {
+      type: 'external',
+      urlTemplate:
+        'https://x.example.com/?{{__url_time_range}}&{{__all_variables}}',
+    };
+    const { result } = renderHook(() =>
+      useOnClickLinkBuilder({ onClick, dateRange }),
+    );
+    const params = new URL(result.current!({}).url!).searchParams;
+    expect(params.get('from')).toBe(String(dateRange[0].getTime()));
+    expect(JSON.parse(decodeURIComponent(params.get('filters') ?? ''))).toEqual(
+      mockFilters,
+    );
+    mockFilters = null;
   });
 
   it('encodes an invalid external URL as url: null with an error handler', () => {

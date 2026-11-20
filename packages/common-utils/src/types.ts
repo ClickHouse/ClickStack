@@ -1482,6 +1482,24 @@ export const OnClickFilterTemplateSchema = z.object({
 });
 export type OnClickFilterTemplate = z.infer<typeof OnClickFilterTemplateSchema>;
 
+/** Sets a destination dashboard filter by its variable name rather than its expression. */
+export const OnClickVariableTemplateSchema = z.object({
+  kind: z.literal('variableTemplate'),
+  variableName: z.string().min(1, 'Variable is required').max(10000),
+  template: z.string().min(1, 'Template is required').max(10000),
+});
+export type OnClickVariableTemplate = z.infer<
+  typeof OnClickVariableTemplateSchema
+>;
+
+export const OnClickDashboardFilterTemplateSchema = z.discriminatedUnion(
+  'kind',
+  [OnClickFilterTemplateSchema, OnClickVariableTemplateSchema],
+);
+export type OnClickDashboardFilterTemplate = z.infer<
+  typeof OnClickDashboardFilterTemplateSchema
+>;
+
 const OnClickTargetSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('id'), id: z.string().min(1) }),
   z.object({
@@ -1505,7 +1523,9 @@ export const OnClickDashboardSchema = z.object({
   target: OnClickTargetSchema,
   whereTemplate: z.string().max(10000).optional(),
   whereLanguage: SearchConditionLanguageSchema,
-  filters: z.array(OnClickFilterTemplateSchema).max(50).optional(),
+  filters: z.array(OnClickDashboardFilterTemplateSchema).max(50).optional(),
+  /** Carry the current dashboard's filter selections over to the destination. */
+  includeCurrentFilters: z.boolean().optional(),
 });
 export type OnClickDashboard = z.infer<typeof OnClickDashboardSchema>;
 

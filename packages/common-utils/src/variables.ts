@@ -37,6 +37,7 @@ export const VARIABLE_FORMATS = [
   'lucene',
   'markdown',
   'promql',
+  'url',
 ] as const;
 
 export type VariableFormat = (typeof VARIABLE_FORMATS)[number];
@@ -113,6 +114,17 @@ export function formatVariableValues(
         : `(${values.map(value => `"${escapeLuceneValue(value)}"`).join(' OR ')})`;
     case 'markdown':
       return values.map(escapeMarkdownValue).join(', ');
+    case 'url':
+      // Also encodes !'()*, which encodeURIComponent leaves alone and a
+      // markdown link destination treats as syntax.
+      return values
+        .map(value =>
+          encodeURIComponent(value).replace(
+            /[!'()*]/g,
+            c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+          ),
+        )
+        .join(',');
     default:
       format satisfies never; // Unreachable
       throw new Error(`Unknown variable format '${format}'`);
@@ -458,6 +470,11 @@ export type VariableContext = {
   variables: ChartVariable[];
   /** The language the renderer will parse this template as. */
   inputLanguage: TemplateLanguage;
+  /**
+   * Argument-less `$__<name>` macros that expand to fixed text, keyed by name
+   * without the `$__` prefix. Only read for markdown.
+   */
+  textMacros?: ReadonlyMap<string, string>;
 };
 
 type LanguageSettings = {
@@ -919,11 +936,20 @@ export function substituteVariables(
 
   const settings = languageSettings(ctx.inputLanguage);
   if (settings.disableMacros) {
-    return scanTemplateTokens(input, VARIABLE_MACRO_NAMES, {
-      onMalformed: 'skip',
-      skipSqlComments: settings.skipSqlComments,
-    })
-      .map(token => expandVariableOnly(token, ctx))
+    const textMacros =
+      ctx.inputLanguage === 'markdown' ? ctx.textMacros : undefined;
+    return scanTemplateTokens(
+      input,
+      [...VARIABLE_MACRO_NAMES, ...(textMacros?.keys() ?? [])],
+      { onMalformed: 'skip', skipSqlComments: settings.skipSqlComments },
+    )
+      .map(token => {
+        const text =
+          token.kind === 'macro' && token.args.length === 0
+            ? textMacros?.get(token.name)
+            : undefined;
+        return text ?? expandVariableOnly(token, ctx);
+      })
       .join('');
   }
 

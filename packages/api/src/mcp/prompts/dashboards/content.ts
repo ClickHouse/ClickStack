@@ -1359,8 +1359,8 @@ Table tiles can wire up row-click navigation via config.onClick. Builder table t
 Destination types:
   { type: "search",    target, whereLanguage, whereTemplate?, filters? }
     Opens the /search page for a log or trace source. Metric and session sources are rejected by the server (the /search page does not render those kinds).
-  { type: "dashboard", target, whereLanguage, whereTemplate?, filters? }
-    Opens another ClickStack dashboard owned by the same team.
+  { type: "dashboard", target, whereLanguage, whereTemplate?, filters?, includeCurrentFilters? }
+    Opens another ClickStack dashboard owned by the same team. includeCurrentFilters: true carries the current dashboard's filter selections over; a filter set by \`filters\` replaces the carried-over selection for the same expression or variable.
   { type: "external",  urlTemplate }
     Opens an arbitrary external URL in a new tab (e.g. a Grafana or Langfuse dashboard, a runbook). The urlTemplate is rendered against the clicked row and the rendered value must be an absolute http(s) URL. It takes no target, whereLanguage, whereTemplate, or filters, and references no ClickStack source or dashboard.
 
@@ -1372,9 +1372,18 @@ Target shape, how the destination is identified:
 
 Templating values come from the clicked row's columns. The column name in {{...}} must match a column produced by the table query (group-by columns and aliases both work).
 
+Every template can also read these globals:
+  {{__from}} / {{__to}}   the selected time range, as epoch milliseconds
+  {{__timezone}}          the IANA time zone times are shown in
+  {{__url_time_range}}    "from=<ms>&to=<ms>", ready to drop into a ClickStack URL
+  {{__all_variables}}     "filters=<…>" carrying the current dashboard's filter selections, or empty
+  {{date <value> "iso"}}  formats a timestamp as ISO 8601; "seconds" and "ms" also work
+Search and dashboard links already carry the time range, so the globals matter most in external urlTemplates. Markdown tiles accept the same globals as $__from, $__to, $__timezone, $__url_time_range, and $__all_variables, and \${var:url} URL-encodes a variable's values, e.g. [Service detail](/dashboards/<id>?$__url_time_range&$__all_variables).
+
   whereTemplate    Handlebars-style template. The rendered string is placed in the destination's \`where\` query param. Uses Lucene or SQL syntax matching \`whereLanguage\`. Example: "ServiceName = '{{service.name}}'".
 
   filters          Array of { kind: "expressionTemplate", expression, template }. Each filter renders to an IN clause on the destination (\`expression IN ('rendered-value')\`). When multiple filters share an expression they are merged into one IN clause. The destination dashboard auto-populates its filter list (matched by expression), so prefer this shape over whereTemplate when the target dashboard already declares the same filter expressions. If the destination dashboard does not declare a top-level filter whose \`expression\` matches, that value is dropped at click time and the destination opens unfiltered for that expression.
+                   Dashboard links also accept { kind: "variableTemplate", variableName, template }, which sets the destination filter whose variableName matches. Use it for STATIC_LIST filters, which have no expression.
 
 whereLanguage is optional, but set it to "sql" or "lucene" so the destination knows how to parse whereTemplate / filter values when a template is rendered.
 
