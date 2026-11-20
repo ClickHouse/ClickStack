@@ -2179,6 +2179,7 @@ function DBDashboardPage({
     refresh,
     refreshInterval,
     refreshIntervalOptions,
+    isAutoRefreshInterval,
   } = useDashboardRefresh({
     searchedTimeRange,
     onTimeRangeSelect,
@@ -2187,14 +2188,11 @@ function DBDashboardPage({
   });
 
   const onRefreshIntervalChange = useCallback(
-    (interval: Granularity) => {
-      // Picking the default follows the date range again as it changes.
-      setSelectedRefreshInterval(
-        interval === granularityOverride ? undefined : interval,
-      );
+    (interval: Granularity | undefined) => {
+      setSelectedRefreshInterval(interval);
       setIsLive(true);
     },
-    [granularityOverride],
+    [],
   );
 
   const onSubmit = useCallback(() => {
@@ -3312,6 +3310,7 @@ function DBDashboardPage({
         isLive={isLive}
         onToggleLive={() => setIsLive(prev => !prev)}
         refreshInterval={refreshInterval}
+        isAutoRefreshInterval={isAutoRefreshInterval}
         defaultRefreshInterval={granularityOverride}
         refreshIntervalOptions={refreshIntervalOptions}
         onRefreshIntervalChange={onRefreshIntervalChange}

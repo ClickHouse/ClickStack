@@ -133,4 +133,53 @@ describe('useDashboardRefresh', () => {
     });
     expect(onTimeRangeSelect).not.toHaveBeenCalled();
   });
+
+  it('keeps a fixed interval when the date range widens, unlike auto', () => {
+    const { result, rerender } = renderHook(
+      ({
+        hours,
+        selected,
+      }: {
+        hours: number;
+        selected: Granularity | undefined;
+      }) =>
+        useDashboardRefresh({
+          searchedTimeRange: lastHours(hours),
+          onTimeRangeSelect: jest.fn(),
+          isLive: true,
+          selectedRefreshInterval: selected,
+        }),
+      {
+        initialProps: {
+          hours: 3,
+          selected: Granularity.FiveMinute as Granularity | undefined,
+        },
+      },
+    );
+
+    expect(result.current.refreshInterval).toBe(Granularity.FiveMinute);
+    expect(result.current.isAutoRefreshInterval).toBe(false);
+
+    rerender({ hours: 24, selected: Granularity.FiveMinute });
+    expect(result.current.refreshInterval).toBe(Granularity.FiveMinute);
+    expect(result.current.isAutoRefreshInterval).toBe(false);
+
+    rerender({ hours: 24, selected: undefined });
+    expect(result.current.refreshInterval).toBe(Granularity.ThirtyMinute);
+    expect(result.current.isAutoRefreshInterval).toBe(true);
+  });
+
+  it('reports auto while a fixed interval is slower than the default', () => {
+    const { result } = renderHook(() =>
+      useDashboardRefresh({
+        searchedTimeRange: lastHours(1),
+        onTimeRangeSelect: jest.fn(),
+        isLive: true,
+        selectedRefreshInterval: Granularity.ThirtyMinute,
+      }),
+    );
+
+    expect(result.current.refreshInterval).toBe(Granularity.OneMinute);
+    expect(result.current.isAutoRefreshInterval).toBe(true);
+  });
 });

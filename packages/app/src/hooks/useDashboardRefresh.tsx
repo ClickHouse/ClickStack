@@ -64,7 +64,10 @@ export const useDashboardRefresh = ({
   onTimeRangeSelect: (start: Date, end: Date) => void;
   searchedTimeRange: [Date, Date];
   isLive: boolean;
-  /** Overrides the date range's default refresh interval while it is offered. */
+  /**
+   * Fixed refresh interval, used while the date range still offers it.
+   * Undefined follows the date range's default.
+   */
   selectedRefreshInterval?: Granularity;
 }) => {
   const [manualRefreshCooloff, setManualRefreshCooloff] = React.useState(false);
@@ -100,6 +103,9 @@ export const useDashboardRefresh = ({
     selectedRefreshInterval,
     granularityOverride,
   );
+  const isAutoRefreshInterval =
+    selectedRefreshInterval == null ||
+    !refreshIntervalOptions.includes(selectedRefreshInterval);
 
   // Auto-refresh interval
   const intervalRef = React.useRef<number | null>(null);
@@ -133,5 +139,6 @@ export const useDashboardRefresh = ({
     refresh,
     refreshInterval,
     refreshIntervalOptions,
+    isAutoRefreshInterval,
   };
 };
