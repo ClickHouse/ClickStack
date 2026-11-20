@@ -3,8 +3,24 @@ import { mapGranularityToExternalFormat } from '@hyperdx/common-utils/dist/exter
 import { Box, Button, Menu, Tooltip } from '@mantine/core';
 import { IconCheck, IconChevronDown } from '@tabler/icons-react';
 
-function CheckSlot({ checked }: { checked: boolean }) {
-  return checked ? <IconCheck size={14} /> : <Box w={14} />;
+function IntervalItem({
+  label,
+  checked,
+  onClick,
+}: {
+  label: string;
+  checked: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Menu.Item
+      data-checked={checked}
+      onClick={onClick}
+      leftSection={checked ? <IconCheck size={14} /> : <Box w={14} />}
+    >
+      {label}
+    </Menu.Item>
+  );
 }
 
 export function DashboardLiveButton({
@@ -70,27 +86,19 @@ export function DashboardLiveButton({
         </Menu.Target>
         <Menu.Dropdown data-testid="dashboard-refresh-interval-menu">
           <Menu.Label>Refresh every</Menu.Label>
-          <Menu.Item
+          <IntervalItem
+            label={autoLabel}
+            checked={isAutoRefreshInterval}
             onClick={() => onRefreshIntervalChange(undefined)}
-            leftSection={<CheckSlot checked={isAutoRefreshInterval} />}
-          >
-            {autoLabel}
-          </Menu.Item>
-          <Menu.Divider />
+          />
+          {refreshIntervalOptions.length > 0 && <Menu.Divider />}
           {refreshIntervalOptions.map(interval => (
-            <Menu.Item
+            <IntervalItem
               key={interval}
+              label={mapGranularityToExternalFormat(interval)}
+              checked={!isAutoRefreshInterval && interval === refreshInterval}
               onClick={() => onRefreshIntervalChange(interval)}
-              leftSection={
-                <CheckSlot
-                  checked={
-                    !isAutoRefreshInterval && interval === refreshInterval
-                  }
-                />
-              }
-            >
-              {mapGranularityToExternalFormat(interval)}
-            </Menu.Item>
+            />
           ))}
         </Menu.Dropdown>
       </Menu>

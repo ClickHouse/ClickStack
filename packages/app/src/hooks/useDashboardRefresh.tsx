@@ -8,10 +8,12 @@ import {
 } from '@hyperdx/common-utils/dist/core/utils';
 import { useDocumentVisibility } from '@mantine/hooks';
 
-const MIN_REFRESH_INTERVAL_SECONDS = 30;
+// setInterval treats longer delays as 0 and would refresh in a tight loop.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
-// Every interval convertDateRangeToGranularityString can return at or above the
-// minimum, so the date range's default interval is always one of the choices.
+// The intervals convertDateRangeToGranularityString can return, minus 15s
+// (refreshes stay at 30s or slower), so a default of 30s or more is always one
+// of the choices.
 const REFRESH_INTERVAL_CHOICES = [
   Granularity.ThirtySecond,
   Granularity.OneMinute,
@@ -29,30 +31,16 @@ const REFRESH_INTERVAL_CHOICES = [
 ];
 
 /**
- * Refresh intervals a live dashboard offers, fastest first: from 30s up to the
- * date range's default interval. A default faster than 30s is the only choice.
+ * Fixed refresh intervals a live dashboard offers, fastest first: from 30s up
+ * to the date range's default interval. Empty when the default is under 30s.
  */
 export function getRefreshIntervalOptions(
   defaultInterval: Granularity,
 ): Granularity[] {
   const maxSeconds = convertGranularityToSeconds(defaultInterval);
-  if (maxSeconds < MIN_REFRESH_INTERVAL_SECONDS) {
-    return [defaultInterval];
-  }
   return REFRESH_INTERVAL_CHOICES.filter(
     interval => convertGranularityToSeconds(interval) <= maxSeconds,
   );
-}
-
-/** The chosen interval while it is still offered, otherwise the default. */
-export function resolveRefreshInterval(
-  selected: Granularity | undefined,
-  defaultInterval: Granularity,
-): Granularity {
-  return selected != null &&
-    getRefreshIntervalOptions(defaultInterval).includes(selected)
-    ? selected
-    : defaultInterval;
 }
 
 export const useDashboardRefresh = ({
@@ -99,13 +87,15 @@ export const useDashboardRefresh = ({
     () => getRefreshIntervalOptions(granularityOverride),
     [granularityOverride],
   );
-  const refreshInterval = resolveRefreshInterval(
-    selectedRefreshInterval,
-    granularityOverride,
-  );
-  const isAutoRefreshInterval =
-    selectedRefreshInterval == null ||
-    !refreshIntervalOptions.includes(selectedRefreshInterval);
+  // A fixed interval the date range no longer offers falls back to auto but
+  // stays selected, so widening the range restores it.
+  const fixedRefreshInterval =
+    selectedRefreshInterval != null &&
+    refreshIntervalOptions.includes(selectedRefreshInterval)
+      ? selectedRefreshInterval
+      : undefined;
+  const isAutoRefreshInterval = fixedRefreshInterval == null;
+  const refreshInterval = fixedRefreshInterval ?? granularityOverride;
 
   // Auto-refresh interval
   const intervalRef = React.useRef<number | null>(null);
@@ -118,7 +108,10 @@ export const useDashboardRefresh = ({
         () => {
           refresh();
         },
-        convertGranularityToSeconds(refreshInterval) * 1000,
+        Math.min(
+          convertGranularityToSeconds(refreshInterval) * 1000,
+          MAX_TIMER_DELAY_MS,
+        ),
       );
     } else {
       if (intervalRef.current) {

@@ -3,7 +3,6 @@ import { act, renderHook } from '@testing-library/react';
 
 import {
   getRefreshIntervalOptions,
-  resolveRefreshInterval,
   useDashboardRefresh,
 } from '@/hooks/useDashboardRefresh';
 
@@ -31,30 +30,8 @@ describe('getRefreshIntervalOptions', () => {
     ]);
   });
 
-  it('keeps a default faster than 30s as the only choice', () => {
-    expect(getRefreshIntervalOptions(Granularity.FifteenSecond)).toEqual([
-      Granularity.FifteenSecond,
-    ]);
-  });
-});
-
-describe('resolveRefreshInterval', () => {
-  it('uses the default when nothing is selected', () => {
-    expect(resolveRefreshInterval(undefined, Granularity.FiveMinute)).toBe(
-      Granularity.FiveMinute,
-    );
-  });
-
-  it('uses a faster selection', () => {
-    expect(
-      resolveRefreshInterval(Granularity.OneMinute, Granularity.FiveMinute),
-    ).toBe(Granularity.OneMinute);
-  });
-
-  it('falls back to the default when the selection is slower than it', () => {
-    expect(
-      resolveRefreshInterval(Granularity.OneHour, Granularity.FiveMinute),
-    ).toBe(Granularity.FiveMinute);
+  it('offers no fixed interval when the default is faster than 30s', () => {
+    expect(getRefreshIntervalOptions(Granularity.FifteenSecond)).toEqual([]);
   });
 });
 
@@ -181,5 +158,28 @@ describe('useDashboardRefresh', () => {
 
     expect(result.current.refreshInterval).toBe(Granularity.OneMinute);
     expect(result.current.isAutoRefreshInterval).toBe(true);
+  });
+
+  it('caps a 30d interval at the longest timer delay', () => {
+    const onTimeRangeSelect = jest.fn();
+    const { result } = renderHook(() =>
+      useDashboardRefresh({
+        searchedTimeRange: lastHours(2 * 365 * 24),
+        onTimeRangeSelect,
+        isLive: true,
+      }),
+    );
+
+    expect(result.current.refreshInterval).toBe(Granularity.ThirtyDay);
+
+    act(() => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(onTimeRangeSelect).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(2 ** 31 - 1);
+    });
+    expect(onTimeRangeSelect).toHaveBeenCalledTimes(1);
   });
 });
