@@ -2991,8 +2991,8 @@ function DBDashboardPage({
   const hasTiles = dashboard && dashboard.tiles.length > 0;
   const hasSavedDefaults = Boolean(
     dashboard?.savedQuery ||
-      dashboard?.savedFilterValues?.length ||
-      dashboard?.savedDateRange,
+    dashboard?.savedFilterValues?.length ||
+    dashboard?.savedDateRange,
   );
 
   const dashboardMeta =
