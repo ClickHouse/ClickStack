@@ -166,6 +166,7 @@ import DBSqlRowTableWithSideBar from './components/DBSqlRowTableWithSidebar';
 import PatternTable from './components/PatternTable';
 import { DBSearchHeatmapChart } from './components/Search/DBSearchHeatmapChart';
 import DirectTraceSidePanel from './components/Search/DirectTraceSidePanel';
+import { getReferencedWithClauses } from './components/Search/histogramWith';
 import {
   TRACE_CHART_MODES,
   TraceRedMetricsChart,
@@ -1983,19 +1984,24 @@ function DBSearchPageContent() {
             ...displayedColumns,
             withMapKeyAlias(column, displayedColumns, knownColumns),
           ];
-      setValue('select', newSelectArray.join(', '));
-      if (selected) {
-        const orderBy = getValues('orderBy') ?? '';
-        const nextOrderBy = orderByAfterRemovingSelectItem(
-          selected,
-          orderBy,
-          defaultSearchConfig.orderBy ?? '',
-        );
-        if (nextOrderBy !== orderBy) {
-          setValue('orderBy', nextOrderBy);
-        }
+      const select = newSelectArray.join(', ');
+      setValue('select', select);
+      const orderBy = getValues('orderBy') ?? '';
+      const nextOrderBy = selected
+        ? orderByAfterRemovingSelectItem(
+            selected,
+            orderBy,
+            defaultSearchConfig.orderBy ?? '',
+          )
+        : orderBy;
+      // Apply only the column change: a full submit re-resolves a relative
+      // time range, which refetches the histogram for nothing.
+      if (nextOrderBy !== orderBy) {
+        setValue('orderBy', nextOrderBy);
+        setSearchedConfig({ select, orderBy: nextOrderBy });
+      } else {
+        setSearchedConfig({ select });
       }
-      onSubmit();
     },
     [
       displayedColumns,
@@ -2003,7 +2009,7 @@ function DBSearchPageContent() {
       setValue,
       getValues,
       defaultSearchConfig.orderBy,
-      onSubmit,
+      setSearchedConfig,
     ],
   );
 
@@ -2141,6 +2147,7 @@ function DBSearchPageContent() {
       return undefined;
     }
 
+    const groupBy = resolveSearchGroupBy(groupByParam, searchedSource);
     return {
       ...chartConfig,
       select: [
@@ -2154,8 +2161,14 @@ function DBSearchPageContent() {
       granularity: 'auto',
       dateRange: searchedTimeRange,
       displayType: DisplayType.StackedBar,
-      with: aliasWith,
-      // Preserve the original table select string for "View Events" links
+      with: getReferencedWithClauses(aliasWith, [
+        chartConfig.where,
+        JSON.stringify(chartConfig.filters ?? []),
+        groupBy ?? '',
+        chartConfig.implicitColumnExpression ?? '',
+      ]),
+      // Preserve the original table select string for "View Events" links.
+      // convertToTimeChartConfig drops it from the query key.
       eventTableSelect: searchedConfig.select ?? undefined,
       // Never align to granularity boundaries on the search page: the histogram
       // and total count must reflect the user's exact selected range so they
@@ -2166,7 +2179,7 @@ function DBSearchPageContent() {
       alignDateRangeToGranularity: false,
       // Make sure the end date is inclusive so that the histogram and table counts match
       dateRangeEndInclusive: true,
-      groupBy: resolveSearchGroupBy(groupByParam, searchedSource),
+      groupBy,
     } satisfies BuilderChartConfigWithDateRange;
   }, [
     chartConfig,

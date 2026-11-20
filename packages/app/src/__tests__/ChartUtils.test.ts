@@ -1384,6 +1384,26 @@ describe('ChartUtils', () => {
       expect(granularityFromFunction).toBe('5 minute');
     });
 
+    it('drops eventTableSelect so table column changes do not change the query key', () => {
+      const config: BuilderChartConfigWithDateRange = {
+        select: 'count()',
+        from: { databaseName: 'test', tableName: 'logs' },
+        where: '',
+        timestampValueExpression: 'timestamp',
+        connection: 'test-connection',
+        granularity: '5 minute',
+        dateRange: [
+          new Date('2025-11-26T00:00:00Z'),
+          new Date('2025-11-27T00:00:00Z'),
+        ],
+        eventTableSelect: 'Timestamp, Body',
+      };
+
+      expect(convertToTimeChartConfig(config)).toMatchObject({
+        eventTableSelect: undefined,
+      });
+    });
+
     // seriesLimit lives on the builder member of the ChartConfigWithDateRange
     // union, so narrow the result before reading it. The per-tile value is
     // read from the config itself (no team override anymore).
