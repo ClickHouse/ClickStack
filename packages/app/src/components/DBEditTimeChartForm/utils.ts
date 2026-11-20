@@ -52,6 +52,7 @@ import {
   convertToReducedPromqlChartConfig,
   convertToTableChartConfig,
   convertToTimeChartConfig,
+  selectItemsHaveOwnColumns,
   tryExpandConfigVariables,
 } from '@/ChartUtils';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
@@ -59,6 +60,7 @@ import {
   buildHeatmapSeriesConfig,
   resolveHeatmapGranularity,
 } from '@/components/DBHeatmapChart/heatmapQueries';
+import type { SeriesStyleMode } from '@/components/SeriesColorDrawer';
 import { getMinGranularitySeconds } from '@/hooks/useChartConfig';
 import { getFirstTimestampValueExpression } from '@/source';
 import { getMetricTableName } from '@/utils';
@@ -609,4 +611,50 @@ export function buildGroupByConnectionProps({
   return connections.length > 0
     ? { tableConnections: connections, intersectFields: true }
     : { tableConnection };
+}
+
+/**
+ * Which style control the series editor offers for each select item, or
+ * undefined for none. Table columns take a color and conditional rules. Time
+ * chart series take a color (and a line style on line charts), but only when
+ * each select item draws exactly one series: a group by splits it into many,
+ * and see `selectItemsHaveOwnColumns` for ratio mode and hidden operands.
+ */
+export function getSeriesStyleMode({
+  displayType,
+  groupBy,
+  seriesReturnType,
+  formulas,
+  showOperandSeries,
+  seriesCount,
+}: Pick<
+  ChartEditorFormState,
+  | 'displayType'
+  | 'groupBy'
+  | 'seriesReturnType'
+  | 'formulas'
+  | 'showOperandSeries'
+> & { seriesCount: number }): SeriesStyleMode | undefined {
+  if (displayType === DisplayType.Table) {
+    return 'column';
+  }
+  if (!isTimeSeriesDisplayType(displayType)) {
+    return undefined;
+  }
+  const isGrouped =
+    typeof groupBy === 'string'
+      ? groupBy.trim() !== ''
+      : (groupBy?.length ?? 0) > 0;
+  if (
+    isGrouped ||
+    !selectItemsHaveOwnColumns({
+      selectCount: seriesCount,
+      seriesReturnType,
+      formulas,
+      showOperandSeries,
+    })
+  ) {
+    return undefined;
+  }
+  return displayType === DisplayType.StackedBar ? 'bar' : 'line';
 }

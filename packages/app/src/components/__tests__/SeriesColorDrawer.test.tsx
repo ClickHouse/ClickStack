@@ -88,4 +88,137 @@ describe('SeriesColorDrawer', () => {
       colorRules: undefined,
     });
   });
+
+  it('shows color rules but no line style for table columns', () => {
+    renderWithMantine(
+      <SeriesColorDrawer opened onChange={jest.fn()} onClose={jest.fn()} />,
+    );
+
+    expect(screen.getByText('Column color')).toBeInTheDocument();
+    expect(screen.getByTestId('color-rules-add-button')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('series-line-style-control'),
+    ).not.toBeInTheDocument();
+  });
+
+  describe('line series', () => {
+    it('shows a line style instead of color rules', () => {
+      renderWithMantine(
+        <SeriesColorDrawer
+          opened
+          mode="line"
+          onChange={jest.fn()}
+          onClose={jest.fn()}
+        />,
+      );
+
+      expect(screen.getByText('Series style')).toBeInTheDocument();
+      expect(
+        screen.getByTestId('series-line-style-control'),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('color-rules-add-button'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('applies the picked color and line style', async () => {
+      const user = userEvent.setup();
+      const onChange = jest.fn();
+
+      renderWithMantine(
+        <SeriesColorDrawer
+          opened
+          mode="line"
+          onChange={onChange}
+          onClose={jest.fn()}
+        />,
+      );
+
+      await user.click(screen.getByTestId('color-swatch-input-trigger'));
+      await user.click(
+        await screen.findByTestId('color-swatch-option-chart-purple'),
+      );
+      await user.click(screen.getByRole('radio', { name: 'Dashed' }));
+      await user.click(screen.getByTestId('series-color-apply'));
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange.mock.calls[0][0]).toMatchObject({
+        color: 'chart-purple',
+        lineStyle: 'dashed',
+      });
+    });
+
+    it('stores solid as unset, since solid is the default', async () => {
+      const user = userEvent.setup();
+      const onChange = jest.fn();
+
+      renderWithMantine(
+        <SeriesColorDrawer
+          opened
+          mode="line"
+          lineStyle="dotted"
+          onChange={onChange}
+          onClose={jest.fn()}
+        />,
+      );
+
+      await user.click(screen.getByRole('radio', { name: 'Solid' }));
+      await user.click(screen.getByTestId('series-color-apply'));
+
+      expect(onChange.mock.calls[0][0].lineStyle).toBeUndefined();
+    });
+
+    // Rules come from table display; they are not editable here, so a line
+    // edit must hand them back untouched for a later switch back to table.
+    it('keeps existing column rules when applying and clearing', async () => {
+      const user = userEvent.setup();
+      const onChange = jest.fn();
+      const colorRules: ColorCondition[] = [
+        { operator: 'gt', value: 500, color: 'chart-error' },
+      ];
+
+      renderWithMantine(
+        <SeriesColorDrawer
+          opened
+          mode="line"
+          color="chart-blue"
+          lineStyle="dashed"
+          colorRules={colorRules}
+          onChange={onChange}
+          onClose={jest.fn()}
+        />,
+      );
+
+      await user.click(screen.getByTestId('series-color-clear'));
+      await user.click(screen.getByTestId('series-color-apply'));
+
+      expect(onChange).toHaveBeenCalledWith({
+        color: undefined,
+        lineStyle: undefined,
+        colorRules,
+      });
+    });
+  });
+
+  it('shows only a color for bar series', () => {
+    renderWithMantine(
+      <SeriesColorDrawer
+        opened
+        mode="bar"
+        onChange={jest.fn()}
+        onClose={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Series color')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('color-swatch-input-trigger'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('series-line-style-control'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('color-rules-add-button'),
+    ).not.toBeInTheDocument();
+  });
 });

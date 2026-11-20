@@ -135,11 +135,5 @@ describe('TraceRedMetricsChart', () => {
     expect(new Set(mockTimeChartProps.map(p => p.title))).toEqual(
       new Set(['Throughput', 'Errors', 'Duration']),
     );
-    // Only the Duration tile opts into its select items' pinned colors.
-    expect(
-      new Set(
-        mockTimeChartProps.filter(p => p.applySelectColors).map(p => p.title),
-      ),
-    ).toEqual(new Set(['Duration']));
   });
 });

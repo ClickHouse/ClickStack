@@ -456,6 +456,11 @@ export type ColorCondition = z.infer<typeof ColorConditionSchema>;
 
 export const HeatmapScaleTypeSchema = z.enum(['log', 'linear']);
 
+// Stroke pattern for one line / stacked line series. Unset draws solid.
+export const SeriesLineStyleSchema = z.enum(['solid', 'dashed', 'dotted']);
+
+export type SeriesLineStyle = z.infer<typeof SeriesLineStyleSchema>;
+
 export const DerivedColumnSchema = z.intersection(
   RootValueExpressionSchema,
   z.object({
@@ -467,13 +472,15 @@ export const DerivedColumnSchema = z.intersection(
     countExpression: z.string().optional(),
     heatmapScaleType: HeatmapScaleTypeSchema.optional(),
     numberFormat: NumberFormatSchema.optional(),
-    // Per-column palette-token color, applied by the renderer to this
-    // column's cells on table tiles only (gated in the series editor by
-    // display type); other display types ignore the field. Mirrors the
-    // per-column `numberFormat` above. The select item is the per-column
-    // config home for builder table tiles, so the table-cell counterpart
-    // of the number tile's static color lives here.
+    // Per-series palette-token color. Table tiles apply it to this column's
+    // cells; ungrouped line / stacked line / stacked bar tiles apply it to
+    // this series' line or bar (a grouped series would paint every group
+    // alike, so time charts skip it there). Other display types ignore it.
+    // Mirrors the per-column `numberFormat` above.
     color: ChartPaletteTokenSchema.optional(),
+    // Stroke pattern for this series on ungrouped line / stacked line tiles;
+    // other display types ignore it.
+    lineStyle: SeriesLineStyleSchema.optional(),
     // Ordered conditional color rules for this column's cells on table
     // tiles. Last matching rule wins (higher-priority rules go last); when
     // no rule matches the column's static `color` applies. The table-cell
@@ -1782,8 +1789,8 @@ const SharedChartSettingsSchema = z.object({
   onClick: OnClickSchema.optional(),
   // Palette-token color override. Applied by the renderer for number
   // tiles only (gated in `ChartDisplaySettingsDrawer`); other display
-  // types ignore the field. Other tile types (line / bar / pie) ship
-  // their per-series colors in a follow-up PR via `select[i].color`.
+  // types ignore the field. Line / bar series colors live on
+  // `select[i].color` instead.
   // Stored at shared level mirroring `numberFormat` above, which is
   // also a Number-tile-only field stored at shared level and gated in
   // the UI.

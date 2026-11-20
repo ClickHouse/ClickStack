@@ -1488,6 +1488,60 @@ export class ChartEditorComponent {
   }
 
   /**
+   * The palette button on the series row at `index` that opens its color
+   * drawer (table columns) or style drawer (line and bar series).
+   */
+  seriesStyleButton(index: number): Locator {
+    return this.page.getByTestId('series-color-button').nth(index);
+  }
+
+  /** The open "Series style" drawer of a line series. */
+  get seriesStyleDrawer(): Locator {
+    return this.page.getByRole('dialog', { name: 'Series style' });
+  }
+
+  /**
+   * Set the color and/or line style of the line series at `index`. Opens the
+   * series style drawer, picks the values, then applies and closes.
+   */
+  async setSeriesStyle(
+    index: number,
+    {
+      color,
+      lineStyle,
+    }: { color?: string; lineStyle?: 'Solid' | 'Dashed' | 'Dotted' },
+  ) {
+    await this.openSeriesStyle(index);
+    const drawer = this.seriesStyleDrawer;
+    if (color) {
+      await drawer.getByTestId('color-swatch-input-trigger').click();
+      await this.page.getByTestId(`color-swatch-option-${color}`).click();
+    }
+    if (lineStyle) {
+      await drawer
+        .getByTestId('series-line-style-control')
+        .locator('.mantine-SegmentedControl-label')
+        .filter({ hasText: new RegExp(`^${lineStyle}$`) })
+        .click();
+    }
+    await drawer.getByTestId('series-color-apply').click();
+    await drawer.waitFor({ state: 'hidden', timeout: 5000 });
+  }
+
+  /** Open the series style drawer of the line series at `index`. */
+  async openSeriesStyle(index: number) {
+    await this.seriesStyleButton(index).click();
+    await this.seriesStyleDrawer.waitFor({ state: 'visible', timeout: 5000 });
+  }
+
+  /** A "Line style" option's (visually hidden) radio in the open drawer. */
+  seriesLineStyleOption(lineStyle: 'Solid' | 'Dashed' | 'Dotted'): Locator {
+    return this.seriesStyleDrawer
+      .getByTestId('series-line-style-control')
+      .getByRole('radio', { name: lineStyle, exact: true });
+  }
+
+  /**
    * Read the column header texts from the first <table> in the tile editor
    * preview panel. Waits for the table to be visible before reading.
    */

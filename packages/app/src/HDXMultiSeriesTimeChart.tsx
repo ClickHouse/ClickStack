@@ -69,6 +69,7 @@ import {
 import { useChartSyncId } from './chartSync';
 import {
   findNearestSeriesKey,
+  getLineStrokeDasharray,
   getSeriesColorForGroup,
   LineData,
   MAX_TIME_CHART_SERIES,
@@ -377,9 +378,16 @@ const LegendRenderer = memo<{
   allLineData?: LineData[];
   selectedSeries?: Set<string>;
   onToggleSeries?: (seriesName: string, isShiftKey?: boolean) => void;
+  displayType?: DisplayType;
 }>(props => {
-  const { payload, lineDataMap, allLineData, selectedSeries, onToggleSeries } =
-    props;
+  const {
+    payload,
+    lineDataMap,
+    allLineData,
+    selectedSeries,
+    onToggleSeries,
+    displayType,
+  } = props;
 
   const hasSelection = hasSeriesSelection(selectedSeries);
 
@@ -390,11 +398,11 @@ const LegendRenderer = memo<{
         dataKey: ld.dataKey,
         value: ld.displayName || ld.dataKey,
         color: ld.color,
-        payload: { strokeDasharray: ld.isDashed ? '4 3' : '0' },
+        payload: { strokeDasharray: getLineStrokeDasharray(ld, displayType) },
       }));
     }
     return payload ?? [];
-  }, [allLineData, payload]);
+  }, [allLineData, payload, displayType]);
 
   const sortedLegendItems = useMemo(() => {
     // Order items such that current and previous period lines are consecutive
@@ -1546,7 +1554,7 @@ export const MemoChart = memo(function MemoChart({
     return visibleLineData.map(ld => {
       const key = ld.dataKey;
       const color = ld.color;
-      const strokeDasharray = ld.isDashed ? '4 3' : '0';
+      const strokeDasharray = getLineStrokeDasharray(ld);
       const seriesName = getSeriesDisplayName(ld);
 
       return displayType === 'stacked_bar' ? (
@@ -2306,6 +2314,7 @@ export const MemoChart = memo(function MemoChart({
                   allLineData={lineData}
                   selectedSeries={selectedSeriesNames || new Set()}
                   onToggleSeries={onToggleSeries}
+                  displayType={displayType}
                 />
               }
               offset={-100}

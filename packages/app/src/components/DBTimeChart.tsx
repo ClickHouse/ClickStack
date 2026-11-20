@@ -38,7 +38,7 @@ import {
   convertToTimeChartConfig,
   formatResponseForTimeChart,
   getPreviousDateRange,
-  getSelectSeriesColors,
+  getSelectSeriesStyles,
   type LineData,
   shouldFillNullsWithZero,
   tryExpandConfigVariables,
@@ -61,6 +61,7 @@ import {
 } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useResultColumnFilterKeys } from '@/hooks/useResultColumnFilterKeys';
+import { useStableValue } from '@/hooks/useStableValue';
 import { useChartNumberFormats, useSource } from '@/source';
 import { useTimeZoneLinkParam } from '@/timeZoneOverride';
 import type { NumberFormat, TileFilterHandler } from '@/types';
@@ -405,15 +406,6 @@ type DBTimeChartComponentProps = {
    * auto-scaling below it. Forwarded to the chart.
    */
   yAxisMaxDomain?: number;
-  /**
-   * Color each series with its select item's `color` (keyed by the item's
-   * alias) instead of the positional palette. Off by default: saved tiles only
-   * set `color` for table display and other display types ignore it, so a tile
-   * switched from Table to Line keeps its palette. Every group of a grouped
-   * select item would share the one color, so this is for ungrouped series
-   * whose config is built in code, like the trace RED duration percentiles.
-   */
-  applySelectColors?: boolean;
 };
 
 function DBTimeChartComponent({
@@ -443,7 +435,6 @@ function DBTimeChartComponent({
   onFilter,
   compactXAxisLabels,
   yAxisMaxDomain,
-  applySelectColors = false,
 }: DBTimeChartComponentProps) {
   const [selectedSeriesSet, setSelectedSeriesSet] = useState<Set<string>>(
     new Set(),
@@ -654,12 +645,11 @@ function DBTimeChartComponent({
   const { formatByColumn, chartFormat: axisNumberFormat } =
     useChartNumberFormats(queriedConfig, data?.meta);
 
-  // Per-series colors come from each select item's `color`, the single source
-  // of truth for pinning a series to a palette token, but only for callers
-  // that opt in (see applySelectColors), so saved tiles keep their palette.
-  const seriesColors = useMemo(
-    () => (applySelectColors ? getSelectSeriesColors(config) : undefined),
-    [applySelectColors, config],
+  // `config` is rebuilt on every dashboard render, so keep the styles'
+  // reference while their content is unchanged; a new one would reformat the
+  // response and rebuild every line.
+  const { seriesColors, seriesLineStyles } = useStableValue(
+    getSelectSeriesStyles(config, data?.meta),
   );
 
   const {
@@ -701,6 +691,7 @@ function DBTimeChartComponent({
         source,
         hiddenSeries,
         seriesColors,
+        seriesLineStyles,
         previousPeriodOffsetSeconds,
         // "Load all" (from the warning / pinned tooltip) overrides everything;
         // otherwise the per-tile Series Limit drives the cap (null = default,
@@ -743,6 +734,7 @@ function DBTimeChartComponent({
     previousPeriodData,
     hiddenSeries,
     seriesColors,
+    seriesLineStyles,
     previousPeriodOffsetSeconds,
     showAllSeries,
   ]);

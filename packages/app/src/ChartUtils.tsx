@@ -43,6 +43,7 @@ import {
   MetricsDataType as MetricsDataTypeV2,
   PromqlChartConfig,
   resolveChartPaletteToken,
+  SeriesLineStyle,
   SourceKind,
   SQLInterval,
   TMetricSource,
@@ -634,40 +635,118 @@ export interface LineData {
   /** The series' raw group-by values, in group column order. */
   groupValues: unknown[];
   color: string;
+  /** True for the previous-period line of a period comparison. */
   isDashed?: boolean;
+  lineStyle?: SeriesLineStyle;
 }
 
 interface LineDataWithOptionalColor extends Omit<LineData, 'color'> {
   color?: string;
 }
 
+const PREVIOUS_PERIOD_DASHARRAY = '4 3';
+const LINE_STYLE_DASHARRAY: Record<SeriesLineStyle, string> = {
+  solid: '0',
+  dashed: '8 4',
+  dotted: '1.5 3',
+};
+
 /**
- * Series colors set on a chart's select items, keyed by result-column name
- * (the item's alias), in the shape formatResponseForTimeChart's
- * `seriesColors` takes. Tokens go through resolveChartPaletteToken, as on
- * table and number tiles, so a legacy token maps to its hue and an
- * unrecognized one is skipped: that series falls back to the positional
- * palette instead of failing the whole chart.
+ * SVG stroke-dasharray for a time chart line and its legend swatch. Bars have
+ * no stroke, so their swatch stays solid whatever line style is saved.
  */
-export function getSelectSeriesColors(
+export function getLineStrokeDasharray(
+  line: LineData,
+  displayType?: DisplayType,
+): string {
+  if (line.isDashed) {
+    return PREVIOUS_PERIOD_DASHARRAY;
+  }
+  if (displayType === DisplayType.StackedBar) {
+    return LINE_STYLE_DASHARRAY.solid;
+  }
+  return LINE_STYLE_DASHARRAY[line.lineStyle ?? 'solid'];
+}
+
+/**
+ * Whether select item i is result value column i. Not so when ratio mode
+ * merges two items into one column (the `isRatioChartConfig` condition) or
+ * when hidden formula operands leave only formula columns. Formulas supersede
+ * ratio, as in `renderMultiSeriesMetricChartConfig` and
+ * `getBuilderValueColumnCount`. Takes plain fields rather than a chart config
+ * because the series editor calls it with form state. Shared by the editor and
+ * `getSelectSeriesStyles` so they agree on when per-series styles apply.
+ */
+export function selectItemsHaveOwnColumns({
+  selectCount,
+  seriesReturnType,
+  formulas,
+  showOperandSeries,
+}: Pick<
+  BuilderChartConfigWithDateRange,
+  'seriesReturnType' | 'formulas' | 'showOperandSeries'
+> & { selectCount: number }): boolean {
+  if ((formulas?.length ?? 0) > 0) {
+    return showOperandSeries !== false;
+  }
+  return !(seriesReturnType === 'ratio' && selectCount === 2);
+}
+
+export type SelectSeriesStyles = {
+  seriesColors?: Record<string, ChartPaletteToken>;
+  seriesLineStyles?: Record<string, SeriesLineStyle>;
+};
+
+/**
+ * Colors and line styles set on a chart's select items, keyed by result
+ * column name in the shape formatResponseForTimeChart takes. Select items map
+ * to `meta` by position (value columns come first, in select order; see
+ * useChartNumberFormats), falling back to the item's alias when meta is not
+ * known yet. Ratio charts and charts whose formula operands are hidden have no
+ * result column per select item, so they get no styles.
+ *
+ * Tokens go through resolveChartPaletteToken, as on table and number tiles,
+ * so a legacy token maps to its hue and an unrecognized one is skipped: that
+ * series falls back to the positional palette instead of failing the chart.
+ */
+export function getSelectSeriesStyles(
   config: ChartConfigWithDateRange,
-): Record<string, ChartPaletteToken> | undefined {
-  if (!isBuilderChartConfig(config) || !Array.isArray(config.select)) {
-    return undefined;
+  meta?: ColumnMetaType[],
+): SelectSeriesStyles {
+  if (
+    !isBuilderChartConfig(config) ||
+    !Array.isArray(config.select) ||
+    !selectItemsHaveOwnColumns({
+      selectCount: config.select.length,
+      seriesReturnType: config.seriesReturnType,
+      formulas: config.formulas,
+      showOperandSeries: config.showOperandSeries,
+    })
+  ) {
+    return {};
   }
-  const entries: [string, ChartPaletteToken][] = [];
-  for (const selectItem of config.select) {
+  const seriesColors: Record<string, ChartPaletteToken> = {};
+  const seriesLineStyles: Record<string, SeriesLineStyle> = {};
+  config.select.forEach((selectItem, i) => {
+    const key = meta?.[i]?.name ?? selectItem.alias;
+    if (!key) return;
     const token = resolveChartPaletteToken(selectItem.color);
-    if (selectItem.alias && token) {
-      entries.push([selectItem.alias, token]);
+    if (token) {
+      seriesColors[key] = token;
     }
-  }
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+    if (selectItem.lineStyle && selectItem.lineStyle !== 'solid') {
+      seriesLineStyles[key] = selectItem.lineStyle;
+    }
+  });
+  return {
+    ...(Object.keys(seriesColors).length > 0 && { seriesColors }),
+    ...(Object.keys(seriesLineStyles).length > 0 && { seriesLineStyles }),
+  };
 }
 
 function setLineColors(
   sortedLineData: LineDataWithOptionalColor[],
-  seriesColors?: Record<string, ChartPaletteToken>,
+  { seriesColors, seriesLineStyles }: SelectSeriesStyles = {},
 ): LineData[] {
   // Ensure that the current and previous period lines are the same color
   const lineColorByCurrentPeriodKey = new Map<string, string>();
@@ -675,6 +754,16 @@ function setLineColors(
   let colorIndex = 0;
   return sortedLineData.map(line => {
     const currentPeriodKey = line.currentPeriodKey;
+    // A select item describes one series; on a grouped series it would paint
+    // every group alike, so only ungrouped series take it.
+    const isGrouped = line.groupValues.length > 0;
+    const lineStyle =
+      isGrouped || line.isDashed
+        ? undefined
+        : seriesLineStyles?.[line.valueColumnName];
+    if (lineStyle) {
+      line.lineStyle = lineStyle;
+    }
     if (lineColorByCurrentPeriodKey.has(currentPeriodKey)) {
       line.color = lineColorByCurrentPeriodKey.get(currentPeriodKey);
     } else if (!line.color) {
@@ -683,7 +772,9 @@ function setLineColors(
       // wins over the positional palette, so a series keeps the same hue no
       // matter how the data sorts it. A pinned series does not consume a
       // positional slot, so unpinned series keep their natural palette order.
-      const pinnedToken = seriesColors?.[line.valueColumnName];
+      const pinnedToken = isGrouped
+        ? undefined
+        : seriesColors?.[line.valueColumnName];
       line.color = pinnedToken
         ? getColorFromCSSToken(pinnedToken)
         : getColorProps(colorIndex++, seriesName);
@@ -839,6 +930,7 @@ export function formatResponseForTimeChart({
   previousPeriodOffsetSeconds = 0,
   maxSeries = MAX_RENDERED_TIME_CHART_SERIES,
   seriesColors,
+  seriesLineStyles,
 }: {
   dateRange: [Date, Date];
   granularity?: SQLInterval;
@@ -859,9 +951,14 @@ export function formatResponseForTimeChart({
    * of the positional palette, so their color is stable across sessions and can
    * avoid hues reserved for other meanings (e.g. keeping latency off error red).
    * DBTimeChart derives this from each select item's `color`
-   * (getSelectSeriesColors) when its caller opts in with `applySelectColors`.
+   * (getSelectSeriesStyles). Ignored on grouped series.
    */
   seriesColors?: Record<string, ChartPaletteToken>;
+  /**
+   * Per-series stroke pattern (keyed by result-column name), from each select
+   * item's `lineStyle`. Ignored on grouped and previous-period series.
+   */
+  seriesLineStyles?: Record<string, SeriesLineStyle>;
 }) {
   const meta = currentPeriodResponse.meta;
 
@@ -1104,7 +1201,10 @@ export function formatResponseForTimeChart({
     (a, b) => a[timestampColumn.name] - b[timestampColumn.name],
   );
 
-  const sortedLineDataWithColors = setLineColors(sortedLineData, seriesColors);
+  const sortedLineDataWithColors = setLineColors(sortedLineData, {
+    seriesColors,
+    seriesLineStyles,
+  });
 
   // Count of LOGICAL groups actually rendered, in the same unit as
   // hiddenSeriesCount — so a comparison chart (current + previous entries per

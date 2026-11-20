@@ -963,12 +963,60 @@ describe('DBEditTimeChartForm - Column color', () => {
     expect(screen.getByTestId('series-color-button')).toBeInTheDocument();
   });
 
-  it('hides the per-column color control on non-table tiles', () => {
+  it('hides the per-series color control on number tiles', () => {
+    renderComponent({
+      chartConfig: { ...tableConfig, displayType: DisplayType.Number },
+    });
+
+    expect(screen.queryByTestId('series-color-button')).not.toBeInTheDocument();
+  });
+
+  it('shows the series style control on ungrouped line tiles', () => {
     renderComponent({
       chartConfig: { ...tableConfig, displayType: DisplayType.Line },
     });
 
+    expect(
+      screen.getByRole('button', { name: 'Edit series style' }),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the series style control on grouped line tiles', () => {
+    renderComponent({
+      chartConfig: {
+        ...tableConfig,
+        displayType: DisplayType.Line,
+        groupBy: 'ServiceName',
+      },
+    });
+
     expect(screen.queryByTestId('series-color-button')).not.toBeInTheDocument();
+  });
+
+  it('saves a line series color and line style on its select item', async () => {
+    const onSave = jest.fn();
+    renderComponent({
+      chartConfig: { ...tableConfig, displayType: DisplayType.Line },
+      onSave,
+    });
+
+    await userEvent.click(screen.getByTestId('series-color-button'));
+    await userEvent.click(
+      await screen.findByTestId('color-swatch-input-trigger'),
+    );
+    await userEvent.click(
+      await screen.findByTestId('color-swatch-option-chart-purple'),
+    );
+    await userEvent.click(screen.getByRole('radio', { name: 'Dotted' }));
+    await userEvent.click(screen.getByTestId('series-color-apply'));
+    await userEvent.click(screen.getByTestId('chart-save-button'));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].select[0]).toMatchObject({
+      alias: 'event count',
+      color: 'chart-purple',
+      lineStyle: 'dotted',
+    });
   });
 
   it('opens the column color drawer when the control is clicked', async () => {
