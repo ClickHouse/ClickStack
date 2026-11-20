@@ -1,0 +1,5 @@
+# Next.js build output. The root ignore files do not apply: prettier reads
+# them only from its working directory.
+.next
+.next-e2e
+next-env.d.ts

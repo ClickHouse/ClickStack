@@ -27,8 +27,10 @@
       "inputs": [
         "default",
         "^production",
-        // Each package's `lint` runs ESLint through this wrapper.
-        "{workspaceRoot}/scripts/ci/eslint-warnings.mjs",
+        // Each package's `lint` runs oxlint through this wrapper, and every
+        // package config extends the shared base and local plugins here.
+        "{workspaceRoot}/scripts/ci/oxlint-warnings.mjs",
+        "{workspaceRoot}/oxlint/**/*",
         { "runtime": "node --version" }
       ]
     },
@@ -75,7 +77,7 @@
       "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
       "!{projectRoot}/tsconfig.spec.json",
       "!{projectRoot}/jest.config.[jt]s",
-      "!{projectRoot}/eslint.config.mjs"
+      "!{projectRoot}/.oxlintrc.json"
     ],
     "sharedGlobals": [
       "{workspaceRoot}/tsconfig.base.json",

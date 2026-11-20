@@ -894,7 +894,7 @@ const Tile = ({
     let tooltip = `Has alert and is in ${alert.state} state`;
     if (alert.silenced?.at) {
       const silencedAt = new Date(alert.silenced.at);
-      // eslint-disable-next-line no-restricted-syntax
+      // eslint-disable-next-line react-hooks/purity
       tooltip += `. Ack'd ${formatRelative(silencedAt, new Date())}`;
     }
     return tooltip;

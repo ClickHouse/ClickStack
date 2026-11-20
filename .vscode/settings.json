@@ -4,15 +4,14 @@
   "editor.detectIndentation": false,
   "editor.formatOnSave": true,
   "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": "always",
+    "source.fixAll.oxc": "always",
     "source.fixAll.stylelint": "always"
   },
-  "eslint.useFlatConfig": true,
   "[typescript]": {
-    "editor.defaultFormatter": "dbaeumer.vscode-eslint"
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[typescriptreact]": {
-    "editor.defaultFormatter": "dbaeumer.vscode-eslint"
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[scss]": {
     "editor.defaultFormatter": "stylelint.vscode-stylelint"
@@ -20,11 +19,6 @@
   "[css]": {
     "editor.defaultFormatter": "stylelint.vscode-stylelint"
   },
-  "eslint.workingDirectories": [
-    {
-      "mode": "auto"
-    }
-  ],
   "stylelint.validate": ["css", "postcss", "scss"],
   "cssVariables.lookupFiles": [
     "**/*.css",

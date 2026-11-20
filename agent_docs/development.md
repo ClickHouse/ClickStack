@@ -269,7 +269,7 @@ does not overlap with CI integration tests (14320-40098) or the dev stack
 The project uses Husky + lint-staged to automatically run:
 
 - Prettier for formatting
-- ESLint for linting
+- oxlint for linting (each file with its package's `.oxlintrc.json`)
 - API doc generation (for external API changes)
 
 These run automatically on `git commit` for staged files.

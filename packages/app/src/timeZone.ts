@@ -6,7 +6,6 @@ export const LOCAL_TIME_ZONE = 'local';
 // For code that needs the time right now, such as a ticking clock or parsing
 // "yesterday", rather than the stable NOW from config.
 export function currentDate(): Date {
-  // eslint-disable-next-line no-restricted-syntax
   return new Date();
 }
 
@@ -78,7 +77,6 @@ export function formatTimeZoneName(timeZone: string): string {
  */
 export function getTimeZoneShortName(
   timeZone: string,
-  // eslint-disable-next-line no-restricted-syntax
   date: Date = new Date(),
 ): string {
   const offset = new Intl.DateTimeFormat('en-US', {
