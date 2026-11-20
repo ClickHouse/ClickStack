@@ -4,7 +4,9 @@
  * - localStorage migration logic
  */
 
-import { mergePinnedData } from '@/searchFilters';
+import { act, renderHook } from '@testing-library/react';
+
+import { mergePinnedData, useCollapsedPinnedFields } from '@/searchFilters';
 
 describe('mergePinnedData', () => {
   it('returns empty fields and filters when both are null', () => {
@@ -165,5 +167,79 @@ describe('localStorage migration', () => {
     );
     expect(result[sourceA]).toBeUndefined();
     expect(result[sourceB]).toEqual({ level: ['error'] });
+  });
+});
+
+describe('useCollapsedPinnedFields', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('remembers a collapsed pinned field across remounts', () => {
+    const first = renderHook(() => useCollapsedPinnedFields('source1'));
+    expect(first.result.current.isPinnedFieldCollapsed('ServiceName')).toBe(
+      false,
+    );
+
+    act(() =>
+      first.result.current.setPinnedFieldCollapsed('ServiceName', true),
+    );
+    expect(first.result.current.isPinnedFieldCollapsed('ServiceName')).toBe(
+      true,
+    );
+    first.unmount();
+
+    const second = renderHook(() => useCollapsedPinnedFields('source1'));
+    expect(second.result.current.isPinnedFieldCollapsed('ServiceName')).toBe(
+      true,
+    );
+  });
+
+  it('forgets the field once it is expanded again', () => {
+    const { result } = renderHook(() => useCollapsedPinnedFields('source1'));
+    act(() => result.current.setPinnedFieldCollapsed('ServiceName', true));
+    act(() => result.current.setPinnedFieldCollapsed('ServiceName', false));
+
+    expect(result.current.isPinnedFieldCollapsed('ServiceName')).toBe(false);
+    expect(
+      JSON.parse(window.localStorage.getItem('hdx-collapsed-pinned-fields')!),
+    ).toEqual({ source1: [] });
+  });
+
+  it('keeps the collapsed state per source', () => {
+    const a = renderHook(() => useCollapsedPinnedFields('sourceA'));
+    act(() => a.result.current.setPinnedFieldCollapsed('ServiceName', true));
+
+    const b = renderHook(() => useCollapsedPinnedFields('sourceB'));
+    expect(b.result.current.isPinnedFieldCollapsed('ServiceName')).toBe(false);
+  });
+
+  it('does nothing without a source', () => {
+    const { result } = renderHook(() => useCollapsedPinnedFields(null));
+    act(() => result.current.setPinnedFieldCollapsed('ServiceName', true));
+
+    expect(result.current.isPinnedFieldCollapsed('ServiceName')).toBe(false);
+    expect(window.localStorage.getItem('hdx-collapsed-pinned-fields')).toBe(
+      null,
+    );
+  });
+});
+
+describe('useCollapsedPinnedFields pruning', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('keeps only the fields still pinned after a reset', () => {
+    const { result } = renderHook(() => useCollapsedPinnedFields('source1'));
+    act(() => result.current.setPinnedFieldCollapsed('ServiceName', true));
+    act(() => result.current.setPinnedFieldCollapsed('SeverityText', true));
+
+    act(() =>
+      result.current.pruneCollapsedPinnedFields(f => f === 'SeverityText'),
+    );
+
+    expect(result.current.isPinnedFieldCollapsed('ServiceName')).toBe(false);
+    expect(result.current.isPinnedFieldCollapsed('SeverityText')).toBe(true);
   });
 });

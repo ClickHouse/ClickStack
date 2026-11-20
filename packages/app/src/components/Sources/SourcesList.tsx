@@ -1,14 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
   Alert,
-  Badge,
   Box,
   Button,
   Card,
-  Divider,
   Flex,
   Group,
   Loader,
@@ -31,7 +30,7 @@ import { IS_LOCAL_MODE } from '@/config';
 import { useConnections } from '@/connection';
 import { useSources } from '@/source';
 
-import { SOURCE_KIND_LABELS } from './SourceForm/constants';
+import { getSourceKindLabel } from './SourceForm/constants';
 import { TableSourceForm } from './SourceForm';
 
 import styles from './Sources.module.scss';
@@ -206,14 +205,15 @@ export function SourcesList({
                     {s.name}
                   </Text>
                   {s.disabled && (
-                    <Badge size="xs" variant="light" color="gray">
-                      Disabled
-                    </Badge>
+                    <Badge size="sm" text="Disabled" state="neutral" />
                   )}
                 </Group>
                 <Text size={subtextSize} c="dimmed" mt={4}>
                   <Group gap="xs">
-                    {SOURCE_KIND_LABELS[s.kind]}
+                    {getSourceKindLabel(
+                      s.kind,
+                      connections?.find(c => c.id === s.connection),
+                    )}
                     {s.section && (
                       <Group gap={4}>
                         <IconFolder size={iconSize} />
@@ -259,13 +259,13 @@ export function SourcesList({
                 />
               </Box>
             )}
-            {index < (sources?.length ?? 0) - 1 && <Divider />}
+            {index < (sources?.length ?? 0) - 1 && <Separator size="xs" />}
           </React.Fragment>
         ))}
 
         {isCreatingSource && (
           <>
-            {sources && sources.length > 0 && <Divider />}
+            {sources && sources.length > 0 && <Separator size="xs" />}
             <TableSourceForm
               isNew
               onCreate={() => setIsCreatingSource(false)}

@@ -1,9 +1,10 @@
 import { useCallback, useEffect } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
+import { Separator } from '@clickhouse/click-ui';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { TableConnection } from '@hyperdx/common-utils/dist/core/metadata';
-import { Button, Divider, Drawer, Group, Stack } from '@mantine/core';
+import { Button, Drawer, Group, Stack } from '@mantine/core';
 import { IconPlayerPlay } from '@tabler/icons-react';
 
 import { HeatmapScaleControl } from '@/components/DBHeatmapChart/HeatmapScaleControl';
@@ -69,7 +70,7 @@ export default function HeatmapSettingsDrawer({
             onChange={v => form.setValue('scaleType', v)}
           />
 
-          <Divider />
+          <Separator size="xs" />
 
           <SQLInlineEditorControlled
             parentRef={parentRef}
@@ -103,7 +104,7 @@ export default function HeatmapSettingsDrawer({
             error={form.formState.errors.count?.message}
           />
 
-          <Divider />
+          <Separator size="xs" />
           <Group gap="xs" justify="flex-end">
             <Button variant="secondary" onClick={handleClose}>
               Cancel

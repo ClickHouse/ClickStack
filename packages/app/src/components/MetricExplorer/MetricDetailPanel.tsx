@@ -1,15 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import { TMetricSource } from '@hyperdx/common-utils/dist/types';
-import {
-  Badge,
-  Box,
-  Divider,
-  Group,
-  Loader,
-  ScrollArea,
-  Stack,
-  Text,
-} from '@mantine/core';
+import { Box, Group, Loader, ScrollArea, Stack, Text } from '@mantine/core';
 import { IconChartLine } from '@tabler/icons-react';
 
 import EmptyState from '@/components/EmptyState';
@@ -116,9 +108,12 @@ function MetricDetail({
           <Text size="sm" fw={600} style={{ wordBreak: 'break-all' }}>
             {metricName}
           </Text>
-          <Badge size="xs" variant="light" style={{ flexShrink: 0 }}>
-            {METRIC_KIND_LABELS[metricType]}
-          </Badge>
+          <Badge
+            size="sm"
+            text={METRIC_KIND_LABELS[metricType]}
+            state="info"
+            style={{ flexShrink: 0 }}
+          />
         </Group>
 
         <Stack gap={4} mt={4}>
@@ -152,16 +147,14 @@ function MetricDetail({
         </Stack>
       </Box>
 
-      <Divider />
+      <Separator size="xs" />
 
       <Group gap="xs">
         <Text size="xs" fw={600}>
           Tags
         </Text>
         {attributeKeys.length > 0 && (
-          <Badge size="xs" variant="default" fw="normal">
-            {attributeKeys.length}
-          </Badge>
+          <Badge size="sm" text={attributeKeys.length} state="neutral" />
         )}
       </Group>
 

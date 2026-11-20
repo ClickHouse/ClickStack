@@ -1,42 +1,60 @@
 import {
+  adhocConditionsToFilters,
+  adhocConditionsToPromqlFilters,
   deriveVariableName,
   doesFilterApplyToSource,
   FilterState,
   filterStateToPredicate,
   filtersToQuery,
+  getAdhocFilterAppliesToSourceIds,
   getDashboardVariableDeclarations,
   getDashboardVariableFilters,
   getFilterBroadcastTarget,
   getFilterExpression,
   getFilterVariableName,
   getPendingFilterValuesVariables,
+  getPromqlFilters,
+  getSqlFilters,
   hasFilterEffect,
+  isAdhocComparableDataType,
+  isAdhocConditionSupported,
   isFilterBroadcastEnabled,
   isFilterGlobalRequirement,
+  isFilterReferenceableVariable,
   isFilterRequired,
   isFilterVariableEnabled,
   isQueryExpressionFilter,
   isRenderablePinnedFilter,
+  mergeAdhocConditions,
   parseQuery,
+  renderSqlQueryFilterValuesQuery,
   resolveFilterValuesWhere,
   resolvePromqlLabelFilterMatch,
   serializeFilterState,
+  SQL_QUERY_FILTER_VALUES_LIMIT,
   validateDashboardFilterQueries,
   validateSavedFilterValues,
   validateSavedQuery,
   validateVariableName,
 } from '@/filters';
 import type {
+  AdhocDashboardFilter,
+  AdhocFilterCondition,
+  AdhocFilterOperator,
+  AdhocFilterSourceType,
   ChartVariable,
   DashboardFilter,
   Filter,
+  PromqlConditionFilter,
   QueryExpressionDashboardFilter,
+  SqlQueryDashboardFilter,
   StaticListDashboardFilter,
 } from '@/types';
 import {
   DASHBOARD_VARIABLE_NAME_MAX_LENGTH,
   DASHBOARD_VARIABLE_NAME_PATTERN_ANCHORED,
 } from '@/types';
+import { isFilterSingleSelect } from '@/variables';
 
 describe('filters', () => {
   describe('filtersToQuery', () => {
@@ -726,6 +744,96 @@ describe('filters', () => {
       ).toEqual([]);
     });
 
+    describe('SQL query filters', () => {
+      const sqlFilter = (
+        sqlTemplate: string,
+        source?: string,
+      ): SqlQueryDashboardFilter => ({
+        id: 'sql',
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        connection: 'conn-1',
+        source,
+        sqlTemplate,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      });
+      const cloud = filter({
+        id: 'cloud',
+        name: 'cloud',
+        isVariableEnabled: true,
+      });
+
+      it('accepts time macros and references to other variables', () => {
+        expect(
+          validateDashboardFilterQueries([
+            cloud,
+            sqlFilter(
+              'SELECT env FROM envs WHERE $__timeFilter(ts) AND $__filter(cloud, $cloud) AND region IN ($cloud)',
+            ),
+          ]),
+        ).toEqual([]);
+      });
+
+      // Running it is the only reliable check of ClickHouse syntax.
+      it('does not parse the SQL itself', () => {
+        expect(
+          validateDashboardFilterQueries([sqlFilter('SELEC env FRM')]),
+        ).toEqual([]);
+      });
+
+      it.each([
+        ['$__sourceTable', 'SELECT env FROM $__sourceTable'],
+        ['$__filters', 'SELECT env FROM envs WHERE $__filters'],
+      ])(
+        'flags %s, which needs a source the filter does not have',
+        (macro, sql) => {
+          expect(validateDashboardFilterQueries([sqlFilter(sql)])).toEqual([
+            {
+              filterId: 'sql',
+              filterName: 'Environment',
+              language: 'sql',
+              where: sql,
+              detail: `SQL uses ${macro} but no source is selected`,
+            },
+          ]);
+        },
+      );
+
+      it.each([
+        'SELECT env FROM $__sourceTable WHERE $__filters',
+        'SELECT env FROM $__sourceTable(gauge) UNION ALL SELECT env FROM $__sourceTable(sum)',
+      ])('accepts source macros when the filter has a source: %s', sql => {
+        expect(
+          validateDashboardFilterQueries([sqlFilter(sql, 'source-1')]),
+        ).toEqual([]);
+      });
+
+      // No source has both a table and metric tables.
+      it('flags a mix of bare and metric $__sourceTable calls', () => {
+        const sql =
+          'SELECT env FROM $__sourceTable UNION ALL SELECT env FROM $__sourceTable(gauge)';
+        expect(
+          validateDashboardFilterQueries([sqlFilter(sql, 'source-1')]),
+        ).toEqual([expect.objectContaining({ filterId: 'sql', where: sql })]);
+      });
+
+      it.each([
+        ['an undeclared variable macro', 'WHERE $__filter(env, $missing)'],
+        ['an unterminated macro', 'WHERE $__timeFilter(ts'],
+        ['an unknown variable format', 'WHERE env IN (${cloud:bogus})'],
+      ])('flags %s', (_label, sql) => {
+        const issues = validateDashboardFilterQueries([cloud, sqlFilter(sql)]);
+
+        expect(issues).toHaveLength(1);
+        expect(issues[0]).toMatchObject({
+          filterId: 'sql',
+          where: sql,
+          detail: expect.any(String),
+        });
+      });
+    });
+
     it('accepts a valid lucene where clause', () => {
       expect(
         validateDashboardFilterQueries([
@@ -780,6 +888,49 @@ describe('filters', () => {
           where: 'ServiceName = =',
         },
       ]);
+    });
+
+    it("flags a malformed where clause on an ad hoc filter's suggestions", () => {
+      expect(
+        validateDashboardFilterQueries([
+          {
+            id: 'conds',
+            type: 'ADHOC',
+            isBroadcastEnabled: true,
+            name: 'Conditions',
+            sourceType: 'sql',
+            sources: ['logs'],
+            isVariableEnabled: true,
+            where: 'ServiceName = =',
+            whereLanguage: 'sql',
+          },
+        ]),
+      ).toEqual([
+        {
+          filterId: 'conds',
+          filterName: 'Conditions',
+          language: 'sql',
+          where: 'ServiceName = =',
+        },
+      ]);
+    });
+
+    it('skips the unused where clause of a PromQL ad hoc filter', () => {
+      expect(
+        validateDashboardFilterQueries([
+          {
+            id: 'conds',
+            type: 'ADHOC',
+            isBroadcastEnabled: true,
+            name: 'Conditions',
+            sourceType: 'promql',
+            sources: ['metrics'],
+            isVariableEnabled: true,
+            where: 'ServiceName = =',
+            whereLanguage: 'sql',
+          },
+        ]),
+      ).toEqual([]);
     });
 
     it('only reports the invalid filters in a mixed list', () => {
@@ -1100,6 +1251,161 @@ describe('filters', () => {
     });
   });
 
+  describe('renderSqlQueryFilterValuesQuery', () => {
+    const dateRange: [Date, Date] = [new Date(1000), new Date(2000)];
+    const svc = (values: string[]): ChartVariable => ({
+      name: 'svc',
+      expression: 'ServiceName',
+      values,
+    });
+
+    it('reads the distinct first column values as strings, capped', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env, count() FROM envs GROUP BY env',
+          variables: [],
+          dateRange,
+        }),
+      ).toEqual({
+        sql: `SELECT DISTINCT toString(tupleElement(tuple(*), 1)) AS value FROM (\nSELECT env, count() FROM envs GROUP BY env\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
+        params: {},
+      });
+    });
+
+    it('sends the time range when a time macro reads it', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM envs WHERE $__timeFilter(ts)',
+          variables: [],
+          dateRange,
+        }).params,
+      ).toEqual({ startDateMilliseconds: 1000, endDateMilliseconds: 2000 });
+    });
+
+    it('sends only the time params the SQL reads', () => {
+      expect(
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate:
+            'SELECT env FROM envs WHERE ts >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})',
+          variables: [],
+          dateRange,
+        }).params,
+      ).toEqual({ startDateMilliseconds: 1000 });
+    });
+
+    it('strips a trailing semicolon', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: '  SELECT env FROM envs;  ',
+        variables: [],
+        dateRange,
+      });
+      expect(sql).toContain('(\nSELECT env FROM envs\n)');
+    });
+
+    it('expands time macros and other filters', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate:
+          'SELECT env FROM envs WHERE $__timeFilter(ts) AND $__filter(svc, $svc)',
+        variables: [svc(['api'])],
+        dateRange,
+      });
+      expect(sql).toContain('{startDateMilliseconds:Int64}');
+      expect(sql).toContain("svc IN ('api')");
+      expect(sql).not.toContain('$');
+    });
+
+    it('throws when the template uses a source macro without a source', () => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM $__sourceTable',
+          variables: [],
+          dateRange,
+        }),
+      ).toThrow(/no source is selected/);
+    });
+
+    it("expands source macros against the filter's source", () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: 'SELECT env FROM $__sourceTable WHERE $__filters',
+        variables: [],
+        sourceTables: { from: { databaseName: 'db', tableName: 'logs' } },
+        filtersSQL: "(ServiceName = 'api')",
+        dateRange,
+      });
+      expect(sql).toContain(
+        "SELECT env FROM `db`.`logs` WHERE (ServiceName = 'api')",
+      );
+    });
+
+    it('expands $__filters to 1=1 when no filters apply', () => {
+      const { sql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate: 'SELECT env FROM $__sourceTable WHERE $__filters',
+        variables: [],
+        sourceTables: { from: { databaseName: 'db', tableName: 'logs' } },
+        dateRange,
+      });
+      expect(sql).toContain('WHERE (1=1');
+    });
+
+    it.each([
+      ['a bare call on a metric source', 'SELECT 1 FROM $__sourceTable', true],
+      [
+        'a metric call on a non-metric source',
+        'SELECT 1 FROM $__sourceTable(gauge)',
+        false,
+      ],
+      [
+        'a metric type the source has no table for',
+        'SELECT 1 FROM $__sourceTable(sum)',
+        true,
+      ],
+    ])('throws on %s', (_label, sqlTemplate, isMetricSource) => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate,
+          variables: [],
+          sourceTables: {
+            from: { databaseName: 'db', tableName: '' },
+            metricTables: isMetricSource
+              ? {
+                  gauge: 'metrics_gauge',
+                  histogram: '',
+                  sum: '',
+                  summary: '',
+                  'exponential histogram': '',
+                }
+              : undefined,
+          },
+          dateRange,
+        }),
+      ).toThrow(/\$__sourceTable/);
+    });
+
+    it.each([
+      'SELECT toStartOfInterval(Timestamp, INTERVAL $__interval_s second) FROM logs',
+      'SELECT $__timeInterval(Timestamp) FROM logs',
+      'SELECT $__timeInterval_ms(Timestamp) FROM logs',
+    ])('throws when the template uses an interval macro: %s', sqlTemplate => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate,
+          variables: [],
+          dateRange,
+        }),
+      ).toThrow(/have no time buckets/);
+    });
+
+    it('throws when a macro names an unknown variable', () => {
+      expect(() =>
+        renderSqlQueryFilterValuesQuery({
+          sqlTemplate: 'SELECT env FROM envs WHERE $__filter(env, $missing)',
+          variables: [svc([])],
+          dateRange,
+        }),
+      ).toThrow(/unknown variable/);
+    });
+  });
+
   describe('getPendingFilterValuesVariables', () => {
     const svc = (values: string[]): ChartVariable => ({
       name: 'svc',
@@ -1156,6 +1462,11 @@ describe('filters', () => {
       [
         'a regex-formatted reference',
         'match(ServiceName, ${svc:regex})',
+        'sql',
+      ],
+      [
+        'a promql-formatted reference',
+        "match(ServiceName, '${svc:promql}')",
         'sql',
       ],
     ] as const)('reports nothing for %s', (_label, where, whereLanguage) => {
@@ -1604,14 +1915,28 @@ describe('filters', () => {
       ...overrides,
     });
 
-    it('reports the expression and scope for a broadcasting filter', () => {
+    it('reports the scope for a broadcasting filter', () => {
       expect(getFilterBroadcastTarget(filter({}))).toEqual({
-        expression: 'ServiceName',
         appliesToSourceIds: undefined,
       });
       expect(
         getFilterBroadcastTarget(filter({ appliesToSourceIds: ['logs'] })),
-      ).toEqual({ expression: 'ServiceName', appliesToSourceIds: ['logs'] });
+      ).toEqual({ appliesToSourceIds: ['logs'] });
+    });
+
+    it('scopes an ad hoc filter to the sources it applies to', () => {
+      const adhoc: AdhocDashboardFilter = {
+        id: 'f4',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['logs', 'traces'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      };
+      expect(getFilterBroadcastTarget(adhoc)).toEqual({
+        appliesToSourceIds: ['logs', 'traces'],
+      });
     });
 
     it('returns undefined when broadcasting is off', () => {
@@ -1664,6 +1989,22 @@ describe('filters', () => {
     });
   });
 
+  describe('isFilterReferenceableVariable', () => {
+    it.each([
+      ['QUERY_EXPRESSION', true, true],
+      ['STATIC_LIST', true, true],
+      ['QUERY_EXPRESSION', false, false],
+      ['ADHOC', true, false],
+    ] as const)(
+      '%s with variables %s: %s',
+      (type, isVariableEnabled, expected) => {
+        expect(isFilterReferenceableVariable({ type, isVariableEnabled })).toBe(
+          expected,
+        );
+      },
+    );
+  });
+
   describe('isFilterRequired', () => {
     it('treats a missing or zero minimum as not required', () => {
       expect(isFilterRequired({})).toBe(false);
@@ -1684,6 +2025,16 @@ describe('filters', () => {
     });
   });
 
+  describe('isFilterSingleSelect', () => {
+    it('treats a missing cap as multi-select', () => {
+      expect(isFilterSingleSelect({})).toBe(false);
+    });
+
+    it('holds for a cap of one', () => {
+      expect(isFilterSingleSelect({ maxSelections: 1 })).toBe(true);
+    });
+  });
+
   describe('isFilterGlobalRequirement', () => {
     it('treats a missing flag as covering only the tiles that read the filter', () => {
       expect(isFilterGlobalRequirement({})).toBe(false);
@@ -1699,6 +2050,333 @@ describe('filters', () => {
       expect(isFilterGlobalRequirement({ isGlobalRequirement: false })).toBe(
         false,
       );
+    });
+  });
+
+  describe('getAdhocFilterAppliesToSourceIds', () => {
+    it('falls back to the filter sources when no scope is set', () => {
+      expect(getAdhocFilterAppliesToSourceIds({ sources: ['logs'] })).toEqual([
+        'logs',
+      ]);
+      expect(
+        getAdhocFilterAppliesToSourceIds({
+          sources: ['logs'],
+          appliesToSourceIds: [],
+        }),
+      ).toEqual(['logs']);
+    });
+
+    it('returns the scoped sources when set', () => {
+      expect(
+        getAdhocFilterAppliesToSourceIds({
+          sources: ['logs', 'traces'],
+          appliesToSourceIds: ['traces'],
+        }),
+      ).toEqual(['traces']);
+    });
+  });
+
+  describe('adhocConditionsToFilters', () => {
+    const conditionFor = (
+      operator: AdhocFilterOperator,
+      value = 'api',
+      key = 'ServiceName',
+    ) => adhocConditionsToFilters([{ key, operator, value }]);
+
+    it.each<[AdhocFilterOperator, string]>([
+      ['=', "toString(ServiceName) = 'api'"],
+      ['!=', "toString(ServiceName) != 'api'"],
+      ['=~', "match(toString(ServiceName), 'api')"],
+      ['!~', "NOT match(toString(ServiceName), 'api')"],
+      ['LIKE', "toString(ServiceName) LIKE 'api'"],
+      ['NOT LIKE', "toString(ServiceName) NOT LIKE 'api'"],
+      ['IN', "toString(ServiceName) IN ('api')"],
+    ])('renders %s', (operator, condition) => {
+      expect(conditionFor(operator)).toEqual([{ type: 'sql', condition }]);
+    });
+
+    it('ORs IN conditions sharing a key, at the first one', () => {
+      expect(
+        adhocConditionsToFilters([
+          { key: 'SeverityText', operator: '=', value: 'error' },
+          { key: 'ServiceName', operator: 'IN', value: 'api' },
+          { key: 'Env', operator: 'IN', value: 'prod' },
+          { key: 'ServiceName', operator: 'IN', value: "it's" },
+          { key: 'ServiceName', operator: '!=', value: 'web' },
+        ]).map(filter => filter.condition),
+      ).toEqual([
+        "toString(SeverityText) = 'error'",
+        "toString(ServiceName) IN ('api', 'it''s')",
+        "toString(Env) IN ('prod')",
+        "toString(ServiceName) != 'web'",
+      ]);
+    });
+
+    it('passes LIKE patterns through as written', () => {
+      expect(conditionFor('LIKE', '%err_r%')).toEqual([
+        { type: 'sql', condition: "toString(ServiceName) LIKE '%err_r%'" },
+      ]);
+    });
+
+    it('escapes quotes and backslashes in values', () => {
+      expect(conditionFor('=', "it's \\ here")).toEqual([
+        {
+          type: 'sql',
+          condition: "toString(ServiceName) = 'it''s \\\\ here'",
+        },
+      ]);
+    });
+
+    it('uses keys verbatim', () => {
+      expect(conditionFor('=', 'api', "`log-attrs`['service.name']")).toEqual([
+        {
+          type: 'sql',
+          condition: "toString(`log-attrs`['service.name']) = 'api'",
+        },
+      ]);
+    });
+
+    it('returns no filters for no conditions', () => {
+      expect(adhocConditionsToFilters([])).toEqual([]);
+    });
+  });
+
+  describe('isAdhocComparableDataType', () => {
+    it.each([
+      'DateTime',
+      "DateTime('UTC')",
+      'DateTime64(9)',
+      'Nullable(DateTime64(3))',
+      'LowCardinality(Nullable(DateTime))',
+    ])('rejects %s', type => {
+      expect(isAdhocComparableDataType(type)).toBe(false);
+    });
+
+    it.each(['Date', 'Date32', 'String', 'UInt64', 'Dynamic'])(
+      'accepts %s',
+      type => {
+        expect(isAdhocComparableDataType(type)).toBe(true);
+      },
+    );
+  });
+
+  describe('mergeAdhocConditions', () => {
+    const svc = (
+      operator: AdhocFilterOperator,
+      value = 'api',
+    ): AdhocFilterCondition => ({ key: 'ServiceName', operator, value });
+    const level: AdhocFilterCondition = {
+      key: 'SeverityText',
+      operator: '=',
+      value: 'error',
+    };
+
+    it('includes a value', () => {
+      expect(
+        mergeAdhocConditions(
+          [level],
+          [{ key: 'ServiceName', value: 'api' }],
+          'include',
+        ),
+      ).toEqual([level, svc('=')]);
+    });
+
+    it('toggles an included value off', () => {
+      expect(
+        mergeAdhocConditions(
+          [svc('='), level],
+          [{ key: 'ServiceName', value: 'api' }],
+          'include',
+        ),
+      ).toEqual([level]);
+    });
+
+    it('replaces the opposite condition on the same value', () => {
+      expect(
+        mergeAdhocConditions(
+          [svc('=')],
+          [{ key: 'ServiceName', value: 'api' }],
+          'exclude',
+        ),
+      ).toEqual([svc('!=')]);
+      expect(
+        mergeAdhocConditions(
+          [svc('!=')],
+          [{ key: 'ServiceName', value: 'api' }],
+          'include',
+        ),
+      ).toEqual([svc('=')]);
+    });
+
+    it('adds a value without toggling an existing condition off', () => {
+      expect(
+        mergeAdhocConditions(
+          [svc('='), level],
+          [{ key: 'ServiceName', value: 'api' }],
+          'add',
+        ),
+      ).toEqual([svc('='), level]);
+      expect(
+        mergeAdhocConditions(
+          [svc('!=')],
+          [{ key: 'ServiceName', value: 'api' }],
+          'add',
+        ),
+      ).toEqual([svc('=')]);
+    });
+
+    it('toggles an excluded value off', () => {
+      expect(
+        mergeAdhocConditions(
+          [svc('!=')],
+          [{ key: 'ServiceName', value: 'api' }],
+          'exclude',
+        ),
+      ).toEqual([]);
+    });
+
+    it('appends a second value on the same key', () => {
+      expect(
+        mergeAdhocConditions(
+          [svc('=')],
+          [{ key: 'ServiceName', value: 'web' }],
+          'include',
+        ),
+      ).toEqual([svc('='), svc('=', 'web')]);
+    });
+
+    it('adds the entries that are missing when some already apply', () => {
+      expect(
+        mergeAdhocConditions(
+          [svc('=')],
+          [
+            { key: 'ServiceName', value: 'api' },
+            { key: 'SeverityText', value: 'error' },
+          ],
+          'include',
+        ),
+      ).toEqual([svc('='), level]);
+    });
+
+    it('removes every entry when all already apply', () => {
+      expect(
+        mergeAdhocConditions(
+          [svc('='), level],
+          [
+            { key: 'ServiceName', value: 'api' },
+            { key: 'SeverityText', value: 'error' },
+          ],
+          'include',
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe('adhocConditionsToPromqlFilters', () => {
+    const matcherFor = (
+      operator: AdhocFilterOperator,
+      value = 'api',
+      key = 'service',
+    ) =>
+      adhocConditionsToPromqlFilters([{ key, operator, value }]).map(
+        filter => filter.condition,
+      );
+
+    it.each<[AdhocFilterOperator, string]>([
+      ['=', 'service="api"'],
+      ['!=', 'service!="api"'],
+      ['=~', 'service=~"api"'],
+      ['!~', 'service!~"api"'],
+      ['IN', 'service=~"api"'],
+    ])('renders %s', (operator, matcher) => {
+      expect(matcherFor(operator)).toEqual([matcher]);
+    });
+
+    it('ORs IN conditions sharing a label into one escaped regex', () => {
+      expect(
+        adhocConditionsToPromqlFilters([
+          { key: 'service', operator: 'IN', value: 'api' },
+          { key: 'job', operator: 'IN', value: 'node' },
+          { key: 'service', operator: 'IN', value: 'a.b\\c' },
+        ]).map(filter => filter.condition),
+      ).toEqual(['service=~"(api|a\\\\.b\\\\\\\\c)"', 'job=~"node"']);
+    });
+
+    it.each<AdhocFilterOperator>(['LIKE', 'NOT LIKE'])(
+      'skips %s rather than throwing',
+      operator => {
+        expect(
+          adhocConditionsToPromqlFilters([
+            { key: 'service', operator, value: 'api' },
+            { key: 'env', operator: '=', value: 'prod' },
+          ]),
+        ).toEqual([{ type: 'promql', condition: 'env="prod"' }]);
+      },
+    );
+
+    it('escapes quotes and backslashes in values', () => {
+      expect(matcherFor('=', 'say "hi" \\ here')).toEqual([
+        'service="say \\"hi\\" \\\\ here"',
+      ]);
+    });
+
+    it('escapes newlines in values and label names', () => {
+      expect(matcherFor('=', 'a\nb', 'odd\nlabel')).toEqual([
+        '"odd\\nlabel"="a\\nb"',
+      ]);
+    });
+
+    it('quotes label names outside the legacy charset', () => {
+      expect(matcherFor('=', 'api', 'service.name')).toEqual([
+        '"service.name"="api"',
+      ]);
+    });
+
+    it('renders one PromQL filter per condition', () => {
+      expect(
+        adhocConditionsToPromqlFilters([
+          { key: 'service', operator: '=', value: 'api' },
+          { key: 'service', operator: '!=', value: 'web' },
+        ]),
+      ).toEqual([
+        { type: 'promql', condition: 'service="api"' },
+        { type: 'promql', condition: 'service!="web"' },
+      ]);
+    });
+  });
+
+  describe('isAdhocConditionSupported', () => {
+    it.each<[AdhocFilterSourceType, AdhocFilterOperator, boolean]>([
+      ['sql', 'LIKE', true],
+      ['sql', 'NOT LIKE', true],
+      ['promql', 'LIKE', false],
+      ['promql', 'NOT LIKE', false],
+      ['promql', '=~', true],
+      ['promql', '!=', true],
+      ['sql', 'IN', true],
+      ['promql', 'IN', true],
+    ])('%s supports %s: %s', (sourceType, operator, expected) => {
+      expect(
+        isAdhocConditionSupported(sourceType, {
+          key: 'service',
+          operator,
+          value: 'api',
+        }),
+      ).toBe(expected);
+    });
+  });
+
+  describe('getSqlFilters / getPromqlFilters', () => {
+    const sql: Filter = { type: 'sql', condition: "env = 'prod'" };
+    const lucene: Filter = { type: 'lucene', condition: 'level:error' };
+    const promql: PromqlConditionFilter = {
+      type: 'promql',
+      condition: 'job="api"',
+    };
+
+    it('splits broadcast filters by query language', () => {
+      expect(getSqlFilters([sql, promql, lucene])).toEqual([sql, lucene]);
+      expect(getPromqlFilters([sql, promql, lucene])).toEqual([promql]);
     });
   });
 
@@ -1843,6 +2521,19 @@ describe('filters', () => {
       ).toEqual([]);
     });
 
+    it('skips ad hoc filters, whose name is not referenceable', () => {
+      const adhoc: AdhocDashboardFilter = {
+        id: 'a1',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['logs'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      };
+      expect(getDashboardVariableFilters([adhoc])).toEqual([]);
+    });
+
     it('skips a filter whose display name derives nothing usable', () => {
       expect(
         getDashboardVariableFilters([
@@ -1935,6 +2626,18 @@ describe('filters', () => {
           filter({ isVariableEnabled: true, variableName: 'svc' }),
         ]),
       ).toEqual([{ name: 'svc', expression: 'ServiceName' }]);
+    });
+
+    it('carries the selection cap', () => {
+      expect(
+        getDashboardVariableDeclarations([
+          filter({
+            isVariableEnabled: true,
+            variableName: 'svc',
+            maxSelections: 1,
+          }),
+        ]),
+      ).toEqual([{ name: 'svc', expression: 'ServiceName', maxSelections: 1 }]);
     });
 
     it('falls back to the name derived from the display name', () => {
@@ -2069,6 +2772,18 @@ describe('filters', () => {
         }),
       ).toBe(
         'This variable name is used by another filter on this dashboard (Env)',
+      );
+    });
+
+    it('names the field by the given noun', () => {
+      const other = [variableFilter({ name: 'Env', variableName: 'env' })];
+      const validate = (value: string) =>
+        validateVariableName({ value, otherFilters: other, noun: 'name' });
+
+      expect(validate('')).toBe('Name is required');
+      expect(validate('1env')).toMatch(/^Names must start with a letter/);
+      expect(validate('env')).toBe(
+        'This name is used by another filter on this dashboard (Env)',
       );
     });
 

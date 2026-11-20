@@ -39,11 +39,11 @@ export const useFetchMetricMetadata = ({
 
   const shouldFetch = Boolean(
     databaseName &&
-      metricType &&
-      metricName &&
-      tableSource &&
-      tableName &&
-      tableSource?.kind === SourceKind.Metric,
+    metricType &&
+    metricName &&
+    tableSource &&
+    tableName &&
+    tableSource?.kind === SourceKind.Metric,
   );
 
   const attribution = useMetadataQueryAttribution();

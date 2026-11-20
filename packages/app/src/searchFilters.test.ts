@@ -21,6 +21,7 @@ describe('useSearchPageFilterState replaceFilterValue', () => {
         searchQuery: EMPTY_SEARCH_QUERY,
         onFilterChange,
         knownColumns: new Set(),
+        jsonColumns: new Set(),
       }),
     );
 
@@ -42,6 +43,7 @@ describe('useSearchPageFilterState replaceFilterValue', () => {
         searchQuery: EMPTY_SEARCH_QUERY,
         onFilterChange,
         knownColumns: new Set(),
+        jsonColumns: new Set(),
       }),
     );
 
@@ -63,6 +65,7 @@ describe('useSearchPageFilterState replaceFilterValue', () => {
         searchQuery: EMPTY_SEARCH_QUERY,
         onFilterChange,
         knownColumns: new Set(),
+        jsonColumns: new Set(),
       }),
     );
 
@@ -117,6 +120,7 @@ describe('canonical key escaping at the persistence boundary', () => {
           searchQuery: EMPTY_SEARCH_QUERY,
           onFilterChange,
           knownColumns: HYPHEN_COLUMNS,
+          jsonColumns: new Set(),
         }),
       );
 
@@ -139,6 +143,7 @@ describe('canonical key escaping at the persistence boundary', () => {
           searchQuery: EMPTY_SEARCH_QUERY,
           onFilterChange,
           knownColumns: MAP_COLUMNS,
+          jsonColumns: new Set(),
         }),
       );
 
@@ -159,6 +164,7 @@ describe('canonical key escaping at the persistence boundary', () => {
           searchQuery: EMPTY_SEARCH_QUERY,
           onFilterChange,
           knownColumns: PLAIN_COLUMNS,
+          jsonColumns: new Set(),
         }),
       );
 
@@ -182,6 +188,7 @@ describe('canonical key escaping at the persistence boundary', () => {
           searchQuery,
           onFilterChange,
           knownColumns: HYPHEN_COLUMNS,
+          jsonColumns: new Set(),
         }),
       );
 

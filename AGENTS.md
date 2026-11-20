@@ -34,7 +34,7 @@ This is a **monorepo** with six packages:
   comparison workflow.
 
 **Data flow**: Apps → OpenTelemetry Collector → ClickHouse (telemetry data) /
-MongoDB (configuration/metadata)
+a MongoDB-compatible store (configuration/metadata; DocumentDB in local dev)
 
 ## Development Setup (HOW)
 
@@ -44,7 +44,8 @@ yarn dev            # Start full stack with worktree-isolated ports
 ```
 
 The project uses **Yarn 4.13.0** workspaces. Docker Compose manages ClickHouse,
-MongoDB, and the OTel Collector.
+DocumentDB (the local metadata store, which the API reaches over the Mongo wire
+protocol), and the OTel Collector.
 
 **This repo is multi-agent friendly.** `yarn dev`, `make dev-int`, and
 `make dev-e2e` all use slot-based port isolation so multiple worktrees can run
@@ -247,7 +248,29 @@ efficient and accurate:
    your agent to produce tests before writing implementation code. See the
    Testing section below for the commands to use.
 
-5. **Ensure a changeset exists before pushing a PR.** Any change to a published
+5. **Attach before/after screenshots to any PR that changes the UI.** Anything
+   visible in `packages/app` needs a "Before" (`main`) and "After" (branch)
+   image in the PR template's screenshots table, taken on the same screen, data,
+   viewport, and theme. Use a short video for interactions. If you can't capture
+   screenshots yourself (no browser tool), say so in the PR description and
+   leave the table for the human author to fill; never submit an empty table
+   silently. See
+   [CONTRIBUTING.md](CONTRIBUTING.md#ui-changes-need-beforeafter-screenshots).
+
+6. **Write reproduction steps a reviewer can follow.** Fill in the PR
+   template's "How to reproduce" section with numbered steps that show the
+   problem on `main` and the fix on the branch. Start from
+   [play.hyperdx.io](https://play.hyperdx.io) when the bug shows there, or from
+   `yarn app:dev:local` connected to the demo server (onboarding → "Connect to
+   Demo Server"; the PR's Vercel preview runs the same local mode). Full-stack
+   `yarn dev` pre-provisions a local ClickHouse connection and never shows that
+   button, so use it only when the change needs the API. Name UI elements by
+   visible text, and list any env vars,
+   feature flags, schema, or seed data needed. When filing issues, apply the
+   same standard. See
+   [CONTRIBUTING.md](CONTRIBUTING.md#reproducing-issues-and-prs).
+
+7. **Ensure a changeset exists before pushing a PR.** Any change to a published
    package (`@hyperdx/app`, `@hyperdx/api`, `@hyperdx/otel-collector`, etc.) that
    is user-facing or affects behavior must include a changeset in `.changeset/`.
    Add one with `yarn changeset` (or create the markdown file by hand following
@@ -255,7 +278,7 @@ efficient and accurate:
    pushing the branch. Skip only for changes that don't warrant a release (docs,
    internal tooling, tests, CI).
 
-6. **The root `CHANGELOG.md` is generated at release time.** During each
+8. **The root `CHANGELOG.md` is generated at release time.** During each
    release, CI writes an AI-generated cross-package summary section into the
    root `CHANGELOG.md` on the "Release HyperDX" PR. Review and edit it there
    like any other file — but keep the `<!-- hyperdx-release-notes … -->` comment
@@ -439,7 +462,7 @@ default `/workspace` directory, the slot is **76**, so services are at:
 - **App**: http://localhost:30276
 - **API**: http://localhost:30176
 - **ClickHouse**: http://localhost:30576
-- **MongoDB**: localhost:30476
+- **DocumentDB**: localhost:30476
 
 ### Key commands reference
 
@@ -453,7 +476,7 @@ reference. Quick summary:
 
 ### First-time registration
 
-When the dev stack starts fresh (empty MongoDB), the app shows a registration
+When the dev stack starts fresh (empty DocumentDB), the app shows a registration
 page. Create any account to get started — no external auth provider is needed.
 
 ---

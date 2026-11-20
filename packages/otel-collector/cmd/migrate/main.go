@@ -54,6 +54,9 @@ type Config struct {
 	// Where to record the seeded database for the entrypoint (fallback only).
 	ResolvedDatabasePath string
 
+	// Set 8,192-token text index dictionary blocks on the seeded tables.
+	SetTextIndexBlockSize bool
+
 	// TLS settings
 	TLSCAFile             string
 	TLSCertFile           string
@@ -83,6 +86,7 @@ func loadConfig() (*Config, error) {
 		Replicated:            getEnv("HYPERDX_OTEL_EXPORTER_CLICKHOUSE_REPLICATED", "false") == "true",
 		FallbackDatabase:      getEnv("HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE", ""),
 		ResolvedDatabasePath:  getEnv("HYPERDX_OTEL_EXPORTER_RESOLVED_DATABASE_PATH", "/tmp/hyperdx-otel-exporter-database"),
+		SetTextIndexBlockSize: getEnv("HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE", "true") != "false",
 		TLSCAFile:             getEnv("CLICKHOUSE_TLS_CA_FILE", ""),
 		TLSCertFile:           getEnv("CLICKHOUSE_TLS_CERT_FILE", ""),
 		TLSKeyFile:            getEnv("CLICKHOUSE_TLS_KEY_FILE", ""),
@@ -739,6 +743,49 @@ func supportsFullTextSearch(major, minor int) bool {
 	return major > 26 || (major == 26 && minor >= 2)
 }
 
+// textIndexTables are the seeded tables with text indexes.
+var textIndexTables = []string{"otel_logs", "otel_traces", "hyperdx_sessions"}
+
+// supportsTextIndexTableSettings returns true if the ClickHouse version has the
+// text_index_dictionary_block_size MergeTree setting. This requires ClickHouse
+// >= 26.6.
+func supportsTextIndexTableSettings(major, minor int) bool {
+	return major > 26 || (major == 26 && minor >= 6)
+}
+
+// setTextIndexBlockSize gives the seeded tables 8,192-token text index
+// dictionary blocks (the default is 512), so filter value reads load a 16x
+// smaller sparse index per part. It runs after the seed so existing tables
+// get it too; new parts use it, existing parts keep theirs until merged. A
+// table that already sets the value is left alone.
+func setTextIndexBlockSize(ctx context.Context, db *sql.DB, database string) error {
+	var firstErr error
+	for _, table := range textIndexTables {
+		var engineFull string
+		err := db.QueryRowContext(ctx,
+			"SELECT engine_full FROM system.tables WHERE database = ? AND name = ?",
+			database, table).Scan(&engineFull)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err == nil && strings.Contains(engineFull, "text_index_dictionary_block_size") {
+			continue
+		}
+		if err == nil {
+			_, err = db.ExecContext(ctx, fmt.Sprintf(
+				"ALTER TABLE `%s`.`%s` MODIFY SETTING text_index_dictionary_block_size = 8192",
+				database, table))
+		}
+		if err != nil {
+			log.Printf("WARNING: could not set the text index block size on %s: %v", table, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
 // swapLogsSchemaForCompat replaces the full-text-search logs schema with the
 // compatibility variant (bloom_filter indexes) in the processed temp directory.
 // It removes 00002_otel_logs.sql and renames 00002_otel_logs_compat.sql to
@@ -809,6 +856,37 @@ func removeCompatTracesSchema(tempDir string) error {
 	compatPath := filepath.Join(tempDir, "00005_otel_traces_compat.sql")
 	if err := os.Remove(compatPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove compat traces schema: %w", err)
+	}
+	return nil
+}
+
+// swapSessionsSchemaForCompat replaces the full-text-search sessions schema
+// with the compatibility variant (bloom_filter session id indexes) in the
+// processed temp directory. It removes 00004_hyperdx_sessions.sql and renames
+// 00004_hyperdx_sessions_compat.sql to take its place, so goose runs the
+// compat schema instead.
+func swapSessionsSchemaForCompat(tempDir string) error {
+	fullTextPath := filepath.Join(tempDir, "00004_hyperdx_sessions.sql")
+	compatPath := filepath.Join(tempDir, "00004_hyperdx_sessions_compat.sql")
+
+	if err := os.Remove(fullTextPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove full text sessions schema: %w", err)
+	}
+
+	if err := os.Rename(compatPath, fullTextPath); err != nil {
+		return fmt.Errorf("failed to rename compat sessions schema: %w", err)
+	}
+
+	return nil
+}
+
+// removeCompatSessionsSchema removes the compat sessions schema file from the
+// temp directory when full text search is supported, so goose doesn't run both
+// schemas.
+func removeCompatSessionsSchema(tempDir string) error {
+	compatPath := filepath.Join(tempDir, "00004_hyperdx_sessions_compat.sql")
+	if err := os.Remove(compatPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove compat sessions schema: %w", err)
 	}
 	return nil
 }
@@ -923,7 +1001,7 @@ func main() {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Select the appropriate logs and traces schemas based on ClickHouse version
+	// Select the appropriate logs, traces and sessions schemas based on ClickHouse version
 	if supportsFullTextSearch(chMajor, chMinor) {
 		if err := removeCompatLogsSchema(tempDir); err != nil {
 			log.Fatalf("Failed to remove compat logs schema: %v", err)
@@ -931,13 +1009,19 @@ func main() {
 		if err := removeCompatTracesSchema(tempDir); err != nil {
 			log.Fatalf("Failed to remove compat traces schema: %v", err)
 		}
+		if err := removeCompatSessionsSchema(tempDir); err != nil {
+			log.Fatalf("Failed to remove compat sessions schema: %v", err)
+		}
 	} else {
-		log.Printf("ClickHouse %d.%d < 26.2, falling back to compatibility logs and traces schemas", chMajor, chMinor)
+		log.Printf("ClickHouse %d.%d < 26.2, falling back to compatibility logs, traces and sessions schemas", chMajor, chMinor)
 		if err := swapLogsSchemaForCompat(tempDir); err != nil {
 			log.Fatalf("Failed to swap logs schema: %v", err)
 		}
 		if err := swapTracesSchemaForCompat(tempDir); err != nil {
 			log.Fatalf("Failed to swap traces schema: %v", err)
+		}
+		if err := swapSessionsSchemaForCompat(tempDir); err != nil {
+			log.Fatalf("Failed to swap sessions schema: %v", err)
 		}
 	}
 
@@ -963,6 +1047,15 @@ func main() {
 		log.Printf("ERROR: Schema seed failed after %d attempts: %v", cfg.MaxRetries, err)
 		log.Println("========================================")
 		os.Exit(1)
+	}
+
+	// On by default; HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE=false lets
+	// operators who manage these tables opt out. Non-fatal so it can't block
+	// startup; older servers keep 512-token blocks.
+	if cfg.SetTextIndexBlockSize && supportsTextIndexTableSettings(chMajor, chMinor) {
+		if err := setTextIndexBlockSize(ctx, db, database); err != nil {
+			log.Printf("WARNING: text index block size: %v", err)
+		}
 	}
 
 	// CREATE TABLE IF NOT EXISTS won't update TTL on existing tables; reconcile

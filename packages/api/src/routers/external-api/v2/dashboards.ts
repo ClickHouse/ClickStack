@@ -57,11 +57,12 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *     SavedFilterValue:
  *       description: >
  *         A single saved dashboard filter selection. Either a rendered SQL
- *         condition, or a selection addressed by the name of the dashboard
- *         variable it belongs to.
+ *         condition, a selection addressed by the name of the dashboard
+ *         variable it belongs to, or the conditions of an ADHOC filter.
  *       oneOf:
  *         - $ref: '#/components/schemas/SqlSavedFilterValue'
  *         - $ref: '#/components/schemas/VariableSavedFilterValue'
+ *         - $ref: '#/components/schemas/AdhocSavedFilterValue'
  *     SqlSavedFilterValue:
  *       type: object
  *       required: [condition]
@@ -102,13 +103,62 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             type: string
  *             maxLength: 10000
  *           example: ["hdx-oss-dev-api"]
+ *     AdhocSavedFilterValue:
+ *       type: object
+ *       required: [type, name, conditions]
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [adhoc]
+ *           description: Filter type.
+ *           example: "adhoc"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           maxLength: 1024
+ *           description: The variableName of the ADHOC filter these conditions belong to.
+ *           example: "conditions"
+ *         conditions:
+ *           type: array
+ *           maxItems: 100
+ *           description: The filter's conditions.
+ *           items:
+ *             $ref: '#/components/schemas/AdhocFilterCondition'
+ *     AdhocFilterCondition:
+ *       type: object
+ *       description: >
+ *         One "key operator value" condition. Conditions are AND'd, except that
+ *         IN conditions sharing a key are OR'd into one: IN (...) for sql
+ *         filters, a =~"a|b" matcher for promql filters.
+ *       required: [key, operator, value]
+ *       properties:
+ *         key:
+ *           type: string
+ *           minLength: 1
+ *           maxLength: 10000
+ *           description: A SQL expression (column or map access) for sql filters, or a label name for promql filters.
+ *           example: "ServiceName"
+ *         operator:
+ *           type: string
+ *           enum: ["=", "!=", "=~", "!~", "LIKE", "NOT LIKE", "IN"]
+ *           description: >
+ *             Comparison operator. =~ and !~ match a regular expression. IN
+ *             takes one value per condition. LIKE and NOT LIKE apply to sql
+ *             filters only; a condition its filter's sourceType can't express
+ *             is not applied.
+ *           example: "="
+ *         value:
+ *           type: string
+ *           maxLength: 10000
+ *           description: Value, pattern, or regular expression to compare against.
+ *           example: "api"
  *     MetricDataType:
  *       type: string
  *       enum: [sum, gauge, histogram, summary, exponential histogram]
  *       description: Metric data type, only for metrics data sources.
  *     TimeSeriesDisplayType:
  *       type: string
- *       enum: [stacked_bar, line]
+ *       enum: [stacked_bar, stacked_line, line]
  *       description: Visual representation type for the time series.
  *     QuantileLevel:
  *       type: number
@@ -655,7 +705,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "line"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -690,6 +740,12 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             instead of zero, making small fluctuations between series easier
  *             to see.
  *           default: false
+ *         lineInterpolation:
+ *           type: string
+ *           enum: [smooth, linear, step]
+ *           example: "step"
+ *           description: >
+ *             How points are connected. Defaults to "smooth" when omitted.
  *         numberFormat:
  *           $ref: '#/components/schemas/NumberFormat'
  *           description: Number formatting options for displayed values.
@@ -736,7 +792,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "stacked_bar"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -791,6 +847,82 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             series are returned; the raw operand series are hidden.
  *           default: true
  *
+ *     StackedLineBuilderChartConfig:
+ *       type: object
+ *       required:
+ *         - displayType
+ *         - sourceId
+ *         - select
+ *       description: Builder configuration for a stacked-line time-series chart.
+ *       properties:
+ *         displayType:
+ *           type: string
+ *           enum: [stacked_line]
+ *           description: Display type discriminator. Must be "stacked_line" for stacked-line charts.
+ *           example: "stacked_line"
+ *         sourceId:
+ *           type: string
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
+ *           example: "65f5e4a3b9e77c001a111111"
+ *         select:
+ *           type: array
+ *           minItems: 1
+ *           maxItems: 20
+ *           description: >
+ *             One or more aggregated values to plot. When asRatio is true,
+ *             exactly two select items are required.
+ *           items:
+ *             $ref: '#/components/schemas/SelectItem'
+ *         groupBy:
+ *           type: string
+ *           description: Field expression to group results by (creates separate stacked bands per group value).
+ *           example: "service"
+ *           maxLength: 10000
+ *         asRatio:
+ *           type: boolean
+ *           description: Plot select[0] / select[1] as a ratio. Requires exactly two select items.
+ *           default: false
+ *         alignDateRangeToGranularity:
+ *           type: boolean
+ *           description: Align the date range boundaries to the query granularity interval.
+ *           default: true
+ *         fillNulls:
+ *           type: boolean
+ *           description: Fill missing time buckets with zero instead of leaving gaps.
+ *           default: true
+ *         lineInterpolation:
+ *           type: string
+ *           enum: [smooth, linear, step]
+ *           example: "step"
+ *           description: >
+ *             How points are connected. Defaults to "linear" when omitted.
+ *         numberFormat:
+ *           $ref: '#/components/schemas/NumberFormat'
+ *           description: Number formatting options for displayed values.
+ *         seriesLimit:
+ *           type: integer
+ *           minimum: 0
+ *           description: >-
+ *             Maximum number of series rendered (top-N by value). Omit to use
+ *             the default render cap, set 0 for unlimited, or a positive N to
+ *             keep the top N series.
+ *           example: 5
+ *         formulas:
+ *           type: array
+ *           maxItems: 10
+ *           description: >
+ *             Derived series computed from the select items via letter-ref
+ *             arithmetic ("A" = select[0], "B" = select[1], ...). Metric,
+ *             log, and trace sources only. Cannot be combined with asRatio.
+ *           items:
+ *             $ref: '#/components/schemas/Formula'
+ *         showOperandSeries:
+ *           type: boolean
+ *           description: >
+ *             Only meaningful with formulas. When false, only the formula
+ *             series are returned; the raw operand series are hidden.
+ *           default: true
+ *
  *     TableBuilderChartConfig:
  *       type: object
  *       required:
@@ -806,7 +938,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "table"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -880,7 +1012,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "number"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -939,7 +1071,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "pie"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -992,7 +1124,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "bar"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1085,7 +1217,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "distribution"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1133,7 +1265,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "series"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1153,12 +1285,18 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *
  *     HeatmapChartConfig:
  *       description: >
- *         Heatmap tile. Heatmap is builder-only (no Raw SQL variant). Omit
- *         heatmapMode (or set it to "distribution") for the distribution
- *         variant; set heatmapMode to "series" for the series variant.
+ *         Heatmap tile. There is no Raw SQL variant. For the builder variant,
+ *         omit heatmapMode (or set it to "distribution") for the distribution
+ *         heatmap, or set it to "series" for the series heatmap. Set
+ *         configType to "promql" for the PromQL variant.
  *       oneOf:
  *         - $ref: '#/components/schemas/HeatmapDistributionChartConfig'
  *         - $ref: '#/components/schemas/HeatmapSeriesChartConfig'
+ *         - $ref: '#/components/schemas/HeatmapPromqlChartConfig'
+ *       discriminator:
+ *         propertyName: configType
+ *         mapping:
+ *           promql: '#/components/schemas/HeatmapPromqlChartConfig'
  *
  *     SearchChartConfig:
  *       type: object
@@ -1176,7 +1314,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "search"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: string
@@ -1207,7 +1345,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "event_patterns"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to mine patterns from.
+ *           description: ID of the data source to mine patterns from, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: string
@@ -1257,7 +1395,9 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "sql"
  *         connectionId:
  *           type: string
- *           description: ID of the ClickHouse connection to execute the query against.
+ *           description: |
+ *             ID of the ClickHouse connection to execute the query against, or
+ *             `$connectionVariable` of a CONNECTION filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a567890"
  *         sqlTemplate:
  *           type: string
@@ -1266,7 +1406,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "SELECT count() FROM otel_logs WHERE timestamp > now() - INTERVAL 1 HOUR"
  *         sourceId:
  *           type: string
- *           description: Optional ID of the data source associated with this Raw SQL chart. Used for applying dashboard filters.
+ *           description: Optional ID of the data source associated with this Raw SQL chart, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard. Used for applying dashboard filters.
  *           example: "65f5e4a3b9e77c001a567890"
  *         numberFormat:
  *           $ref: '#/components/schemas/NumberFormat'
@@ -1304,6 +1444,12 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *                 data instead of zero, making small fluctuations between
  *                 series easier to see.
  *               default: false
+ *             lineInterpolation:
+ *               type: string
+ *               enum: [smooth, linear, step]
+ *               example: "step"
+ *               description: >
+ *                 How points are connected. Defaults to "smooth" when omitted.
  *
  *     BarRawSqlChartConfig:
  *       description: Raw SQL configuration for a stacked-bar time-series chart.
@@ -1326,6 +1472,34 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *               type: boolean
  *               description: Expand date range boundaries to the query granularity interval.
  *               default: true
+ *
+ *     StackedLineRawSqlChartConfig:
+ *       description: Raw SQL configuration for a stacked-line time-series chart.
+ *       allOf:
+ *         - $ref: '#/components/schemas/RawSqlChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [stacked_line]
+ *               description: Display as a stacked-line time-series chart.
+ *               example: "stacked_line"
+ *             fillNulls:
+ *               type: boolean
+ *               description: Fill missing time buckets with zero instead of leaving gaps.
+ *               default: true
+ *             alignDateRangeToGranularity:
+ *               type: boolean
+ *               description: Expand date range boundaries to the query granularity interval.
+ *               default: true
+ *             lineInterpolation:
+ *               type: string
+ *               enum: [smooth, linear, step]
+ *               example: "step"
+ *               description: >
+ *                 How points are connected. Defaults to "linear" when omitted.
  *
  *     TableRawSqlChartConfig:
  *       description: Raw SQL configuration for a table chart.
@@ -1398,31 +1572,425 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *               description: Display as a categorical bar chart.
  *               example: "bar"
  *
+ *     PromqlRangeExpression:
+ *       type: object
+ *       required:
+ *         - expression
+ *       description: A PromQL expression evaluated over the dashboard time range.
+ *       properties:
+ *         expression:
+ *           type: string
+ *           maxLength: 10000
+ *           description: >
+ *             PromQL expression. Supports dashboard variables and the
+ *             $__interval, $__rate_interval, and $__range macros.
+ *           example: "sum by (job) (rate(http_requests_total[$__rate_interval]))"
+ *         alias:
+ *           type: string
+ *           maxLength: 10000
+ *           description: Prefixed to every series name this expression produces.
+ *           example: "Requests"
+ *
+ *     PromqlInstantExpression:
+ *       description: >
+ *         A PromQL expression on a table, number, pie, or bar tile, which can be
+ *         evaluated at a single instant instead of over a range.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlRangeExpression'
+ *         - type: object
+ *           properties:
+ *             queryType:
+ *               type: string
+ *               enum: [range, instant]
+ *               description: >
+ *                 Whether to evaluate over the time range or at its end.
+ *                 Defaults to "range" when omitted.
+ *               example: "instant"
+ *
+ *     PromqlReducibleExpression:
+ *       description: >
+ *         A PromQL expression on a number, pie, or bar tile, which reduces each
+ *         series of a range query to a single value.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlInstantExpression'
+ *         - type: object
+ *           properties:
+ *             reducer:
+ *               type: string
+ *               enum: [lastNotNull, min, max, mean, sum, count]
+ *               description: >
+ *                 How each series' samples are reduced to one value. Defaults
+ *                 to "lastNotNull" when omitted. It also applies to instant
+ *                 queries, where each series has a single sample, so e.g.
+ *                 "count" turns every value into 1.
+ *               example: "max"
+ *
+ *     PromqlChartConfigBase:
+ *       type: object
+ *       required:
+ *         - configType
+ *         - sourceId
+ *       description: >
+ *         Shared fields for PromQL chart configs. Set configType to "promql" and
+ *         provide sourceId + expressions. The connection is read from the source.
+ *         PromQL is a preview feature and must be enabled on the deployment
+ *         (ENABLE_PROMQL) before PromQL tiles can be queried.
+ *       properties:
+ *         configType:
+ *           type: string
+ *           enum: [promql]
+ *           description: Must be "promql" to use the PromQL chart config variant.
+ *           example: "promql"
+ *         sourceId:
+ *           type: string
+ *           description: ID of the PromQL source to query. Must be a source of kind "promql".
+ *           example: "65f5e4a3b9e77c001a333333"
+ *         granularity:
+ *           type: string
+ *           pattern: '^(\d+ (second|minute|hour|day)|auto)$'
+ *           description: >
+ *             Resolution of range queries, used as the Prometheus step and the
+ *             $__interval macro. Defaults to "auto", which picks one from the
+ *             time range.
+ *           example: "5 minute"
+ *         numberFormat:
+ *           $ref: '#/components/schemas/NumberFormat'
+ *           description: Number formatting options for displayed values.
+ *
+ *     PromqlTimeChartConfigBase:
+ *       description: Shared fields for PromQL time-series chart configs.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - expressions
+ *           properties:
+ *             expressions:
+ *               type: array
+ *               minItems: 1
+ *               maxItems: 10
+ *               description: PromQL expressions to plot.
+ *               items:
+ *                 $ref: '#/components/schemas/PromqlRangeExpression'
+ *             legendTemplate:
+ *               type: string
+ *               maxLength: 1024
+ *               description: >
+ *                 Template for series names, using the series' Prometheus labels
+ *                 in double braces.
+ *               example: "{{job}} - {{instance}}"
+ *             fillNulls:
+ *               type: boolean
+ *               description: Fill missing time buckets with zero instead of leaving gaps.
+ *               default: true
+ *             alignDateRangeToGranularity:
+ *               type: boolean
+ *               description: Expand date range boundaries to the query granularity interval.
+ *               default: true
+ *             seriesLimit:
+ *               type: integer
+ *               minimum: 0
+ *               description: >
+ *                 Maximum number of series rendered (top-N by value). Omit to use
+ *                 the default render cap, set 0 for unlimited, or a positive N to
+ *                 keep the top N series.
+ *               example: 5
+ *
+ *     LinePromqlChartConfig:
+ *       description: PromQL configuration for a line time-series chart.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlTimeChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [line]
+ *               description: Display as a line time-series chart.
+ *               example: "line"
+ *             compareToPreviousPeriod:
+ *               type: boolean
+ *               description: Overlay the equivalent previous time period for comparison.
+ *               default: false
+ *             lineInterpolation:
+ *               type: string
+ *               enum: [smooth, linear, step]
+ *               example: "step"
+ *               description: >
+ *                 How points are connected. Defaults to "smooth" when omitted.
+ *
+ *     BarPromqlChartConfig:
+ *       description: PromQL configuration for a stacked-bar time-series chart.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlTimeChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [stacked_bar]
+ *               description: Display as a stacked-bar time-series chart.
+ *               example: "stacked_bar"
+ *
+ *     StackedLinePromqlChartConfig:
+ *       description: PromQL configuration for a stacked-line time-series chart.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlTimeChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [stacked_line]
+ *               description: Display as a stacked-line time-series chart.
+ *               example: "stacked_line"
+ *             lineInterpolation:
+ *               type: string
+ *               enum: [smooth, linear, step]
+ *               example: "step"
+ *               description: >
+ *                 How points are connected. Defaults to "linear" when omitted.
+ *
+ *     TablePromqlChartConfig:
+ *       description: >
+ *         PromQL configuration for a table chart, with one row per sample: a
+ *         column per label, a Value column, and a Timestamp column when the
+ *         expression is a range query. An instant query gives one row per
+ *         series.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *             - expressions
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [table]
+ *               description: Display as a table chart.
+ *               example: "table"
+ *             expressions:
+ *               type: array
+ *               minItems: 1
+ *               maxItems: 10
+ *               description: >
+ *                 PromQL expressions. Only the first is queried; the rest are
+ *                 kept but ignored.
+ *               items:
+ *                 $ref: '#/components/schemas/PromqlInstantExpression'
+ *
+ *     NumberPromqlChartConfig:
+ *       description: PromQL configuration for a single big-number chart.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *             - expressions
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [number]
+ *               description: Display as a single big-number chart.
+ *               example: "number"
+ *             expressions:
+ *               type: array
+ *               minItems: 1
+ *               maxItems: 10
+ *               description: >
+ *                 PromQL expressions. Only the first is queried; the rest are
+ *                 kept but ignored. The tile displays the first value.
+ *               items:
+ *                 $ref: '#/components/schemas/PromqlReducibleExpression'
+ *             color:
+ *               $ref: '#/components/schemas/ChartPaletteToken'
+ *               description: Optional static color applied to the displayed number.
+ *             colorRules:
+ *               type: array
+ *               maxItems: 10
+ *               description: >
+ *                 Ordered conditional color rules evaluated against the displayed
+ *                 value (last match wins). Falls back to color, then the default
+ *                 text color when no rule matches.
+ *               items:
+ *                 $ref: '#/components/schemas/NumberTileColorCondition'
+ *             backgroundChart:
+ *               $ref: '#/components/schemas/BackgroundChart'
+ *               description: >
+ *                 Optional trend sparkline drawn behind the number. Only rendered
+ *                 when the expression uses a range query.
+ *
+ *     PiePromqlChartConfig:
+ *       description: PromQL configuration for a pie chart, with one slice per series.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *             - expressions
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [pie]
+ *               description: Display as a pie chart.
+ *               example: "pie"
+ *             expressions:
+ *               type: array
+ *               minItems: 1
+ *               maxItems: 10
+ *               description: >
+ *                 PromQL expressions. Only the first is queried; the rest are
+ *                 kept but ignored.
+ *               items:
+ *                 $ref: '#/components/schemas/PromqlReducibleExpression'
+ *             legendTemplate:
+ *               type: string
+ *               maxLength: 1024
+ *               description: >
+ *                 Template for slice names, using the series' Prometheus labels
+ *                 in double braces.
+ *               example: "{{job}}"
+ *             limit:
+ *               type: integer
+ *               minimum: 0
+ *               description: >
+ *                 Maximum number of slices (top-N by value), at most 500. Omit
+ *                 or set 0 to show up to 500.
+ *               example: 10
+ *
+ *     CategoricalBarPromqlChartConfig:
+ *       description: PromQL configuration for a categorical bar chart, with one bar per series.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *             - expressions
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [bar]
+ *               description: Display as a categorical bar chart.
+ *               example: "bar"
+ *             expressions:
+ *               type: array
+ *               minItems: 1
+ *               maxItems: 10
+ *               description: >
+ *                 PromQL expressions. Only the first is queried; the rest are
+ *                 kept but ignored.
+ *               items:
+ *                 $ref: '#/components/schemas/PromqlReducibleExpression'
+ *             legendTemplate:
+ *               type: string
+ *               maxLength: 1024
+ *               description: >
+ *                 Template for bar names, using the series' Prometheus labels in
+ *                 double braces.
+ *               example: "{{job}}"
+ *             limit:
+ *               type: integer
+ *               minimum: 0
+ *               description: >
+ *                 Maximum number of bars (top-N by value), at most 500. Omit or
+ *                 set 0 to show up to 500.
+ *               example: 10
+ *
+ *     HeatmapPromqlChartConfig:
+ *       description: PromQL configuration for a heatmap.
+ *       allOf:
+ *         - $ref: '#/components/schemas/PromqlChartConfigBase'
+ *         - type: object
+ *           required:
+ *             - displayType
+ *             - expressions
+ *           properties:
+ *             displayType:
+ *               type: string
+ *               enum: [heatmap]
+ *               description: Display as a heatmap.
+ *               example: "heatmap"
+ *             expressions:
+ *               type: array
+ *               minItems: 1
+ *               maxItems: 10
+ *               description: >
+ *                 PromQL expressions. Only the first is queried; the rest are
+ *                 kept but ignored.
+ *               items:
+ *                 $ref: '#/components/schemas/PromqlRangeExpression'
+ *             heatmapMode:
+ *               type: string
+ *               enum: [distribution, series, histogram]
+ *               description: >
+ *                 "distribution" buckets the values of all series over time,
+ *                 "series" draws one row per series, and "histogram" draws one
+ *                 row per Prometheus histogram bucket (series need an "le"
+ *                 label). Defaults to "distribution" when omitted.
+ *               example: "histogram"
+ *             heatmapScaleType:
+ *               type: string
+ *               enum: [log, linear]
+ *               description: Y-axis scale of a distribution heatmap.
+ *               example: "log"
+ *             legendTemplate:
+ *               type: string
+ *               maxLength: 1024
+ *               description: >
+ *                 Template for row names of a series heatmap, using the series'
+ *                 Prometheus labels in double braces.
+ *               example: "{{job}}"
+ *
  *     LineChartConfig:
  *       description: >
  *         Line chart. Omit configType for the builder variant (requires sourceId
  *         and select). Set configType to "sql" for the Raw SQL variant (requires
- *         connectionId and sqlTemplate).
+ *         connectionId and sqlTemplate), or to "promql" for the PromQL variant
+ *         (requires sourceId and expressions).
  *       oneOf:
  *         - $ref: '#/components/schemas/LineBuilderChartConfig'
  *         - $ref: '#/components/schemas/LineRawSqlChartConfig'
+ *         - $ref: '#/components/schemas/LinePromqlChartConfig'
  *       discriminator:
  *         propertyName: configType
  *         mapping:
  *           sql: '#/components/schemas/LineRawSqlChartConfig'
+ *           promql: '#/components/schemas/LinePromqlChartConfig'
  *
  *     BarChartConfig:
  *       description: >
  *         Stacked-bar chart. Omit configType for the builder variant (requires
  *         sourceId and select). Set configType to "sql" for the Raw SQL variant
- *         (requires connectionId and sqlTemplate).
+ *         (requires connectionId and sqlTemplate), or to "promql" for the PromQL
+ *         variant (requires sourceId and expressions).
  *       oneOf:
  *         - $ref: '#/components/schemas/BarBuilderChartConfig'
  *         - $ref: '#/components/schemas/BarRawSqlChartConfig'
+ *         - $ref: '#/components/schemas/BarPromqlChartConfig'
  *       discriminator:
  *         propertyName: configType
  *         mapping:
  *           sql: '#/components/schemas/BarRawSqlChartConfig'
+ *           promql: '#/components/schemas/BarPromqlChartConfig'
+ *
+ *     StackedLineChartConfig:
+ *       description: >
+ *         Stacked-line chart. Omit configType for the builder variant (requires
+ *         sourceId and select). Set configType to "sql" for the Raw SQL variant
+ *         (requires connectionId and sqlTemplate), or to "promql" for the PromQL
+ *         variant (requires sourceId and expressions).
+ *       oneOf:
+ *         - $ref: '#/components/schemas/StackedLineBuilderChartConfig'
+ *         - $ref: '#/components/schemas/StackedLineRawSqlChartConfig'
+ *         - $ref: '#/components/schemas/StackedLinePromqlChartConfig'
+ *       discriminator:
+ *         propertyName: configType
+ *         mapping:
+ *           sql: '#/components/schemas/StackedLineRawSqlChartConfig'
+ *           promql: '#/components/schemas/StackedLinePromqlChartConfig'
  *
  *     OnClickFilterTemplate:
  *       type: object
@@ -1581,66 +2149,80 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *       description: >
  *         Table chart. Omit configType for the builder variant (requires sourceId
  *         and select). Set configType to "sql" for the Raw SQL variant (requires
- *         connectionId and sqlTemplate).
+ *         connectionId and sqlTemplate), or to "promql" for the PromQL variant
+ *         (requires sourceId and expressions).
  *       oneOf:
  *         - $ref: '#/components/schemas/TableBuilderChartConfig'
  *         - $ref: '#/components/schemas/TableRawSqlChartConfig'
+ *         - $ref: '#/components/schemas/TablePromqlChartConfig'
  *       discriminator:
  *         propertyName: configType
  *         mapping:
  *           sql: '#/components/schemas/TableRawSqlChartConfig'
+ *           promql: '#/components/schemas/TablePromqlChartConfig'
  *
  *     NumberChartConfig:
  *       description: >
  *         Single big-number chart. Omit configType for the builder variant
  *         (requires sourceId and select). Set configType to "sql" for the Raw
- *         SQL variant (requires connectionId and sqlTemplate).
+ *         SQL variant (requires connectionId and sqlTemplate), or to "promql"
+ *         for the PromQL variant (requires sourceId and expressions).
  *       oneOf:
  *         - $ref: '#/components/schemas/NumberBuilderChartConfig'
  *         - $ref: '#/components/schemas/NumberRawSqlChartConfig'
+ *         - $ref: '#/components/schemas/NumberPromqlChartConfig'
  *       discriminator:
  *         propertyName: configType
  *         mapping:
  *           sql: '#/components/schemas/NumberRawSqlChartConfig'
+ *           promql: '#/components/schemas/NumberPromqlChartConfig'
  *
  *     PieChartConfig:
  *       description: >
  *         Pie chart. Omit configType for the builder variant (requires sourceId
  *         and select). Set configType to "sql" for the Raw SQL variant (requires
- *         connectionId and sqlTemplate).
+ *         connectionId and sqlTemplate), or to "promql" for the PromQL variant
+ *         (requires sourceId and expressions).
  *       oneOf:
  *         - $ref: '#/components/schemas/PieBuilderChartConfig'
  *         - $ref: '#/components/schemas/PieRawSqlChartConfig'
+ *         - $ref: '#/components/schemas/PiePromqlChartConfig'
  *       discriminator:
  *         propertyName: configType
  *         mapping:
  *           sql: '#/components/schemas/PieRawSqlChartConfig'
+ *           promql: '#/components/schemas/PiePromqlChartConfig'
  *
  *     CategoricalBarChartConfig:
  *       description: >
  *         Categorical bar chart (one bar per group value; not a time series).
  *         Omit configType for the builder variant (requires sourceId and
  *         select). Set configType to "sql" for the Raw SQL variant (requires
- *         connectionId and sqlTemplate).
+ *         connectionId and sqlTemplate), or to "promql" for the PromQL variant
+ *         (requires sourceId and expressions).
  *       oneOf:
  *         - $ref: '#/components/schemas/CategoricalBarBuilderChartConfig'
  *         - $ref: '#/components/schemas/CategoricalBarRawSqlChartConfig'
+ *         - $ref: '#/components/schemas/CategoricalBarPromqlChartConfig'
  *       discriminator:
  *         propertyName: configType
  *         mapping:
  *           sql: '#/components/schemas/CategoricalBarRawSqlChartConfig'
+ *           promql: '#/components/schemas/CategoricalBarPromqlChartConfig'
  *
  *     TileConfig:
  *       description: >
  *         Tile chart configuration. displayType is the primary discriminant and
- *         determines which variant group applies. For displayTypes that support
- *         both builder and Raw SQL modes (line, stacked_bar, table, number, pie,
- *         bar), configType is the secondary discriminant: omit it for the builder
- *         variant or set it to "sql" for the Raw SQL variant. The heatmap,
- *         search, event_patterns, and markdown displayTypes only have a builder variant.
+ *         determines which variant group applies. configType is the secondary
+ *         discriminant: omit it for the builder variant, set it to "sql" for the
+ *         Raw SQL variant, or set it to "promql" for the PromQL variant. Line,
+ *         stacked_bar, stacked_line, table, number, pie, and bar support all
+ *         three. Heatmap supports builder and PromQL. Search, event_patterns,
+ *         and markdown only have a builder variant.
  *       oneOf:
  *         - $ref: '#/components/schemas/LineChartConfig'
  *         - $ref: '#/components/schemas/BarChartConfig'
+ *         - $ref: '#/components/schemas/StackedLineChartConfig'
  *         - $ref: '#/components/schemas/TableChartConfig'
  *         - $ref: '#/components/schemas/NumberChartConfig'
  *         - $ref: '#/components/schemas/PieChartConfig'
@@ -1654,6 +2236,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *         mapping:
  *           line: '#/components/schemas/LineChartConfig'
  *           stacked_bar: '#/components/schemas/BarChartConfig'
+ *           stacked_line: '#/components/schemas/StackedLineChartConfig'
  *           table: '#/components/schemas/TableChartConfig'
  *           number: '#/components/schemas/NumberChartConfig'
  *           pie: '#/components/schemas/PieChartConfig'
@@ -1775,6 +2358,11 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           maxLength: 256
  *           description: References a tab inside the tile's container by id. Requires containerId to be set, and the container to declare a matching tab.
  *           example: "errors"
+ *         description:
+ *           type: string
+ *           maxLength: 1024
+ *           description: Short explanation of the tile, shown as a tooltip next to its name.
+ *           example: "Share of API requests that returned a 5xx response."
  *
  *     TileOutput:
  *       description: Response format for dashboard tiles
@@ -1832,12 +2420,157 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *         - $ref: '#/components/schemas/QueryExpressionFilterInput'
  *         - $ref: '#/components/schemas/StaticListFilterInput'
  *         - $ref: '#/components/schemas/PrometheusLabelFilterInput'
+ *         - $ref: '#/components/schemas/SqlQueryFilterInput'
+ *         - $ref: '#/components/schemas/AdhocFilterInput'
+ *         - $ref: '#/components/schemas/DataSourceFilterInput'
+ *         - $ref: '#/components/schemas/ConnectionFilterInput'
  *       discriminator:
  *         propertyName: type
  *         mapping:
  *           QUERY_EXPRESSION: '#/components/schemas/QueryExpressionFilterInput'
  *           STATIC_LIST: '#/components/schemas/StaticListFilterInput'
  *           PROMETHEUS_LABEL: '#/components/schemas/PrometheusLabelFilterInput'
+ *           SQL_QUERY: '#/components/schemas/SqlQueryFilterInput'
+ *           ADHOC: '#/components/schemas/AdhocFilterInput'
+ *           DATA_SOURCE: '#/components/schemas/DataSourceFilterInput'
+ *           CONNECTION: '#/components/schemas/ConnectionFilterInput'
+ *
+ *     DataSourceFilterInput:
+ *       type: object
+ *       description: |
+ *         A variable whose single, required value is a source. Tiles reference it
+ *         as `$variableName` in their sourceId, and other filters in sourceId or
+ *         appliesToSourceIds, so viewers can switch the source those read. Tiles
+ *         that use it do not load until a source is selected, and cannot have
+ *         alerts.
+ *       required:
+ *         - type
+ *         - name
+ *         - allowedSourceKinds
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [DATA_SOURCE]
+ *           description: Filter type discriminator. Must be "DATA_SOURCE".
+ *           example: "DATA_SOURCE"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name of the variable's dropdown
+ *           example: "Logs source"
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: Token tiles and filters reference the selected source by, as `$variableName`.
+ *           example: "logs"
+ *         isGlobalRequirement:
+ *           type: boolean
+ *           default: false
+ *           description: |
+ *             Blocks every tile on the dashboard until a value is selected. False
+ *             (the default) blocks only the tiles that reference the variable.
+ *           example: true
+ *         minSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable always requires a selection.
+ *           example: 1
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable is always single-select.
+ *           example: 1
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true if provided, and is true when omitted.
+ *           example: true
+ *         allowedSourceKinds:
+ *           type: array
+ *           minItems: 1
+ *           items:
+ *             type: string
+ *             enum: [log, trace, session, metric, promql]
+ *           description: |
+ *             Kinds of sources offered. A field can reference the variable if it
+ *             accepts at least one listed kind. A tile whose selected source is a
+ *             kind it cannot use shows an error instead of running.
+ *           example: ["log"]
+ *         connectionId:
+ *           type: string
+ *           description: |
+ *             Optional connection the offered sources are limited to: a
+ *             connection ID, or `$name` of a CONNECTION filter on the dashboard.
+ *           example: "$conn"
+ *
+ *     ConnectionFilterInput:
+ *       type: object
+ *       description: |
+ *         A variable whose single, required value is a connection. Raw SQL tiles
+ *         reference it as `$variableName` in their connectionId, and data source
+ *         variables and SQL query filters in theirs. Tiles that use it do not load
+ *         until a connection is selected, and cannot have alerts.
+ *       required:
+ *         - type
+ *         - name
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [CONNECTION]
+ *           description: Filter type discriminator. Must be "CONNECTION".
+ *           example: "CONNECTION"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name of the variable's dropdown
+ *           example: "Connection"
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: Token raw SQL tiles reference the selected connection by, as `$variableName`.
+ *           example: "conn"
+ *         isGlobalRequirement:
+ *           type: boolean
+ *           default: false
+ *           description: |
+ *             Blocks every tile on the dashboard until a value is selected. False
+ *             (the default) blocks only the tiles that reference the variable.
+ *           example: true
+ *         minSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable always requires a selection.
+ *           example: 1
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable is always single-select.
+ *           example: 1
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true if provided, and is true when omitted.
+ *           example: true
  *
  *     QueryExpressionFilterInput:
  *       type: object
@@ -1868,7 +2601,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "environment"
  *         sourceId:
  *           type: string
- *           description: Source ID this dashboard filter key applies to
+ *           description: Source ID this dashboard filter key applies to, or `$name` of a DATA_SOURCE filter on the dashboard
  *           example: "65f5e4a3b9e77c001a111111"
  *         sourceMetricType:
  *           type: string
@@ -1948,6 +2681,14 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             referencing its variableName, and those its broadcast applies to.
  *             Ignored unless minSelections is 1.
  *           example: true
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           description: |
+ *             Maximum number of values that can be selected at once. Set to 1 to make
+ *             the filter single-select. Omit the field for the default multi-select
+ *             behavior.
+ *           example: 1
  *
  *     StaticListFilterInput:
  *       type: object
@@ -2034,13 +2775,23 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             referencing its variableName, and those its broadcast applies to.
  *             Ignored unless minSelections is 1.
  *           example: true
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           description: |
+ *             Maximum number of values that can be selected at once. Set to 1 to make
+ *             the filter single-select. Omit the field for the default multi-select
+ *             behavior.
+ *           example: 1
  *
  *     PrometheusLabelFilterInput:
  *       type: object
  *       description: |
  *         A filter whose dropdown lists the values for a Prometheus label,
  *         read from a PromQL source over the dashboard's time range.
- *         Supports variable mode only.
+ *         Supports variable mode only. PromQL is a preview feature and must be
+ *         enabled on the deployment (ENABLE_PROMQL) before these filters can
+ *         list values.
  *       required:
  *         - type
  *         - name
@@ -2121,6 +2872,188 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             referencing its variableName, and those its broadcast applies to.
  *             Ignored unless minSelections is 1.
  *           example: true
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           description: |
+ *             Maximum number of values that can be selected at once. Set to 1 to make
+ *             the filter single-select. Omit the field for the default multi-select
+ *             behavior.
+ *           example: 1
+ *
+ *     SqlQueryFilterInput:
+ *       type: object
+ *       description: |
+ *         A filter whose dropdown lists the first column returned by a ClickHouse
+ *         query, cast to strings with nulls and duplicates removed. Supports
+ *         variable mode only.
+ *       required:
+ *         - type
+ *         - name
+ *         - connectionId
+ *         - sqlTemplate
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [SQL_QUERY]
+ *           description: Discriminator. Must be "SQL_QUERY".
+ *           example: "SQL_QUERY"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name for the dashboard filter
+ *           example: "Environment"
+ *         connectionId:
+ *           type: string
+ *           description: |
+ *             ClickHouse connection the query runs on: a connection ID, or
+ *             `$name` of a CONNECTION filter on the dashboard.
+ *           example: "65f5e4a3b9e77c001a567890"
+ *         sourceId:
+ *           type: string
+ *           description: |
+ *             Optional Log, Trace, Session, or Metric source on the same
+ *             connection, or `$name` of a DATA_SOURCE filter on this
+ *             dashboard. Lets `sqlTemplate` use `$__sourceTable` and
+ *             `$__filters`.
+ *           example: "65f5e4a3b9e77c001a345678"
+ *         sqlTemplate:
+ *           type: string
+ *           minLength: 1
+ *           description: |
+ *             Query whose first column populates the dropdown. May use the time
+ *             macros and other filters' variables. `$__sourceTable` and
+ *             `$__filters` need a `sourceId`; `$__filters` expands to the
+ *             dashboard's broadcast filter selections for that source.
+ *           example: "SELECT DISTINCT env FROM default.envs ORDER BY env"
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: |
+ *             Must be true if provided, and is true when omitted. Tiles reference
+ *             the selection as `$variableName`.
+ *           example: true
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: |
+ *             Token that tiles reference this filter's selected value by, as
+ *             `$variableName`. Defaults to the display name with whitespace
+ *             replaced by underscores and remaining illegal characters removed.
+ *             Must be unique across a dashboard's variable-enabled filters.
+ *           example: "env"
+ *         minSelections:
+ *           type: integer
+ *           enum: [0, 1]
+ *           default: 0
+ *           description: Set to 1 to make the filter required.
+ *           example: 1
+ *         isGlobalRequirement:
+ *           type: boolean
+ *           default: false
+ *           description: |
+ *             Widens a required filter's block to every tile on the dashboard.
+ *             Ignored unless minSelections is 1.
+ *           example: true
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           description: Set to 1 to make the filter single-select.
+ *           example: 1
+ *
+ *     AdhocFilterInput:
+ *       type: object
+ *       description: |
+ *         A filter holding free-form "key operator value" conditions, with keys
+ *         and values suggested from its sources: columns and map keys for sql
+ *         sources, labels for promql sources. Its conditions are always
+ *         broadcast to the tiles it applies to: as WHERE conditions on builder
+ *         tiles and raw sql tiles using the $__filters macro, or as label
+ *         matchers on PromQL tiles. Its conditions are saved in
+ *         savedFilterValues as an "adhoc" entry. Ad hoc filters are a preview
+ *         feature.
+ *       required:
+ *         - type
+ *         - name
+ *         - sourceType
+ *         - sources
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [ADHOC]
+ *           description: Discriminator. Must be "ADHOC".
+ *           example: "ADHOC"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name for the dashboard filter
+ *           example: "Conditions"
+ *         sourceType:
+ *           type: string
+ *           enum: [sql, promql]
+ *           description: |
+ *             The kind of sources the filter reads keys from and applies to: Log,
+ *             Trace, or Session sources for sql, PromQL sources for promql.
+ *           example: "sql"
+ *         sources:
+ *           type: array
+ *           minItems: 1
+ *           items:
+ *             type: string
+ *           description: IDs of the sources whose keys and values the filter suggests, all of sourceType, or `$name` of data source variables.
+ *           example: ["65f5e4a3b9e77c001a111111"]
+ *         where:
+ *           type: string
+ *           description: |
+ *             Optional condition narrowing the rows keys and values are suggested
+ *             from. Never applied to tiles. May reference the dashboard's
+ *             variables. sql filters only: rejected when sourceType is promql.
+ *           example: "ServiceName:api"
+ *         whereLanguage:
+ *           type: string
+ *           enum: [sql, lucene]
+ *           description: Language of the where condition. Rejected when sourceType is promql.
+ *           example: "lucene"
+ *         appliesToSourceIds:
+ *           type: array
+ *           items:
+ *             type: string
+ *           description: |
+ *             IDs of the sources whose tiles the conditions apply to, all of
+ *             sourceType, or `$name` of data source variables. Omit or send an
+ *             empty array to apply to the tiles of the filter's sources.
+ *           example: ["65f5e4a3b9e77c001a111111"]
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true or omitted.
+ *           example: true
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true or omitted.
+ *           example: true
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: |
+ *             Unique name the filter's conditions are saved under, in
+ *             savedFilterValues and the dashboard URL. Tiles can't reference it
+ *             as a variable. Defaults to the display name with whitespace
+ *             replaced by underscores and remaining illegal characters removed.
+ *             Must be unique across a dashboard's variable-enabled filters.
+ *           example: "conditions"
  *
  *     Filter:
  *       allOf:
@@ -3041,6 +3974,7 @@ router.put(
         tiles,
         filters,
         existingTiles: existingDashboard.tiles ?? [],
+        existingFilters: existingDashboard.filters ?? [],
         containers: effectiveContainers,
       });
       if (validationError) {

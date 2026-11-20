@@ -644,6 +644,35 @@ describe('sources router', () => {
     });
   });
 
+  // Same regression guard as serviceVersionExpression above.
+  it('POST / - round-trips severityNumberExpression on a log source', async () => {
+    const { agent } = await getLoggedInAgent(server);
+    await agent
+      .post('/sources')
+      .send({ ...MOCK_SOURCE, severityNumberExpression: 'SeverityNumber' })
+      .expect(200);
+
+    const response = await agent.get('/sources').expect(200);
+
+    expect(response.body[0]).toMatchObject({
+      severityNumberExpression: 'SeverityNumber',
+    });
+  });
+
+  it('POST / - round-trips eventNameExpression on a log source', async () => {
+    const { agent } = await getLoggedInAgent(server);
+    await agent
+      .post('/sources')
+      .send({ ...MOCK_SOURCE, eventNameExpression: 'EventName' })
+      .expect(200);
+
+    const response = await agent.get('/sources').expect(200);
+
+    expect(response.body[0]).toMatchObject({
+      eventNameExpression: 'EventName',
+    });
+  });
+
   describe('seriesTable', () => {
     it('POST / - creates a metric source with seriesTable and it round-trips', async () => {
       const { agent } = await getLoggedInAgent(server);
@@ -898,6 +927,86 @@ describe('sources router', () => {
 
       const updatedSource = await Source.findById(promqlSource._id).lean();
       expect(updatedSource).not.toHaveProperty('minAutoGranularity');
+    });
+  });
+
+  describe('promqlBackend on a PromQL source', () => {
+    it('POST / - creates a PromQL source with promqlBackend and it round-trips', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const response = await agent
+        .post('/sources')
+        .send({ ...MOCK_PROMQL_SOURCE, promqlBackend: 'clickhouse-http' })
+        .expect(200);
+
+      expect(response.body.promqlBackend).toBe('clickhouse-http');
+
+      const sources = await Source.find({}).lean();
+      expect(sources).toHaveLength(1);
+      expect(sources[0]).toHaveProperty('promqlBackend', 'clickhouse-http');
+    });
+
+    it('POST / - leaves promqlBackend unset when the request omits it', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const response = await agent
+        .post('/sources')
+        .send(MOCK_PROMQL_SOURCE)
+        .expect(200);
+
+      expect(response.body).not.toHaveProperty('promqlBackend');
+      expect(await Source.find({}).lean()).toEqual([
+        expect.not.objectContaining({ promqlBackend: expect.anything() }),
+      ]);
+    });
+
+    it('POST / - rejects a promqlBackend that is not one of the known backends', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      await agent
+        .post('/sources')
+        .send({ ...MOCK_PROMQL_SOURCE, promqlBackend: 'http' })
+        .expect(400);
+
+      expect(await Source.countDocuments()).toBe(0);
+    });
+
+    it('PUT /:id - updates promqlBackend', async () => {
+      const { agent, team } = await getLoggedInAgent(server);
+      const promqlSource = await Source.create({
+        ...MOCK_PROMQL_SOURCE,
+        promqlBackend: 'clickhouse-http',
+        team: team._id,
+      });
+
+      await agent
+        .put(`/sources/${promqlSource._id}`)
+        .send({
+          id: promqlSource._id.toString(),
+          ...MOCK_PROMQL_SOURCE,
+          promqlBackend: 'table-function',
+        })
+        .expect(200);
+
+      const updatedSource = await Source.findById(promqlSource._id).lean();
+      expect(updatedSource).toHaveProperty('promqlBackend', 'table-function');
+    });
+
+    it('PUT /:id - removes promqlBackend when omitted from the update payload', async () => {
+      const { agent, team } = await getLoggedInAgent(server);
+      const promqlSource = await Source.create({
+        ...MOCK_PROMQL_SOURCE,
+        promqlBackend: 'clickhouse-http',
+        team: team._id,
+      });
+
+      await agent
+        .put(`/sources/${promqlSource._id}`)
+        .send({ id: promqlSource._id.toString(), ...MOCK_PROMQL_SOURCE })
+        .expect(200);
+
+      const updatedSource = await Source.findById(promqlSource._id).lean();
+      expect(updatedSource).not.toHaveProperty('promqlBackend');
     });
   });
 
@@ -1561,6 +1670,81 @@ describe('sources router', () => {
 
       const sources = await Source.find({}).lean();
       expect(sources).toHaveLength(0);
+    });
+  });
+
+  describe('mapKeyIndexMaxParts field', () => {
+    it('POST / - persists mapKeyIndexMaxParts and PUT /:id updates it', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const created = await agent
+        .post('/sources')
+        .send({ ...MOCK_SOURCE, mapKeyIndexMaxParts: 50 })
+        .expect(200);
+      expect(created.body.mapKeyIndexMaxParts).toBe(50);
+
+      await agent
+        .put(`/sources/${created.body.id}`)
+        .send({ ...MOCK_SOURCE, id: created.body.id, mapKeyIndexMaxParts: 5 })
+        .expect(200);
+
+      const updated = await Source.findById(created.body.id).lean();
+      if (updated?.kind !== SourceKind.Log) {
+        throw new Error(`expected Log source, got ${updated?.kind}`);
+      }
+      expect(updated.mapKeyIndexMaxParts).toBe(5);
+    });
+
+    it.each([0, 2.5, -1])(
+      'POST / - rejects mapKeyIndexMaxParts %s',
+      async mapKeyIndexMaxParts => {
+        const { agent } = await getLoggedInAgent(server);
+
+        await agent
+          .post('/sources')
+          .send({ ...MOCK_SOURCE, mapKeyIndexMaxParts })
+          .expect(400);
+
+        expect(await Source.find({}).lean()).toHaveLength(0);
+      },
+    );
+  });
+
+  describe('mapKeyIndexPartSelection field', () => {
+    it('POST / - persists mapKeyIndexPartSelection and PUT /:id updates it', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      const created = await agent
+        .post('/sources')
+        .send({ ...MOCK_SOURCE, mapKeyIndexPartSelection: 'largest' })
+        .expect(200);
+      expect(created.body.mapKeyIndexPartSelection).toBe('largest');
+
+      await agent
+        .put(`/sources/${created.body.id}`)
+        .send({
+          ...MOCK_SOURCE,
+          id: created.body.id,
+          mapKeyIndexPartSelection: 'smallest',
+        })
+        .expect(200);
+
+      const updated = await Source.findById(created.body.id).lean();
+      if (updated?.kind !== SourceKind.Log) {
+        throw new Error(`expected Log source, got ${updated?.kind}`);
+      }
+      expect(updated.mapKeyIndexPartSelection).toBe('smallest');
+    });
+
+    it('POST / - rejects an unknown mapKeyIndexPartSelection', async () => {
+      const { agent } = await getLoggedInAgent(server);
+
+      await agent
+        .post('/sources')
+        .send({ ...MOCK_SOURCE, mapKeyIndexPartSelection: 'random' })
+        .expect(400);
+
+      expect(await Source.find({}).lean()).toHaveLength(0);
     });
   });
 });

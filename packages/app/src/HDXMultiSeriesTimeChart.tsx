@@ -22,14 +22,20 @@ import {
   ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
+  Text,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import { getTickValuesFixedDomain } from 'recharts/lib/util/scale/getNiceTickValues';
-import { AxisDomain } from 'recharts/types/util/types';
+import { CurveType } from 'recharts/types/shape/Curve';
+import { AxisDomain, XAxisTickContentProps } from 'recharts/types/util/types';
 import { convertGranularityToSeconds } from '@hyperdx/common-utils/dist/core/utils';
-import { DisplayType } from '@hyperdx/common-utils/dist/types';
+import {
+  DisplayType,
+  getDefaultLineInterpolation,
+  LineInterpolation,
+} from '@hyperdx/common-utils/dist/types';
 import { Popover } from '@mantine/core';
 
 import type { NumberFormat } from '@/types';
@@ -69,6 +75,7 @@ import {
   toStartOfInterval,
 } from './ChartUtils';
 import { useFormatTime } from './useFormatTime';
+import { useContentFontSize } from './useUserPreferences';
 
 import styles from '@styles/HDXLineChart.module.scss';
 
@@ -777,7 +784,12 @@ export function collectMemoChartGradientHexes(
 // (NumberFormat.tsx), but 2 already distinguishes values >= 0.005 from 0.
 const MAX_AXIS_MANTISSA = 2;
 
-/** Base width ceiling for a bare signed number - see MAX_AXIS_MANTISSA's comment. */
+/**
+ * Base width ceiling for a bare signed number - see MAX_AXIS_MANTISSA's
+ * comment. A character budget rather than a pixel one, which is why
+ * Y_AXIS_WIDTH scales with the content font size preference: the gutter has to
+ * grow with the tick font for this to keep holding at every setting.
+ */
 const AXIS_CHAR_BUDGET = 5;
 
 // Flat, not suffix-length-scaled - IBM Plex Mono is monospace, so a longer
@@ -1123,6 +1135,32 @@ export function scanYAxisValueRange(
   return { min, max };
 }
 
+// Mirrors Recharts' stackOffset="none": each series sits on the running sum
+// of the ones before it, starting from a zero baseline, and the axis must
+// cover every one of those running sums.
+export function scanStackedYAxisValueRange(
+  graphResults: any[],
+  lineData: LineData[],
+): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  graphResults.forEach(dataPoint => {
+    let sum = 0;
+    lineData.forEach(ld => {
+      const value = dataPoint[ld.dataKey];
+      if (typeof value === 'number' && !isNaN(value)) {
+        sum += value;
+        min = Math.min(min, sum);
+        max = Math.max(max, sum);
+      }
+    });
+  });
+  if (max === -Infinity) {
+    return { min, max };
+  }
+  return { min: Math.min(min, 0), max: Math.max(max, 0) };
+}
+
 export interface YAxisBounds {
   domain: AxisDomain;
   ticks: number[] | undefined;
@@ -1142,8 +1180,21 @@ const FIT_Y_AXIS_BOUNDS: YAxisBounds = {
   ticks: undefined,
 };
 
-// A stacked bar's rendered height sums its series at each timestamp - leave
-// that entirely to Recharts, regardless of selection/fit-to-data state.
+const CURVE_TYPE_BY_INTERPOLATION: Record<LineInterpolation, CurveType> = {
+  smooth: 'monotone',
+  linear: 'linear',
+  step: 'stepAfter',
+};
+
+export function getLineCurveType(
+  displayType: DisplayType,
+  lineInterpolation: LineInterpolation | undefined,
+): CurveType {
+  return CURVE_TYPE_BY_INTERPOLATION[
+    lineInterpolation ?? getDefaultLineInterpolation(displayType)
+  ];
+}
+
 export function computeYAxisBounds(
   graphResults: any[],
   visibleLineData: LineData[],
@@ -1152,19 +1203,57 @@ export function computeYAxisBounds(
   displayType: DisplayType,
   referenceLineValues: number[],
   axisNumberFormat?: NumberFormat,
+  yAxisMaxDomain?: number,
 ): YAxisBounds {
-  if (displayType === DisplayType.StackedBar) {
-    return DEFAULT_Y_AXIS_BOUNDS;
-  }
+  const isStacked =
+    displayType === DisplayType.StackedBar ||
+    displayType === DisplayType.StackedLine;
   const shouldFitYAxis = fitYAxisToData;
 
-  if (!hasSelection && !shouldFitYAxis) {
+  if (yAxisMaxDomain != null && !isStacked) {
+    // A capped axis (e.g. a 0-100% rate tile): pin the lower bound at 0 and
+    // scale the upper bound to the data peak with headroom but never above the
+    // cap, so a flat or near-zero series can't auto-scale to a nonsense range.
+    // Applied on every path (selection and fit included) so selecting the sole
+    // series can't collapse the axis to [0, 0]; a numeric bound (not a function
+    // domain) lets the nice-tick logic dedupe labels instead of Recharts
+    // repeating "0%" at very small rates. Stacked charts skip the cap: their
+    // axis follows the stack height, sized below.
+    const { max } = scanYAxisValueRange(graphResults, visibleLineData);
+    const upperBound = cappedYAxisUpperBound(max, yAxisMaxDomain);
+    const expanded = getExpandableYAxisTicks(
+      0,
+      upperBound,
+      5,
+      axisNumberFormat,
+    );
+    if (expanded.ticks.length === 0) {
+      const baseFormat = (value: number) =>
+        formatAxisTick(value, axisNumberFormat);
+      return {
+        domain: [0, upperBound],
+        ticks: getYAxisTicks(0, upperBound, baseFormat),
+        tickFormatter: baseFormat,
+      };
+    }
+    return {
+      domain: [0, expanded.max],
+      ticks: expanded.ticks,
+      tickFormatter: expanded.tickFormatter,
+    };
+  }
+
+  // Stacked charts always stay zero-pinned: fit-to-data is line-only, and a
+  // selection already narrows visibleLineData, so it changes the stack sums.
+  if (isStacked || (!hasSelection && !shouldFitYAxis)) {
     // A fully numeric domain skips Recharts' own nice rounding, and a
     // reference line can extend it further - defer to Recharts entirely.
     if (referenceLineValues.length > 0) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }
-    const { min, max } = scanYAxisValueRange(graphResults, visibleLineData);
+    const { min, max } = isStacked
+      ? scanStackedYAxisValueRange(graphResults, visibleLineData)
+      : scanYAxisValueRange(graphResults, visibleLineData);
     if (max === -Infinity) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }
@@ -1274,6 +1363,37 @@ export function computeYAxisBounds(
   };
 }
 
+/**
+ * Upper bound for a y-axis that has an explicit cap (`yAxisMaxDomain`). Recharts
+ * calls this with the data's max value. Auto-scale up to the data max with 10%
+ * headroom, but never above the cap; a flat or zero/non-finite series uses the
+ * cap instead of a degenerate auto-domain (which recharts otherwise renders as
+ * e.g. 0-400% for a 0% error rate).
+ */
+export function cappedYAxisUpperBound(dataMax: number, cap: number): number {
+  return Number.isFinite(dataMax) && dataMax > 0
+    ? Math.min(dataMax * 1.1, cap)
+    : cap;
+}
+
+/**
+ * Text anchor for a compact x-axis tick. The first and last ticks are anchored
+ * to their inner edge so the edge time labels stay inside the plot instead of
+ * clipping; interior ticks stay centered.
+ */
+export function compactTickAnchor(
+  index: number,
+  visibleTicksCount: number,
+): 'start' | 'middle' | 'end' {
+  if (index <= 0) {
+    return 'start';
+  }
+  if (index >= visibleTicksCount - 1) {
+    return 'end';
+  }
+  return 'middle';
+}
+
 export const MemoChart = memo(function MemoChart({
   graphResults,
   setIsClickActive,
@@ -1300,6 +1420,9 @@ export const MemoChart = memo(function MemoChart({
   granularity,
   dateRangeEndInclusive = true,
   fitYAxisToData = false,
+  lineInterpolation,
+  compactXAxisLabels = false,
+  yAxisMaxDomain,
 }: {
   graphResults: any[];
   setIsClickActive: (v: ActiveClickPayload | undefined) => void;
@@ -1344,9 +1467,31 @@ export const MemoChart = memo(function MemoChart({
    * (with padding) instead of zero.
    **/
   fitYAxisToData?: boolean;
+  /** Unset follows the display type's default (see getLineCurveType). */
+  lineInterpolation?: LineInterpolation;
+  /**
+   * When true, anchor the first x-axis label to the start and the last to the
+   * end (instead of centering every label) so edge labels are not clipped on
+   * narrow charts, e.g. the side-by-side RED metrics tiles.
+   */
+  compactXAxisLabels?: boolean;
+  /**
+   * Cap the y-axis upper bound at this value (e.g. 1 for a 0-100% rate). The
+   * axis still auto-scales below the cap so small values keep a tight range,
+   * and a flat/zero series falls back to the cap instead of a degenerate
+   * auto-domain. Applied on every path (selection and fit included) so the
+   * capped axis cannot collapse; only stacked charts ignore it.
+   */
+  yAxisMaxDomain?: number;
 }) {
   const _id = useId();
   const id = _id.replace(/:/g, '');
+
+  // The y-axis width budget is expressed in characters (see MAX_AXIS_MANTISSA),
+  // so it has to grow with the tick font or the widest labels clip.
+  const { compact: axisTickFontSize, scale: contentFontScale } =
+    useContentFontSize();
+  const yAxisWidth = Math.round(Y_AXIS_WIDTH * contentFontScale);
 
   // recharts sync group, scoped via context (see chartSync).
   const syncId = useChartSyncId();
@@ -1396,6 +1541,8 @@ export const MemoChart = memo(function MemoChart({
   );
 
   const lines = useMemo(() => {
+    const isStackedLine = displayType === DisplayType.StackedLine;
+    const curveType = getLineCurveType(displayType, lineInterpolation);
     return visibleLineData.map(ld => {
       const key = ld.dataKey;
       const color = ld.color;
@@ -1418,18 +1565,25 @@ export const MemoChart = memo(function MemoChart({
         <Area
           key={key}
           dataKey={key}
-          type="monotone"
+          type={curveType}
           stroke={color}
-          fillOpacity={1}
+          fillOpacity={isStackedLine ? 0.35 : 1}
+          stackId={isStackedLine ? '1' : undefined}
           // Stable per-series class so the nearest-cursor emphasis can be
           // applied via CSS (see nearestSeriesStyle) rather than by changing
           // these props — a prop change here rebuilds every <Area> on hover.
           className={seriesClassName(id, key)}
           activeDot={<CaptureActiveDot onCapture={captureActivePointY} />}
-          // Fill is always the gradient. Hiding it on hover is a CSS class
-          // toggle (styles.chartHovered), not a prop swap — swapping it here
+          // Stacked bands get a flat fill; the gradient fades out within the
+          // top 10% of the chart, which leaves stacked bands looking like
+          // bare lines. Hiding the fill on hover is a CSS class toggle
+          // (styles.chartHovered), not a prop swap — swapping it here
           // re-created every <Area> on each hover enter/leave (hover churn).
-          fill={`url(#time-chart-lin-grad-${id}-${color?.replace('#', '').toLowerCase()})`}
+          fill={
+            isStackedLine
+              ? color
+              : `url(#time-chart-lin-grad-${id}-${color?.replace('#', '').toLowerCase()})`
+          }
           strokeDasharray={strokeDasharray}
           name={seriesName}
           isAnimationActive={false}
@@ -1437,7 +1591,13 @@ export const MemoChart = memo(function MemoChart({
         />
       );
     });
-  }, [visibleLineData, displayType, id, captureActivePointY]);
+  }, [
+    visibleLineData,
+    displayType,
+    lineInterpolation,
+    id,
+    captureActivePointY,
+  ]);
 
   // Nearest-cursor emphasis (thicken the nearest line, fade the rest) applied
   // via a tiny scoped <style> keyed to nearestSeriesKey, so hovering only swaps
@@ -1466,6 +1626,7 @@ export const MemoChart = memo(function MemoChart({
         displayType,
         referenceLineValues,
         axisNumberFormat,
+        yAxisMaxDomain,
       ),
     [
       graphResults,
@@ -1475,6 +1636,7 @@ export const MemoChart = memo(function MemoChart({
       displayType,
       referenceLineValues,
       axisNumberFormat,
+      yAxisMaxDomain,
     ],
   );
   const yAxisDomain = yAxisBounds.domain;
@@ -1571,14 +1733,14 @@ export const MemoChart = memo(function MemoChart({
     if (graphResults.length !== 1) return undefined;
     const drawableWidth = Math.max(
       0,
-      containerWidth - Y_AXIS_WIDTH - SINGLE_POINT_BAR_RIGHT_PADDING,
+      containerWidth - yAxisWidth - SINGLE_POINT_BAR_RIGHT_PADDING,
     );
     if (drawableWidth <= 0) return undefined;
     return Math.max(
       1,
       Math.floor(drawableWidth * SINGLE_POINT_BAR_WIDTH_RATIO),
     );
-  }, [displayType, graphResults.length, containerWidth]);
+  }, [displayType, graphResults.length, containerWidth, yAxisWidth]);
 
   const formatTime = useFormatTime();
   const xTickFormatter = useCallback(
@@ -1588,6 +1750,38 @@ export const MemoChart = memo(function MemoChart({
       });
     },
     [formatTime],
+  );
+
+  // Compact mode: anchor the first label to the start and the last to the end
+  // so neither is clipped on a narrow chart. Renders every tick through one
+  // path (axis color, mono) so the axis stays visually consistent. `fill` is
+  // the color Recharts gives every tick, so these match the y-axis labels.
+  const renderCompactXTick = useCallback(
+    ({
+      x,
+      y,
+      payload,
+      index,
+      visibleTicksCount,
+      fill,
+    }: XAxisTickContentProps) => {
+      const textAnchor = compactTickAnchor(index, visibleTicksCount);
+      return (
+        <Text
+          x={x}
+          y={y}
+          dy={8}
+          textAnchor={textAnchor}
+          verticalAnchor="start"
+          fontSize={axisTickFontSize}
+          fontFamily="IBM Plex Mono, monospace"
+          fill={fill}
+        >
+          {xTickFormatter(Number(payload.value), index)}
+        </Text>
+      );
+    },
+    [xTickFormatter, axisTickFontSize],
   );
 
   const tickFormatter = useCallback(
@@ -1918,9 +2112,9 @@ export const MemoChart = memo(function MemoChart({
     }
     return layoutAnnotations(coloredAnnotations, {
       domain: xAxisDomain,
-      plotWidth: Math.max(0, containerWidth - Y_AXIS_WIDTH),
+      plotWidth: Math.max(0, containerWidth - yAxisWidth),
     });
-  }, [coloredAnnotations, xAxisDomain, containerWidth]);
+  }, [coloredAnnotations, xAxisDomain, containerWidth, yAxisWidth]);
 
   const [hoveredAnnotation, setHoveredAnnotation] =
     useState<HoveredAnnotation | null>(null);
@@ -1934,9 +2128,9 @@ export const MemoChart = memo(function MemoChart({
       // Drawable width, so markers too close together share one label. Zero on
       // the first paint (before ResponsiveContainer measures), which the
       // renderer treats as "label everything".
-      plotWidth: Math.max(0, containerWidth - Y_AXIS_WIDTH),
+      plotWidth: Math.max(0, containerWidth - yAxisWidth),
     });
-  }, [coloredAnnotations, xAxisDomain, containerWidth]);
+  }, [coloredAnnotations, xAxisDomain, containerWidth, yAxisWidth]);
 
   return (
     <div
@@ -1956,6 +2150,11 @@ export const MemoChart = memo(function MemoChart({
       )}
       // Scopes nearestSeriesStyle to this chart instance.
       data-chart-id={id}
+      // Stacked lines are read by their filled bands, so keep the fill on
+      // hover; the chartHovered fill-hiding rule opts out via this attribute.
+      data-stacked-fill={
+        displayType === DisplayType.StackedLine ? 'true' : undefined
+      }
       style={{ position: 'relative', width: '100%', height: '100%' }}
     >
       {nearestSeriesStyle}
@@ -2044,13 +2243,23 @@ export const MemoChart = memo(function MemoChart({
             type="number"
             tickFormatter={xTickFormatter}
             minTickGap={100}
-            tick={{ fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
+            tick={
+              compactXAxisLabels
+                ? renderCompactXTick
+                : {
+                    fontSize: axisTickFontSize,
+                    fontFamily: 'IBM Plex Mono, monospace',
+                  }
+            }
           />
           <YAxis
-            width={Y_AXIS_WIDTH}
+            width={yAxisWidth}
             minTickGap={25}
             tickFormatter={yAxisTickFormatter}
-            tick={{ fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
+            tick={{
+              fontSize: axisTickFontSize,
+              fontFamily: 'IBM Plex Mono, monospace',
+            }}
             domain={yAxisDomain}
             ticks={yAxisTicks}
           />

@@ -1,8 +1,15 @@
 import { getHeatmapMode } from '@hyperdx/common-utils/dist/core/heatmap';
 import {
+  getAlignedDateRange,
+  getTimeChartGranularity,
+  HEATMAP_AUTO_GRANULARITY_BUCKETS,
+} from '@hyperdx/common-utils/dist/core/utils';
+import { isPromqlChartConfig } from '@hyperdx/common-utils/dist/guards';
+import {
   BuilderChartConfigWithDateRange,
   ChartConfigWithDateRange,
   DisplayType,
+  PromqlConfigWithDateRange,
   SQLInterval,
 } from '@hyperdx/common-utils/dist/types';
 
@@ -31,10 +38,20 @@ export type HeatmapChartConfig = {
   with?: BuilderChartConfigWithDateRange['with'];
 };
 
+/** The configs a series-mode heatmap can query. */
+export type HeatmapSeriesChartConfig =
+  | BuilderChartConfigWithDateRange
+  | PromqlConfigWithDateRange;
+
+/** Linear, since PromQL samples often include zeros, which log scale drops. */
+export const PROMQL_DEFAULT_HEATMAP_SCALE_TYPE: HeatmapScaleType = 'linear';
+
 /**
  * What a heatmap queries, by mode. Distribution heatmaps bucket a value
- * expression server-side; series heatmaps query one builder series per time
- * bucket and draw a row per series.
+ * expression server-side; calculated heatmaps bucket the samples of a PromQL
+ * range query client-side; histogram heatmaps draw the `le` buckets of a
+ * PromQL histogram; series heatmaps query one builder series or PromQL
+ * expression per time bucket and draw a row per series.
  */
 export type HeatmapQuery =
   | {
@@ -43,15 +60,54 @@ export type HeatmapQuery =
       scaleType: HeatmapScaleType;
     }
   | {
+      mode: 'calculated';
+      config: PromqlConfigWithDateRange;
+      scaleType: HeatmapScaleType;
+    }
+  | {
+      mode: 'histogram';
+      config: PromqlConfigWithDateRange;
+    }
+  | {
       mode: 'series';
-      config: BuilderChartConfigWithDateRange;
+      config: HeatmapSeriesChartConfig;
     };
 
-export function toHeatmapQuery(
-  config: BuilderChartConfigWithDateRange,
-): HeatmapQuery {
-  if (getHeatmapMode(config) === 'series') {
+/**
+ * `minGranularitySeconds` floors only auto granularity: an explicit
+ * granularity is the user's choice and is kept as-is.
+ */
+export function resolveHeatmapGranularity({
+  granularity,
+  dateRange,
+  minGranularitySeconds,
+}: Pick<
+  BuilderChartConfigWithDateRange,
+  'granularity' | 'dateRange' | 'minGranularitySeconds'
+>): SQLInterval {
+  return getTimeChartGranularity(
+    granularity,
+    dateRange,
+    minGranularitySeconds,
+    HEATMAP_AUTO_GRANULARITY_BUCKETS,
+  );
+}
+
+export function toHeatmapQuery(config: HeatmapSeriesChartConfig): HeatmapQuery {
+  const mode = getHeatmapMode(config);
+  if (mode === 'series') {
     return { mode: 'series', config };
+  }
+
+  if (isPromqlChartConfig(config)) {
+    if (mode === 'histogram') {
+      return { mode: 'histogram', config };
+    }
+    return {
+      mode: 'calculated',
+      config,
+      scaleType: config.heatmap?.scaleType ?? PROMQL_DEFAULT_HEATMAP_SCALE_TYPE,
+    };
   }
 
   const firstSelect = Array.isArray(config.select)
@@ -69,7 +125,7 @@ export function toHeatmapQuery(
           countExpression: firstSelect?.countExpression,
         },
       ],
-      granularity: 'auto',
+      granularity: config.granularity,
       numberFormat: config.numberFormat,
     },
     scaleType: firstSelect?.heatmapScaleType ?? 'log',
@@ -77,21 +133,37 @@ export function toHeatmapQuery(
 }
 
 /**
- * The time-chart query behind a series-mode heatmap: `select[0]` and the
- * group by, bucketed at the heatmap's granularity.
+ * The time-chart query behind a series-mode, calculated or histogram heatmap,
+ * bucketed at the heatmap's granularity: `select[0]` and the group by for a
+ * builder config, or the first expression's range query for PromQL.
  */
 export function buildHeatmapSeriesConfig(
-  config: BuilderChartConfigWithDateRange,
+  config: HeatmapSeriesChartConfig,
   granularity: SQLInterval,
 ): ChartConfigWithDateRange {
+  // Heatmaps have no series limit control, a default is applied automatically.
+  // Heatmap settings only change how the response is drawn, so keep them out
+  // of the query's cache key: switching mode or scale reuses the data.
+  // Histogram mode is the exception, since its response is keyed by bucket.
+  if (isPromqlChartConfig(config)) {
+    return convertToTimeChartConfig({
+      ...config,
+      granularity,
+      seriesLimit: undefined,
+      heatmap:
+        config.heatmap?.mode === 'histogram'
+          ? { mode: 'histogram' }
+          : undefined,
+    });
+  }
   return convertToTimeChartConfig({
     ...config,
-    select: Array.isArray(config.select)
-      ? config.select.slice(0, 1)
-      : config.select,
+    ...(Array.isArray(config.select)
+      ? { select: config.select.slice(0, 1) }
+      : {}),
     granularity,
-    // Heatmaps have no series limit control, a default is applied automatically
     seriesLimit: undefined,
+    heatmap: undefined,
   });
 }
 
@@ -102,9 +174,11 @@ export function buildHeatmapSeriesConfig(
 export function buildHeatmapBoundsConfig({
   config,
   scaleType,
+  granularity,
 }: {
   config: HeatmapChartConfig;
   scaleType: HeatmapScaleType;
+  granularity: SQLInterval;
 }): BuilderChartConfigWithDateRange {
   const valueExpression = config.select[0].valueExpression;
   const isAggregateExpression = isAggregateFunction(valueExpression);
@@ -138,10 +212,16 @@ export function buildHeatmapBoundsConfig({
               ...config,
               select: [{ valueExpression, alias: 'value_calc' }],
               orderBy: undefined,
+              // Emits the __hdx_time_bucket column the outer query filters on.
+              granularity,
             },
           },
         ],
         timestampValueExpression: '__hdx_time_bucket',
+        // The first bucket is labelled before an unaligned start, so align
+        // this filter on bucket labels. The inner query keeps the original
+        // range so no events outside it are counted.
+        dateRange: getAlignedDateRange(config.dateRange, granularity),
         from: { databaseName: '', tableName: 'min_max_calc' },
       }
     : {
@@ -184,7 +264,7 @@ export function buildHeatmapBucketConfig({
   scaleType: HeatmapScaleType;
   effectiveMin: string | number;
   max: string | number;
-  granularity: string;
+  granularity: SQLInterval;
   nBuckets: number;
 }): BuilderChartConfigWithDateRange {
   const valueExpression = config.select[0].valueExpression;
@@ -235,6 +315,7 @@ export function buildHeatmapBucketConfig({
           },
         ],
         timestampValueExpression: '__hdx_time_bucket',
+        dateRange: getAlignedDateRange(config.dateRange, granularity),
         from: { databaseName: '', tableName: 'bucket_calc' },
         orderBy: [{ valueExpression: 'x_bucket', ordering: 'ASC' }],
         granularity,

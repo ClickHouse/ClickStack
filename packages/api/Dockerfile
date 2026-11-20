@@ -1,10 +1,10 @@
 ## base #############################################################################################
-FROM node:22.16.0-alpine AS base
+FROM node:22.23.4-alpine AS base
 
 WORKDIR /app
 
 COPY .yarn ./.yarn
-COPY .yarnrc.yml yarn.lock package.json nx.json .prettierrc .prettierignore ./tsconfig.base.json ./
+COPY .yarnrc.yml yarn.lock package.json nx.json .oxfmtrc.json ./tsconfig.base.json ./
 # Only copy package.json for workspace resolution during yarn install;
 # full source is copied in the build stages that need it.
 COPY ./packages/common-utils/package.json ./packages/common-utils/package.json
@@ -51,12 +51,12 @@ RUN --mount=type=cache,target=/root/.yarn/berry/cache,id=yarn-cache \
 
 ## prod ############################################################################################
 
-FROM node:22.16.0-alpine AS prod
+FROM node:22.23.4-alpine AS prod
 
 LABEL org.opencontainers.image.vendor="HyperDX" \
       org.opencontainers.image.title="HyperDX API" \
       org.opencontainers.image.description="HyperDX API service for observability platform" \
-      org.opencontainers.image.source="https://github.com/hyperdxio/hyperdx" \
+      org.opencontainers.image.source="https://github.com/ClickHouse/ClickStack" \
       org.opencontainers.image.licenses="MIT"
 
 ARG CODE_VERSION

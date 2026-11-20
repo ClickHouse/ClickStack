@@ -5,13 +5,19 @@ import {
   getDashboardVariableFilters,
   getFilterExpression,
   getFilterVariableName,
+  isAdhocFilter,
+  isAdhocFilterValue,
   isFilterGlobalRequirement,
   isFilterRequired,
   isFilterVariableEnabled,
   parseQuery,
 } from '@/filters';
-import { isMissingFiltersMacro } from '@/macros';
+import { isPromqlSavedChartConfig, isRawSqlSavedChartConfig } from '@/guards';
+import { hasMacro, isMissingFiltersMacro } from '@/macros';
+import { getReferenceVariableFilters } from '@/referenceVariables';
 import {
+  AdhocDashboardFilter,
+  AdhocFilterValue,
   ChartConfigWithOptDateRange,
   DashboardFilter,
   DashboardFilterValue,
@@ -19,6 +25,7 @@ import {
   SavedChartConfig,
   VariableFilterValue,
 } from '@/types';
+import { isFilterSingleSelect } from '@/variables';
 
 /**
  * A dashboards filter/variable state is persisted as an array of entries in one of two
@@ -26,6 +33,7 @@ import {
  *
  *  - legacy, keyed by SQL expression: `{ type: 'sql', condition: "E IN ('a')" }`
  *  - variable-keyed:                  `{ type: 'variable', name: 'svc', values: ['a'] }`
+ *                                     `{ type: 'adhoc', name: 'conds', conditions: [...] }`
  *
  * Expression keying cannot represent two filters that share an `expression`,
  * and has nowhere to put a selection for a filter with no expression at all.
@@ -38,11 +46,16 @@ import {
 /** One filter's selection: what a `FilterState` holds per key. */
 export type FilterSelection = FilterState[string];
 
+/** A variable-keyed entry, without the name it is keyed by. */
+export type VariableEntryValue =
+  | Omit<VariableFilterValue, 'name'>
+  | Omit<AdhocFilterValue, 'name'>;
+
 export type ParsedDashboardFilterValues = {
   /** Selections addressed by SQL expression, parsed via `parseQuery`. */
   byExpression: FilterState;
-  /** Selections addressed by dashboard variable name. */
-  byVariable: Map<string, string[]>;
+  /** Selected values and ad hoc conditions addressed by dashboard variable name. */
+  byVariable: Map<string, VariableEntryValue>;
   /**
    * Non-`sql` entries (`lucene`, `sql_ast`), carried verbatim so a write doesn't
    * destroy them.
@@ -58,15 +71,16 @@ const isVariableEntry = (
 export function parseDashboardFilterValues(
   entries: DashboardFilterValue[] | undefined,
 ): ParsedDashboardFilterValues {
-  const byVariable = new Map<string, string[]>();
+  const byVariable = new Map<string, VariableEntryValue>();
   const passthrough: DashboardFilterValue[] = [];
   const sqlEntries: Filter[] = [];
 
   for (const entry of entries ?? []) {
-    if (isVariableEntry(entry)) {
+    if (isVariableEntry(entry) || isAdhocFilterValue(entry)) {
       // There shouldn't be duplicate names, but if there are the first wins.
       if (!byVariable.has(entry.name)) {
-        byVariable.set(entry.name, entry.values);
+        const { name, ...value } = entry;
+        byVariable.set(name, value);
       }
       continue;
     }
@@ -98,7 +112,7 @@ export function parseDashboardFilterValues(
  */
 export function serializeDashboardFilterValues(input: {
   byExpression?: FilterState;
-  byVariable?: ReadonlyMap<string, string[]>;
+  byVariable?: ReadonlyMap<string, VariableEntryValue>;
   passthrough?: DashboardFilterValue[];
 }): DashboardFilterValue[] {
   const entries: DashboardFilterValue[] = [
@@ -106,9 +120,13 @@ export function serializeDashboardFilterValues(input: {
     ...filtersToQuery(input.byExpression ?? {}, { stringifyKeys: false }),
   ];
 
-  for (const [name, values] of input.byVariable ?? []) {
-    if (values.length === 0) continue; // Empty selections are omitted.
-    entries.push({ type: 'variable', name, values });
+  for (const [name, value] of input.byVariable ?? []) {
+    // Empty selections are omitted.
+    const isEmpty =
+      value.type === 'adhoc'
+        ? value.conditions.length === 0
+        : value.values.length === 0;
+    if (!isEmpty) entries.push({ name, ...value });
   }
 
   entries.push(...(input.passthrough ?? []));
@@ -148,15 +166,31 @@ export function filterSelectionKey(
 export function resolveFilterSelection(
   filter: DashboardFilter,
   parsed: Pick<ParsedDashboardFilterValues, 'byExpression'> & {
-    byVariable: ReadonlyMap<string, string[]>;
+    byVariable: ReadonlyMap<string, VariableEntryValue>;
+  },
+): FilterSelection | undefined {
+  const selection = resolveUncappedFilterSelection(filter, parsed);
+  if (!selection || !isFilterSingleSelect(filter)) return selection;
+  if (selection.included.size <= 1) return selection;
+
+  // State written before the filter became single-select (or by hand) can hold
+  // several values; only the first is honored.
+  const [first] = selection.included;
+  return { ...selection, included: new Set([first]) };
+}
+
+function resolveUncappedFilterSelection(
+  filter: DashboardFilter,
+  parsed: Pick<ParsedDashboardFilterValues, 'byExpression'> & {
+    byVariable: ReadonlyMap<string, VariableEntryValue>;
   },
 ): FilterSelection | undefined {
   const key = filterSelectionKey(filter);
   if (key.kind === 'variable') {
     const values = parsed.byVariable.get(key.name);
-    if (values) {
+    if (values?.type === 'variable') {
       return {
-        included: new Set<string | boolean>(values),
+        included: new Set<string | boolean>(values.values),
         excluded: new Set(),
       };
     }
@@ -180,6 +214,14 @@ export function getUnsatisfiedRequiredFilters<
   );
 }
 
+const hasFiltersMacro = (sqlTemplate: string): boolean => {
+  try {
+    return hasMacro(sqlTemplate, 'filters');
+  } catch {
+    return false;
+  }
+};
+
 /** Whether a dashboard's broadcast filters reach a tile with the given config. */
 export function configConsumesBroadcastFilters(
   config: SavedChartConfig | ChartConfigWithOptDateRange,
@@ -194,6 +236,33 @@ export function configConsumesBroadcastFilters(
 }
 
 /**
+ * The ad hoc filters whose conditions reach a tile, i.e. the filters that
+ * clicking a value in the tile should update. PromQL tiles take PromQL filters;
+ * builder and raw SQL tiles take SQL filters.
+ */
+export function getAdhocFilterTargetsForTile(
+  filters: DashboardFilter[],
+  config: SavedChartConfig,
+  sourceId: string | undefined,
+): AdhocDashboardFilter[] {
+  // Ad hoc conditions reach raw SQL only through `$__filters`, which requires a sourceId.
+  if (
+    isRawSqlSavedChartConfig(config) &&
+    !(sourceId && hasFiltersMacro(config.sqlTemplate))
+  ) {
+    return [];
+  }
+  const isPromql = isPromqlSavedChartConfig(config);
+  return filters
+    .filter(isAdhocFilter)
+    .filter(
+      filter =>
+        filter.sourceType === (isPromql ? 'promql' : 'sql') &&
+        doesFilterApplyToSource(filter, sourceId),
+    );
+}
+
+/**
  * The subset of `unsatisfiedRequiredFilters` that blocks the given tile.
  *
  * A tile is blocked if any of the following conditions hold:
@@ -201,6 +270,8 @@ export function configConsumesBroadcastFilters(
  * 2. The tile references the filter's variable.
  * 3. The filter applies via broadcast to the tile's source, and the tile
  *    applies broadcast conditions (`consumesBroadcastFilters`).
+ * 4. The filter is a data source or connection variable the tile's stored
+ *    config references.
  */
 export function getBlockingRequiredFilters(
   unsatisfiedRequiredFilters: DashboardFilter[],
@@ -209,8 +280,16 @@ export function getBlockingRequiredFilters(
     referencedVariableNames?: readonly string[];
     /** Whether the tile's query applies broadcast filter conditions. */
     consumesBroadcastFilters: boolean;
+    /** The reference variables the tile's stored config references. */
+    referenceVariableNames?: readonly string[];
   },
 ): DashboardFilter[] {
+  const referenceVariableNames = new Set(tile.referenceVariableNames ?? []);
+  const referenceVariableFilterIds = new Set(
+    getReferenceVariableFilters(unsatisfiedRequiredFilters)
+      .filter(({ name }) => referenceVariableNames.has(name))
+      .map(({ filter }) => filter.id),
+  );
   const referencedNamesSet = new Set(tile.referencedVariableNames ?? []);
   const referencedFilterIds = new Set(
     getDashboardVariableFilters(unsatisfiedRequiredFilters)
@@ -222,6 +301,7 @@ export function getBlockingRequiredFilters(
     filter =>
       isFilterGlobalRequirement(filter) ||
       referencedFilterIds.has(filter.id) ||
+      referenceVariableFilterIds.has(filter.id) ||
       (tile.consumesBroadcastFilters &&
         doesFilterApplyToSource(filter, tile.sourceId)),
   );
@@ -233,15 +313,19 @@ export function getBlockingRequiredFilterNames({
   sourceId,
   unsatisfiedRequiredFilters,
   referencedVariables,
+  referenceVariableNames,
 }: {
   config: SavedChartConfig | ChartConfigWithOptDateRange;
   sourceId: string | undefined;
   unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
   /** The tile's variables, already narrowed to the ones it references. */
   referencedVariables: readonly { name: string }[] | undefined;
+  /** The reference variables the tile's stored config references. */
+  referenceVariableNames?: readonly string[];
 }): string[] {
   return getBlockingRequiredFilters(unsatisfiedRequiredFilters ?? [], {
     sourceId,
+    referenceVariableNames,
     referencedVariableNames: referencedVariables?.map(
       variable => variable.name,
     ),

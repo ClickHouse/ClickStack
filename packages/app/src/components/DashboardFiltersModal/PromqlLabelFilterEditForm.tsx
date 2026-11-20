@@ -8,6 +8,7 @@ import {
 import { AutocompleteControlled } from '@/components/InputControlled';
 import PromQLEditor from '@/components/PromQLEditor/PromQLEditor';
 import { SourceSelectControlled } from '@/components/SourceSelect';
+import { useResolvedReference } from '@/components/sourceSelectUtils';
 import {
   usePromqlLabelNames,
   usePromqlMetricNames,
@@ -42,19 +43,11 @@ export const PromqlLabelFilterEditForm = ({
 
   // Only a PromQL source can answer the label lookup; the form may briefly hold
   // another kind while the user switches types.
-  const sourceId = useWatch({ control, name: 'source' });
+  const sourceId = useResolvedReference(useWatch({ control, name: 'source' }));
   const source = sources?.find(s => s.id === sourceId);
   const promqlSource = source && isPromqlSource(source) ? source : undefined;
-  const { data: labelNames } = usePromqlLabelNames(
-    promqlSource?.connection,
-    promqlSource?.from.databaseName,
-    promqlSource?.from.tableName,
-  );
-  const { data: metricNames } = usePromqlMetricNames(
-    promqlSource?.connection,
-    promqlSource?.from.databaseName,
-    promqlSource?.from.tableName,
-  );
+  const { data: labelNames } = usePromqlLabelNames(promqlSource?.id);
+  const { data: metricNames } = usePromqlMetricNames(promqlSource?.id);
 
   return (
     <>
@@ -72,6 +65,7 @@ export const PromqlLabelFilterEditForm = ({
           }}
           comboboxProps={{ withinPortal: true }}
           allowedSourceKinds={[SourceKind.Promql]}
+          allowSourceVariables
         />
       </CustomInputWrapper>
 

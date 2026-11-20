@@ -3,6 +3,8 @@ import {
   ChartVariable,
   DashboardFilter,
   DisplayType,
+  Filter,
+  PromqlConditionFilter,
   PromqlExpressionList,
   SavedChartConfig,
   SourceKind,
@@ -17,12 +19,14 @@ import {
   buildSampleEventsConfig,
   computeDbTimeChartConfig,
   displayTypeToActiveTab,
+  getPreviewBlockingFilters,
   isQueryReady,
   resolvePreviewVariables,
   resolveTilePreviewFilters,
   seriesToFilters,
   tabQueriesData,
   TABS_WITH_GENERATED_SQL,
+  withBroadcastFilters,
 } from '@/components/DBEditTimeChartForm/utils';
 
 // ---------------------------------------------------------------------------
@@ -167,6 +171,7 @@ describe('isQueryReady', () => {
         configType: 'promql',
         promqlExpression: [{ expression: 'up' }],
         connection: 'local',
+        source: 'source-promql',
         dateRange,
       }),
     ).toBeTruthy();
@@ -176,6 +181,7 @@ describe('isQueryReady', () => {
         configType: 'promql',
         promqlExpression: 'up',
         connection: 'local',
+        source: 'source-promql',
         dateRange,
       }),
     ).toBeTruthy();
@@ -187,6 +193,7 @@ describe('isQueryReady', () => {
         configType: 'promql',
         promqlExpression: [{ expression: '' }],
         connection: 'local',
+        source: 'source-promql',
         dateRange,
       }),
     ).toBeFalsy();
@@ -201,6 +208,7 @@ describe('isQueryReady', () => {
         displayType: DisplayType.Number,
         promqlExpression: [{ expression: '' }, { expression: 'up' }],
         connection: 'local',
+        source: 'source-promql',
         dateRange,
       }),
     ).toBeFalsy();
@@ -210,6 +218,7 @@ describe('isQueryReady', () => {
         displayType: DisplayType.Line,
         promqlExpression: [{ expression: '' }, { expression: 'up' }],
         connection: 'local',
+        source: 'source-promql',
         dateRange,
       }),
     ).toBeTruthy();
@@ -227,6 +236,7 @@ describe('buildRenderedPromqlExpression', () => {
   ): ChartConfigWithDateRange => ({
     configType: 'promql',
     connection: 'local',
+    source: 'source-promql',
     displayType: DisplayType.Line,
     promqlExpression: [{ expression: 'up' }],
     dateRange,
@@ -325,6 +335,18 @@ describe('buildRenderedPromqlExpression', () => {
     expect(render(DisplayType.Number, 'auto')).toBe(
       'rate(up[1815s]) / 1800s / 86400s',
     );
+  });
+
+  it("expands macros with a heatmap's finer auto granularity", () => {
+    expect(
+      buildRenderedPromqlExpression(
+        promqlConfig({
+          displayType: DisplayType.Heatmap,
+          granularity: 'auto',
+          promqlExpression: [{ expression: 'rate(up[$__interval])' }],
+        }),
+      )?.expressions?.[0].expression,
+    ).toBe('rate(up[900s])');
   });
 
   it('expands macros with the granularity a table queries with', () => {
@@ -494,6 +516,8 @@ describe('displayTypeToActiveTab', () => {
     [DisplayType.Bar, 'bar'],
     [DisplayType.Number, 'number'],
     [DisplayType.Line, 'time'],
+    [DisplayType.StackedBar, 'time'],
+    [DisplayType.StackedLine, 'time'],
   ])('maps %s to %s', (displayType, expected) => {
     expect(displayTypeToActiveTab(displayType)).toBe(expected);
   });
@@ -582,6 +606,7 @@ describe('resolvePreviewVariables', () => {
     configType: 'promql',
     promqlExpression: 'up{service=~"$service"}',
     connection: 'local',
+    source: 'source-promql',
     dateRange,
   };
 
@@ -625,11 +650,16 @@ describe('resolveTilePreviewFilters', () => {
     { type: 'sql' as const, condition: "ServiceName IN ('api')" },
   ];
   const variables = [{ name: 'service', values: ['api'] }];
+  const promqlFilter: PromqlConditionFilter = {
+    type: 'promql',
+    condition: 'job="api"',
+  };
 
   const promqlConfig: ChartConfigWithDateRange = {
     configType: 'promql',
     promqlExpression: 'up{service=~"$service"}',
     connection: 'local',
+    source: 'source-promql',
     dateRange,
   };
 
@@ -667,6 +697,7 @@ describe('resolveTilePreviewFilters', () => {
       filters: dashboardFilters,
       variables: [],
       missingRequiredFilterNames: [],
+      canPreviewWithoutFilters: false,
     });
   });
 
@@ -679,11 +710,34 @@ describe('resolveTilePreviewFilters', () => {
       filters: undefined,
       variables: [{ name: 'service', values: [] }],
       missingRequiredFilterNames: [],
+      canPreviewWithoutFilters: false,
     });
   });
 
-  it('never hands filters to a PromQL tile', () => {
-    expect(resolve({ config: promqlConfig }).filters).toBeUndefined();
+  it('never hands SQL filters to a PromQL tile', () => {
+    expect(resolve({ config: promqlConfig }).filters).toEqual([]);
+  });
+
+  it('hands each tile the filters in its own query language', () => {
+    const filters = [...dashboardFilters, promqlFilter];
+
+    expect(resolve({ config: promqlConfig, filters }).filters).toEqual([
+      promqlFilter,
+    ]);
+    expect(resolve({ filters }).filters).toEqual(dashboardFilters);
+    expect(
+      resolve({ config: rawSqlWithFiltersMacro, filters }).filters,
+    ).toEqual(dashboardFilters);
+  });
+
+  it('drops PromQL filters when turned off', () => {
+    expect(
+      resolve({
+        config: promqlConfig,
+        filters: [promqlFilter],
+        applySelections: false,
+      }).filters,
+    ).toBeUndefined();
   });
 
   it('drops the filters a raw-SQL template would not apply', () => {
@@ -744,6 +798,134 @@ describe('resolveTilePreviewFilters', () => {
         applySelections: false,
       }).missingRequiredFilterNames,
     ).toEqual([]);
+  });
+
+  it('still blocks on a referenced source variable while the filters are turned off', () => {
+    const sourceVariable: DashboardFilter = {
+      id: 'f3',
+      type: 'DATA_SOURCE',
+      name: 'Logs source',
+      allowedSourceKinds: [SourceKind.Log],
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'logs',
+      minSelections: 1,
+      maxSelections: 1,
+    };
+    const unsatisfiedRequiredFilters = [requiredFilter, sourceVariable];
+
+    expect(
+      resolve({
+        config: rawSqlWithFiltersMacro,
+        unsatisfiedRequiredFilters,
+        applySelections: false,
+        referenceVariableNames: ['logs'],
+      }).missingRequiredFilterNames,
+    ).toEqual(['Logs source']);
+    expect(
+      resolve({ unsatisfiedRequiredFilters, applySelections: false })
+        .missingRequiredFilterNames,
+    ).toEqual([]);
+  });
+});
+
+describe('getPreviewBlockingFilters', () => {
+  const sourceVariable: DashboardFilter = {
+    id: 'logs',
+    type: 'DATA_SOURCE',
+    name: 'Logs source',
+    allowedSourceKinds: [SourceKind.Log],
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'logs',
+    minSelections: 1,
+    maxSelections: 1,
+  };
+  const requiredVariable: DashboardFilter = {
+    id: 'env',
+    type: 'STATIC_LIST',
+    name: 'Environment',
+    options: ['prod'],
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'env',
+    minSelections: 1,
+  };
+  const rawSqlWithVariable: ChartConfigWithDateRange = {
+    configType: 'sql',
+    sqlTemplate: "SELECT count() FROM logs WHERE env = '$env'",
+    connection: 'clickhouse',
+    dateRange,
+  };
+
+  const getBlocking = (
+    overrides: Partial<Parameters<typeof getPreviewBlockingFilters>[0]> = {},
+  ) =>
+    getPreviewBlockingFilters({
+      config: rawSqlWithVariable,
+      sourceId: undefined,
+      variables: [{ name: 'env', values: [] }],
+      unsatisfiedRequiredFilters: [sourceVariable, requiredVariable],
+      applySelections: true,
+      referenceVariableNames: ['logs'],
+      ...overrides,
+    });
+
+  it('offers turning off the filters when that clears part of the block', () => {
+    expect(getBlocking()).toEqual({
+      missingRequiredFilterNames: ['Logs source', 'Environment'],
+      canPreviewWithoutFilters: true,
+    });
+  });
+
+  it('does not offer turning off the filters when only a reference variable blocks', () => {
+    expect(
+      getBlocking({ unsatisfiedRequiredFilters: [sourceVariable] }),
+    ).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
+  });
+
+  it('does not offer turning off the filters when they are already off', () => {
+    expect(getBlocking({ applySelections: false })).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
+  });
+
+  it('blocks only on reference variables when no query could be built', () => {
+    expect(getBlocking({ config: undefined })).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
+  });
+});
+
+describe('withBroadcastFilters', () => {
+  const sqlFilter: Filter = { type: 'sql', condition: "ServiceName = 'api'" };
+  const promqlFilter: PromqlConditionFilter = {
+    type: 'promql',
+    condition: 'job="api"',
+  };
+  const promqlConfig: ChartConfigWithDateRange = {
+    configType: 'promql',
+    promqlExpression: 'up',
+    connection: 'local',
+    source: 'source-promql',
+    dateRange,
+  };
+
+  it('attaches only PromQL filters to a PromQL config', () => {
+    expect(
+      withBroadcastFilters(promqlConfig, [sqlFilter, promqlFilter]),
+    ).toMatchObject({ filters: [promqlFilter] });
+  });
+
+  it('attaches only SQL and Lucene filters to other configs', () => {
+    expect(
+      withBroadcastFilters(builderConfig, [sqlFilter, promqlFilter]),
+    ).toMatchObject({ filters: [sqlFilter] });
   });
 });
 
@@ -1035,6 +1217,34 @@ describe('buildChartConfigForExplanations', () => {
       expect(result).toBeDefined();
     },
   );
+
+  it("carries the source's minimum auto granularity on the heatmap tab", () => {
+    const result = buildChartConfigForExplanations({
+      ...baseParams,
+      queriedConfig: builderConfig,
+      queriedSourceId: 'metric-source',
+      tableSource: {
+        kind: SourceKind.Metric,
+        id: 'metric-source',
+        name: 'Metrics',
+        from: { databaseName: 'default', tableName: '' },
+        connection: 'clickhouse',
+        timestampValueExpression: 'Timestamp',
+        resourceAttributesExpression: 'ResourceAttributes',
+        metricTables: {
+          gauge: 'metrics.gauge',
+          sum: 'metrics.sum',
+          histogram: 'metrics.histogram',
+          summary: 'metrics.summary',
+          'exponential histogram': 'metrics.exp_histogram',
+        },
+        minAutoGranularity: '5 minute',
+      } satisfies Extract<TSource, { kind: SourceKind.Metric }>,
+      activeTab: 'heatmap',
+    });
+
+    expect(result?.minGranularitySeconds).toBe(300);
+  });
 
   it('falls back to chartConfig when queriedSource does not match', () => {
     const result = buildChartConfigForExplanations({

@@ -1,8 +1,12 @@
 import {
+  ADHOC_FILTER_MAX_CONDITIONS,
+  AdhocDashboardFilter,
+  AdhocFilterCondition,
+  BroadcastFilter,
   DashboardFilter,
   DashboardFilterValue,
-  Filter,
   QueryExpressionDashboardFilter,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { act, renderHook } from '@testing-library/react';
 
@@ -62,8 +66,8 @@ describe('useDashboardFilters', () => {
     filterId: string,
   ) => result.current.selectionByFilterId.get(filterId);
 
-  const conditionsFor = (queries: Filter[]) =>
-    queries.map(q => ('condition' in q ? q.condition : ''));
+  const conditionsFor = (queries: BroadcastFilter[]) =>
+    queries.map(q => q.condition);
 
   beforeEach(() => {
     mockState = null;
@@ -941,6 +945,418 @@ describe('useDashboardFilters', () => {
     });
   });
 
+  describe('single-select filters', () => {
+    const singleSelect: QueryExpressionDashboardFilter = {
+      ...mockFilters[0],
+      isVariableEnabled: true,
+      variableName: 'env',
+      maxSelections: 1,
+    };
+
+    it('honors only the first of several values in the URL', () => {
+      mockState = [
+        { type: 'variable', name: 'env', values: ['staging', 'prod'] },
+      ];
+
+      const { result } = renderHook(() => useDashboardFilters([singleSelect]));
+
+      expect(selectionFor(result, 'filter1')?.included).toEqual(
+        new Set(['staging']),
+      );
+      expect(result.current.variables).toEqual([
+        {
+          name: 'env',
+          expression: 'environment',
+          values: ['staging'],
+          maxSelections: 1,
+        },
+      ]);
+    });
+
+    it('drops the extra values from the URL on the next write', () => {
+      mockState = [
+        { type: 'variable', name: 'env', values: ['staging', 'prod'] },
+      ];
+      const filters = [singleSelect, mockFilters[1]];
+
+      const { result } = renderHook(() => useDashboardFilters(filters));
+
+      act(() => {
+        result.current.setFilterValue('filter2', ['api']);
+      });
+
+      expect(mockState).toEqual([
+        { type: 'sql', condition: "service.name IN ('api')" },
+        { type: 'variable', name: 'env', values: ['staging'] },
+      ]);
+    });
+  });
+
+  describe('ad hoc filters', () => {
+    const adhocFilter: AdhocDashboardFilter = {
+      id: 'adhoc1',
+      type: 'ADHOC',
+      isBroadcastEnabled: true,
+      name: 'Conditions',
+      sourceType: 'sql',
+      sources: ['logs'],
+      isVariableEnabled: true,
+      variableName: 'conds',
+    };
+    const condition: AdhocFilterCondition = {
+      key: 'ServiceName',
+      operator: '!=',
+      value: 'api',
+    };
+
+    it('reads conditions from an ad hoc entry with its variable name', () => {
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+      expect(result.current.adhocConditionsByFilterId.get('adhoc1')).toEqual([
+        condition,
+      ]);
+      expect(result.current.ignoredVariableNames).toEqual([]);
+    });
+
+    it('writes and clears conditions without touching other entries', () => {
+      mockState = [{ type: 'sql', condition: "environment IN ('prod')" }];
+      const filters = [mockFilters[0], adhocFilter];
+      const { result } = renderHook(() => useDashboardFilters(filters));
+
+      act(() => {
+        result.current.setAdhocConditions('adhoc1', [condition]);
+      });
+      expect(mockState).toEqual([
+        { type: 'sql', condition: "environment IN ('prod')" },
+        { type: 'adhoc', name: 'conds', conditions: [condition] },
+      ]);
+
+      act(() => {
+        result.current.setAdhocConditions('adhoc1', []);
+      });
+      expect(mockState).toEqual([
+        { type: 'sql', condition: "environment IN ('prod')" },
+      ]);
+    });
+
+    it('drops repeated conditions on read and write', () => {
+      mockState = [
+        { type: 'adhoc', name: 'conds', conditions: [condition, condition] },
+      ];
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+      expect(result.current.adhocConditionsByFilterId.get('adhoc1')).toEqual([
+        condition,
+      ]);
+
+      act(() => {
+        result.current.setAdhocConditions('adhoc1', [condition, condition]);
+      });
+      expect(mockState).toEqual([
+        { type: 'adhoc', name: 'conds', conditions: [condition] },
+      ]);
+    });
+
+    it('ignores a write of more conditions than the URL entry can hold', () => {
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+      const conditionsUpTo = (count: number) =>
+        Array.from({ length: count }, (_, i) => ({
+          ...condition,
+          value: `${i}`,
+        }));
+
+      act(() => {
+        result.current.setAdhocConditions(
+          'adhoc1',
+          conditionsUpTo(ADHOC_FILTER_MAX_CONDITIONS + 1),
+        );
+      });
+      expect(mockState).toEqual([
+        { type: 'adhoc', name: 'conds', conditions: [condition] },
+      ]);
+
+      act(() => {
+        result.current.setAdhocConditions(
+          'adhoc1',
+          conditionsUpTo(ADHOC_FILTER_MAX_CONDITIONS),
+        );
+      });
+      expect(mockState).toEqual([
+        {
+          type: 'adhoc',
+          name: 'conds',
+          conditions: conditionsUpTo(ADHOC_FILTER_MAX_CONDITIONS),
+        },
+      ]);
+    });
+
+    it('ignores a write of a condition too long for the URL entry', () => {
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+      act(() => {
+        result.current.setAdhocConditions('adhoc1', [
+          condition,
+          { ...condition, value: 'x'.repeat(10001) },
+        ]);
+      });
+      expect(mockState).toEqual([
+        { type: 'adhoc', name: 'conds', conditions: [condition] },
+      ]);
+    });
+
+    it('applies a clicked value to every target filter', () => {
+      const other: AdhocDashboardFilter = {
+        ...adhocFilter,
+        id: 'adhoc2',
+        name: 'More',
+        variableName: 'more',
+      };
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+      const { result } = renderHook(() =>
+        useDashboardFilters([adhocFilter, other]),
+      );
+
+      act(() => {
+        result.current.applyAdhocAction(
+          ['adhoc1', 'adhoc2'],
+          [{ key: 'ServiceName', value: 'api' }],
+          'include',
+        );
+      });
+
+      const included = { key: 'ServiceName', operator: '=', value: 'api' };
+      expect(mockState).toEqual([
+        { type: 'adhoc', name: 'conds', conditions: [included] },
+        { type: 'adhoc', name: 'more', conditions: [included] },
+      ]);
+    });
+
+    it('leaves filters unchanged when a clicked value is too long', () => {
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+      act(() => {
+        result.current.applyAdhocAction(
+          ['adhoc1'],
+          [{ key: 'ServiceName', value: 'x'.repeat(10001) }],
+          'include',
+        );
+      });
+
+      expect(mockState).toEqual([
+        { type: 'adhoc', name: 'conds', conditions: [condition] },
+      ]);
+    });
+
+    it('leaves a filter that would exceed its limit unchanged', () => {
+      const full = Array.from(
+        { length: ADHOC_FILTER_MAX_CONDITIONS },
+        (_, i) => ({ ...condition, value: `${i}` }),
+      );
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: full }];
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+      act(() => {
+        result.current.applyAdhocAction(
+          ['adhoc1'],
+          [{ key: 'ServiceName', value: 'web' }],
+          'include',
+        );
+      });
+
+      expect(mockState).toEqual([
+        { type: 'adhoc', name: 'conds', conditions: full },
+      ]);
+    });
+
+    it('keeps conditions across a write to another filter', () => {
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+      const filters = [mockFilters[0], adhocFilter];
+      const { result } = renderHook(() => useDashboardFilters(filters));
+
+      act(() => {
+        result.current.setFilterValue('filter1', ['prod']);
+      });
+
+      expect(mockState).toEqual([
+        { type: 'sql', condition: "environment IN ('prod')" },
+        { type: 'adhoc', name: 'conds', conditions: [condition] },
+      ]);
+    });
+
+    it('exposes no variable or selection', () => {
+      mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+      expect(result.current.variables).toEqual([]);
+      expect(result.current.selectionByFilterId.size).toBe(0);
+    });
+
+    describe('broadcast', () => {
+      const conditionSql = "toString(ServiceName) != 'api'";
+
+      it("applies conditions to tiles on the filter's sources only", () => {
+        mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+
+        const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+        expect(
+          conditionsFor(result.current.getFilterQueriesForSource('logs')),
+        ).toEqual([conditionSql]);
+        expect(result.current.getFilterQueriesForSource('traces')).toEqual([]);
+        expect(result.current.getFilterQueriesForSource(undefined)).toEqual([]);
+      });
+
+      it('applies conditions to appliesToSourceIds over sources', () => {
+        mockState = [{ type: 'adhoc', name: 'conds', conditions: [condition] }];
+        const filters = [{ ...adhocFilter, appliesToSourceIds: ['traces'] }];
+
+        const { result } = renderHook(() => useDashboardFilters(filters));
+
+        expect(result.current.getFilterQueriesForSource('logs')).toEqual([]);
+        expect(
+          conditionsFor(result.current.getFilterQueriesForSource('traces')),
+        ).toEqual([conditionSql]);
+      });
+
+      describe('PromQL', () => {
+        const promqlFilter: AdhocDashboardFilter = {
+          ...adhocFilter,
+          sourceType: 'promql',
+          sources: ['prom'],
+        };
+        const jobMatcher = 'job="api"';
+
+        beforeEach(() => {
+          mockState = [
+            {
+              type: 'adhoc',
+              name: 'conds',
+              conditions: [{ key: 'job', operator: '=', value: 'api' }],
+            },
+          ];
+        });
+
+        it("applies conditions as label matchers to the filter's sources only", () => {
+          const { result } = renderHook(() =>
+            useDashboardFilters([promqlFilter]),
+          );
+
+          expect(result.current.getFilterQueriesForSource('prom')).toEqual([
+            { type: 'promql', condition: jobMatcher },
+          ]);
+          expect(result.current.getFilterQueriesForSource('prom2')).toEqual([]);
+          expect(result.current.getFilterQueriesForSource(undefined)).toEqual(
+            [],
+          );
+        });
+
+        it('applies conditions to appliesToSourceIds over sources', () => {
+          const filters = [{ ...promqlFilter, appliesToSourceIds: ['prom2'] }];
+
+          const { result } = renderHook(() => useDashboardFilters(filters));
+
+          expect(result.current.getFilterQueriesForSource('prom')).toEqual([]);
+          expect(
+            conditionsFor(result.current.getFilterQueriesForSource('prom2')),
+          ).toEqual([jobMatcher]);
+        });
+
+        it('combines conditions across filters, deduplicated', () => {
+          mockState = [
+            {
+              type: 'adhoc',
+              name: 'conds',
+              conditions: [{ key: 'job', operator: '=', value: 'api' }],
+            },
+            {
+              type: 'adhoc',
+              name: 'conds2',
+              conditions: [
+                { key: 'job', operator: '=', value: 'api' },
+                { key: 'env', operator: '!=', value: 'dev' },
+              ],
+            },
+          ];
+          const filters = [
+            promqlFilter,
+            { ...promqlFilter, id: 'adhoc2', variableName: 'conds2' },
+          ];
+
+          const { result } = renderHook(() => useDashboardFilters(filters));
+
+          expect(
+            conditionsFor(result.current.getFilterQueriesForSource('prom')),
+          ).toEqual([jobMatcher, 'env!="dev"']);
+        });
+
+        it('skips conditions PromQL cannot express rather than throwing', () => {
+          // Kept from before the filter was switched from SQL to PromQL
+          mockState = [
+            {
+              type: 'adhoc',
+              name: 'conds',
+              conditions: [
+                { key: 'job', operator: 'LIKE', value: '%api%' },
+                { key: 'job', operator: '=', value: 'api' },
+              ],
+            },
+          ];
+
+          const { result } = renderHook(() =>
+            useDashboardFilters([promqlFilter]),
+          );
+
+          expect(result.current.broadcastedFilters).toEqual([]);
+          expect(
+            conditionsFor(result.current.getFilterQueriesForSource('prom')),
+          ).toEqual([jobMatcher]);
+        });
+
+        it('leaves them out of the unscoped broadcast filters', () => {
+          const { result } = renderHook(() =>
+            useDashboardFilters([promqlFilter]),
+          );
+
+          expect(result.current.broadcastedFilters).toEqual([]);
+        });
+      });
+
+      it('combines conditions with other filters, deduplicated', () => {
+        mockState = [
+          { type: 'sql', condition: "environment IN ('production')" },
+          { type: 'adhoc', name: 'conds', conditions: [condition] },
+          { type: 'adhoc', name: 'conds2', conditions: [condition] },
+        ];
+        const filters: DashboardFilter[] = [
+          mockFilters[0],
+          adhocFilter,
+          { ...adhocFilter, id: 'adhoc2', variableName: 'conds2' },
+        ];
+
+        const { result } = renderHook(() => useDashboardFilters(filters));
+
+        expect(
+          conditionsFor(result.current.getFilterQueriesForSource('logs')),
+        ).toEqual(["toString(environment) IN ('production')", conditionSql]);
+      });
+    });
+
+    it('lists an ad hoc entry naming no declared filter as ignored', () => {
+      mockState = [{ type: 'adhoc', name: 'renamed', conditions: [condition] }];
+
+      const { result } = renderHook(() => useDashboardFilters([adhocFilter]));
+
+      expect(result.current.adhocConditionsByFilterId.size).toBe(0);
+      expect(result.current.ignoredVariableNames).toEqual(['renamed']);
+    });
+  });
+
   describe('unsatisfiedRequiredFilters', () => {
     const required = (
       overrides: Partial<QueryExpressionDashboardFilter> = {},
@@ -1025,6 +1441,337 @@ describe('useDashboardFilters', () => {
         'filter1',
         'filter3',
       ]);
+    });
+  });
+  describe('data source variables', () => {
+    const dataSourceFilter: DashboardFilter = {
+      id: 'ds',
+      type: 'DATA_SOURCE',
+      name: 'Logs source',
+      variableName: 'logs',
+      allowedSourceKinds: [SourceKind.Log],
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    };
+    const scopedFilter: DashboardFilter = {
+      id: 'svc',
+      type: 'QUERY_EXPRESSION',
+      name: 'Service',
+      expression: 'ServiceName',
+      source: '$logs',
+      appliesToSourceIds: ['$logs'],
+    };
+
+    it('exposes the selected source by variable name, not as a text variable', () => {
+      mockState = [{ type: 'variable', name: 'logs', values: ['src-1'] }];
+      const { result } = renderHook(() =>
+        useDashboardFilters([dataSourceFilter]),
+      );
+
+      expect(result.current.referenceVariableValues).toEqual(
+        new Map([['logs', 'src-1']]),
+      );
+      expect(result.current.variables).toEqual([]);
+      expect(result.current.ignoredVariableNames).toEqual([]);
+      expect(result.current.unsatisfiedRequiredFilters).toEqual([]);
+    });
+
+    it('exposes connection variables and resolves filter connections', () => {
+      const connectionFilter: DashboardFilter = {
+        id: 'conn',
+        type: 'CONNECTION',
+        name: 'Cluster',
+        variableName: 'cluster',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      };
+      const limitedFilter: DashboardFilter = {
+        ...dataSourceFilter,
+        connection: '$cluster',
+      };
+      mockState = [{ type: 'variable', name: 'cluster', values: ['conn-1'] }];
+      const { result } = renderHook(() =>
+        useDashboardFilters([connectionFilter, limitedFilter]),
+      );
+
+      expect(result.current.referenceVariableValues.get('cluster')).toBe(
+        'conn-1',
+      );
+      expect(result.current.resolvedFilters[1]).toMatchObject({
+        connection: 'conn-1',
+      });
+      expect(result.current.variables).toEqual([]);
+    });
+
+    describe('a selection the variable no longer offers', () => {
+      const connectionFilter: DashboardFilter = {
+        id: 'conn',
+        type: 'CONNECTION',
+        name: 'Cluster',
+        variableName: 'cluster',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      };
+      const scopedFilter: DashboardFilter = {
+        ...dataSourceFilter,
+        connection: '$cluster',
+      };
+      const sources = [
+        {
+          id: 'logs-a',
+          name: 'Logs A',
+          kind: SourceKind.Log,
+          connection: 'conn-a',
+        },
+        {
+          id: 'traces-a',
+          name: 'Traces A',
+          kind: SourceKind.Trace,
+          connection: 'conn-a',
+        },
+      ];
+      const render = (
+        filters: DashboardFilter[],
+        selection: { cluster?: string; logs: string },
+      ) => {
+        mockState = [
+          ...(selection.cluster
+            ? [
+                {
+                  type: 'variable' as const,
+                  name: 'cluster',
+                  values: [selection.cluster],
+                },
+              ]
+            : []),
+          { type: 'variable', name: 'logs', values: [selection.logs] },
+        ];
+        return renderHook(() => useDashboardFilters(filters, { sources }))
+          .result.current;
+      };
+
+      it('applies a source on the selected connection', () => {
+        const result = render([connectionFilter, scopedFilter], {
+          cluster: 'conn-a',
+          logs: 'logs-a',
+        });
+        expect(result.referenceVariableValues.get('logs')).toBe('logs-a');
+        expect(result.unsatisfiedRequiredFilters).toEqual([]);
+      });
+
+      it('drops a source on another connection than the selected one', () => {
+        const result = render([connectionFilter, scopedFilter], {
+          cluster: 'conn-b',
+          logs: 'logs-a',
+        });
+        expect(result.referenceVariableValues.get('logs')).toBeUndefined();
+        expect(result.selectionByFilterId.has('ds')).toBe(false);
+        expect(result.unsatisfiedRequiredFilters.map(f => f.id)).toEqual([
+          'ds',
+        ]);
+      });
+
+      it('drops a source while its connection variable is unselected', () => {
+        const result = render([connectionFilter, scopedFilter], {
+          logs: 'logs-a',
+        });
+        expect(result.referenceVariableValues.get('logs')).toBeUndefined();
+      });
+
+      it('drops a source of a kind the variable does not offer', () => {
+        const result = render([dataSourceFilter], { logs: 'traces-a' });
+        expect(result.referenceVariableValues.get('logs')).toBeUndefined();
+      });
+
+      it('drops a source that no longer exists', () => {
+        const result = render([dataSourceFilter], { logs: 'deleted' });
+        expect(result.referenceVariableValues.get('logs')).toBeUndefined();
+      });
+    });
+
+    describe('a selection by name', () => {
+      const connectionFilter: DashboardFilter = {
+        id: 'conn',
+        type: 'CONNECTION',
+        name: 'Cluster',
+        variableName: 'cluster',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      };
+      const scopedFilter: DashboardFilter = {
+        ...dataSourceFilter,
+        connection: '$cluster',
+      };
+      const connections = [
+        { id: 'conn-a', name: 'Cluster A' },
+        { id: 'conn-b', name: 'Cluster B' },
+      ];
+      const sources = [
+        {
+          id: 'logs-a',
+          name: 'Logs',
+          kind: SourceKind.Log,
+          connection: 'conn-a',
+        },
+        {
+          id: 'logs-b',
+          name: 'Logs',
+          kind: SourceKind.Log,
+          connection: 'conn-b',
+        },
+        {
+          id: 'traces-a',
+          name: 'Traces',
+          kind: SourceKind.Trace,
+          connection: 'conn-a',
+        },
+      ];
+      const render = (
+        filters: DashboardFilter[],
+        selection: { cluster?: string; logs?: string },
+      ) => {
+        mockState = Object.entries(selection).map(([name, value]) => ({
+          type: 'variable' as const,
+          name,
+          values: [value],
+        }));
+        return renderHook(() =>
+          useDashboardFilters(filters, { sources, connections }),
+        ).result.current;
+      };
+
+      it('resolves a source name to its ID', () => {
+        const result = render([dataSourceFilter], { logs: 'logs' });
+        expect(result.referenceVariableValues.get('logs')).toBe('logs-a');
+        expect(result.selectionByFilterId.get('ds')?.included).toEqual(
+          new Set(['logs-a']),
+        );
+      });
+
+      it('resolves a connection name to its ID', () => {
+        const result = render([connectionFilter], { cluster: 'Cluster B' });
+        expect(result.referenceVariableValues.get('cluster')).toBe('conn-b');
+      });
+
+      it("matches a source name on the selected connection's sources only", () => {
+        const result = render([connectionFilter, scopedFilter], {
+          cluster: 'Cluster B',
+          logs: 'Logs',
+        });
+        expect(result.referenceVariableValues.get('logs')).toBe('logs-b');
+        expect(result.resolvedFilters[1]).toMatchObject({
+          connection: 'conn-b',
+        });
+      });
+
+      it('drops a name the variable does not offer', () => {
+        const result = render([dataSourceFilter], { logs: 'Traces' });
+        expect(result.referenceVariableValues.get('logs')).toBeUndefined();
+        expect(result.selectionByFilterId.has('ds')).toBe(false);
+      });
+
+      it('keeps an unmatched connection value as written', () => {
+        const result = render([connectionFilter], { cluster: 'conn-c' });
+        expect(result.referenceVariableValues.get('cluster')).toBe('conn-c');
+      });
+    });
+
+    it('is a required filter while unselected', () => {
+      const { result } = renderHook(() =>
+        useDashboardFilters([dataSourceFilter]),
+      );
+
+      expect(result.current.referenceVariableValues).toEqual(
+        new Map([['logs', undefined]]),
+      );
+      expect(result.current.unsatisfiedRequiredFilters).toEqual([
+        dataSourceFilter,
+      ]);
+    });
+
+    it('reports an unmet required filter scoped to the variable with its selected source', () => {
+      mockState = [{ type: 'variable', name: 'logs', values: ['src-1'] }];
+      const { result } = renderHook(() =>
+        useDashboardFilters([
+          dataSourceFilter,
+          { ...scopedFilter, minSelections: 1 },
+        ]),
+      );
+
+      expect(result.current.unsatisfiedRequiredFilters).toEqual([
+        expect.objectContaining({
+          id: 'svc',
+          source: 'src-1',
+          appliesToSourceIds: ['src-1'],
+        }),
+      ]);
+    });
+
+    it('broadcasts a filter scoped to the variable onto its selected source', () => {
+      mockState = [{ type: 'variable', name: 'logs', values: ['src-1'] }];
+      const { result, rerender } = renderHook(() =>
+        useDashboardFilters([dataSourceFilter, scopedFilter]),
+      );
+      act(() => {
+        result.current.setFilterValue('svc', ['api']);
+      });
+      rerender();
+
+      expect(
+        conditionsFor(result.current.getFilterQueriesForSource('src-1')),
+      ).toEqual(["toString(ServiceName) IN ('api')"]);
+      expect(result.current.getFilterQueriesForSource('src-2')).toEqual([]);
+    });
+
+    it("leaves a filter unresolved while the variable selects a source it can't use", () => {
+      const logsOrMetrics: DashboardFilter = {
+        ...dataSourceFilter,
+        allowedSourceKinds: [SourceKind.Log, SourceKind.Metric],
+      };
+      const adhocFilter: DashboardFilter = {
+        id: 'adhoc',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['$logs'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      };
+      const sources = [
+        {
+          id: 'metric-1',
+          name: 'Metrics',
+          kind: SourceKind.Metric,
+          connection: 'conn-a',
+        },
+      ];
+      mockState = [{ type: 'variable', name: 'logs', values: ['metric-1'] }];
+      const { result } = renderHook(() =>
+        useDashboardFilters([logsOrMetrics, scopedFilter, adhocFilter], {
+          sources,
+        }),
+      );
+
+      expect(result.current.resolvedFilters[1]).toMatchObject({
+        source: 'metric-1',
+      });
+      expect(result.current.resolvedFilters[2]).toMatchObject({
+        sources: ['$logs'],
+      });
+      expect(result.current.unresolvedReferenceVariablesByFilterId).toEqual(
+        new Map([['adhoc', ['logs']]]),
+      );
+      expect(result.current.incompatibleReferenceVariablesByFilterId).toEqual(
+        new Map([['adhoc', ['logs']]]),
+      );
     });
   });
 });

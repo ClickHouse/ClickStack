@@ -107,7 +107,7 @@ export function reducePromqlSamples(
  * A HyperDX granularity ("5 minute") as a Prometheus step, in seconds. A
  * `minGranularitySeconds` floor only applies when the granularity is `auto`.
  */
-const promqlStepSeconds = (
+export const promqlStepSeconds = (
   granularity: string | undefined,
   dateRange?: [Date, Date],
   minGranularitySeconds?: number,
@@ -132,6 +132,17 @@ export const promqlStep = (
   minGranularitySeconds?: number,
 ): string =>
   `${promqlStepSeconds(granularity, dateRange, minGranularitySeconds)}s`;
+
+/**
+ * A histogram bucket's `le` label as its upper bound. Prometheus writes the
+ * open-ended bucket as `+Inf`, which `Number` and `parseFloat` don't accept.
+ * NaN for a missing or non-numeric label.
+ */
+export function parsePromqlLe(le: string | undefined): number {
+  if (le === '+Inf') return Infinity;
+  if (le == null || le.trim() === '') return NaN;
+  return Number(le);
+}
 
 /**
  * Prometheus' default scrape interval, which `$__rate_interval` assumes when

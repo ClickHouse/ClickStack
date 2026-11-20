@@ -981,6 +981,34 @@ describe('alerts router', () => {
     );
   });
 
+  it('accepts a silence time with a UTC offset', async () => {
+    const dashboard = await agent
+      .post('/dashboards')
+      .send(MOCK_DASHBOARD)
+      .expect(200);
+    const alert = await agent
+      .post('/alerts')
+      .send(
+        makeAlertInput({
+          dashboardId: dashboard.body.id,
+          tileId: dashboard.body.tiles[0].id,
+          webhookId: webhook._id.toString(),
+        }),
+      )
+      .expect(200);
+
+    const until = new Date(Date.now() + 3 * 3600000);
+    await agent
+      .post(`/alerts/${alert.body.data._id}/silenced`)
+      .send({ mutedUntil: until.toISOString().replace('Z', '+02:00') })
+      .expect(200);
+
+    const alertFromDb = await Alert.findById(alert.body.data._id);
+    expect(alertFromDb!.silenced!.until.getTime()).toBe(
+      until.getTime() - 2 * 3600000,
+    );
+  });
+
   it('can unsilence an alert', async () => {
     const dashboard = await agent
       .post('/dashboards')
@@ -1140,6 +1168,68 @@ describe('alerts router', () => {
         }),
       )
       .expect(400);
+  });
+
+  it('rejects creating an alert on a builder table tile', async () => {
+    const tile = makeTile();
+    tile.config = { ...tile.config, displayType: DisplayType.Table };
+    const dashboard = await agent
+      .post('/dashboards')
+      .send({ name: 'Test Dashboard', tiles: [tile], tags: [] })
+      .expect(200);
+
+    const res = await agent
+      .post('/alerts')
+      .send(
+        makeAlertInput({
+          dashboardId: dashboard.body.id,
+          tileId: tile.id,
+          webhookId: webhook._id.toString(),
+        }),
+      )
+      .expect(400);
+    expect(JSON.stringify(res.body)).toContain(
+      'Alerts on dashboard tiles are only supported',
+    );
+  });
+
+  it('rejects creating an alert on a PromQL tile', async () => {
+    const promqlTileId = randomMongoId();
+    const dashboard = await Dashboard.create({
+      name: 'PromQL Dashboard',
+      team: team._id,
+      tiles: [
+        {
+          id: promqlTileId,
+          x: 0,
+          y: 0,
+          w: 6,
+          h: 3,
+          config: {
+            configType: 'promql',
+            name: 'Up',
+            displayType: DisplayType.Line,
+            source: randomMongoId(),
+            promqlExpression: [{ expression: 'up' }],
+          },
+        },
+      ],
+    });
+
+    const res = await agent
+      .post('/alerts')
+      .send(
+        makeAlertInput({
+          dashboardId: dashboard._id.toString(),
+          tileId: promqlTileId,
+          webhookId: webhook._id.toString(),
+        }),
+      )
+      .expect(400);
+    expect(JSON.stringify(res.body)).toContain(
+      'Alerts are not supported on PromQL tiles',
+    );
+    expect(await Alert.countDocuments({ team: team._id })).toBe(0);
   });
 
   it('rejects creating an alert on a raw SQL tile without interval params', async () => {

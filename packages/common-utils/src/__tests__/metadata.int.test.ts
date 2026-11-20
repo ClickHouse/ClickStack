@@ -3,7 +3,7 @@ import { ClickHouseClient } from '@clickhouse/client';
 
 import { ClickhouseClient as HdxClickhouseClient } from '@/clickhouse/node';
 import { supportsMergeTreeTextIndex } from '@/core/clickhouseVersion';
-import { Metadata, MetadataCache } from '@/core/metadata';
+import { Field, Metadata, MetadataCache } from '@/core/metadata';
 import {
   parseKvItemsCastExpression,
   parseKvItemsExpression,
@@ -188,6 +188,38 @@ describe('Metadata Integration Tests', () => {
         expect(resultLogAttributes[0].value).toEqual(
           expect.arrayContaining(['john', 'jack', 'jane']),
         );
+      });
+
+      it('should handle several keys on one Map column', async () => {
+        const result = await metadata.getKeyValues({
+          chartConfig,
+          keys: [
+            "ResourceAttributes['k8s.pod.name']",
+            'SeverityText',
+            "`ResourceAttributes`['env']",
+            "ResourceAttributes['missing']",
+          ],
+          disableRowLimit,
+          source,
+        });
+
+        expect(result).toEqual([
+          {
+            key: "ResourceAttributes['k8s.pod.name']",
+            value: expect.arrayContaining(['pod1', 'pod2']),
+          },
+          {
+            key: 'SeverityText',
+            value: expect.arrayContaining(['info', 'error', 'warning']),
+          },
+          {
+            key: "`ResourceAttributes`['env']",
+            value: expect.arrayContaining(['prod', 'staging']),
+          },
+          { key: "ResourceAttributes['missing']", value: [] },
+        ]);
+        expect(result[0].value).toHaveLength(2);
+        expect(result[2].value).toHaveLength(2);
       });
 
       it('should return an empty list when no keys are provided', async () => {
@@ -697,7 +729,7 @@ describe('Metadata Integration Tests', () => {
             ResourceAttributeItems Array(String) MATERIALIZED
               arrayMap(x -> concat(x.1, '=', x.2), CAST(ResourceAttributes, 'Array(Tuple(String, String))'))
               CODEC(ZSTD(1)),
-            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1
+            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
           )
           ENGINE = MergeTree()
           ORDER BY (Timestamp)
@@ -712,7 +744,7 @@ describe('Metadata Integration Tests', () => {
             LogAttributeItems Array(String) MATERIALIZED
               arrayMap((x) -> concat(x.1, '=', x.2), LogAttributes::Array(Tuple(String, String)))
               CODEC(ZSTD(1)),
-            INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1
+            INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
           )
           ENGINE = MergeTree()
           ORDER BY (Timestamp)
@@ -904,6 +936,41 @@ describe('Metadata Integration Tests', () => {
       expect(podNames).toBeDefined();
       expect(podNames!.value).toEqual(
         expect.arrayContaining([podNameA, podNameB]),
+      );
+    });
+
+    it('keeps the most frequent text index values when maxValuesPerKey truncates the list', async () => {
+      if (!textIndexSupported) {
+        console.warn(
+          'Skipping: ClickHouse < 26.3 does not support mergeTreeTextIndex()',
+        );
+        return;
+      }
+      // The index dictionary is sorted, so 'a-rare' is read first.
+      const freqKey = `freq.${tag}`;
+      const timestamp = testTime.toISOString().replace('T', ' ').slice(0, 23);
+      await client.command({
+        query: `INSERT INTO default.otel_logs (Timestamp, ResourceAttributes)
+          SELECT '${timestamp}', map('${freqKey}', if(number = 0, 'a-rare', 'z-common'))
+          FROM numbers(4)`,
+      });
+
+      const result = await metadata.getAllKeyValues({
+        ...commonArgs,
+        keyExpressions: [
+          `ResourceAttributes['${freqKey}']`,
+          `ResourceAttributes['${mapKey}']`,
+        ],
+        maxValuesPerKey: 1,
+      });
+
+      // UNION ALL branches can arrive in any order.
+      expect(result).toHaveLength(2);
+      expect(result).toEqual(
+        expect.arrayContaining([
+          { key: `ResourceAttributes['${freqKey}']`, value: ['z-common'] },
+          { key: `ResourceAttributes['${mapKey}']`, value: [podNameA] },
+        ]),
       );
     });
 
@@ -1159,14 +1226,17 @@ describe('Metadata Integration Tests', () => {
         clickhouse_settings: { allow_experimental_time_series_table: 1 },
       });
 
+    // Pinned to version 7: from version 8 (the default since ClickHouse 26.10)
+    // min_time/max_time live in a separate time ranges table, and
+    // store_min_time_and_max_time is rejected.
     beforeAll(async () => {
       await timeSeriesCommand(`DROP TABLE IF EXISTS default.${boundedTable}`);
       await timeSeriesCommand(`DROP TABLE IF EXISTS default.${unboundedTable}`);
       await timeSeriesCommand(
-        `CREATE TABLE default.${boundedTable} ENGINE = TimeSeries`,
+        `CREATE TABLE default.${boundedTable} ENGINE = TimeSeries SETTINGS version = 7`,
       );
       await timeSeriesCommand(
-        `CREATE TABLE default.${unboundedTable} ENGINE = TimeSeries SETTINGS store_min_time_and_max_time = 0`,
+        `CREATE TABLE default.${unboundedTable} ENGINE = TimeSeries SETTINGS store_min_time_and_max_time = 0, version = 7`,
       );
     });
 
@@ -1219,7 +1289,7 @@ describe('Metadata Integration Tests', () => {
     });
 
     it.each([
-      ['Metrics', ['metric_family_name', 'type', 'unit', 'help']],
+      ['Metrics', ['metric_family', 'type', 'unit', 'help']],
       ['Data', ['id', 'timestamp', 'value']],
     ] as const)(
       'describes the %s inner table',
@@ -1304,6 +1374,91 @@ describe('Metadata Integration Tests', () => {
       expect(querySpy).toHaveBeenCalledTimes(3);
 
       querySpy.mockRestore();
+    });
+  });
+
+  // The version decides which samples column a query reads (`samples` from
+  // version 3, `time_series` before), so a version read as 0 silently breaks
+  // queries on new tables.
+  describe('getTimeSeriesTableVersion', () => {
+    const defaultTable = 'test_ts_version_default';
+    const v7Table = 'test_ts_version_7';
+
+    const timeSeriesCommand = (query: string) =>
+      client.command({
+        query,
+        clickhouse_settings: { allow_experimental_time_series_table: 1 },
+      });
+
+    const version = (tableName: string) =>
+      new Metadata(hdxClient, new MetadataCache()).getTimeSeriesTableVersion({
+        connectionId: 'test_connection',
+        databaseName: 'default',
+        tableName,
+      });
+
+    beforeAll(async () => {
+      await timeSeriesCommand(
+        `CREATE OR REPLACE TABLE default.${defaultTable} ENGINE = TimeSeries`,
+      );
+      await timeSeriesCommand(
+        `CREATE OR REPLACE TABLE default.${v7Table} ENGINE = TimeSeries SETTINGS version = 7`,
+      );
+    });
+
+    afterAll(async () => {
+      await timeSeriesCommand(`DROP TABLE IF EXISTS default.${defaultTable}`);
+      await timeSeriesCommand(`DROP TABLE IF EXISTS default.${v7Table}`);
+    });
+
+    it('reads the version from the table definition', async () => {
+      expect(await version(defaultTable)).toBe(8);
+      expect(await version(v7Table)).toBe(7);
+    });
+
+    it('answers 0 for a table that does not exist', async () => {
+      expect(await version('test_ts_version_missing')).toBe(0);
+    });
+  });
+
+  describe('getTimeSeriesTables', () => {
+    const database = 'test_ts_discovery';
+
+    const timeSeriesCommand = (query: string) =>
+      client.command({
+        query,
+        clickhouse_settings: { allow_experimental_time_series_table: 1 },
+      });
+
+    beforeAll(async () => {
+      await timeSeriesCommand(`DROP DATABASE IF EXISTS ${database}`);
+      await timeSeriesCommand(`CREATE DATABASE ${database}`);
+      await timeSeriesCommand(
+        `CREATE TABLE ${database}.metrics_ts ENGINE = TimeSeries`,
+      );
+      await timeSeriesCommand(
+        `CREATE TABLE ${database}.custom_ts ENGINE = TimeSeries`,
+      );
+      await timeSeriesCommand(
+        `CREATE TABLE ${database}.not_ts (ts DateTime) ENGINE = MergeTree ORDER BY ts`,
+      );
+    });
+
+    afterAll(async () => {
+      await timeSeriesCommand(`DROP DATABASE IF EXISTS ${database}`);
+    });
+
+    it('lists only TimeSeries tables, without their inner tables', async () => {
+      const metadata = new Metadata(hdxClient, new MetadataCache());
+
+      const tables = await metadata.getTimeSeriesTables({
+        connectionId: 'test_connection',
+      });
+
+      expect(tables.filter(t => t.databaseName === database)).toEqual([
+        { databaseName: database, tableName: 'custom_ts' },
+        { databaseName: database, tableName: 'metrics_ts' },
+      ]);
     });
   });
 
@@ -1412,18 +1567,136 @@ describe('Metadata Integration Tests', () => {
     });
   });
 
+  // Shaped like LogHouse: a two-column timestamp, a date partition, a sort key
+  // led by the namespace, and settings that reject scans which skip either.
+  describe('getAllFields with a condition', () => {
+    const tableName = 'test_all_fields_condition';
+    const tableConnection = {
+      databaseName: 'default',
+      tableName,
+      connectionId: 'test_connection',
+      timestampValueExpression: 'EventTime, EventDate',
+    };
+    const nsACondition = {
+      where: "Namespace = 'ns-a'",
+      whereLanguage: 'sql' as const,
+    };
+    const lastTwoHours = (): [Date, Date] => [
+      new Date(Date.now() - 2 * 60 * 60 * 1000),
+      new Date(),
+    ];
+    const mapKeys = (fields: Field[]) =>
+      fields
+        .filter(({ path }) => path.length === 2 && path[0] === 'LogAttributes')
+        .map(({ path }) => path[1]);
+
+    beforeAll(async () => {
+      await client.command({
+        query: `DROP TABLE IF EXISTS default.${tableName}`,
+      });
+      await client.command({
+        query: `CREATE TABLE default.${tableName} (
+            EventDate Date,
+            EventTime DateTime,
+            Namespace LowCardinality(String),
+            ServiceName LowCardinality(String),
+            LogAttributes Map(String, String)
+          )
+          ENGINE = MergeTree()
+          PARTITION BY EventDate
+          ORDER BY (Namespace, ServiceName)
+        `,
+      });
+
+      const eventTime = new Date(Date.now() - 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 19)
+        .replace('T', ' ');
+      const row = { EventDate: eventTime.slice(0, 10), EventTime: eventTime };
+      await client.insert({
+        table: `default.${tableName}`,
+        values: [
+          {
+            ...row,
+            Namespace: 'ns-a',
+            ServiceName: 'api',
+            LogAttributes: { 'a.key': '1' },
+          },
+          {
+            ...row,
+            Namespace: 'ns-b',
+            ServiceName: 'api',
+            LogAttributes: { 'b.key': '2' },
+          },
+        ],
+        format: 'JSONEachRow',
+      });
+    });
+
+    afterAll(async () => {
+      await client.command({
+        query: `DROP TABLE IF EXISTS default.${tableName}`,
+      });
+    });
+
+    it('reads Map keys only from rows matching a SQL condition', async () => {
+      const metadata = new Metadata(hdxClient, new MetadataCache());
+
+      const fields = await metadata.getAllFields({
+        ...tableConnection,
+        dateRange: lastTwoHours(),
+        condition: nsACondition,
+      });
+
+      expect(mapKeys(fields)).toEqual(['a.key']);
+    });
+
+    it('reads Map keys only from rows matching a Lucene condition', async () => {
+      const metadata = new Metadata(hdxClient, new MetadataCache());
+
+      const fields = await metadata.getAllFields({
+        ...tableConnection,
+        dateRange: lastTwoHours(),
+        condition: { where: 'Namespace:"ns-b"', whereLanguage: 'lucene' },
+      });
+
+      expect(mapKeys(fields)).toEqual(['b.key']);
+    });
+
+    it('lets a condition on the sort key pass force_primary_key, which rejects the unscoped scan', async () => {
+      const metadata = new Metadata(hdxClient, new MetadataCache(), {
+        force_primary_key: 1,
+        force_index_by_date: 1,
+      });
+
+      await expect(
+        metadata.getAllFields({
+          ...tableConnection,
+          dateRange: lastTwoHours(),
+        }),
+      ).rejects.toThrow(/INDEX_NOT_USED|force_primary_key/);
+
+      const fields = await metadata.getAllFields({
+        ...tableConnection,
+        dateRange: lastTwoHours(),
+        condition: nsACondition,
+      });
+      expect(mapKeys(fields)).toEqual(['a.key']);
+    });
+  });
+
   describe.each([
     {
       path: 'key',
       tableName: 'test_map_keys_key_text_index_order',
-      indexDefinition: `INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array') GRANULARITY 1`,
+      indexDefinition: `INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1`,
     },
     {
       path: 'kv',
       tableName: 'test_map_keys_kv_text_index_order',
       indexDefinition: `LogAttributeItems Array(String) MATERIALIZED
           arrayMap(x -> concat(x.1, '=', x.2), CAST(LogAttributes, 'Array(Tuple(String, String))')),
-        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1`,
+        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1`,
     },
   ])(
     'getMapKeys - $path text index ordering',
@@ -1513,4 +1786,92 @@ describe('Metadata Integration Tests', () => {
       });
     },
   );
+
+  describe('getAllKeyValues - values repeated across parts', () => {
+    // mergeTreeTextIndex returns one row per part and token, so a token cap
+    // stops before the later parts' values. Each part holds the same SHARED
+    // values plus OWN values no other part has.
+    const tableName = 'test_text_index_values_across_parts';
+    const PARTS = 25;
+    const SHARED = 1000;
+    const OWN = 100;
+    const dateRange = (): [Date, Date] => [
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 1000),
+    ];
+    let textIndexSupported = false;
+
+    beforeAll(async () => {
+      const probe = new Metadata(hdxClient, new MetadataCache());
+      textIndexSupported = supportsMergeTreeTextIndex(
+        await probe.getServerVersion({ connectionId: 'test_connection' }),
+      );
+      if (!textIndexSupported) return;
+
+      await client.command({
+        query: `CREATE OR REPLACE TABLE default.${tableName} (
+            Timestamp DateTime64(9),
+            ResourceAttributes Map(LowCardinality(String), String),
+            ResourceAttributeItems Array(String) MATERIALIZED
+              arrayMap(x -> concat(x.1, '=', x.2), CAST(ResourceAttributes, 'Array(Tuple(String, String))')),
+            Tags Array(String),
+            INDEX idx_res_attr_items ResourceAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1,
+            INDEX idx_tags Tags TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
+          )
+          ENGINE = MergeTree()
+          PARTITION BY toDate(Timestamp)
+          ORDER BY Timestamp
+        `,
+      });
+      await client.command({
+        query: `SYSTEM STOP MERGES default.${tableName}`,
+      });
+      for (let i = 0; i < PARTS; i++) {
+        await client.command({
+          query: `INSERT INTO default.${tableName} (Timestamp, ResourceAttributes, Tags)
+            SELECT now64(9) - INTERVAL 10 MINUTE, map('pod', v), [v]
+            FROM (
+              SELECT if(number < ${SHARED}, concat('shared-', toString(number)), concat('own-${i}-', toString(number))) AS v
+              FROM numbers(${SHARED + OWN})
+            )`,
+        });
+      }
+    });
+
+    afterAll(async () => {
+      await client.command({
+        query: `DROP TABLE IF EXISTS default.${tableName}`,
+      });
+    });
+
+    it.each([
+      ['Map key=value', "ResourceAttributes['pod']"],
+      ['plain-column', 'Tags'],
+    ])(
+      'returns every distinct value from the %s text index for "Load more"',
+      async (_, keyExpression) => {
+        if (!textIndexSupported) {
+          console.warn(
+            'Skipping: ClickHouse < 26.3 does not support mergeTreeTextIndex()',
+          );
+          return;
+        }
+
+        // "Load more" passes null: every part, no token cap.
+        const metadata = new Metadata(hdxClient, new MetadataCache());
+        const result = await metadata.getAllKeyValues({
+          databaseName: 'default',
+          tableName,
+          keyExpressions: [keyExpression],
+          maxValuesPerKey: 10000,
+          mapKeyIndexMaxParts: null,
+          connectionId: 'test_connection',
+          dateRange: dateRange(),
+          timestampValueExpression: 'Timestamp',
+        });
+        expect(result).toHaveLength(1);
+        expect(result[0].value).toHaveLength(SHARED + OWN * PARTS);
+      },
+    );
+  });
 });

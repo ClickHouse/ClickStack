@@ -6,6 +6,7 @@ import {
   cleanedFacetName,
   FilterGroup,
   type FilterGroupProps,
+  getFilterGroupDefaultExpanded,
 } from '@/components/DBSearchPageFilters';
 import { NestedFilterGroup } from '@/components/DBSearchPageFilters/NestedFilterGroup';
 import {
@@ -49,17 +50,35 @@ describe('cleanClickHouseExpression', () => {
   });
 });
 
+// jsdom has no layout, so the real virtualizer in NestedFilterGroup renders no
+// rows. Render every row as if visible.
+jest.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 26,
+      })),
+    getTotalSize: () => count * 26,
+    measureElement: () => {},
+  }),
+}));
+
 jest.mock('@/hooks/useMetadata', () => ({
   useGetValuesDistribution: jest
     .fn()
     .mockReturnValue({ data: undefined, isFetching: false, error: undefined }),
 }));
 
-const mockDistribution = (data: Map<string, number>) =>
+const mockDistribution = (
+  data: Map<string, number> | undefined,
+  error: Error | null = null,
+) =>
   jest.mocked(useGetValuesDistribution).mockReturnValue({
     data,
     isFetching: false,
-    error: null,
+    error,
   } as UseQueryResult<Map<string, number>>);
 
 describe('cleanedFacetName', () => {
@@ -416,6 +435,50 @@ describe('FilterGroup', () => {
       dateRange: [new Date('2024-01-01'), new Date('2024-01-02')],
     },
   };
+
+  it('shows a loader instead of the value count while values load', () => {
+    renderWithMantine(
+      <FilterGroup
+        {...defaultProps}
+        options={[]}
+        optionsLoading
+        showFilterCounts
+      />,
+    );
+
+    expect(
+      screen.getByTestId('filter-values-loading-Test Filter'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('(0)')).not.toBeInTheDocument();
+  });
+
+  it('keeps the applied filter count while values load', () => {
+    renderWithMantine(
+      <FilterGroup
+        {...defaultProps}
+        optionsLoading
+        showFilterCounts
+        selectedValues={{
+          included: new Set(['apple']),
+          excluded: new Set(),
+        }}
+      />,
+    );
+
+    expect(screen.getByText('(1)')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('filter-values-loading-Test Filter'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the value count once values have loaded', () => {
+    renderWithMantine(<FilterGroup {...defaultProps} showFilterCounts />);
+
+    expect(screen.getByText('(3)')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('filter-values-loading-Test Filter'),
+    ).not.toBeInTheDocument();
+  });
 
   it('should sort options alphabetically by default', () => {
     renderWithMantine(<FilterGroup {...defaultProps} />);
@@ -783,7 +846,7 @@ describe('FilterGroup', () => {
     expect(screen.getAllByTestId(/filter-checkbox-.+-input/)).toHaveLength(3);
   });
 
-  // https://github.com/hyperdxio/hyperdx/issues/2576 — an empty map attribute
+  // https://github.com/ClickHouse/ClickStack/issues/2576 — an empty map attribute
   // key (e.g. LogAttributes['']) yields an empty name, which Mantine rejects
   // as an Accordion.Item value and crashes the filter panel.
   it('should render a placeholder instead of crashing when name is empty', () => {
@@ -849,5 +912,298 @@ describe('NestedFilterGroup', () => {
     // Reopen the group — should not be stuck closed
     await userEvent.click(control);
     expect(panel).toHaveAttribute('aria-hidden', 'false');
+  });
+
+  const manyChildFilters = [
+    'service.name',
+    'service.version',
+    'host.name',
+    'host.arch',
+    'k8s.pod.name',
+    'k8s.namespace.name',
+  ].map(propertyPath => ({
+    key: `ResourceAttributes['${propertyPath}']`,
+    value: ['val'],
+    propertyPath,
+  }));
+
+  it('should not show the key search when there are few keys', () => {
+    renderWithMantine(
+      <NestedFilterGroup {...defaultNestedProps} isDefaultExpanded={true} />,
+    );
+
+    expect(screen.queryByPlaceholderText('Search keys...')).toBeNull();
+  });
+
+  it('should filter keys when searching', async () => {
+    renderWithMantine(
+      <NestedFilterGroup
+        {...defaultNestedProps}
+        childFilters={manyChildFilters}
+        isDefaultExpanded={true}
+      />,
+    );
+
+    await userEvent.type(screen.getByPlaceholderText('Search keys...'), 'K8S');
+
+    expect(screen.getByText('k8s.pod.name')).toBeInTheDocument();
+    expect(screen.getByText('k8s.namespace.name')).toBeInTheDocument();
+    expect(screen.queryByText('service.name')).toBeNull();
+    expect(screen.queryByText('host.name')).toBeNull();
+  });
+
+  it('should keep a child expanded after its row unmounts and remounts', async () => {
+    renderWithMantine(
+      <NestedFilterGroup
+        {...defaultNestedProps}
+        childFilters={manyChildFilters}
+        isDefaultExpanded={true}
+      />,
+    );
+    const childTestId = `nested-filter-group-${manyChildFilters[0].key}`;
+    const child = () => within(screen.getByTestId(childTestId));
+
+    await userEvent.click(child().getByTestId('filter-group-control'));
+    expect(child().getByTestId('filter-group-panel')).toHaveAttribute(
+      'aria-hidden',
+      'false',
+    );
+
+    // Filtering the row out unmounts it, like scrolling it out of view
+    const search = screen.getByPlaceholderText('Search keys...');
+    await userEvent.type(search, 'k8s');
+    expect(screen.queryByTestId(childTestId)).toBeNull();
+    await userEvent.clear(search);
+
+    expect(child().getByTestId('filter-group-panel')).toHaveAttribute(
+      'aria-hidden',
+      'false',
+    );
+  });
+
+  it('should keep a child with selections collapsed after its row unmounts and remounts', async () => {
+    const { key } = manyChildFilters[0];
+    renderWithMantine(
+      <NestedFilterGroup
+        {...defaultNestedProps}
+        childFilters={manyChildFilters}
+        selectedValues={{
+          [key]: { included: new Set(['val']), excluded: new Set() },
+        }}
+        isDefaultExpanded={true}
+      />,
+    );
+    const childTestId = `nested-filter-group-${key}`;
+    const child = () => within(screen.getByTestId(childTestId));
+    expect(child().getByTestId('filter-group-panel')).toHaveAttribute(
+      'aria-hidden',
+      'false',
+    );
+
+    await userEvent.click(child().getByTestId('filter-group-control'));
+    expect(child().getByTestId('filter-group-panel')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+
+    const search = screen.getByPlaceholderText('Search keys...');
+    await userEvent.type(search, 'k8s');
+    expect(screen.queryByTestId(childTestId)).toBeNull();
+    await userEvent.clear(search);
+
+    expect(child().getByTestId('filter-group-panel')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+  });
+
+  it('should keep distributions on after a row unmounts and remounts', async () => {
+    renderWithMantine(
+      <NestedFilterGroup
+        {...defaultNestedProps}
+        childFilters={manyChildFilters}
+        isDefaultExpanded={true}
+      />,
+    );
+    const toggleTestId = `toggle-distribution-button-${manyChildFilters[0].propertyPath}`;
+
+    await userEvent.click(screen.getByTestId(toggleTestId));
+    expect(screen.getByTestId(toggleTestId)).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+
+    const search = screen.getByPlaceholderText('Search keys...');
+    await userEvent.type(search, 'k8s');
+    expect(screen.queryByTestId(toggleTestId)).toBeNull();
+    await userEvent.clear(search);
+
+    expect(screen.getByTestId(toggleTestId)).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+  });
+
+  it('should turn distributions off and notify once when they fail to load', async () => {
+    mockDistribution(undefined, new Error('boom'));
+    renderWithMantine(
+      <NestedFilterGroup
+        {...defaultNestedProps}
+        childFilters={manyChildFilters}
+        isDefaultExpanded={true}
+      />,
+    );
+    const toggleTestId = `toggle-distribution-button-${manyChildFilters[0].propertyPath}`;
+
+    await userEvent.click(screen.getByTestId(toggleTestId));
+
+    expect(screen.getByTestId(toggleTestId)).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+    expect(
+      await screen.findAllByText('Error loading filter distribution'),
+    ).toHaveLength(1);
+    mockDistribution(undefined);
+  });
+
+  it('should expand a collapsed child when a filter for it is added elsewhere', async () => {
+    const props = {
+      ...defaultNestedProps,
+      childFilters: manyChildFilters,
+      isDefaultExpanded: true,
+    };
+    const { rerender } = renderWithMantine(<NestedFilterGroup {...props} />);
+    const { key } = manyChildFilters[0];
+    const child = () =>
+      within(screen.getByTestId(`nested-filter-group-${key}`));
+
+    await userEvent.click(child().getByTestId('filter-group-control'));
+    await userEvent.click(child().getByTestId('filter-group-control'));
+    expect(child().getByTestId('filter-group-panel')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+
+    rerender(
+      <TestProviders>
+        <NestedFilterGroup
+          {...props}
+          selectedValues={{
+            [key]: { included: new Set(['val']), excluded: new Set() },
+          }}
+        />
+      </TestProviders>,
+    );
+
+    expect(child().getByTestId('filter-group-panel')).toHaveAttribute(
+      'aria-hidden',
+      'false',
+    );
+  });
+
+  it('should keep a child expanded when its filter is removed', () => {
+    const props = {
+      ...defaultNestedProps,
+      childFilters: manyChildFilters,
+      isDefaultExpanded: true,
+    };
+    const { key } = manyChildFilters[0];
+    const { rerender } = renderWithMantine(
+      <NestedFilterGroup
+        {...props}
+        selectedValues={{
+          [key]: { included: new Set(['val']), excluded: new Set() },
+        }}
+      />,
+    );
+    const panel = () =>
+      within(screen.getByTestId(`nested-filter-group-${key}`)).getByTestId(
+        'filter-group-panel',
+      );
+    expect(panel()).toHaveAttribute('aria-hidden', 'false');
+
+    rerender(
+      <TestProviders>
+        <NestedFilterGroup {...props} />
+      </TestProviders>,
+    );
+
+    expect(panel()).toHaveAttribute('aria-hidden', 'false');
+  });
+
+  it('should show an empty state when no keys match', async () => {
+    renderWithMantine(
+      <NestedFilterGroup
+        {...defaultNestedProps}
+        childFilters={manyChildFilters}
+        isDefaultExpanded={true}
+      />,
+    );
+
+    await userEvent.type(
+      screen.getByPlaceholderText('Search keys...'),
+      'nonexistent',
+    );
+
+    expect(screen.getByText('No properties found')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search keys...')).toBeInTheDocument();
+  });
+});
+
+describe('getFilterGroupDefaultExpanded', () => {
+  const base = {
+    hasSelection: false,
+    isPinned: false,
+    isCollapsed: false,
+    isPrimary: false,
+  };
+
+  it('opens a pinned field by default', () => {
+    expect(getFilterGroupDefaultExpanded({ ...base, isPinned: true })).toBe(
+      true,
+    );
+  });
+
+  it('keeps a pinned field the user collapsed closed', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('still opens a collapsed pinned field that has an active filter', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+        hasSelection: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps it closed in the Shared Filters section, which forces groups open', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isPinned: true,
+        isCollapsed: true,
+        forceExpanded: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('ignores a stale collapsed entry once the field is no longer pinned', () => {
+    expect(
+      getFilterGroupDefaultExpanded({
+        ...base,
+        isCollapsed: true,
+        isPrimary: true,
+      }),
+    ).toBe(true);
   });
 });

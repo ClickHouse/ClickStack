@@ -4,20 +4,40 @@ import {
   getFilterBroadcastTarget,
   getFilterVariableName,
   getPendingFilterValuesVariables,
+  isAdhocFilter,
+  isDataSourceFilter,
   isFilterGlobalRequirement,
+  isFilterReferenceableVariable,
   isFilterRequired,
-  isFilterVariableEnabled,
   isQueryExpressionFilter,
+  isReferenceVariableFilter,
+  isSqlQueryFilter,
   isStaticListFilter,
 } from '@hyperdx/common-utils/dist/filters';
+import { ReferenceVariableValues } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
+  AdhocFilterCondition,
+  BroadcastFilter,
   ChartVariable,
   DashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
-import { Group, Stack, Text, Tooltip } from '@mantine/core';
-import { IconAlertTriangle, IconHelp, IconRefresh } from '@tabler/icons-react';
+import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
+import { Group, Stack, Text } from '@mantine/core';
+import { IconRefresh } from '@tabler/icons-react';
 
+import { AdhocDashboardFilter } from './components/AdhocDashboardFilter/AdhocDashboardFilter';
+import {
+  DashboardFilterLabel,
+  FilterCaution,
+  FilterEffect,
+  getIncompatibleVariablesTooltip,
+  getPendingVariablesTooltip,
+} from './components/DashboardFilterLabel';
 import { FilterLinkToggle } from './components/FilterLinkToggle';
+import {
+  ConnectionDashboardFilter,
+  DataSourceDashboardFilter,
+} from './components/ReferenceVariableDashboardFilter';
 import { VirtualMultiSelect } from './components/VirtualMultiSelect/VirtualMultiSelect';
 import { useDashboardFilterValues } from './hooks/useDashboardFilterValues';
 
@@ -38,20 +58,6 @@ interface DashboardFilterSelectProps {
 }
 
 /**
- * Explain a dropdown query that may list nothing until one of the variables it
- * depends on is selected. Only the bare SQL reference form gets here — the
- * macros and Lucene both have an empty state that lists every value.
- */
-export const getPendingVariablesTooltip = (
-  pendingVariables: string[],
-): string => {
-  const names = pendingVariables.map(name => `$${name}`).join(', ');
-  return `Filter depends on ${names}, which ${
-    pendingVariables.length === 1 ? 'has' : 'have'
-  } no selected value.`;
-};
-
-/**
  * Explain a required filter that has nothing selected, naming how far the block
  * it imposes reaches.
  */
@@ -64,9 +70,7 @@ export const getRequiredFilterTooltip = (filter: DashboardFilter): string =>
  * Describe what a filter does with the value you pick: broadcast it as a
  * condition, expose it as a variable, both, or neither.
  */
-export const getFilterEffect = (
-  filter: DashboardFilter,
-): { hasEffect: boolean; tooltip: string } => {
+export const getFilterEffect = (filter: DashboardFilter): FilterEffect => {
   const parts: string[] = [];
 
   const broadcast = getFilterBroadcastTarget(filter);
@@ -79,7 +83,7 @@ export const getFilterEffect = (
     );
   }
 
-  const variableName = isFilterVariableEnabled(filter)
+  const variableName = isFilterReferenceableVariable(filter)
     ? getFilterVariableName(filter)
     : undefined;
   if (variableName) {
@@ -98,25 +102,6 @@ export const getFilterEffect = (
   return { hasEffect: true, tooltip: parts.join(', ') };
 };
 
-/** One of the caution icons a filter's label row can carry, with its tooltip. */
-const FilterCaution = ({
-  label,
-  testId,
-  variant = 'warning',
-}: {
-  label: string;
-  testId: string;
-  variant?: 'warning' | 'danger';
-}) => (
-  <Tooltip label={label} withinPortal multiline maw={400}>
-    <IconAlertTriangle
-      size={12}
-      color={`var(--color-text-${variant})`}
-      data-testid={testId}
-    />
-  </Tooltip>
-);
-
 const DashboardFilterSelect = ({
   filter,
   onChange,
@@ -133,25 +118,7 @@ const DashboardFilterSelect = ({
 
   return (
     <Stack gap={2}>
-      <Group gap={4} align="center" wrap="nowrap">
-        <Text size="xs" c="dimmed">
-          {filter.name}
-        </Text>
-        <Tooltip label={effect.tooltip} withinPortal>
-          {effect.hasEffect ? (
-            <IconHelp
-              size={12}
-              color="var(--color-text-muted)"
-              data-testid={`dashboard-filter-help-${filter.name}`}
-            />
-          ) : (
-            <IconAlertTriangle
-              size={12}
-              color="var(--color-text-warning)"
-              data-testid={`dashboard-filter-no-effect-${filter.name}`}
-            />
-          )}
-        </Tooltip>
+      <DashboardFilterLabel name={filter.name} effect={effect}>
         {isMissingRequiredValue && (
           <FilterCaution
             label={getRequiredFilterTooltip(filter)}
@@ -174,7 +141,7 @@ const DashboardFilterSelect = ({
             variant="danger"
           />
         )}
-      </Group>
+      </DashboardFilterLabel>
       <div style={{ width: 250 }}>
         <VirtualMultiSelect
           placeholder={value.length === 0 ? filter.name : undefined}
@@ -184,8 +151,10 @@ const DashboardFilterSelect = ({
           // so a completed/empty/failed query stays interactive and the user can
           // still clear or adjust the selection.
           loading={isLoading}
-          // A static list renders in the order its author wrote it.
-          sort={!isStaticListFilter(filter)}
+          // A static list renders in the order its author wrote it, and a SQL
+          // query filter in the order its query returns.
+          sort={!isStaticListFilter(filter) && !isSqlQueryFilter(filter)}
+          isMultiSelect={!isFilterSingleSelect(filter)}
           onChange={onChange}
           data-testid={`dashboard-filter-select-${filter.name}`}
         />
@@ -201,6 +170,11 @@ interface DashboardFilterProps {
   filters: DashboardFilter[];
   selectionByFilterId: ReadonlyMap<string, FilterSelection>;
   onSetFilterValue: (filterId: string, values: string[]) => void;
+  adhocConditionsByFilterId?: ReadonlyMap<string, AdhocFilterCondition[]>;
+  onSetAdhocConditions?: (
+    filterId: string,
+    conditions: AdhocFilterCondition[],
+  ) => void;
   dateRange: [Date, Date];
   /**
    * The dashboard's variables and their current selections. Defined only when
@@ -208,6 +182,20 @@ interface DashboardFilterProps {
    * as the gate for variable-specific copy.
    */
   variables?: ChartVariable[];
+  /** Required filters with nothing selected, which can block ad hoc filters. */
+  unsatisfiedRequiredFilters?: DashboardFilter[];
+  /** The selected ID of each data source and connection variable, by name. */
+  referenceVariableValues?: ReferenceVariableValues;
+  /**
+   * The reference variables each filter's fields reference that leave it
+   * nothing to query, by filter ID. `filters` are otherwise expected with
+   * their references resolved.
+   */
+  unresolvedReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
+  /** The subset of those selecting a source the filter can't use. */
+  incompatibleReferenceVariablesByFilterId?: ReadonlyMap<string, string[]>;
+  /** The filter selections that broadcast to a source, for `$__filters` */
+  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
 }
 
 const DashboardFilters = ({
@@ -215,7 +203,14 @@ const DashboardFilters = ({
   dateRange,
   selectionByFilterId,
   onSetFilterValue,
+  adhocConditionsByFilterId,
+  onSetAdhocConditions,
   variables,
+  unsatisfiedRequiredFilters,
+  referenceVariableValues,
+  unresolvedReferenceVariablesByFilterId,
+  incompatibleReferenceVariablesByFilterId,
+  getDashboardFilters,
 }: DashboardFilterProps) => {
   // "Link" mode (opt-in, off by default): each dropdown's values are narrowed by
   // the others' selections. Off by default because contingent value lookups
@@ -223,15 +218,25 @@ const DashboardFilters = ({
   // on, all of a source's facets are computed in a single groupUniqArrayIf scan.
   const [linked, setLinked] = useState(false);
 
+  // A filter whose data source variable has no selection has nothing to query yet
+  const queryableFilters = useMemo(
+    () =>
+      filters.filter(
+        filter => !unresolvedReferenceVariablesByFilterId?.has(filter.id),
+      ),
+    [filters, unresolvedReferenceVariablesByFilterId],
+  );
+
   const {
     data: filterValuesById,
     erroredFilterIds,
     filterErrorMessages,
     isFetching,
   } = useDashboardFilterValues({
-    filters,
+    filters: queryableFilters,
     dateRange,
     variables,
+    getDashboardFilters,
     // Only narrow by sibling selections when linked.
     selectionByFilterId: linked ? selectionByFilterId : EMPTY_SELECTIONS,
   });
@@ -246,6 +251,57 @@ const DashboardFilters = ({
   return (
     <Group align="start">
       {filters.map(filter => {
+        const incompatibleVariables =
+          incompatibleReferenceVariablesByFilterId?.get(filter.id) ?? [];
+        const unresolvedVariables =
+          unresolvedReferenceVariablesByFilterId?.get(filter.id) ?? [];
+        // Variables with no selection yet, as opposed to an unusable one
+        const unselectedVariables = unresolvedVariables.filter(
+          name => !incompatibleVariables.includes(name),
+        );
+        if (isReferenceVariableFilter(filter)) {
+          const referenceProps = {
+            value: referenceVariableValues?.get(
+              getFilterVariableName(filter) ?? '',
+            ),
+            onChange: (value: string | undefined) =>
+              onSetFilterValue(filter.id, value ? [value] : []),
+            effect: getFilterEffect(filter),
+            requiredTooltip: getRequiredFilterTooltip(filter),
+          };
+          return isDataSourceFilter(filter) ? (
+            <DataSourceDashboardFilter
+              key={filter.id}
+              filter={filter}
+              pendingVariables={unresolvedVariables}
+              {...referenceProps}
+            />
+          ) : (
+            <ConnectionDashboardFilter
+              key={filter.id}
+              filter={filter}
+              {...referenceProps}
+            />
+          );
+        }
+        if (isAdhocFilter(filter)) {
+          return (
+            <AdhocDashboardFilter
+              key={filter.id}
+              filter={filter}
+              conditions={adhocConditionsByFilterId?.get(filter.id) ?? []}
+              onChange={conditions =>
+                onSetAdhocConditions?.(filter.id, conditions)
+              }
+              dateRange={dateRange}
+              effect={getFilterEffect(filter)}
+              variables={variables}
+              unsatisfiedRequiredFilters={unsatisfiedRequiredFilters}
+              unresolvedVariables={unresolvedVariables}
+              incompatibleVariables={incompatibleVariables}
+            />
+          );
+        }
         const queriedFilterValues = filterValuesById?.get(filter.id);
         const included = selectionByFilterId.get(filter.id)?.included;
         const selectedValues = included
@@ -254,21 +310,37 @@ const DashboardFilters = ({
         // Fall back to the hook-level fetching state only until this filter's
         // query has produced an entry; once it has (even with empty values),
         // honor its own loading flag.
-        const isLoadingValues = queriedFilterValues
-          ? queriedFilterValues.isLoading
-          : isFetching;
-        // Only a queried dropdown has a values query that can await a
-        // variable's selection.
-        const pendingVariables = isQueryExpressionFilter(filter)
-          ? getPendingFilterValuesVariables(filter, variables)
-          : undefined;
+        const isLoadingValues =
+          unresolvedVariables.length === 0 &&
+          (queriedFilterValues ? queriedFilterValues.isLoading : isFetching);
+        // Only queried and SQL query dropdowns have a values query that can
+        // await a variable's selection, besides any data source variable it
+        // reads from.
+        const pendingVariables = [
+          ...unselectedVariables,
+          ...(isQueryExpressionFilter(filter)
+            ? getPendingFilterValuesVariables(filter, variables)
+            : isSqlQueryFilter(filter)
+              ? getPendingFilterValuesVariables(
+                  { where: filter.sqlTemplate, whereLanguage: 'sql' },
+                  variables,
+                )
+              : []),
+        ];
         return (
           <DashboardFilterSelect
             key={filter.id}
             filter={filter}
             isLoading={isLoadingValues}
-            isError={erroredFilterIds?.has(filter.id) ?? false}
-            errorMessage={filterErrorMessages?.get(filter.id)}
+            isError={
+              incompatibleVariables.length > 0 ||
+              (erroredFilterIds?.has(filter.id) ?? false)
+            }
+            errorMessage={
+              incompatibleVariables.length > 0
+                ? getIncompatibleVariablesTooltip(incompatibleVariables)
+                : filterErrorMessages?.get(filter.id)
+            }
             pendingVariables={pendingVariables}
             onChange={values => onSetFilterValue(filter.id, values)}
             values={queriedFilterValues?.values}

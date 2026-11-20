@@ -1,4 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useState,
+} from 'react';
 import cx from 'classnames';
 import {
   TableMetadata,
@@ -27,27 +34,26 @@ import {
   Stack,
   Tabs,
   Text,
-  TextInput,
   Tooltip,
   UnstyledButton,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowBarToLeft,
   IconChartBar,
   IconChartBarOff,
   IconChevronDown,
   IconChevronRight,
   IconChevronUp,
   IconFilterOff,
+  IconLayoutSidebarLeftCollapse,
   IconMinus,
   IconPlus,
   IconRefresh,
-  IconSearch,
   IconShadow,
   IconSitemap,
 } from '@tabler/icons-react';
 
+import api from '@/api';
 import { IS_CLICKHOUSE_BUILD } from '@/config';
 import {
   useColumns,
@@ -60,11 +66,16 @@ import { usePinnedFiltersApi } from '@/pinnedFilters';
 import {
   FilterStateHook,
   IS_ROOT_SPAN_COLUMN_NAME,
+  useCollapsedPinnedFields,
   usePinnedFilters,
 } from '@/searchFilters';
 import { useSource } from '@/source';
 import { isColumnInSelect, useLocalStorage } from '@/utils';
 
+import {
+  FILTER_SEARCH_MIN_ITEMS,
+  FilterSearchInput,
+} from './DBSearchPageFilters/FilterSearchInput';
 import { FilterSettingsPanel } from './DBSearchPageFilters/FilterSettingsPopover';
 import { useFetchFacets } from './DBSearchPageFilters/hooks';
 import { NestedFilterGroup } from './DBSearchPageFilters/NestedFilterGroup';
@@ -74,8 +85,10 @@ import {
 } from './DBSearchPageFilters/PinShareMenu';
 import { SharedFiltersSection } from './DBSearchPageFilters/SharedFilters';
 import {
+  type FacetEntry,
   getFilterStateEntry,
   groupFacetsByBaseName,
+  sortNestedFacetKeys,
   toQuotedClickHouseKeyExpression,
 } from './DBSearchPageFilters/utils';
 
@@ -411,6 +424,10 @@ export type FilterGroupProps = {
   loadMoreLoading: boolean;
   hasLoadedMore: boolean;
   isDefaultExpanded?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  showDistributions?: boolean;
+  onShowDistributionsChange?: (show: boolean) => void;
   showFilterCounts?: boolean;
   'data-testid'?: string;
   chartConfig: BuilderChartConfigWithDateRange;
@@ -515,6 +532,8 @@ const FilterGroupBody = ({
     onFetchingDistributionChange(isFetchingDistribution);
   }, [isFetchingDistribution, onFetchingDistributionChange]);
 
+  // onDistributionError isn't stable; re-running on it would notify again
+  const handleDistributionError = useEffectEvent(onDistributionError);
   useEffect(() => {
     if (distributionError) {
       notifications.show({
@@ -523,9 +542,9 @@ const FilterGroupBody = ({
         message: distributionError?.message,
         autoClose: 5000,
       });
-      onDistributionError();
+      handleDistributionError();
     }
-  }, [distributionError, onDistributionError]);
+  }, [distributionError]);
 
   const totalAppliedFiltersSize =
     selectedValues.included.size +
@@ -667,23 +686,13 @@ const FilterGroupBody = ({
 
   return (
     <Stack gap={0}>
-      {augmentedOptions.length > 5 && (
-        <div className="px-2 pb-2">
-          <TextInput
-            size="xs"
-            placeholder="Search values..."
-            value={search}
-            data-testid={`filter-search-${name}`}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-              handleSetSearch(event.currentTarget.value)
-            }
-            rightSectionWidth={20}
-            rightSection={<IconSearch size={12} stroke={2} />}
-            classNames={{
-              input: 'ps-0.5',
-            }}
-          />
-        </div>
+      {augmentedOptions.length > FILTER_SEARCH_MIN_ITEMS && (
+        <FilterSearchInput
+          placeholder="Search values..."
+          value={search}
+          data-testid={`filter-search-${name}`}
+          onChange={handleSetSearch}
+        />
       )}
       {displayedOptions.map(option => (
         <FilterCheckbox
@@ -911,6 +920,31 @@ function FilterGroupActions({
 
 const voidFunc = () => {};
 
+/**
+ * Whether a filter group opens on load. A pinned field the user collapsed
+ * stays collapsed unless it has an active filter. That persisted collapse
+ * intentionally takes precedence over a section-level `forceExpanded`
+ * (the Shared Filters section).
+ */
+export function getFilterGroupDefaultExpanded({
+  hasSelection,
+  isPinned,
+  isCollapsed,
+  isPrimary,
+  forceExpanded,
+}: {
+  hasSelection: boolean;
+  isPinned: boolean;
+  isCollapsed: boolean;
+  isPrimary: boolean;
+  forceExpanded?: boolean;
+}): boolean {
+  if (isPinned && isCollapsed && !hasSelection) {
+    return false;
+  }
+  return forceExpanded ?? (isPrimary || isPinned || hasSelection);
+}
+
 export const FilterGroup = ({
   name,
   options,
@@ -928,6 +962,10 @@ export const FilterGroup = ({
   loadMoreLoading,
   hasLoadedMore,
   isDefaultExpanded,
+  expanded,
+  onExpandedChange,
+  showDistributions: _showDistributions,
+  onShowDistributionsChange,
   showFilterCounts,
   'data-testid': dataTestId,
   chartConfig,
@@ -935,8 +973,21 @@ export const FilterGroup = ({
   distributionKey,
   onRangeChange,
 }: FilterGroupProps) => {
-  const [isExpanded, setExpanded] = useState(isDefaultExpanded ?? false);
-  const [showDistributions, setShowDistributions] = useState(false);
+  const [uncontrolledExpanded, setUncontrolledExpanded] = useState(
+    isDefaultExpanded ?? false,
+  );
+  const isExpanded = expanded ?? uncontrolledExpanded;
+  const setExpanded = (value: boolean) => {
+    setUncontrolledExpanded(value);
+    onExpandedChange?.(value);
+  };
+  const [uncontrolledShowDistributions, setUncontrolledShowDistributions] =
+    useState(false);
+  const showDistributions = _showDistributions ?? uncontrolledShowDistributions;
+  const setShowDistributions = (value: boolean) => {
+    setUncontrolledShowDistributions(value);
+    onShowDistributionsChange?.(value);
+  };
   const [isFetchingDistribution, setIsFetchingDistribution] = useState(false);
 
   const selectedValues: SelectedValues = useMemo(
@@ -946,22 +997,16 @@ export const FilterGroup = ({
 
   const hasRange = selectedValues.range != null;
 
-  const toggleShowDistributions = useCallback(() => {
-    setShowDistributions(prev => {
-      if (!prev) {
-        setExpanded(true);
-      }
-      return !prev;
-    });
-  }, []);
+  const toggleShowDistributions = () => {
+    if (!showDistributions) setExpanded(true);
+    setShowDistributions(!showDistributions);
+  };
 
-  const onDistributionError = useCallback(() => {
-    setShowDistributions(false);
-  }, []);
+  const onDistributionError = () => setShowDistributions(false);
 
   useEffect(() => {
     if (isDefaultExpanded) {
-      setExpanded(true);
+      setUncontrolledExpanded(true);
     }
   }, [isDefaultExpanded]);
 
@@ -1000,7 +1045,7 @@ export const FilterGroup = ({
                 chevron: 'm-0',
                 label: 'p-0',
               }}
-              className={hasOptions ? '' : 'opacity-50'}
+              className={hasOptions || optionsLoading ? '' : 'opacity-50'}
             >
               <Tooltip
                 openDelay={displayName.length > 26 ? 0 : 1500}
@@ -1012,12 +1057,21 @@ export const FilterGroup = ({
               >
                 <Text size="xs" fw="500" truncate="end">
                   {displayName}
-                  {showFilterCounts && (
-                    <Text
-                      component="span"
-                      size="xs"
-                      c="dimmed"
-                    >{` (${totalAppliedFiltersSize > 0 ? totalAppliedFiltersSize : options.length})`}</Text>
+                  {totalAppliedFiltersSize === 0 && optionsLoading ? (
+                    <Loader
+                      size={8}
+                      color="var(--color-text-muted)"
+                      ml={6}
+                      data-testid={`filter-values-loading-${name}`}
+                    />
+                  ) : (
+                    showFilterCounts && (
+                      <Text
+                        component="span"
+                        size="xs"
+                        c="dimmed"
+                      >{` (${totalAppliedFiltersSize > 0 ? totalAppliedFiltersSize : options.length})`}</Text>
+                    )
                   )}
                 </Text>
               </Tooltip>
@@ -1102,6 +1156,7 @@ const DBSearchPageFiltersComponent = ({
   onColumnToggle,
   displayedColumns,
   onCollapse,
+  fill = false,
 }: {
   analysisMode: 'results' | 'delta' | 'pattern';
   setAnalysisMode: (mode: 'results' | 'delta' | 'pattern') => void;
@@ -1115,6 +1170,8 @@ const DBSearchPageFiltersComponent = ({
   onColumnToggle?: (column: string) => void;
   displayedColumns?: string[];
   onCollapse?: () => void;
+  /** Fill the parent instead of the resizable desktop width. Used in the compact drawer. */
+  fill?: boolean;
 } & FilterStateHook) => {
   const setFilterValue = useCallback(
     (
@@ -1142,6 +1199,11 @@ const DBSearchPageFiltersComponent = ({
     hasPersonalPins,
     hasSharedPins,
   } = usePinnedFilters(sourceId ?? null);
+  const {
+    isPinnedFieldCollapsed,
+    setPinnedFieldCollapsed,
+    pruneCollapsedPinnedFields,
+  } = useCollapsedPinnedFields(sourceId ?? null);
   const { data: pinnedFiltersApiData } = usePinnedFiltersApi(sourceId ?? null);
   const [isSharedFiltersVisible, setSharedFiltersVisible] = useLocalStorage(
     'hdx-shared-filters-visible',
@@ -1159,10 +1221,14 @@ const DBSearchPageFiltersComponent = ({
     'hdx-shared-filters-expanded',
     true,
   );
-  const [showAllValues, setShowAllValues] = useLocalStorage(
+  const { data: me } = api.useMe();
+  // null = user hasn't chosen, so fall back to the team default
+  const [userShowAllValues, setShowAllValues] = useLocalStorage<boolean | null>(
     'hdx-show-all-filter-values',
-    true,
+    null,
   );
+  const teamShowAllValues = !me?.team?.filterValuesExactByDefault;
+  const showAllValues = userShowAllValues ?? teamShowAllValues;
   const { size, startResize } = useResizable(16, 'left');
 
   const { data: source } = useSource({ id: sourceId });
@@ -1198,6 +1264,10 @@ const DBSearchPageFiltersComponent = ({
     () => (columns ? new Set(columns.map(c => c.name)) : new Set<string>()),
     [columns],
   );
+  const jsonColumnSet = useMemo(
+    () => new Set(jsonColumns ?? []),
+    [jsonColumns],
+  );
 
   const [showMoreFields, setShowMoreFields] = useState(false);
   const {
@@ -1216,7 +1286,7 @@ const DBSearchPageFiltersComponent = ({
     filterState,
     showMoreFields,
   });
-  const facets = fetchFacetsData.keyValues;
+  const { keyValues: facets, pendingKeys } = fetchFacetsData;
 
   useEffect(() => {
     if (error) {
@@ -1230,7 +1300,7 @@ const DBSearchPageFiltersComponent = ({
   }, [error]);
 
   // Merge pinned filter values into the queried facets, so that pinned values are always available
-  const facetsWithPinnedValues = useMemo(() => {
+  const facetsWithPinnedValues = useMemo((): FacetEntry[] => {
     const facetsMap = new Map((facets ?? []).map(f => [f.key, f.value]));
     const mergedKeys = new Set<string>([
       ...facetsMap.keys(),
@@ -1246,9 +1316,13 @@ const DBSearchPageFiltersComponent = ({
         ...(pinnedValues ?? []),
       ]);
 
-      return { key, value: Array.from(mergedValues) };
+      return {
+        key,
+        value: Array.from(mergedValues),
+        isLoading: pendingKeys.has(key),
+      };
     });
-  }, [facets, pinnedFilters, getPinnedFields]);
+  }, [facets, pinnedFilters, getPinnedFields, pendingKeys]);
 
   // Build the set of team-pinned fields for the Shared Filters section,
   // so we can avoid duplicating them in the regular Filters list below.
@@ -1262,7 +1336,7 @@ const DBSearchPageFiltersComponent = ({
 
   // Build the facet list for the Shared Filters section.
   // For each team-pinned field: merge pinned values with dynamic facet values.
-  const sharedFacets = useMemo(() => {
+  const sharedFacets = useMemo((): FacetEntry[] => {
     if (sharedFilterKeys.size === 0) return [];
 
     const facetMap = new Map(
@@ -1272,6 +1346,7 @@ const DBSearchPageFiltersComponent = ({
     return Array.from(sharedFilterKeys).map(key => {
       const teamVals = pinnedFiltersApiData?.team?.filters[key] ?? [];
       const dynamicValues = facetMap.get(key) ?? [];
+      const isLoading = pendingKeys.has(key);
 
       let merged: (string | boolean)[];
       if (teamVals.length > 0) {
@@ -1286,12 +1361,17 @@ const DBSearchPageFiltersComponent = ({
         merged = [...dynamicValues];
       }
 
-      return { key, value: merged };
+      return { key, value: merged, isLoading };
     });
-  }, [sharedFilterKeys, facetsWithPinnedValues, pinnedFiltersApiData]);
+  }, [
+    sharedFilterKeys,
+    facetsWithPinnedValues,
+    pinnedFiltersApiData,
+    pendingKeys,
+  ]);
 
   const shownFacets = useMemo(() => {
-    const _facets: { key: string; value: (string | boolean)[] }[] = [];
+    const _facets: FacetEntry[] = [];
     for (const _facet of facetsWithPinnedValues ?? []) {
       const facet = structuredClone(_facet);
       if (jsonColumns?.some(col => facet.key.startsWith(col))) {
@@ -1303,12 +1383,18 @@ const DBSearchPageFiltersComponent = ({
         continue;
       }
 
-      // don't include empty facets, unless they are already selected or pinned
+      // don't include empty facets, unless they are already selected, pinned,
+      // or still waiting on their values
       const filter = filterState[facet.key];
       const hasSelectedValues =
         filter && (filter.included.size > 0 || filter.excluded.size > 0);
       const isPinned = isFieldPinned(facet.key);
-      if (facet.value?.length > 0 || hasSelectedValues || isPinned) {
+      if (
+        facet.value?.length > 0 ||
+        hasSelectedValues ||
+        isPinned ||
+        facet.isLoading
+      ) {
         _facets.push(facet);
       }
     }
@@ -1323,6 +1409,8 @@ const DBSearchPageFiltersComponent = ({
         value: Array.from(filterState[key].included),
       });
     }
+
+    sortNestedFacetKeys(_facets);
 
     // prioritize facets that are primary keys
     _facets.sort((a, b) => {
@@ -1450,12 +1538,14 @@ const DBSearchPageFiltersComponent = ({
    */
   const renderFacetList = useCallback(
     (
-      facets: { key: string; value: (string | boolean)[] }[],
+      facets: FacetEntry[],
       options?: { keyPrefix?: string; isDefaultExpanded?: boolean },
     ) => {
       const { keyPrefix = '', isDefaultExpanded: forceExpanded } =
         options ?? {};
       const { grouped, nonGrouped } = groupFacetsByBaseName(facets);
+      const isFieldPinnedAny = (key: string) =>
+        isFieldPinned(key) || isSharedFieldPinned(key);
 
       const makeValuePins = (key: string): ValuePinHandlers => ({
         onPinClick: (value: string | boolean) => toggleFilterPin(key, value),
@@ -1467,9 +1557,21 @@ const DBSearchPageFiltersComponent = ({
       });
 
       const makeFieldPins = (key: string): FieldPinHandlers => ({
-        onFieldPinClick: () => toggleFieldPin(key),
+        onFieldPinClick: () => {
+          // Unpinned for good: forget its collapsed state, so pinning it again
+          // opens it like any newly pinned field.
+          if (isFieldPinned(key) && !isSharedFieldPinned(key)) {
+            setPinnedFieldCollapsed(key, false);
+          }
+          toggleFieldPin(key);
+        },
         isFieldPinned: isFieldPinned(key),
-        onToggleSharedFieldPin: () => toggleSharedFieldPin(key),
+        onToggleSharedFieldPin: () => {
+          if (isSharedFieldPinned(key) && !isFieldPinned(key)) {
+            setPinnedFieldCollapsed(key, false);
+          }
+          toggleSharedFieldPin(key);
+        },
         isSharedFieldPinned: isSharedFieldPinned(key),
       });
 
@@ -1488,6 +1590,7 @@ const DBSearchPageFiltersComponent = ({
                 sqlKey: toQuotedClickHouseKeyExpression(
                   child.key,
                   knownColumns,
+                  jsonColumnSet,
                 ),
               }))}
               selectedValues={group.children.reduce((acc, child) => {
@@ -1554,6 +1657,7 @@ const DBSearchPageFiltersComponent = ({
             const facetSqlKey = toQuotedClickHouseKeyExpression(
               facet.key,
               knownColumns,
+              jsonColumnSet,
             );
             return (
               <FilterGroup
@@ -1566,7 +1670,7 @@ const DBSearchPageFiltersComponent = ({
                   value,
                   label: value.toString(),
                 }))}
-                optionsLoading={isFacetsLoading}
+                optionsLoading={isFacetsLoading || !!facet.isLoading}
                 selectedValues={
                   getFilterStateEntry(filterState, facet.key) ?? {
                     included: new Set(),
@@ -1593,17 +1697,23 @@ const DBSearchPageFiltersComponent = ({
                 hasLoadedMore={extraFacetKeys.has(facet.key)}
                 isDefaultExpanded={(() => {
                   const entry = getFilterStateEntry(filterState, facet.key);
-                  return (
-                    forceExpanded ??
-                    (isFieldPrimary(tableMetadata, facet.key) ||
-                      isFieldPinned(facet.key) ||
-                      isSharedFieldPinned(facet.key) ||
-                      (entry != null &&
-                        (entry.included.size > 0 ||
-                          entry.excluded.size > 0 ||
-                          entry.range != null)))
-                  );
+                  return getFilterGroupDefaultExpanded({
+                    hasSelection:
+                      entry != null &&
+                      (entry.included.size > 0 ||
+                        entry.excluded.size > 0 ||
+                        entry.range != null),
+                    isPinned: isFieldPinnedAny(facet.key),
+                    isCollapsed: isPinnedFieldCollapsed(facet.key),
+                    isPrimary: !!isFieldPrimary(tableMetadata, facet.key),
+                    forceExpanded,
+                  });
                 })()}
+                onExpandedChange={expanded => {
+                  if (isFieldPinnedAny(facet.key)) {
+                    setPinnedFieldCollapsed(facet.key, !expanded);
+                  }
+                }}
                 chartConfig={chartConfig}
                 isLive={isLive}
                 onRangeChange={range => setFilterRange(facet.key, range)}
@@ -1625,6 +1735,8 @@ const DBSearchPageFiltersComponent = ({
       isFieldPinned,
       toggleSharedFieldPin,
       isSharedFieldPinned,
+      isPinnedFieldCollapsed,
+      setPinnedFieldCollapsed,
       onColumnToggle,
       displayedColumns,
       loadMoreFacetsForKey,
@@ -1636,13 +1748,29 @@ const DBSearchPageFiltersComponent = ({
       setFilterRange,
       tableMetadata,
       knownColumns,
+      jsonColumnSet,
       extraFacetKeys,
     ],
   );
 
   return (
-    <Box className={classes.filtersPanel} style={{ width: `${size}%` }}>
-      <div className={resizeStyles.resizeHandle} onMouseDown={startResize} />
+    <Box
+      className={classes.filtersPanel}
+      style={
+        fill
+          ? {
+              width: '100%',
+              maxWidth: 'none',
+              minWidth: 0,
+              flex: 1,
+              borderRight: 'none',
+            }
+          : { width: `${size}%` }
+      }
+    >
+      {!fill && (
+        <div className={resizeStyles.resizeHandle} onMouseDown={startResize} />
+      )}
       <ScrollArea
         h="100%"
         scrollbarSize={4}
@@ -1675,11 +1803,20 @@ const DBSearchPageFiltersComponent = ({
                 showFilterCounts={showFilterCounts}
                 onShowFilterCountsChange={setShowFilterCounts}
                 hasPersonalPins={hasPersonalPins}
-                onResetPersonalPins={resetPersonalPins}
+                onResetPersonalPins={() => {
+                  pruneCollapsedPinnedFields(isSharedFieldPinned);
+                  resetPersonalPins();
+                }}
                 hasSharedPins={hasSharedPins}
-                onResetSharedFilters={resetSharedFilters}
+                onResetSharedFilters={() => {
+                  pruneCollapsedPinnedFields(isFieldPinned);
+                  resetSharedFilters();
+                }}
                 showAllValues={showAllValues}
                 onShowAllValuesChange={setShowAllValues}
+                teamShowAllValues={teamShowAllValues}
+                isShowAllValuesOverridden={userShowAllValues != null}
+                onResetShowAllValues={() => setShowAllValues(null)}
               />
               {onCollapse && (
                 <Tooltip label="Hide filters" position="bottom">
@@ -1689,7 +1826,7 @@ const DBSearchPageFiltersComponent = ({
                     onClick={onCollapse}
                     aria-label="Hide filters"
                   >
-                    <IconArrowBarToLeft size={14} />
+                    <IconLayoutSidebarLeftCollapse size={14} />
                   </ActionIcon>
                 </Tooltip>
               )}
@@ -1860,16 +1997,15 @@ const DBSearchPageFiltersComponent = ({
                     />
                   )}
 
-                {isFacetsLoading ? (
-                  <Flex align="center" justify="center">
-                    <Loader size="xs" color="gray" />
-                  </Flex>
-                ) : (
-                  shownFacets.length === 0 && (
+                {shownFacets.length === 0 &&
+                  (isFacetsLoading ? (
+                    <Flex align="center" justify="center">
+                      <Loader size="xs" color="gray" />
+                    </Flex>
+                  ) : (
                     <Text size="xxs">No filters available</Text>
-                  )
-                )}
-                {/* Show facets even when loading to ensure pinned filters are visible while loading */}
+                  ))}
+                {/* Filters show their own loader until their values arrive */}
                 {renderFacetList(shownFacets)}
 
                 <Button

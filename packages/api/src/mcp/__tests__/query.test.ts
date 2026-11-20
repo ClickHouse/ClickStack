@@ -17,10 +17,10 @@ import {
   assertSourceKindMatchesSelect,
   clickHouseErrorResult,
   errorHint,
-  getClickHouseErrorType,
   INCREASE_TOP_N_CAP,
   isServerError,
   mergeWhereIntoSelectItems,
+  normalizeBodyExpression,
   parseTimeRange,
 } from '@/mcp/tools/query/helpers';
 import {
@@ -28,9 +28,12 @@ import {
   getMetricSelectIssues,
   mcpQuantileLevelSchema,
   validateMetricSelectItems,
+  whereLanguageSchema,
+  whereSchema,
 } from '@/mcp/tools/query/schemas';
-import { resolveOrderBy } from '@/mcp/tools/query/table';
+import { defaultOrderBy, resolveOrderBy } from '@/mcp/tools/query/table';
 import { getErrorCategory } from '@/mcp/utils/errors';
+import { getClickHouseErrorType } from '@/utils/clickhouseErrors';
 
 describe('parseTimeRange', () => {
   it('should return default range (last 15 minutes) when no arguments provided', () => {
@@ -106,6 +109,60 @@ describe('parseTimeRange', () => {
 });
 
 // ─── mergeWhereIntoSelectItems ───────────────────────────────────────────────
+
+describe('normalizeBodyExpression', () => {
+  it.each([
+    ['Body', 'Body'],
+    ['SpanName', 'SpanName'],
+    ["SpanAttributes['http.url']", "SpanAttributes['http.url']"],
+    [
+      "JSONExtractString(Body, 'message')",
+      "JSONExtractString(Body, 'message')",
+    ],
+    [
+      "JSONExtractString(Body,'error',  'message')",
+      "JSONExtractString(Body, 'error', 'message')",
+    ],
+    [
+      "JSONExtractString(Body, 'app.user.currency')",
+      "JSONExtractString(Body, 'app.user.currency')",
+    ],
+    [
+      "JSONExtractString(LogAttributes['object'], 'regarding', 'kind')",
+      "JSONExtractString(LogAttributes['object'], 'regarding', 'kind')",
+    ],
+    [
+      String.raw`JSONExtractString(Body, 'it\'s, ok')`,
+      String.raw`JSONExtractString(Body, 'it\'s, ok')`,
+    ],
+    [
+      "JSONExtractString(Body, 'it''s, ok')",
+      "JSONExtractString(Body, 'it''s, ok')",
+    ],
+  ])('accepts %s', (expr, expected) => {
+    expect(normalizeBodyExpression(expr)).toBe(expected);
+  });
+
+  it.each([
+    'Body) OR (1=1',
+    'lower(Body)',
+    "JSONExtract(Body, 'message', 'String')",
+    'JSONExtractString(Body)',
+    'JSONExtractString(Body, message)',
+    "JSONExtractString(lower(Body), 'message')",
+    "JSONExtractString(Body, 'm') OR 1=1",
+    "JSONExtractString(Body, 'm'), Body",
+    "JSONExtractString(Body, 'm' || 'x')",
+    "JSONExtractString(Body, 'm')) OR (lower(Body)",
+    "JSONExtractString(LogAttributes['a'], 'm') OR (1=1",
+    "JSONExtractString(Body, 'm', (SELECT 1))",
+    // A stray quote in the column would pair with a key's quotes.
+    "JSONExtractString(Body', ' OR 1=1 --')",
+    "JSONExtractString(Body, 'm'' OR 1=1)",
+  ])('rejects %s', expr => {
+    expect(normalizeBodyExpression(expr)).toBeNull();
+  });
+});
 
 describe('mergeWhereIntoSelectItems', () => {
   it('should return items unchanged when topWhere is empty', () => {
@@ -227,6 +284,90 @@ describe('errorHint', () => {
   it('should NOT match AS embedded in other words like DATABASE', () => {
     const hint = errorHint("Syntax error: Unknown database 'FOOBAR'");
     expect(hint).toBeNull();
+  });
+
+  const unknownTableErrors = [
+    "Unknown table expression identifier 'otel_logs' in scope SELECT count() FROM otel_logs",
+    'Table default.otel_traces does not exist.',
+    'Database o11y does not exist.',
+  ];
+
+  it.each(unknownTableErrors)(
+    'points unknown-table errors in raw SQL at clickstack_list_sources: %s',
+    msg => {
+      expect(errorHint(msg, undefined, { rawSql: true })).toContain(
+        'clickstack_list_sources',
+      );
+    },
+  );
+
+  // Source-based tools take a sourceId, so the failing table is the source's
+  // own and listing sources would only hand it back.
+  it.each(unknownTableErrors)(
+    'does not point source-based tools at clickstack_list_sources: %s',
+    msg => {
+      expect(errorHint(msg) ?? '').not.toContain('clickstack_list_sources');
+    },
+  );
+
+  it('keeps pointing unknown-column errors at clickstack_describe_source', () => {
+    const hint = errorHint(
+      'Unknown expression or function identifier `TimestampTime` in scope SELECT TimestampTime FROM t',
+    );
+    expect(hint).toContain('clickstack_describe_source');
+    expect(hint).not.toContain('clickstack_list_sources');
+  });
+
+  it('explains hasToken separators in agent-written SQL filters', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Needle must not contain whitespace or separator characters: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+    );
+    expect(hint).toContain('hasToken() takes a single token');
+    expect(hint).toContain('lucene');
+    expect(hint).toContain('hasAllTokens');
+  });
+
+  it('keeps the hasToken hint if ClickHouse rewords the message', () => {
+    const message =
+      "Token argument contains a separator: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'";
+    const cause = new ClickHouseError({
+      message,
+      code: '36',
+      type: 'BAD_ARGUMENTS',
+    });
+    const hint = errorHint(message, new Error(message, { cause }));
+    expect(hint).toContain('hasToken() takes a single token');
+  });
+
+  it('keeps the hasToken hint when BAD_ARGUMENTS is only in the message text', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Token argument contains a separator: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+    );
+    expect(hint).toContain('hasToken() takes a single token');
+  });
+
+  it('does not show the hasToken hint for a non-BAD_ARGUMENTS hasToken error', () => {
+    const hint = errorHint(
+      'Code: 42. DB::Exception: Number of arguments for function hasToken does not match: passed 1, should be 2. (NUMBER_OF_ARGUMENTS_DOESNT_MATCH)',
+    );
+    expect(hint ?? '').not.toContain('hasToken() takes a single token');
+  });
+
+  it('gives raw SQL callers a SQL-only hasToken hint', () => {
+    const hint = errorHint(
+      "Code: 36. DB::Exception: Needle must not contain whitespace or separator characters: while executing 'FUNCTION hasToken(message : 0, 'payment_failed'_String :: 1)'. (BAD_ARGUMENTS)",
+      undefined,
+      { rawSql: true },
+    );
+    expect(hint).toContain("Use position(col, 'payment_failed') > 0");
+    expect(hint).toContain('If the column has a text index');
+    expect(hint).not.toContain('whereLanguage');
+  });
+
+  it('does not show the hasToken hint for other BAD_ARGUMENTS errors', () => {
+    const message =
+      "Code: 36. DB::Exception: Argument for function 'splitByChar' must be a single character. (BAD_ARGUMENTS)";
+    expect(errorHint(message) ?? '').not.toContain('hasToken');
   });
 
   it('should NOT match lowercase "as" in cast expressions', () => {
@@ -1380,5 +1521,55 @@ describe('mcpQuantileLevelSchema', () => {
 
     expect(optional.parse(undefined)).toBeUndefined();
     expect(optional.safeParse('0.97').success).toBe(false);
+  });
+});
+
+describe('where / whereLanguage descriptions', () => {
+  it('steer exact matches to the quoted Lucene form and body text to bare terms', () => {
+    expect(whereSchema.description).toContain(
+      'quote the value: SpanKind:"Server"',
+    );
+    expect(whereSchema.description).toContain(
+      'BODY TEXT: write the term or phrase without a field name',
+    );
+    expect(whereLanguageSchema.description).toContain(
+      'quote the value (field:"value", case-sensitive)',
+    );
+  });
+});
+
+describe('defaultOrderBy', () => {
+  it('orders a grouped table by the first select item, descending', () => {
+    expect(defaultOrderBy([{}, {}], 'SpanName', 'table')).toBe(
+      '1 DESC, SpanName ASC',
+    );
+  });
+
+  it('uses the first select item alias when it has one', () => {
+    expect(defaultOrderBy([{ alias: 'Errors' }], 'SpanName', 'table')).toBe(
+      'Errors DESC, SpanName ASC',
+    );
+    expect(
+      defaultOrderBy([{ alias: 'P95 Latency' }], 'SpanName', 'table'),
+    ).toBe('"P95 Latency" DESC, SpanName ASC');
+  });
+
+  it('quotes an alias with surrounding spaces as SELECT renders it', () => {
+    expect(defaultOrderBy([{ alias: ' Errors' }], 'SpanName', 'table')).toBe(
+      '" Errors" DESC, SpanName ASC',
+    );
+    expect(defaultOrderBy([{ alias: '  ' }], 'SpanName', 'table')).toBe(
+      '1 DESC, SpanName ASC',
+    );
+  });
+
+  it('adds no order without a groupBy, for other shapes, or for metric selects', () => {
+    expect(defaultOrderBy([{}], undefined, 'table')).toBeUndefined();
+    expect(defaultOrderBy([{}], ' ', 'table')).toBeUndefined();
+    expect(defaultOrderBy([{}], 'SpanName', 'pie')).toBeUndefined();
+    expect(defaultOrderBy([{}], 'SpanName', 'number')).toBeUndefined();
+    expect(
+      defaultOrderBy([{ metricType: 'gauge' }], 'SpanName', 'table'),
+    ).toBeUndefined();
   });
 });

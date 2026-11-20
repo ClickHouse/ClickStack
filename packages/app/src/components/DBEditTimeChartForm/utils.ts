@@ -10,8 +10,12 @@ import {
 import { isTimeSeriesDisplayType } from '@hyperdx/common-utils/dist/core/utils';
 import {
   configConsumesBroadcastFilters,
-  getBlockingRequiredFilterNames,
+  getBlockingRequiredFilters,
 } from '@hyperdx/common-utils/dist/dashboardFilterValues';
+import {
+  getPromqlFilters,
+  getSqlFilters,
+} from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderChartConfig,
   isPromqlChartConfig,
@@ -19,10 +23,13 @@ import {
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
 import { substitutePromqlChartConfigTemplates } from '@hyperdx/common-utils/dist/macros';
+import { getReferenceVariableFilters } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
+  BroadcastFilter,
   BuilderChartConfigWithDateRange,
   ChartAlertBaseSchema,
   ChartConfigWithDateRange,
+  ChartConfigWithOptDateRange,
   ChartConfigWithOptTimestamp,
   ChartVariable,
   DashboardFilter,
@@ -48,6 +55,10 @@ import {
   tryExpandConfigVariables,
 } from '@/ChartUtils';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
+import {
+  buildHeatmapSeriesConfig,
+  resolveHeatmapGranularity,
+} from '@/components/DBHeatmapChart/heatmapQueries';
 import { getMinGranularitySeconds } from '@/hooks/useChartConfig';
 import { getFirstTimestampValueExpression } from '@/source';
 import { getMetricTableName } from '@/utils';
@@ -195,21 +206,97 @@ export function resolvePreviewVariables({
     : referenced.map(variable => ({ ...variable, values: [] }));
 }
 
+/**
+ * The required filters that block a preview with `applySelections` off: only
+ * the reference variables the tile can't be queried without.
+ */
+function getUnappliedPreviewBlockingFilterNames(
+  unsatisfiedRequiredFilters: DashboardFilter[] | undefined,
+  referenceVariableNames: readonly string[] | undefined,
+): string[] {
+  const referenced = new Set(referenceVariableNames);
+  return getReferenceVariableFilters(unsatisfiedRequiredFilters)
+    .filter(({ name }) => referenced.has(name))
+    .map(({ filter }) => filter.name);
+}
+
+export type PreviewBlockingFilters = {
+  /** Names of the required filters that have nothing selected and block the preview. */
+  missingRequiredFilterNames: string[];
+  /** Whether turning off "Apply filters" would clear the block. */
+  canPreviewWithoutFilters: boolean;
+};
+
+/**
+ * The required filters with nothing selected that block a tile preview.
+ *
+ * With `applySelections` off, only the reference variables the tile can't be
+ * queried without still block. `config` is undefined when no query could be
+ * built, e.g. because a source variable has no selection; the tile then
+ * consumes no broadcast filters and references no template variables.
+ */
+export function getPreviewBlockingFilters({
+  config,
+  sourceId,
+  variables,
+  unsatisfiedRequiredFilters,
+  applySelections,
+  referenceVariableNames,
+}: {
+  config: ChartConfigWithOptDateRange | SavedChartConfig | undefined;
+  sourceId: string | undefined;
+  variables: ChartVariable[] | undefined;
+  unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
+  applySelections: boolean;
+  /** The data source and connection variables the tile's stored config references. */
+  referenceVariableNames: readonly string[] | undefined;
+}): PreviewBlockingFilters {
+  const unappliedNames = getUnappliedPreviewBlockingFilterNames(
+    unsatisfiedRequiredFilters,
+    referenceVariableNames,
+  );
+  if (!applySelections) {
+    return {
+      missingRequiredFilterNames: unappliedNames,
+      canPreviewWithoutFilters: false,
+    };
+  }
+
+  const missingRequiredFilterNames = getBlockingRequiredFilters(
+    unsatisfiedRequiredFilters ?? [],
+    {
+      sourceId,
+      referenceVariableNames,
+      referencedVariableNames:
+        config && variables
+          ? filterReferencedVariables(config, variables).map(v => v.name)
+          : undefined,
+      consumesBroadcastFilters:
+        config != null && configConsumesBroadcastFilters(config, sourceId),
+    },
+  ).map(filter => filter.name);
+  return {
+    missingRequiredFilterNames,
+    canPreviewWithoutFilters: missingRequiredFilterNames.some(
+      name => !unappliedNames.includes(name),
+    ),
+  };
+}
+
 /** What the dashboard's filter state contributes to a tile preview. */
-export type TilePreviewFilters = {
-  /** Broadcast filter conditions to query the preview with. */
-  filters: Filter[] | undefined;
+export type TilePreviewFilters = PreviewBlockingFilters & {
+  /** Broadcast filter conditions to query the preview with, in its query language. */
+  filters: BroadcastFilter[] | undefined;
   /** The referenced variables, with or without their selections. */
   variables: ChartVariable[] | undefined;
-  /** Names of the required filters that have nothing selected. */
-  missingRequiredFilterNames: string[];
 };
 
 /**
  * Applies the parent dashboard's filter selections to a tile preview.
  *
  * With `applySelections` off, the preview runs as an alert would: no broadcast
- * filters, empty variable selections, and no required-filter block.
+ * filters, empty variable selections, and no required-filter block other than
+ * the reference variables the tile can't be queried without.
  */
 export function resolveTilePreviewFilters({
   config,
@@ -218,14 +305,25 @@ export function resolveTilePreviewFilters({
   variables,
   unsatisfiedRequiredFilters,
   applySelections,
+  referenceVariableNames,
 }: {
   config: ChartConfigWithDateRange;
   sourceId: string | undefined;
-  filters: Filter[] | undefined;
+  /** The data source and connection variables the tile's stored config references. */
+  referenceVariableNames?: readonly string[];
+  filters: BroadcastFilter[] | undefined;
   variables: ChartVariable[] | undefined;
   unsatisfiedRequiredFilters: DashboardFilter[] | undefined;
   applySelections: boolean;
 }): TilePreviewFilters {
+  const blocking = getPreviewBlockingFilters({
+    config,
+    sourceId,
+    variables,
+    unsatisfiedRequiredFilters,
+    applySelections,
+    referenceVariableNames,
+  });
   const previewVariables = resolvePreviewVariables({
     config,
     variables,
@@ -233,28 +331,29 @@ export function resolveTilePreviewFilters({
   });
 
   if (!applySelections) {
-    return {
-      filters: undefined,
-      variables: previewVariables,
-      missingRequiredFilterNames: [],
-    };
+    return { ...blocking, filters: undefined, variables: previewVariables };
   }
 
-  const consumesBroadcastFilters = configConsumesBroadcastFilters(
-    config,
-    sourceId,
-  );
+  // PromQL tiles take only PromQL conditions; `configConsumesBroadcastFilters`
+  // stays false for them so that required SQL filters don't block them.
+  const previewFilters = isPromqlChartConfig(config)
+    ? filters && getPromqlFilters(filters)
+    : configConsumesBroadcastFilters(config, sourceId) && filters
+      ? getSqlFilters(filters)
+      : undefined;
 
-  return {
-    filters: consumesBroadcastFilters ? filters : undefined,
-    variables: previewVariables,
-    missingRequiredFilterNames: getBlockingRequiredFilterNames({
-      config,
-      sourceId,
-      unsatisfiedRequiredFilters,
-      referencedVariables: previewVariables,
-    }),
-  };
+  return { ...blocking, filters: previewFilters, variables: previewVariables };
+}
+
+/** The config with the broadcast filters in its own query language attached. */
+export function withBroadcastFilters(
+  config: ChartConfigWithDateRange,
+  filters: BroadcastFilter[] | undefined,
+): ChartConfigWithDateRange {
+  if (isPromqlChartConfig(config)) {
+    return { ...config, filters: filters && getPromqlFilters(filters) };
+  }
+  return { ...config, filters: filters && getSqlFilters(filters) };
 }
 
 /** One expression as a PromQL tile queries it. */
@@ -285,6 +384,13 @@ function toQueriedPromqlConfig(
   }
   if (isTimeSeriesDisplayType(config.displayType)) {
     const converted = convertToTimeChartConfig(config);
+    return isPromqlChartConfig(converted) ? converted : config;
+  }
+  if (config.displayType === DisplayType.Heatmap) {
+    const converted = buildHeatmapSeriesConfig(
+      config,
+      resolveHeatmapGranularity(config),
+    );
     return isPromqlChartConfig(converted) ? converted : config;
   }
   return config;
@@ -432,9 +538,9 @@ export function buildChartConfigForExplanations({
   // so that the MV optimization explanation and generated SQL preview
   // are accurate.  Heatmap is special-cased: it actually runs as two
   // sequential queries (bounds + bucketed counts) that depend on each
-  // other at runtime, so the SQL preview transforms `config` itself into
-  // both queries on render and the MV indicator is suppressed for this
-  // tab.  Returning `config` unchanged is intentional.
+  // other at runtime, so the SQL preview transforms `builderConfig` itself
+  // into both queries on render and the MV indicator is suppressed for this
+  // tab.
   const builderConfig: BuilderChartConfigWithDateRange = {
     ...config,
     minGranularitySeconds: getMinGranularitySeconds(tableSource),
@@ -449,7 +555,7 @@ export function buildChartConfigForExplanations({
   } else if (activeTab === 'pie' || activeTab === 'bar') {
     return convertToCategoricalChartConfig(builderConfig);
   } else if (activeTab === 'heatmap') {
-    return config;
+    return builderConfig;
   }
 
   return config;

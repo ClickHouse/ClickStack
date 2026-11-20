@@ -2,9 +2,10 @@ import {
   getFilterBroadcastTarget,
   getFilterVariableName,
   isFilterGlobalRequirement,
+  isFilterReferenceableVariable,
   isFilterRequired,
-  isFilterVariableEnabled,
 } from '@hyperdx/common-utils/dist/filters';
+import { getObjectName } from '@hyperdx/common-utils/dist/referenceVariables';
 import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
 import {
   Button,
@@ -17,14 +18,20 @@ import {
 import {
   IconAsterisk,
   IconBuildingBroadcastTower,
+  IconDatabase,
+  IconFilter,
   IconLabel,
   IconList,
   IconPencil,
   IconRefresh,
   IconSearch,
+  IconServer,
+  IconSql,
   IconTrash,
 } from '@tabler/icons-react';
 
+import { SOURCE_KIND_LABELS } from '@/components/Sources/SourceForm/constants';
+import { useConnections } from '@/connection';
 import { useSources } from '@/source';
 
 import { MODAL_SIZE } from './constants';
@@ -47,23 +54,34 @@ interface DashboardFiltersListProps {
   onAddNew: () => void;
 }
 
+function getSourceNames(
+  ids: string[],
+  sources?: { id: string; name: string }[],
+) {
+  return ids
+    .map(id => getObjectName(id, sources))
+    .filter((name): name is string => !!name)
+    .join(', ');
+}
+
 /** Where the dropdown's values come from: the queried source, or the authored list. */
 function getValuesAttribute(
   filter: DashboardFilter,
   sources?: { id: string; name: string }[],
+  connections?: { id: string; name: string }[],
 ): DashboardFilterAttribute {
   switch (filter.type) {
     case 'QUERY_EXPRESSION':
       return {
         icon: <IconSearch size={14} />,
         tooltip: 'Source the dropdown values are queried from',
-        label: sources?.find(s => s.id === filter.source)?.name ?? '',
+        label: getObjectName(filter.source, sources) ?? '',
       };
     case 'PROMETHEUS_LABEL':
       return {
         icon: <IconLabel size={14} />,
         tooltip: 'PromQL source and label the dropdown values come from',
-        label: [sources?.find(s => s.id === filter.source)?.name, filter.label]
+        label: [getObjectName(filter.source, sources), filter.label]
           .filter(Boolean)
           .join(' · '),
       };
@@ -74,6 +92,37 @@ function getValuesAttribute(
         label: `${count} custom option${count === 1 ? '' : 's'}`,
       };
     }
+    case 'ADHOC':
+      return {
+        icon: <IconFilter size={14} />,
+        tooltip: 'Sources the condition keys and values come from',
+        label: getSourceNames(filter.sources, sources),
+      };
+    case 'SQL_QUERY':
+      return {
+        icon: <IconSql size={14} />,
+        tooltip: 'The dropdown values come from a SQL query',
+        label: 'SQL query',
+      };
+    case 'DATA_SOURCE':
+      return {
+        icon: <IconDatabase size={14} />,
+        tooltip:
+          'Kinds of sources offered, and the connection they are limited to',
+        label: [
+          filter.allowedSourceKinds
+            .map(kind => SOURCE_KIND_LABELS[kind])
+            .join(', '),
+          filter.connection && getObjectName(filter.connection, connections),
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      };
+    case 'CONNECTION':
+      return {
+        icon: <IconServer size={14} />,
+        label: 'Connections',
+      };
     default:
       filter satisfies never; // exhaustive check
       return { icon: <IconSearch size={14} />, label: '' };
@@ -91,11 +140,7 @@ function getBroadcastTargetDisplay(
     return 'All sources';
   }
 
-  const appliedSourceNames = broadcastTarget.appliesToSourceIds
-    .map(id => sources?.find(s => s.id === id)?.name)
-    .filter((name): name is string => !!name);
-
-  return appliedSourceNames.join(', ');
+  return getSourceNames(broadcastTarget.appliesToSourceIds, sources);
 }
 
 export const DashboardFiltersList = ({
@@ -109,6 +154,7 @@ export const DashboardFiltersList = ({
   onAddNew,
 }: DashboardFiltersListProps) => {
   const { data: sources } = useSources();
+  const { data: connections } = useConnections();
 
   return (
     <Modal
@@ -124,7 +170,7 @@ export const DashboardFiltersList = ({
         data-testid="dashboard-filters-list"
       >
         {filters.map(filter => {
-          const attributes = [getValuesAttribute(filter, sources)];
+          const attributes = [getValuesAttribute(filter, sources, connections)];
 
           const broadcastTarget = getBroadcastTargetDisplay(filter, sources);
           if (!hideAppliesTo && broadcastTarget != null) {
@@ -149,7 +195,7 @@ export const DashboardFiltersList = ({
           }
 
           const variableName =
-            showVariableOptions && isFilterVariableEnabled(filter)
+            showVariableOptions && isFilterReferenceableVariable(filter)
               ? getFilterVariableName(filter)
               : undefined;
           return (

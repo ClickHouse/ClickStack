@@ -1,5 +1,6 @@
 import {
   displayTypeRequiresSource,
+  getSavedConfigAllowedSourceKinds,
   isBuilderSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@/guards';
@@ -9,6 +10,8 @@ import {
   DisplayType,
   isChartPaletteToken,
   resolveChartPaletteToken,
+  SavedChartConfig,
+  SourceKind,
   walkRawDashboardTileColors,
 } from '@/types';
 
@@ -107,6 +110,10 @@ describe('displayTypeRequiresSource', () => {
 
   it('returns true for StackedBar', () => {
     expect(displayTypeRequiresSource(DisplayType.StackedBar)).toBe(true);
+  });
+
+  it('returns true for StackedLine', () => {
+    expect(displayTypeRequiresSource(DisplayType.StackedLine)).toBe(true);
   });
 
   it('returns true for Pie', () => {
@@ -361,5 +368,48 @@ describe('walkRawDashboardTileColors', () => {
     };
     // No color fields to touch → identity output.
     expect(walkRawDashboardTileColors(input, () => 'x')).toBe(input);
+  });
+});
+
+describe('getSavedConfigAllowedSourceKinds', () => {
+  it.each<{
+    case: string;
+    config: Partial<SavedChartConfig>;
+    kinds: SourceKind[];
+  }>([
+    {
+      case: 'a PromQL chart',
+      config: { configType: 'promql', displayType: DisplayType.Line },
+      kinds: [SourceKind.Promql],
+    },
+    {
+      case: 'a builder search',
+      config: { displayType: DisplayType.Search },
+      kinds: [SourceKind.Log, SourceKind.Trace, SourceKind.Session],
+    },
+    {
+      case: 'a builder distribution heatmap',
+      config: { displayType: DisplayType.Heatmap },
+      kinds: [SourceKind.Trace],
+    },
+    {
+      case: 'a builder series heatmap',
+      config: { displayType: DisplayType.Heatmap, heatmap: { mode: 'series' } },
+      kinds: [SourceKind.Trace, SourceKind.Log, SourceKind.Metric],
+    },
+    {
+      case: 'a raw SQL table',
+      config: { configType: 'sql', displayType: DisplayType.Table },
+      kinds: [
+        SourceKind.Log,
+        SourceKind.Trace,
+        SourceKind.Session,
+        SourceKind.Metric,
+      ],
+    },
+  ])('lists the kinds for $case', ({ config, kinds }) => {
+    expect(
+      getSavedConfigAllowedSourceKinds(config as SavedChartConfig).sort(),
+    ).toEqual([...kinds].sort());
   });
 });

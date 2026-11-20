@@ -34,10 +34,15 @@ import { PageLayout } from '@/components/PageLayout';
 import SearchWhereInput, {
   getStoredLanguage,
 } from '@/components/SearchInput/SearchWhereInput';
+import { parseServiceMapGroupBy } from '@/components/ServiceMap/dimensions';
+import ServiceMapGroupByInput, {
+  ServiceMapSearchFormValues,
+} from '@/components/ServiceMap/ServiceMapGroupByInput';
 import { IS_LOCAL_MODE } from '@/config';
 import { useGetKeyValues } from '@/hooks/useMetadata';
 import { useResolvedSourceParam } from '@/hooks/useResolvedSourceParam';
 import { withAppNavForSurface } from '@/layout';
+import { useLocalStorage } from '@/utils';
 import { parseAsStringEncoded } from '@/utils/queryParsers';
 
 import OnboardingModal from './components/OnboardingModal';
@@ -48,7 +53,7 @@ import SourceSchemaPreview, {
 } from './components/SourceSchemaPreview';
 import { SourceSelectControlled } from './components/SourceSelect';
 import { TimePicker } from './components/TimePicker';
-import { usePageTitle } from './theme/ThemeProvider';
+import { usePageTitle } from './brand';
 import { useSources } from './source';
 import { useDefaultTimeRange, useNewTimeQuery } from './timeQuery';
 
@@ -76,12 +81,17 @@ const SAMPLING_FACTORS = [
   },
 ];
 
+const DEFAULT_SAMPLING_FACTOR = 10;
+const SAMPLING_FACTOR_STORAGE_KEY = 'hdx-service-map-sampling-factor';
+
 const DEFAULT_INTERVAL = 'Past 1h';
 
 const searchQueryStateMap = {
   where: parseAsStringEncoded,
   whereLanguage: parseAsStringEnum<'sql' | 'lucene'>(['sql', 'lucene']),
   services: parseAsArrayOf(parseAsString),
+  // Comma-separated SQL expressions the nodes are split by, after ServiceName.
+  groupBy: parseAsStringEncoded,
 };
 
 function DBServiceMapPage() {
@@ -117,14 +127,22 @@ function DBServiceMapPage() {
   // useResolvedSourceParam will show a notification to the user.
   const source = paramSource ?? defaultSource;
 
-  const { control, handleSubmit, setValue } = useForm({
-    values: {
-      source: source?.id,
-      where: searchedConfig.where ?? '',
-      whereLanguage:
-        searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
-    },
-  });
+  const groupBy = useMemo(
+    () => parseServiceMapGroupBy(searchedConfig.groupBy),
+    [searchedConfig.groupBy],
+  );
+  const { control, handleSubmit, setValue } =
+    useForm<ServiceMapSearchFormValues>({
+      values: {
+        source: source?.id,
+        where: searchedConfig.where ?? '',
+        whereLanguage:
+          searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
+        // Seeded from the parsed list so the editor shows exactly what the map
+        // is grouped by, even for a hand-edited URL with too many expressions.
+        groupBy: groupBy.join(', '),
+      },
+    });
 
   const watchedSource = useWatch({ control, name: 'source' });
   const [isSourceSchemaPreviewOpen, setIsSourceSchemaPreviewOpen] =
@@ -203,16 +221,42 @@ function DBServiceMapPage() {
     [setSearchedConfig],
   );
 
+  // The time range is applied together with the form values, so an invalid
+  // group-by leaves the URL untouched instead of moving the time window.
   const onSubmit = useCallback(() => {
-    onSearch(displayedTimeInputValue);
-    handleSubmit(({ where, whereLanguage }) => {
-      setSearchedConfig(prev => ({ ...prev, where, whereLanguage }));
+    handleSubmit(({ where, whereLanguage, groupBy }) => {
+      onSearch(displayedTimeInputValue);
+      setSearchedConfig(prev => ({
+        ...prev,
+        where,
+        whereLanguage,
+        groupBy: groupBy || null,
+      }));
     })();
   }, [handleSubmit, setSearchedConfig, displayedTimeInputValue, onSearch]);
 
-  const [samplingFactor, setSamplingFactor] = useQueryState(
+  // The URL param wins so shared links reproduce the sender's view, but only
+  // slider changes are remembered: opening a link must not overwrite the
+  // viewer's saved preference.
+  const [samplingFactorParam, setSamplingFactorParam] = useQueryState(
     'samplingFactor',
-    parseAsInteger.withDefault(10),
+    parseAsInteger,
+  );
+  const [storedSamplingFactor, setStoredSamplingFactor] = useLocalStorage(
+    SAMPLING_FACTOR_STORAGE_KEY,
+    DEFAULT_SAMPLING_FACTOR,
+  );
+  const samplingFactor =
+    samplingFactorParam ??
+    (SAMPLING_FACTORS.some(factor => factor.value === storedSamplingFactor)
+      ? storedSamplingFactor
+      : DEFAULT_SAMPLING_FACTOR);
+  const setSamplingFactor = useCallback(
+    (value: number) => {
+      setStoredSamplingFactor(value);
+      setSamplingFactorParam(value);
+    },
+    [setStoredSamplingFactor, setSamplingFactorParam],
   );
   const { label: samplingLabel = '' } =
     SAMPLING_FACTORS.find(factor => factor.value === samplingFactor) ?? {};
@@ -253,7 +297,7 @@ function DBServiceMapPage() {
 
   const headerActions = (
     <Group gap="sm" wrap="nowrap">
-      <Text bg="inherit" size="sm">
+      <Text bg="inherit" size="sm" data-testid="service-map-sampling-label">
         Sampling {samplingLabel}
       </Text>
       <div style={{ minWidth: '200px' }}>
@@ -266,6 +310,7 @@ function DBServiceMapPage() {
           )}
           onChange={v => setSamplingFactor(SAMPLING_FACTORS[v].value)}
           showLabelOnHover={false}
+          data-testid="service-map-sampling-slider"
         />
       </div>
       <TimePicker
@@ -386,6 +431,13 @@ function DBServiceMapPage() {
                 sqlPlaceholder="SQL WHERE to filter spans (ex. Duration > 1000000)"
                 minWidth="min(500px, 100%)"
               />
+              <ServiceMapGroupByInput
+                control={control}
+                tableConnection={sourceTableConnection}
+                sourceId={source.id}
+                dateRange={searchedTimeRange}
+                onSubmit={onSubmit}
+              />
             </Flex>
             <ServiceMap
               traceTableSource={source}
@@ -396,6 +448,7 @@ function DBServiceMapPage() {
               serviceNames={
                 selectedServices.length > 0 ? selectedServices : undefined
               }
+              groupBy={groupBy}
               onFocusService={onFocusService}
             />
           </>

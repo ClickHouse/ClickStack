@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
-import { convertDateRangeToGranularityString } from '@hyperdx/common-utils/dist/core/utils';
-import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
+import {
+  isBuilderChartConfig,
+  isPromqlChartConfig,
+} from '@hyperdx/common-utils/dist/guards';
 import {
   BuilderChartConfigWithDateRange,
   BuilderChartConfigWithOptTimestamp,
@@ -27,6 +29,8 @@ import DBHeatmapChart, {
   buildHeatmapBucketConfig,
   buildHeatmapSeriesConfig,
   HEATMAP_N_BUCKETS,
+  HeatmapSeriesChartConfig,
+  resolveHeatmapGranularity,
   toHeatmapQuery,
 } from '@/components/DBHeatmapChart';
 import DBNumberChart from '@/components/DBNumberChart';
@@ -62,13 +66,15 @@ const RUN_TO_PREVIEW = 'Run the query to see the preview';
 
 function HeatmapPreview({
   config,
+  minGranularitySeconds,
 }: {
-  config: BuilderChartConfigWithDateRange;
+  config: HeatmapSeriesChartConfig;
+  minGranularitySeconds: number | undefined;
 }) {
   return (
     <div className="flex-grow-1 d-flex flex-column" style={{ height: 400 }}>
       <DBHeatmapChart
-        query={toHeatmapQuery(config)}
+        query={toHeatmapQuery({ ...config, minGranularitySeconds })}
         showLegend
         errorVariant="inline"
       />
@@ -99,24 +105,34 @@ function HeatmapSQLPreview({
     timestampValueExpression,
   };
   const query = toHeatmapQuery(configWithTimestamp);
-  const granularity = convertDateRangeToGranularityString(dateRange, 245);
+
+  // Only PromQL heatmaps are calculated or histograms, and they have no SQL
+  if (query.mode === 'calculated' || query.mode === 'histogram') {
+    return null;
+  }
 
   if (query.mode === 'series') {
+    const seriesConfig = { ...query.config, dateRange };
     return (
       <ChartSQLPreview
         config={buildHeatmapSeriesConfig(
-          { ...query.config, dateRange },
-          granularity,
+          seriesConfig,
+          resolveHeatmapGranularity(seriesConfig),
         )}
         enableCopy
       />
     );
   }
   const { config: heatmapConfig, scaleType } = query;
+  const granularity = resolveHeatmapGranularity({
+    granularity: heatmapConfig.granularity,
+    dateRange,
+  });
 
   const boundsConfig = buildHeatmapBoundsConfig({
     config: heatmapConfig,
     scaleType,
+    granularity,
   });
 
   const bucketConfig = buildHeatmapBucketConfig({
@@ -162,7 +178,12 @@ type ChartPreviewPanelProps = {
   dbTimeChartConfig?: ChartConfigWithDateRange;
   /** Required dashboard filters with nothing selected that block this tile. */
   missingRequiredFilterNames?: string[];
+  /** Whether turning off "Apply filters" would clear the required-filter block. */
+  canPreviewWithoutFilters?: boolean;
+  /** Why the current selections can't be queried, shown instead of the chart. */
+  blockedReason?: string;
   setValue: (name: 'orderBy', value: string) => void;
+  setDisplayType: (displayType: DisplayType) => void;
   onSubmit: () => void;
 };
 
@@ -180,7 +201,10 @@ export function ChartPreviewPanel({
   showGeneratedPromql,
   dbTimeChartConfig,
   missingRequiredFilterNames,
+  canPreviewWithoutFilters = false,
+  blockedReason,
   setValue,
+  setDisplayType,
   onSubmit,
 }: ChartPreviewPanelProps) {
   const [isSampleEventsOpen, setIsSampleEventsOpen] = useState(false);
@@ -195,8 +219,12 @@ export function ChartPreviewPanel({
   const blockingFilterNames = missingRequiredFilterNames ?? [];
   const isBlockedByRequiredFilters =
     blockingFilterNames.length > 0 && tabQueriesData(activeTab);
+  const isBlocked =
+    blockedReason != null &&
+    !isBlockedByRequiredFilters &&
+    tabQueriesData(activeTab);
   const queryReady =
-    !isBlockedByRequiredFilters && !!isQueryReady(queriedConfig);
+    !isBlockedByRequiredFilters && !isBlocked && !!isQueryReady(queriedConfig);
 
   const onTableSortingChange = useCallback(
     (sortState: SortingState | null) => {
@@ -244,12 +272,23 @@ export function ChartPreviewPanel({
     <>
       {isBlockedByRequiredFilters ? (
         <EmptyState
-          description={`Missing required filters: ${blockingFilterNames.join(
+          description={`Missing required filters or variables: ${blockingFilterNames.join(
             ', ',
-          )}. Select a value for each required filter, or turn off “Apply filters” to preview this tile without them.`}
+          )}. ${
+            canPreviewWithoutFilters
+              ? 'Select a value for each required filter, or turn off “Apply filters” to preview this tile without them.'
+              : 'Select a value for each one to preview this tile.'
+          }`}
           variant="card"
           fullWidth
           data-testid="preview-missing-required-filters"
+        />
+      ) : isBlocked ? (
+        <EmptyState
+          description={blockedReason}
+          variant="card"
+          fullWidth
+          data-testid="preview-blocked"
         />
       ) : !queryReady && tabQueriesData(activeTab) ? (
         <EmptyState
@@ -289,6 +328,7 @@ export function ChartPreviewPanel({
           <DBTimeChart
             sourceId={sourceId}
             config={dbTimeChartConfig}
+            setDisplayType={setDisplayType}
             onTimeRangeSelect={onTimeRangeSelect}
             referenceLines={
               alert &&
@@ -337,8 +377,14 @@ export function ChartPreviewPanel({
       )}
       {queryReady &&
         queriedConfig != null &&
-        isBuilderChartConfig(queriedConfig) &&
-        activeTab === 'heatmap' && <HeatmapPreview config={queriedConfig} />}
+        (isBuilderChartConfig(queriedConfig) ||
+          isPromqlChartConfig(queriedConfig)) &&
+        activeTab === 'heatmap' && (
+          <HeatmapPreview
+            config={queriedConfig}
+            minGranularitySeconds={minGranularitySeconds}
+          />
+        )}
       {queryReady &&
         tableSource &&
         queriedConfig != null &&

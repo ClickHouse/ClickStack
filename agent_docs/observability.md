@@ -1,8 +1,8 @@
 # Observability & Instrumentation
 
-HyperDX is an observability product, so our own code should be a shining example
-of well-instrumented software. When you add or change a feature, instrument it
-as part of the change - not as an afterthought.
+ClickStack is an observability product, so our own code should be a shining
+example of well-instrumented software. When you add or change a feature,
+instrument it as part of the change - not as an afterthought.
 
 This guide covers the conventions and the shared helpers. The principles are
 aligned with the
@@ -11,9 +11,9 @@ aligned with the
 ## TL;DR (the non-negotiables)
 
 1. **Every team-scoped operation carries team + user context.** Use
-   `setBusinessContext(...)` so `hyperdx.team.id` / `user.id` end up on
-   the trace. Auth middleware already does this for HTTP requests; background
-   jobs and other entry points must do it themselves.
+   `setBusinessContext(...)` so `hyperdx.team.id` / `user.id` end up on the
+   trace. Auth middleware already does this for HTTP requests; background jobs
+   and other entry points must do it themselves.
 2. **If something is worth a log, put it on the span first.** The active span is
    the wide event for the current unit of work — attach the fact there as an
    attribute. If it also marks a countable event worth aggregating (an error, a
@@ -30,14 +30,15 @@ aligned with the
    already in flight, and put point-in-time / gauge-style values (sizes, counts,
    depths, current state) there rather than in a gauge. This is an internal
    engineering preference, not a rule against metrics — counters and histograms
-   remain first-class, feed alerts and SLOs, and many HyperDX deployments depend
-   heavily on them. See [Wide events over gauges](#wide-events-over-gauges).
+   remain first-class, feed alerts and SLOs, and many ClickStack deployments
+   depend heavily on them. See
+   [Wide events over gauges](#wide-events-over-gauges).
 5. **Use the shared helpers** in
    [`packages/api/src/utils/instrumentation.ts`](../packages/api/src/utils/instrumentation.ts).
    Don't hand-roll tracer/meter lifecycle.
-6. **A new surface that queries ClickHouse declares its query attribution.**
-   One provider or one `withQueryAttribution` scope at the entry point, not a
-   change at each query. See [Query attribution](#query-attribution).
+6. **A new surface that queries ClickHouse declares its query attribution.** One
+   provider or one `withQueryAttribution` scope at the entry point, not a change
+   at each query. See [Query attribution](#query-attribution).
 
 ## The shared helper library
 
@@ -47,7 +48,7 @@ All manual instrumentation in `packages/api` goes through
 | Helper                                                    | Purpose                                                                                                      |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `withSpan(name, fn, opts?)`                               | Run an async unit of work in an active span. Records exceptions, sets OK/ERROR status, always ends the span. |
-| `setBusinessContext({ teamId, userId, email, ...extra })` | Attach standardized incident-remediation context to the trace + active span.                                 |
+| `setBusinessContext({ teamId, userId, email, ...extra })` | Attach standardized incident-remediation context to the active span and the request's HTTP server span.      |
 | `getStaticFeatureFlags()`                                 | Returns the static (env/compile-time) feature-flag states as `feature_flag.*` attributes.                    |
 | `getCounter(name, opts?)` / `getHistogram(name, opts?)`   | Memoized OTel instrument accessors. Always use these instead of `meter.create*`.                             |
 | `recordDuration(histogram, fn, attrs?)`                   | Run `fn`, recording its wall-clock duration on a histogram (even on throw).                                  |
@@ -57,10 +58,10 @@ types, so a single import is usually enough.
 
 ### Tracing
 
-Rely on the HyperDX SDK auto-instrumentation (HTTP, Express, Mongo, etc.) for
-the common path. Add a **manual span only for a meaningful unit of work** that
-auto-instrumentation can't see - a background job step, a fan-out, an expensive
-computation, an external tool invocation.
+Rely on the ClickStack SDK (`@clickhouse/clickstack-node`) auto-instrumentation
+(HTTP, Express, Mongo, etc.) for the common path. Add a **manual span only for a
+meaningful unit of work** that auto-instrumentation can't see - a background job
+step, a fan-out, an expensive computation, an external tool invocation.
 
 ```ts
 import { withSpan } from '@/utils/instrumentation';
@@ -91,8 +92,10 @@ Span rules to follow (from the Instrumentation Score spec):
 ### Business context
 
 Attach team/user context as early as possible (at the auth boundary or the top
-of a job). `setBusinessContext` writes both to the whole trace (via the HyperDX
-SDK, requires `HDX_NODE_BETA_MODE=1`) and to the active span.
+of a job). `setBusinessContext` writes to the active span and, inside an HTTP
+request, to the request's HTTP server span, so the context stays on the request
+even when the active span is a short Express middleware span. Other spans in the
+trace do not get it.
 
 ```ts
 import {
@@ -114,16 +117,16 @@ Standard attribute keys:
 | -------------------------- | ---------------------------------------------------------- |
 | `hyperdx.team.id`          | Owning team (multi-tenancy boundary). Set this everywhere. |
 | `user.id`                  | Acting user (OTel `user.*` semconv).                       |
-| `user.email`              | Acting user's email (OTel `user.*` semconv).               |
+| `user.email`               | Acting user's email (OTel `user.*` semconv).               |
 | `hyperdx.<domain>.<field>` | Domain IDs, e.g. `hyperdx.alert.id`, `hyperdx.source.id`.  |
 | `feature_flag.<name>`      | Evaluated feature/config flag state.                       |
 
 ### Wide events over gauges
 
-> **Scope:** this is HyperDX's _internal_ instrumentation philosophy for the
+> **Scope:** this is ClickStack's _internal_ instrumentation philosophy for the
 > code in this repo — not a recommendation that users pick wide events over
-> metrics. Metrics are a first-class HyperDX signal that many operators rely on;
-> nothing here discourages them. What follows is simply how _we_ prefer to
+> metrics. Metrics are a first-class ClickStack signal that many operators rely
+> on; nothing here discourages them. What follows is simply how _we_ prefer to
 > instrument our own services.
 
 We instrument in the spirit of
@@ -212,10 +215,10 @@ To make a piece of functionality SLO-able, wrap it with `withOperationMetrics`
 a streaming proxy). Both emit a standard pair of SLI signals tagged with a
 stable, low-cardinality `operation` name and `outcome` (`success` | `error`):
 
-| Metric                          | Type      | Use as          |
-| ------------------------------- | --------- | --------------- |
+| Metric                          | Type      | Use as           |
+| ------------------------------- | --------- | ---------------- |
 | `hyperdx.operation.requests`    | counter   | availability SLI |
-| `hyperdx.operation.duration_ms` | histogram | latency SLI     |
+| `hyperdx.operation.duration_ms` | histogram | latency SLI      |
 
 ```ts
 import { withOperationMetrics } from '@/utils/instrumentation';
@@ -228,8 +231,8 @@ const chartConfig = await withOperationMetrics(
 ```
 
 Because every operation reports through the same two metrics, an SLO is just a
-filter on `operation` — availability = `outcome:success` / total, latency =
-the duration histogram. Keep `operation` a constant (e.g. `ai.assistant`,
+filter on `operation` — availability = `outcome:success` / total, latency = the
+duration histogram. Keep `operation` a constant (e.g. `ai.assistant`,
 `clickhouse_proxy.query`); never interpolate IDs or user input into it. Reach
 for this on functionality with real failure modes worth a target (external
 dependencies, query proxies, AI calls) — not on thin CRUD that the HTTP
@@ -237,18 +240,18 @@ auto-instrumentation and error middleware already cover.
 
 ## Query attribution
 
-Every ClickHouse query HyperDX runs is tagged with what asked for it, so a row
-in the customer's `system.query_log` points back to a dashboard tile, a saved
-search, an alert, or an MCP tool. This is the one piece of our instrumentation
-that lands in *their* data rather than ours, so it stays small, carries no
-identity, and must never be able to fail a query.
+Every ClickHouse query ClickStack runs is tagged with what asked for it, so a
+row in the customer's `system.query_log` points back to a dashboard tile, a
+saved search, an alert, or an MCP tool. This is the one piece of our
+instrumentation that lands in _their_ data rather than ours, so it stays small,
+carries no identity, and must never be able to fail a query.
 
 Two channels carry it, set by `BaseClickhouseClient.query`:
 
-| Where | Shape | What it answers |
-| --- | --- | --- |
+| Where         | Shape                                                                         | What it answers                                                                           |
+| ------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `log_comment` | JSON payload, e.g. `{"v":1,"surface":"dashboard","dashboard":"…","tile":"…"}` | After the fact: `GROUP BY JSONExtractString(log_comment, 'tile')` over `system.query_log` |
-| `query_id` | `hdx-<surface>-<uuid>` | Right now: reading `system.processes` while a query is still running |
+| `query_id`    | `hdx-<surface>-<uuid>`                                                        | Right now: reading `system.processes` while a query is still running                      |
 
 The vocabulary lives in
 [`packages/common-utils/src/clickhouse/attribution.ts`](../packages/common-utils/src/clickhouse/attribution.ts).
@@ -302,13 +305,13 @@ calls `/api/v1/prometheus/query{,_range}`, and `/labels` and
 `buildLogComment(attribution)` in the `x-hyperdx-query-attribution` header
 (`QUERY_ATTRIBUTION_HEADER`), and the router parses it with `parseLogComment`
 into a `withQueryAttribution` scope layered over the auth middleware's `api`
-scope. The browser's surface and ids win; `trace` and `label` stay the
-server's. Queries the route runs through a ClickHouse client (label lookups,
-and the `prometheusQuery()`/`prometheusQueryRange()` fallback) pick the scope
-up as usual. Requests proxied to ClickHouse's Prometheus HTTP API on 26.6+ are tagged
-by `clickhousePrometheusRequest`: `log_comment` as a URL setting, `query_id` as
-the `X-ClickHouse-Query-Id` header, because the handler rejects `query_id` as an
-unknown setting in the URL.
+scope. The browser's surface and ids win; `trace` and `label` stay the server's.
+Queries the route runs through a ClickHouse client (label lookups before 26.9,
+and the `prometheusQuery()`/`prometheusQueryRange()` fallback) pick the scope up
+as usual. Requests proxied to ClickHouse's Prometheus HTTP API (queries on
+26.6+, label lookups on 26.9+) are tagged by `clickhousePrometheusRequest`:
+`log_comment` as a URL setting, `query_id` as the `X-ClickHouse-Query-Id`
+header, because the handler rejects `query_id` as an unknown setting in the URL.
 
 ### Rules
 
@@ -353,7 +356,7 @@ unknown setting in the URL.
 - SLO operation metrics (`withOperationMetrics`) on an external dependency:
   `packages/api/src/routers/api/ai.ts`
 - SLO operation metrics (`recordOperationOutcome`) on a streaming proxy:
-  `packages/api/src/routers/api/clickhouseProxy.ts`
+  `packages/api/src/utils/proxyOutcome.ts`
 - End-to-end + sub-operation SLO metrics on a background job (alert evaluation
   and its data fetch): `packages/api/src/tasks/checkAlerts/index.ts`
   (`alerts.evaluate`, `alerts.query`)

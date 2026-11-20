@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
+import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
 import logger from '@/utils/logger';
-import { trimToolResponse } from '@/utils/trimToolResponse';
+import { SIZE_NOTE_PREFIX, trimToolResponse } from '@/utils/trimToolResponse';
 
 import { PREFER_BUILDER_OVER_SQL_NUDGE } from './builderCatalog';
 import { denoiseSearchResults } from './denoise';
@@ -15,6 +16,7 @@ import {
   whereLanguageSchema,
   whereSchema,
 } from './schemas';
+import type { SearchCoverage } from './windowedSearch';
 
 // ─── Schema ──────────────────────────────────────────────────────────────────
 
@@ -37,8 +39,7 @@ const searchSchema = z.object({
     .optional()
     .default(50)
     .describe(
-      'Maximum number of rows to return (1-200). Default: 50. ' +
-        'Use smaller values to reduce response size.',
+      'Maximum rows to return. Use smaller values to reduce response size.',
     ),
   denoise: z
     .boolean()
@@ -46,7 +47,7 @@ const searchSchema = z.object({
     .default(false)
     .describe(
       'When true, automatically removes events matching high-frequency patterns ' +
-        '(those accounting for >10% of sampled events) from the results. ' +
+        '(those accounting for >5% of sampled events) from the results. ' +
         'Useful for cutting through log noise to find unusual or interesting events. ' +
         'Adds ~1-2s of latency for the pattern sampling queries.',
     ),
@@ -63,7 +64,7 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
     'clickstack_search',
     {
       title: 'Search Events',
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY_TOOL,
       description:
         'Browse individual log/event/trace rows. ' +
         'Use this when you need to see raw events, investigate specific log lines, ' +
@@ -75,6 +76,9 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
         'For pattern discovery, use clickstack_event_patterns instead.\n\n' +
         'Set denoise=true to automatically filter out high-frequency repetitive patterns, ' +
         'surfacing only unusual or interesting events.\n\n' +
+        'Scans newest-first. If time runs out (or an older part of the range fails) before the range is searched, ' +
+        'it returns the rows found so far with a `partial` block (reason, requestedRange, coveredRange, incompleteRange) ' +
+        'and a `hints` entry naming the next call.\n\n' +
         'Column naming: top-level columns are PascalCase (Duration, StatusCode). ' +
         "Map attributes use bracket syntax: SpanAttributes['http.method'].",
       inputSchema: searchSchema,
@@ -101,6 +105,7 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
         endDate,
         {
           maxResults: input.maxResults,
+          partialSearchResults: true,
         },
       );
 
@@ -114,7 +119,12 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
       const resultText = result.content?.[0]?.text;
       if (!resultText) return result;
 
-      let parsed: { result?: { data?: Record<string, unknown>[] } };
+      let parsed: {
+        result?: { data?: Record<string, unknown>[] };
+        trimNotes?: string[];
+        partial?: SearchCoverage;
+        hints?: string[];
+      };
       try {
         parsed = JSON.parse(resultText);
       } catch {
@@ -122,19 +132,36 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
       }
 
       const resultData = parsed.result;
+      // runConfigTile may already have trimmed the rows; keep its notes, except
+      // the size line, which denoise makes stale.
+      const firstPassNotes = (parsed.trimNotes ?? []).filter(
+        n => !n.startsWith(SIZE_NOTE_PREFIX),
+      );
       const rows = (resultData as Record<string, unknown> | undefined)?.data as
         | Record<string, unknown>[]
         | undefined;
       if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return result;
       }
+      // Keep the partial-result notice, and sample patterns only over the
+      // range the search actually reached.
+      const partialFields = parsed.partial
+        ? { partial: parsed.partial, hints: parsed.hints ?? [] }
+        : {};
+      const scannedStart = parsed.partial
+        ? (parsed.partial.incompleteRange?.startTime ??
+          parsed.partial.coveredRange?.startTime)
+        : undefined;
+      const denoiseStartDate = scannedStart
+        ? new Date(scannedStart)
+        : startDate;
 
       let denoised;
       try {
         denoised = await denoiseSearchResults(
           teamId.toString(),
           input.sourceId,
-          startDate,
+          denoiseStartDate,
           endDate,
           rows,
           {
@@ -150,7 +177,11 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
           'denoiseSearchResults failed; returning raw results',
         );
 
-        const { data: trimmedResult, isTrimmed } = trimToolResponse(resultData);
+        const {
+          data: { result: trimmedResult },
+          notes,
+        } = trimToolResponse({ result: resultData });
+        const trimNotes = [...firstPassNotes, ...notes];
         return {
           content: [
             {
@@ -164,9 +195,11 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
                     filteredRowCount: rows.length,
                     skipped: 'denoise_failed',
                   },
-                  ...(isTrimmed
+                  ...partialFields,
+                  ...(trimNotes.length > 0
                     ? {
                         note: 'Result was trimmed for context size. Narrow the time range or add filters to reduce data.',
+                        trimNotes,
                       }
                     : {}),
                 },
@@ -185,8 +218,11 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
         ...resultData,
         data: denoised.rows,
       };
-      const { data: trimmedResult, isTrimmed } =
-        trimToolResponse(denoisedResult);
+      const {
+        data: { result: trimmedResult },
+        notes,
+      } = trimToolResponse({ result: denoisedResult });
+      const trimNotes = [...firstPassNotes, ...notes];
 
       return {
         content: [
@@ -203,9 +239,11 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
                   filteredRowCount: denoised.rows.length,
                   ...(denoised.skipped ? { skipped: denoised.skipped } : {}),
                 },
-                ...(isTrimmed
+                ...partialFields,
+                ...(trimNotes.length > 0
                   ? {
                       note: 'Result was trimmed for context size. Narrow the time range or add filters to reduce data.',
+                      trimNotes,
                     }
                   : {}),
                 ...(denoised.rows.length === 0 && !denoised.skipped

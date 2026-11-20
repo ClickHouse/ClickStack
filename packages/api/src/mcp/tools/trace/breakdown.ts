@@ -1,5 +1,5 @@
 /**
- * clickstack_trace_top_time_consuming_operations
+ * clickstack_trace_top_time_consuming_ops
  *
  * Aggregate counterpart to clickstack_trace_waterfall. Given a parent-span
  * filter (a service + operation, optionally constrained to slow durations),
@@ -20,6 +20,7 @@ import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 
 import { getSource } from '@/controllers/sources';
+import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
   isQueryOutOfTime,
@@ -61,10 +62,10 @@ export function registerTraceBreakdown({
   const { teamId } = context;
 
   registerTool(
-    'clickstack_trace_top_time_consuming_operations',
+    'clickstack_trace_top_time_consuming_ops',
     {
       title: 'Top Time-Consuming Operations Across Matching Traces',
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY_TOOL,
       description: TRACE_BREAKDOWN_DESCRIPTION,
       inputSchema: traceBreakdownSchema,
     },
@@ -85,7 +86,7 @@ export function registerTraceBreakdown({
       }
       if (source.kind !== SourceKind.Trace) {
         return mcpUserError(
-          `Source ${input.sourceId} is kind="${source.kind}". clickstack_trace_top_time_consuming_operations requires a source of kind="trace".`,
+          `Source ${input.sourceId} is kind="${source.kind}". clickstack_trace_top_time_consuming_ops requires a source of kind="trace".`,
         );
       }
 

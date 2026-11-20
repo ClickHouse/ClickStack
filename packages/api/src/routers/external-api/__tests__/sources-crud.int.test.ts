@@ -90,6 +90,16 @@ describe('External API v2 Sources CRUD', () => {
     connection: connection._id.toString(),
   });
 
+  const metricSourceBody = () => ({
+    kind: SourceKind.Metric,
+    name: 'Created Metric Source',
+    from: { databaseName: DEFAULT_DATABASE, tableName: '' },
+    timestampValueExpression: 'TimeUnix',
+    resourceAttributesExpression: 'ResourceAttributes',
+    metricTables: { gauge: 'otel_metrics_gauge' },
+    connection: connection._id.toString(),
+  });
+
   const createOtherTeamConnection = (otherTeamId: mongoose.Types.ObjectId) =>
     Connection.create({
       team: otherTeamId,
@@ -257,6 +267,70 @@ describe('External API v2 Sources CRUD', () => {
       expect(persisted!.kind).toBe(SourceKind.Promql);
     });
 
+    it('should round-trip minAutoGranularity in the SQL interval format', async () => {
+      const response = await authRequest('post', BASE_URL)
+        .send({ ...metricSourceBody(), minAutoGranularity: '1 minute' })
+        .expect(200);
+
+      expect(response.body.data.minAutoGranularity).toBe('1 minute');
+
+      const persisted = await Source.findById(response.body.data.id);
+      expect(persisted!.get('minAutoGranularity')).toBe('1 minute');
+    });
+
+    it('should reject a short-form minAutoGranularity', async () => {
+      // Unlike materializedViews[].minGranularity, this field is not mapped
+      // from the short form, so the documented contract is the SQL interval.
+      await authRequest('post', BASE_URL)
+        .send({ ...metricSourceBody(), minAutoGranularity: '1m' })
+        .expect(400);
+    });
+
+    it('should round-trip promqlBackend on a promql source', async () => {
+      const body = {
+        kind: SourceKind.Promql,
+        name: 'Prometheus Metrics',
+        from: { databaseName: 'default', tableName: 'default' },
+        timestampValueExpression: 'timestamp',
+        connection: connection._id.toString(),
+        promqlBackend: 'clickhouse-http',
+      };
+
+      const created = await authRequest('post', BASE_URL)
+        .send(body)
+        .expect(200);
+      expect(created.body.data.promqlBackend).toBe('clickhouse-http');
+
+      const updated = await authRequest(
+        'put',
+        `${BASE_URL}/${created.body.data.id}`,
+      )
+        .send({ ...body, promqlBackend: 'table-function' })
+        .expect(200);
+      expect(updated.body.data.promqlBackend).toBe('table-function');
+
+      const fetched = await authRequest(
+        'get',
+        `${BASE_URL}/${created.body.data.id}`,
+      ).expect(200);
+      expect(fetched.body.data.promqlBackend).toBe('table-function');
+    });
+
+    it('should return 400 for a promqlBackend that is not a known backend', async () => {
+      await authRequest('post', BASE_URL)
+        .send({
+          kind: SourceKind.Promql,
+          name: 'Prometheus Metrics',
+          from: { databaseName: 'default', tableName: 'default' },
+          timestampValueExpression: 'timestamp',
+          connection: connection._id.toString(),
+          promqlBackend: 'http',
+        })
+        .expect(400);
+
+      expect(await Source.findOne({ team: team._id })).toBeNull();
+    });
+
     it('should return 400 when connection is not a valid id', async () => {
       await authRequest('post', BASE_URL)
         .send({ ...logSourceBody(), connection: 'my-connection-name' })
@@ -282,6 +356,55 @@ describe('External API v2 Sources CRUD', () => {
       await authRequest('post', BASE_URL)
         .send({ kind: SourceKind.Log, name: 'Missing required fields' })
         .expect(400);
+    });
+  });
+
+  describe('PromQL sources with PromQL disabled', () => {
+    const promqlSourceBody = () => ({
+      kind: SourceKind.Promql,
+      name: 'Prometheus Metrics',
+      from: { databaseName: 'default', tableName: 'default' },
+      timestampValueExpression: 'timestamp',
+      connection: connection._id.toString(),
+    });
+
+    beforeEach(() => {
+      jest.replaceProperty(config, 'IS_PROMQL_ENABLED', false);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('rejects creating a PromQL source', async () => {
+      const response = await authRequest('post', BASE_URL)
+        .send(promqlSourceBody())
+        .expect(400);
+
+      expect(response.body.message).toBe(
+        'PromQL is not enabled on this deployment',
+      );
+      expect(await Source.findOne({ team: team._id })).toBeNull();
+    });
+
+    it('rejects updating a source to PromQL', async () => {
+      const logSource = await LogSource.create({
+        ...logSourceBody(),
+        team: team._id,
+      });
+
+      const response = await authRequest('put', `${BASE_URL}/${logSource._id}`)
+        .send(promqlSourceBody())
+        .expect(400);
+
+      expect(response.body.message).toBe(
+        'PromQL is not enabled on this deployment',
+      );
+      expect((await Source.findById(logSource._id))!.kind).toBe(SourceKind.Log);
+    });
+
+    it('still creates other source kinds', async () => {
+      await authRequest('post', BASE_URL).send(logSourceBody()).expect(200);
     });
   });
 
