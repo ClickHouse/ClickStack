@@ -300,6 +300,49 @@ describe('inferMaterializedViewConfig', () => {
     });
   });
 
+  it.each([
+    {
+      createdAt: '2026-11-20T04:12:18Z',
+      minDate: '2026-11-20T05:00:00.000Z',
+    },
+    // Created on a bucket boundary: that bucket is already whole
+    {
+      createdAt: '2026-11-20T04:00:00Z',
+      minDate: '2026-11-20T04:00:00.000Z',
+    },
+  ])(
+    'should start a view created at $createdAt at its first whole bucket',
+    async ({ createdAt, minDate }) => {
+      const getTableMetadata = mockMetadata.getTableMetadata;
+      mockMetadata.getTableMetadata = jest.fn().mockImplementation(args =>
+        args.tableName === 'test_mv'
+          ? Promise.resolve({
+              ...mv.meta,
+              metadata_modification_time: createdAt,
+            })
+          : getTableMetadata(args),
+      );
+
+      const actualConfig = await inferMaterializedViewConfig(
+        {
+          databaseName: 'test_db',
+          tableName: 'test_mv',
+          connectionId: 'test_connection',
+        },
+        {
+          databaseName: 'test_db',
+          tableName: 'test_source_table',
+          connectionId: 'test_connection',
+        },
+        mockMetadata,
+      );
+
+      // One-hour buckets, from the view's toStartOfHour
+      expect(actualConfig?.minGranularity).toBe('1 hour');
+      expect(actualConfig?.minDate).toBe(minDate);
+    },
+  );
+
   it('should infer materialized view configuration when given the name of a SummingMergeTree target table', async () => {
     const sourceTableConnection: TableConnection = {
       databaseName: 'test_db',
