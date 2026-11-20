@@ -2144,12 +2144,29 @@ function DBSearchPageContent() {
       ? searchedSource
       : null;
 
+  const histogramGroupBy = resolveSearchGroupBy(groupByParam, searchedSource);
+
+  // The histogram, trace heatmap and filter queries don't select the table's
+  // columns, so they only take the aliases they use. The rest would refetch
+  // them whenever a column is added or removed.
+  const referencedAliasWith = useMemo(
+    () =>
+      chartConfig == null
+        ? undefined
+        : getReferencedWithClauses(aliasWith, [
+            chartConfig.where,
+            JSON.stringify(chartConfig.filters ?? []),
+            histogramGroupBy ?? '',
+            chartConfig.implicitColumnExpression ?? '',
+          ]),
+    [chartConfig, aliasWith, histogramGroupBy],
+  );
+
   const histogramTimeChartConfig = useMemo(() => {
     if (chartConfig == null) {
       return undefined;
     }
 
-    const groupBy = resolveSearchGroupBy(groupByParam, searchedSource);
     return {
       ...chartConfig,
       select: [
@@ -2163,12 +2180,7 @@ function DBSearchPageContent() {
       granularity: 'auto',
       dateRange: searchedTimeRange,
       displayType: DisplayType.StackedBar,
-      with: getReferencedWithClauses(aliasWith, [
-        chartConfig.where,
-        JSON.stringify(chartConfig.filters ?? []),
-        groupBy ?? '',
-        chartConfig.implicitColumnExpression ?? '',
-      ]),
+      with: referencedAliasWith,
       // Preserve the original table select string for "View Events" links.
       // convertToTimeChartConfig drops it from the query key.
       eventTableSelect: searchedConfig.select ?? undefined,
@@ -2181,15 +2193,14 @@ function DBSearchPageContent() {
       alignDateRangeToGranularity: false,
       // Make sure the end date is inclusive so that the histogram and table counts match
       dateRangeEndInclusive: true,
-      groupBy,
+      groupBy: histogramGroupBy,
     } satisfies BuilderChartConfigWithDateRange;
   }, [
     chartConfig,
-    searchedSource,
-    aliasWith,
+    referencedAliasWith,
     searchedTimeRange,
     searchedConfig.select,
-    groupByParam,
+    histogramGroupBy,
   ]);
 
   // The default severity/status grouping reads without a legend.
@@ -2230,9 +2241,9 @@ function DBSearchPageContent() {
             ...chartConfig,
             orderBy: undefined,
             dateRange: searchedTimeRange,
-            with: aliasWith,
+            with: referencedAliasWith,
           } satisfies BuilderChartConfigWithDateRange),
-    [chartConfig, searchedTimeRange, aliasWith],
+    [chartConfig, searchedTimeRange, referencedAliasWith],
   );
 
   // While the heatmap shows, live tail stays off as in delta and pattern modes:
@@ -2313,10 +2324,13 @@ function DBSearchPageContent() {
   );
 
   const filtersChartConfig = useMemo<BuilderChartConfigWithDateRange>(() => {
+    // The filter queries set their own select, so the table's would only
+    // change their query keys.
     const overrides = {
+      select: '',
       orderBy: undefined,
       dateRange: searchedTimeRange,
-      with: aliasWith,
+      with: referencedAliasWith,
     } as const;
     return chartConfig
       ? {
@@ -2331,10 +2345,9 @@ function DBSearchPageContent() {
             tableName: '',
           },
           where: '',
-          select: '',
           ...overrides,
         };
-  }, [chartConfig, searchedTimeRange, aliasWith]);
+  }, [chartConfig, searchedTimeRange, referencedAliasWith]);
 
   const openNewSourceModal = useCallback(() => {
     setNewSourceModalOpened(true);
