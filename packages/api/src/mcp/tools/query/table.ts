@@ -256,8 +256,6 @@ export function defaultOrderBy(
 // ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerTable({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_table',
     {
@@ -338,13 +336,10 @@ export function registerTable({ context, registerTool }: ToolRegistrar) {
           defaultOrderBy(selectItems, groupBy, displayType),
       });
 
-      const result = await runConfigTile(
-        teamId.toString(),
-        tile,
-        startDate,
-        endDate,
-        { having: input.having, limit: input.limit },
-      );
+      const result = await runConfigTile(context, tile, startDate, endDate, {
+        having: input.having,
+        limit: input.limit,
+      });
 
       // Surface language-mismatch warnings so the agent knows the top-level
       // where was not applied to every select item.
