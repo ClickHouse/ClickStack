@@ -38,6 +38,7 @@ jest.mock('@tanstack/react-query', () => ({
 jest.mock('@/utils', () => ({ hashCode: jest.fn(() => 0) }));
 
 import { LEGACY_CHART_PALETTE_TOKEN_MAP } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { hdxServer } from '@/api';
 import {
@@ -47,7 +48,7 @@ import {
   useUpdateDashboard,
 } from '@/dashboard';
 
-const hdxServerMock = hdxServer as jest.Mock;
+const hdxServerMock = jest.mocked(hdxServer);
 
 const LEGACY_TO_HUE_CASES = Object.entries(LEGACY_CHART_PALETTE_TOKEN_MAP);
 
@@ -61,9 +62,11 @@ const remoteDashboardWithTileColor = (color: unknown) => [
 ];
 
 const setRemotePayload = (payload: unknown) => {
-  hdxServerMock.mockReturnValue({
-    json: jest.fn().mockResolvedValue(payload),
-  });
+  hdxServerMock.mockReturnValue(
+    fromPartial({
+      json: jest.fn().mockResolvedValue(payload),
+    }),
+  );
 };
 
 beforeEach(() => {
@@ -145,9 +148,11 @@ describe('useCreateDashboard / useUpdateDashboard write-time normalization', () 
   beforeEach(() => {
     // hdxServer is invoked as `hdxServer(url, opts).json<T>()` for POST
     // but as `hdxServer(url, opts)` for PATCH; mock to handle both.
-    hdxServerMock.mockReturnValue({
-      json: jest.fn().mockResolvedValue({ id: 'a' }),
-    });
+    hdxServerMock.mockReturnValue(
+      fromPartial({
+        json: jest.fn().mockResolvedValue({ id: 'a' }),
+      }),
+    );
   });
 
   it('rewrites legacy chart-N to hue tokens before POST in useCreateDashboard', async () => {
@@ -192,10 +197,21 @@ describe('useCreateDashboard / useUpdateDashboard write-time normalization', () 
       tags: [],
     });
 
-    const call = hdxServerMock.mock.calls[0];
-    expect(call[1].json.tiles[0].config).toMatchObject({
-      color: 'chart-future-magenta',
-    });
+    expect(hdxServerMock).toHaveBeenNthCalledWith(
+      1,
+      'dashboards',
+      expect.objectContaining({
+        json: expect.objectContaining({
+          tiles: [
+            expect.objectContaining({
+              config: expect.objectContaining({
+                color: 'chart-future-magenta',
+              }),
+            }),
+          ],
+        }),
+      }),
+    );
   });
 
   it('rewrites legacy chart-N to hue tokens before PATCH in useUpdateDashboard', async () => {
@@ -236,8 +252,17 @@ describe('useCreateDashboard / useUpdateDashboard write-time normalization', () 
       ],
     });
 
-    const call = hdxServerMock.mock.calls[0];
-    expect(call[1].json.tiles[0].config).toEqual({ color: 'chart-orange' });
+    expect(hdxServerMock).toHaveBeenNthCalledWith(
+      1,
+      'dashboards/a',
+      expect.objectContaining({
+        json: expect.objectContaining({
+          tiles: [
+            expect.objectContaining({ config: { color: 'chart-orange' } }),
+          ],
+        }),
+      }),
+    );
   });
 });
 

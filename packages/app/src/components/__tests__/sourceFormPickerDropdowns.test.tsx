@@ -1,6 +1,7 @@
 import { useForm } from 'react-hook-form';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { useDatabasesDirect, useTablesDirect } from '@/clickhouse';
 import { ConnectionSelectControlled } from '@/components/ConnectionSelect';
@@ -28,10 +29,6 @@ jest.mock('../SourceSelect', () => ({
 // Mantine's Combobox calls scrollIntoView when its dropdown opens; jsdom lacks it.
 window.HTMLElement.prototype.scrollIntoView = jest.fn();
 
-// The hooks return large `UseQueryResult`/connection types; the components only
-// read a couple of fields, so cast to a loose mock for these minimal fixtures.
-const asMock = (fn: unknown) => fn as jest.Mock;
-
 // Use a large list so the dropdown overflows like the bug report (HDX-4445).
 const OPTION_COUNT = 20;
 const databaseNames = Array.from(
@@ -48,15 +45,21 @@ const connections = Array.from({ length: OPTION_COUNT }, (_, i) => ({
 }));
 
 beforeEach(() => {
-  asMock(useDatabasesDirect).mockReturnValue({
-    data: { data: databaseNames.map(name => ({ name })) },
-    isLoading: false,
-  });
-  asMock(useTablesDirect).mockReturnValue({
-    data: { data: tableNames.map(name => ({ name })) },
-    isLoading: false,
-  });
-  asMock(useConnections).mockReturnValue({ data: connections });
+  jest.mocked(useDatabasesDirect).mockReturnValue(
+    fromPartial({
+      data: { data: databaseNames.map(name => ({ name })) },
+      isLoading: false,
+    }),
+  );
+  jest.mocked(useTablesDirect).mockReturnValue(
+    fromPartial({
+      data: { data: tableNames.map(name => ({ name })) },
+      isLoading: false,
+    }),
+  );
+  jest
+    .mocked(useConnections)
+    .mockReturnValue(fromPartial({ data: connections }));
 });
 
 function DatabaseHarness() {

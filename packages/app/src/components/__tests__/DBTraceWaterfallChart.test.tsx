@@ -1,5 +1,8 @@
 import React from 'react';
+import { ColumnMeta } from '@hyperdx/common-utils/dist/clickhouse';
+import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import {
+  ChartConfigWithOptTimestamp,
   SourceKind,
   TLogSource,
   TTraceSource,
@@ -7,6 +10,7 @@ import {
 import { screen, waitFor } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { RowSidePanelContext } from '@/components/DBRowSidePanel';
 import {
@@ -131,18 +135,31 @@ jest.mock('@/hooks/useWaterfallSearchState', () => ({
   default: (...args: any[]) => mockUseWaterfallSearchState(...args),
 }));
 
-const mockUseOffsetPaginatedQuery = useOffsetPaginatedQuery as jest.Mock;
-const mockUseRowWhere = useRowWhere as jest.Mock;
-const mockUseColumns = useColumns as jest.Mock;
+const mockUseOffsetPaginatedQuery = jest.mocked(useOffsetPaginatedQuery);
+const mockUseRowWhere = jest.mocked(useRowWhere);
+const mockUseColumns = jest.mocked(useColumns);
 const MockTimelineChart = TimelineChart as any;
 
 // Mirrors useColumns, which is disabled, so never loading, without a table.
-const setupColumnsMock = (state: { data?: object[]; isLoading?: boolean }) =>
-  mockUseColumns.mockImplementation(({ tableName }: { tableName: string }) =>
-    tableName ? { isLoading: false, ...state } : { isLoading: false },
+// A loading query result carries no data, so the two states are built apart.
+const setupColumnsMock = ({
+  data,
+  isLoading = false,
+}: {
+  data?: Partial<ColumnMeta>[];
+  isLoading?: boolean;
+}) =>
+  mockUseColumns.mockImplementation(({ tableName }) =>
+    fromPartial(
+      tableName && isLoading
+        ? { isLoading: true }
+        : { isLoading: false, data: tableName ? data : undefined },
+    ),
   );
 
-const selectsSeverityNumber = (query: { select: Array<{ alias?: string }> }) =>
+const selectsSeverityNumber = (query: ChartConfigWithOptTimestamp) =>
+  isBuilderChartConfig(query) &&
+  Array.isArray(query.select) &&
   query.select.some(s => s.alias === 'SeverityNumber');
 
 describe('DBTraceWaterfallChartContainer', () => {
@@ -294,7 +311,11 @@ describe('DBTraceWaterfallChartContainer', () => {
     mockUseOffsetPaginatedQuery.mockImplementation((query: any, opts: any) => {
       // Disabled queries never fire (mirrors react-query).
       if (opts?.enabled === false) {
-        return { data: undefined, isFetching: false, error: undefined };
+        return fromPartial({
+          data: undefined,
+          isFetching: false,
+          error: undefined,
+        });
       }
       const isLog = query?.from?.tableName === 'log_table';
       const isBefore = query?.dateRangeStartInclusive === true;
@@ -304,28 +325,30 @@ describe('DBTraceWaterfallChartContainer', () => {
 
       const fatal = isLog ? logError : traceError;
       if (fatal) {
-        return { data: undefined, isFetching, error: fatal };
+        return fromPartial({ data: undefined, isFetching, error: fatal });
       }
       const filterErr = isLog ? logFilterError : traceFilterError;
       if (filterErr && isFiltered) {
-        return { data: undefined, isFetching, error: filterErr };
+        return fromPartial({ data: undefined, isFetching, error: filterErr });
       }
 
       const data = isLog ? logData : traceData;
-      return {
+      return fromPartial({
         data: isBefore ? data : emptyData,
         isFetching,
         error: undefined,
-      };
+      });
     });
   };
 
   // Test cases
   it('renders loading state when data is being fetched', () => {
-    mockUseOffsetPaginatedQuery.mockReturnValue({
-      data: undefined,
-      isFetching: true,
-    });
+    mockUseOffsetPaginatedQuery.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isFetching: true,
+      }),
+    );
     renderComponent();
     expect(screen.getByText('Loading Traces...')).toBeInTheDocument();
   });
@@ -726,10 +749,12 @@ describe('DBTraceWaterfallChartContainer', () => {
     );
   });
   it('renders empty state when no data is available', async () => {
-    mockUseOffsetPaginatedQuery.mockReturnValue({
-      data: emptyData,
-      isFetching: false,
-    });
+    mockUseOffsetPaginatedQuery.mockReturnValue(
+      fromPartial({
+        data: emptyData,
+        isFetching: false,
+      }),
+    );
 
     renderComponent();
 
@@ -746,9 +771,9 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent(mockLogTableSource, "trace'with-quote");
 
     expect(mockUseOffsetPaginatedQuery).toHaveBeenCalled();
-    expect(mockUseOffsetPaginatedQuery.mock.calls[0][0].where).toBe(
-      "TraceId = 'trace\\'with-quote'",
-    );
+    expect(mockUseOffsetPaginatedQuery.mock.calls[0]?.[0]).toMatchObject({
+      where: "TraceId = 'trace\\'with-quote'",
+    });
   });
 
   it('renders HTTP spans with URL information', async () => {
@@ -1436,13 +1461,19 @@ describe('useEventsAroundFocus', () => {
 
     if (enabled) {
       mockUseOffsetPaginatedQuery
-        .mockReturnValueOnce({ data: beforeData, isFetching: false })
-        .mockReturnValueOnce({ data: afterData, isFetching: false });
+        .mockReturnValueOnce(
+          fromPartial({ data: beforeData, isFetching: false }),
+        )
+        .mockReturnValueOnce(
+          fromPartial({ data: afterData, isFetching: false }),
+        );
     } else {
-      mockUseOffsetPaginatedQuery.mockReturnValue({
-        data: { data: [], meta: [] },
-        isFetching: false,
-      });
+      mockUseOffsetPaginatedQuery.mockReturnValue(
+        fromPartial({
+          data: { data: [], meta: [] },
+          isFetching: false,
+        }),
+      );
     }
 
     const { result } = renderHook(() =>
