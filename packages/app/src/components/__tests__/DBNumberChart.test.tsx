@@ -14,11 +14,7 @@ import {
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useSource } from '@/source';
 import { NumberFormat } from '@/types';
-import {
-  ChartPaletteToken,
-  formatNumber,
-  getColorFromCSSToken,
-} from '@/utils';
+import { ChartPaletteToken, formatNumber, getColorFromCSSToken } from '@/utils';
 
 // Mock dependencies
 jest.mock('@/hooks/useChartConfig', () => ({
