@@ -82,7 +82,7 @@ import { queryPromqlChartConfig } from '@/utils/promqlChartQuery';
 const createMockChartConfig = (
   overrides: Partial<ChartConfigWithDateRange> = {},
 ): ChartConfigWithDateRange =>
-  ({
+  fromPartial({
     timestampValueExpression: 'Timestamp',
     connection: 'foo',
     from: {
@@ -99,7 +99,7 @@ const createMockChartConfig = (
     },
     orderBy: 'Timestamp DESC',
     ...overrides,
-  }) as ChartConfigWithDateRange;
+  });
 
 describe('useOffsetPaginatedQuery', () => {
   // Increase timeout for complex async operations

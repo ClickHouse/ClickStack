@@ -286,10 +286,9 @@ describe('normalizeRawDashboardTileColors', () => {
 
   it('leaves unresolvable color strings in place for the schema to flag', () => {
     const input = { tiles: [{ config: { color: 'chart-future-magenta' } }] };
-    const result = normalizeRawDashboardTileColors(input) as {
-      tiles: Array<{ config: { color: string } }>;
-    };
-    expect(result.tiles[0].config.color).toBe('chart-future-magenta');
+    expect(normalizeRawDashboardTileColors(input)).toMatchObject({
+      tiles: [{ config: { color: 'chart-future-magenta' } }],
+    });
   });
 
   it('returns the input untouched when tiles is missing or non-array', () => {
