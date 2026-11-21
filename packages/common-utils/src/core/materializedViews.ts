@@ -221,12 +221,19 @@ async function isSimpleAggregateFunction(
   }
 }
 
+// Quantile sketches whose state is built with an accuracy ahead of the level,
+// e.g. quantileDD(relative_accuracy, level) and quantileGK(accuracy, level).
+// Their -Merge has to be given the same accuracy: with the level alone,
+// ClickHouse reads the level as the accuracy and returns a different quantile
+// without raising an error.
+const ACCURACY_PARAMETERIZED_QUANTILES = new Set(['quantileDD', 'quantileGK']);
+
 // Variants of quantile (ex. quantileExact, quantileDD, etc.)
 async function getQuantileAggregateFunction(
   tableConnection: TableConnection,
   column: string,
   metadata: Metadata,
-) {
+): Promise<{ name: string; sketchParams?: number[] } | undefined> {
   try {
     const columnMeta = await metadata.getColumn({
       ...tableConnection,
@@ -238,16 +245,31 @@ async function getQuantileAggregateFunction(
       return undefined;
     }
 
-    // Use regex to extract the quantile function name inside AggregateFunction(...)
+    // Use regex to extract the quantile function name and its parameters inside AggregateFunction(...)
     // For example, AggregateFunction(quantile(0.95), Int64)       --> quantile
     //              AggregateFunction(quantileTDigest(0.95), Int64) --> quantileTDigest
-    //              AggregateFunction(quantileDD(0.001, 0.95), Int64) --> quantileDD
+    //              AggregateFunction(quantileDD(0.001, 0.95), Int64) --> quantileDD, accuracy 0.001
     // The plural `quantiles*` variants return arrays, but a select item carries a
     // single `level`, so we normalize to the singular form to pull a scalar value.
     //              AggregateFunction(quantiles(0.9, 0.95), UInt64)        --> quantile
     //              AggregateFunction(quantilesTDigest(0.9, 0.95), UInt64) --> quantileTDigest
-    const match = type.match(/^AggregateFunction\(\s*([^(, ]+)\s*\(/);
-    return match?.[1]?.replace(/^quantiles/, 'quantile');
+    //              AggregateFunction(quantilesDD(0.01, 0.9, 0.95), UInt64) --> quantileDD, accuracy 0.01
+    const match = type.match(/^AggregateFunction\(\s*([^(, ]+)\s*\(([^)]*)\)/);
+    const name = match?.[1]?.replace(/^quantiles/, 'quantile');
+    if (!name) {
+      return undefined;
+    }
+    if (!ACCURACY_PARAMETERIZED_QUANTILES.has(name)) {
+      return { name };
+    }
+
+    // The accuracy is the first parameter in both the singular and plural forms.
+    // Without it the merge can't match the state, so leave the select item
+    // unconverted and let the EXPLAIN check reject this view.
+    const accuracy = Number(match?.[2]?.split(',')[0]?.trim());
+    return Number.isFinite(accuracy) && accuracy > 0
+      ? { name, sketchParams: [accuracy] }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -439,6 +461,7 @@ async function convertSelectToMaterializedViewSelect(
     );
   }
 
+  let sketchParams: number[] | undefined;
   if (isQuantileSelectItem(selectItem)) {
     const quantileAggregateFunction = await getQuantileAggregateFunction(
       mvTableConnection,
@@ -446,7 +469,8 @@ async function convertSelectToMaterializedViewSelect(
       metadata,
     );
     if (quantileAggregateFunction) {
-      aggFn = quantileAggregateFunction;
+      aggFn = quantileAggregateFunction.name;
+      sketchParams = quantileAggregateFunction.sketchParams;
     }
   }
 
@@ -461,6 +485,7 @@ async function convertSelectToMaterializedViewSelect(
     ...selectItem,
     valueExpression: aggregatedColumnConfig.mvColumn,
     aggFn: aggMergeFn,
+    ...(sketchParams != null ? { sketchParams } : {}),
   };
 }
 

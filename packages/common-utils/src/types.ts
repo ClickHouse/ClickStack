@@ -481,6 +481,11 @@ export const DerivedColumnSchema = z.intersection(
     // `ColorConditionSchema` so no schema change was needed (the union's
     // string-match operators were always intended for this slice).
     colorRules: z.array(ColorConditionSchema).max(10).optional(),
+    // Parameters a materialized view's quantile sketch was built with, other
+    // than the level: the accuracy of quantileDD(0.01, 0.5) or
+    // quantileGK(100, 0.5). The materialized view optimizer sets it so the
+    // -Merge call matches the stored state; it is not user-configurable.
+    sketchParams: z.array(z.number()).optional(),
   }),
 );
 export const SelectListSchema = z.array(DerivedColumnSchema).or(z.string());
