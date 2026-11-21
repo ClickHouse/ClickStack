@@ -143,17 +143,11 @@ describe('useOffsetPaginatedQuery', () => {
     };
 
     // Reset and set up the mock to return a fresh client each time
-    (
-      getClickhouseClient as jest.MockedFunction<typeof getClickhouseClient>
-    ).mockReset();
-    (
-      getClickhouseClient as jest.MockedFunction<typeof getClickhouseClient>
-    ).mockReturnValue(mockClickhouseClient);
+    jest.mocked(getClickhouseClient).mockReset();
+    jest.mocked(getClickhouseClient).mockReturnValue(mockClickhouseClient);
 
     // Mock renderChartConfig
-    (
-      renderChartConfig as jest.MockedFunction<typeof renderChartConfig>
-    ).mockResolvedValue({
+    jest.mocked(renderChartConfig).mockResolvedValue({
       sql: 'SELECT * FROM traces',
       params: {},
     });

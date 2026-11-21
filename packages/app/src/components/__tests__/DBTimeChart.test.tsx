@@ -61,9 +61,9 @@ jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
 jest.mock('../charts/DateRangeIndicator', () => jest.fn(() => null));
 
 describe('DBTimeChart', () => {
-  const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
-  const mockUseMe = api.useMe as jest.Mock;
-  const mockUseSource = useSource as jest.Mock;
+  const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
+  const mockUseMe = jest.mocked(api.useMe);
+  const mockUseSource = jest.mocked(useSource);
 
   const baseTestConfig = {
     dateRange: [new Date('2024-01-01'), new Date('2024-01-02')] as [Date, Date],
@@ -77,28 +77,34 @@ describe('DBTimeChart', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    mockUseMe.mockReturnValue({
-      data: { team: { parallelizeWhenPossible: false } },
-      isLoading: false,
-    });
+    mockUseMe.mockReturnValue(
+      fromPartial({
+        data: { team: { parallelizeWhenPossible: false } },
+        isLoading: false,
+      }),
+    );
 
-    mockUseSource.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-    });
+    mockUseSource.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: false,
+      }),
+    );
 
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: {
-        data: [{ timestamp: 1704067200, value: 100 }],
-        meta: [],
-        rows: 1,
-        isComplete: true,
-      },
-      isLoading: false,
-      isError: false,
-      isSuccess: true,
-      isPlaceholderData: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: {
+          data: [{ timestamp: 1704067200, value: 100 }],
+          meta: [],
+          rows: 1,
+          isComplete: true,
+        },
+        isLoading: false,
+        isError: false,
+        isSuccess: true,
+        isPlaceholderData: false,
+      }),
+    );
   });
 
   it('passes enabled: false to useQueriedChartConfig for previous period when compareToPreviousPeriod is undefined', () => {
@@ -113,7 +119,7 @@ describe('DBTimeChart', () => {
     const [, secondCallOptions] = mockUseQueriedChartConfig.mock.calls[1];
 
     // Verify that enabled is false for the previous period query
-    expect(secondCallOptions.enabled).toBe(false);
+    expect(secondCallOptions?.enabled).toBe(false);
   });
 
   it('passes enabled: true to useQueriedChartConfig for previous period when compareToPreviousPeriod is true', () => {
@@ -128,7 +134,7 @@ describe('DBTimeChart', () => {
     const [, secondCallOptions] = mockUseQueriedChartConfig.mock.calls[1];
 
     // Verify that enabled is true for the previous period query
-    expect(secondCallOptions.enabled).toBe(true);
+    expect(secondCallOptions?.enabled).toBe(true);
   });
 
   it('passes enabled: false to useQueriedChartConfig for previous period when compareToPreviousPeriod is false', () => {
@@ -143,7 +149,7 @@ describe('DBTimeChart', () => {
     const [, secondCallOptions] = mockUseQueriedChartConfig.mock.calls[1];
 
     // Verify that enabled is false for the previous period query
-    expect(secondCallOptions.enabled).toBe(false);
+    expect(secondCallOptions?.enabled).toBe(false);
   });
 
   it('respects the enabled prop when determining if previous period query should run', () => {
@@ -160,37 +166,38 @@ describe('DBTimeChart', () => {
 
     // Verify that enabled is false even when compareToPreviousPeriod is true
     // because the enabled prop is false
-    expect(secondCallOptions.enabled).toBe(false);
+    expect(secondCallOptions?.enabled).toBe(false);
   });
 
   describe('empty state', () => {
-    const emptyResult = {
-      data: {
-        data: [],
-        meta: [
-          { name: 'timestamp', type: 'DateTime' },
-          { name: 'value', type: 'UInt64' },
-        ],
-        rows: 0,
-        isComplete: true,
-      },
-      isLoading: false,
-      isFetching: false,
-      isError: false,
-      isSuccess: true,
-      isPlaceholderData: false,
-    };
+    const emptyResult = ({ isFetching = false } = {}) =>
+      fromPartial<ReturnType<typeof useQueriedChartConfig>>({
+        data: {
+          data: [],
+          meta: [
+            { name: 'timestamp', type: 'DateTime' },
+            { name: 'value', type: 'UInt64' },
+          ],
+          rows: 0,
+          isComplete: !isFetching,
+        },
+        isLoading: false,
+        isFetching,
+        isError: false,
+        isSuccess: true,
+        isPlaceholderData: false,
+      });
     // Zero-filled buckets would otherwise render an empty line, not the empty state.
     const emptyConfig = { ...baseTestConfig, fillNulls: false as const };
-    const isPreviousPeriod = (config: { dateRange: [Date, Date] }) =>
-      config.dateRange[0] < baseTestConfig.dateRange[0];
+    const isPreviousPeriod = (config: { dateRange?: [Date, Date] }) => {
+      const start = config.dateRange?.[0];
+      return start != null && start < baseTestConfig.dateRange[0];
+    };
 
     it('shows loading while the query is still fetching', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        ...emptyResult,
-        data: { ...emptyResult.data, isComplete: false },
-        isFetching: true,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        emptyResult({ isFetching: true }),
+      );
 
       renderWithMantine(<DBTimeChart config={emptyConfig} />);
 
@@ -200,7 +207,7 @@ describe('DBTimeChart', () => {
     it('shows no data when the previous-period query fails', () => {
       mockUseQueriedChartConfig.mockImplementation(config =>
         isPreviousPeriod(config)
-          ? {
+          ? fromPartial({
               data: undefined,
               isLoading: false,
               isFetching: false,
@@ -208,8 +215,8 @@ describe('DBTimeChart', () => {
               error: new Error('previous period failed'),
               isSuccess: false,
               isPlaceholderData: false,
-            }
-          : emptyResult,
+            })
+          : emptyResult(),
       );
 
       renderWithMantine(
@@ -342,18 +349,20 @@ describe('DBTimeChart', () => {
     };
 
     beforeEach(() => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: {
-          data: highCardinalityData,
-          meta: highCardinalityMeta,
-          rows: GROUP_COUNT,
-          isComplete: true,
-        },
-        isLoading: false,
-        isError: false,
-        isSuccess: true,
-        isPlaceholderData: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: {
+            data: highCardinalityData,
+            meta: highCardinalityMeta,
+            rows: GROUP_COUNT,
+            isComplete: true,
+          },
+          isLoading: false,
+          isError: false,
+          isSuccess: true,
+          isPlaceholderData: false,
+        }),
+      );
     });
 
     it('surfaces the load-all button when the render cap hides series, then hides it after loading all', async () => {
@@ -480,18 +489,20 @@ describe('DBTimeChart', () => {
         value: i + 1,
         group: `g${i}`,
       }));
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: {
-          data: bigData,
-          meta: highCardinalityMeta,
-          rows: BIG_GROUP_COUNT,
-          isComplete: true,
-        },
-        isLoading: false,
-        isError: false,
-        isSuccess: true,
-        isPlaceholderData: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: {
+            data: bigData,
+            meta: highCardinalityMeta,
+            rows: BIG_GROUP_COUNT,
+            isComplete: true,
+          },
+          isLoading: false,
+          isError: false,
+          isSuccess: true,
+          isPlaceholderData: false,
+        }),
+      );
 
       renderWithMantine(<DBTimeChart config={groupByConfig} />);
 
@@ -664,8 +675,10 @@ describe('DBTimeChart', () => {
       const firstCallConfig = mockUseQueriedChartConfig.mock.calls[0][0];
       // The config should be passed as-is, not wrapped by convertToTimeChartConfig
       // (which would add `limit`, `dateRangeEndInclusive`, etc.)
-      expect(firstCallConfig.configType).toBe('sql');
-      expect(firstCallConfig.sqlTemplate).toBe(rawSqlConfig.sqlTemplate);
+      expect(firstCallConfig).toMatchObject({
+        configType: 'sql',
+        sqlTemplate: rawSqlConfig.sqlTemplate,
+      });
       expect(firstCallConfig).not.toHaveProperty('limit');
     });
 
@@ -679,24 +692,26 @@ describe('DBTimeChart', () => {
     });
 
     it('renders without crashing when query returns timestamp and value columns', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: {
-          data: [
-            { ts: 1704067200, count: 42 },
-            { ts: 1704067260, count: 17 },
-          ],
-          meta: [
-            { name: 'ts', type: 'DateTime' },
-            { name: 'count', type: 'UInt64' },
-          ],
-          rows: 2,
-          isComplete: true,
-        },
-        isLoading: false,
-        isError: false,
-        isSuccess: true,
-        isPlaceholderData: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: {
+            data: [
+              { ts: 1704067200, count: 42 },
+              { ts: 1704067260, count: 17 },
+            ],
+            meta: [
+              { name: 'ts', type: 'DateTime' },
+              { name: 'count', type: 'UInt64' },
+            ],
+            rows: 2,
+            isComplete: true,
+          },
+          isLoading: false,
+          isError: false,
+          isSuccess: true,
+          isPlaceholderData: false,
+        }),
+      );
 
       // Should render without throwing
       expect(() =>
@@ -705,18 +720,20 @@ describe('DBTimeChart', () => {
     });
 
     it('renders without crashing when query returns no data', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: {
-          data: [],
-          meta: [],
-          rows: 0,
-          isComplete: true,
-        },
-        isLoading: false,
-        isError: false,
-        isSuccess: true,
-        isPlaceholderData: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: {
+            data: [],
+            meta: [],
+            rows: 0,
+            isComplete: true,
+          },
+          isLoading: false,
+          isError: false,
+          isSuccess: true,
+          isPlaceholderData: false,
+        }),
+      );
 
       expect(() =>
         renderWithMantine(<DBTimeChart config={rawSqlConfig} />),
@@ -724,25 +741,27 @@ describe('DBTimeChart', () => {
     });
 
     it('renders without crashing when query returns multiple value columns', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: {
-          data: [
-            { ts: 1704067200, errors: 5, warnings: 12 },
-            { ts: 1704067260, errors: 3, warnings: 8 },
-          ],
-          meta: [
-            { name: 'ts', type: 'DateTime' },
-            { name: 'errors', type: 'UInt64' },
-            { name: 'warnings', type: 'UInt64' },
-          ],
-          rows: 2,
-          isComplete: true,
-        },
-        isLoading: false,
-        isError: false,
-        isSuccess: true,
-        isPlaceholderData: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: {
+            data: [
+              { ts: 1704067200, errors: 5, warnings: 12 },
+              { ts: 1704067260, errors: 3, warnings: 8 },
+            ],
+            meta: [
+              { name: 'ts', type: 'DateTime' },
+              { name: 'errors', type: 'UInt64' },
+              { name: 'warnings', type: 'UInt64' },
+            ],
+            rows: 2,
+            isComplete: true,
+          },
+          isLoading: false,
+          isError: false,
+          isSuccess: true,
+          isPlaceholderData: false,
+        }),
+      );
 
       expect(() =>
         renderWithMantine(<DBTimeChart config={rawSqlConfig} />),
