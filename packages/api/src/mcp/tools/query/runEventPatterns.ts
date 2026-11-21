@@ -156,14 +156,9 @@ export async function mineWindowPatterns(
   }
   // Truncate in the query, so long bodies are not transferred, and in the
   // drill-down predicate, so it matches the prefix the template came from.
-  const maxBodyChars = options?.maxBodyChars;
-  if (maxBodyChars != null) {
-    if (!Number.isSafeInteger(maxBodyChars) || maxBodyChars < 1) {
-      return {
-        error: mcpUserError('maxBodyChars must be a positive integer.'),
-      };
-    }
-    bodyColumn = `leftUTF8(${bodyColumn}, ${maxBodyChars})`;
+  // The tool schemas bound maxBodyChars to an integer from 1 to 1,000,000.
+  if (options?.maxBodyChars != null) {
+    bodyColumn = `leftUTF8(${bodyColumn}, ${options.maxBodyChars})`;
   }
 
   const filters = getSourceTableFilters(source);
