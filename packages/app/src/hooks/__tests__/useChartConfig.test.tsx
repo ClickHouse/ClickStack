@@ -2191,20 +2191,26 @@ describe('useChartConfig', () => {
       let resolvePromise2: (value: any) => void;
       let resolvePromise1: (value: any) => void;
 
-      const promise1 = new Promise(resolve => {
+      const promise1 = new Promise<
+        ResponseJSON<Record<string, string | number>>
+      >(resolve => {
         resolvePromise1 = resolve;
       });
-      const promise2 = new Promise(resolve => {
+      const promise2 = new Promise<
+        ResponseJSON<Record<string, string | number>>
+      >(resolve => {
         resolvePromise2 = resolve;
       });
-      const promise3 = new Promise(resolve => {
+      const promise3 = new Promise<
+        ResponseJSON<Record<string, string | number>>
+      >(resolve => {
         resolvePromise3 = resolve;
       });
 
       mockClickhouseClient.queryChartConfig
-        .mockReturnValueOnce(promise1 as any)
-        .mockReturnValueOnce(promise2 as any)
-        .mockReturnValueOnce(promise3 as any);
+        .mockReturnValueOnce(promise1)
+        .mockReturnValueOnce(promise2)
+        .mockReturnValueOnce(promise3);
 
       const { result } = renderHook(
         () =>
@@ -2325,12 +2331,17 @@ describe('useChartConfig', () => {
           },
         ],
       });
+      if (!isBuilderChartConfig(optimizedConfig)) {
+        throw new Error('Expected a BuilderChartConfig');
+      }
 
       // Mock useMVOptimizationExplanation to be in loading state
-      jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-        data: undefined,
-        isLoading: true, // MV optimization is still loading
-      } as any);
+      jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: true, // MV optimization is still loading
+        }),
+      );
 
       renderHook(
         () => useQueriedChartConfig(config, { enableQueryChunking: true }),
@@ -2346,21 +2357,23 @@ describe('useChartConfig', () => {
       expect(mockClickhouseClient.queryChartConfig).not.toHaveBeenCalled();
 
       // Now mock the MV optimization to finish loading with an optimized config
-      jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-        data: {
-          optimizedConfig: optimizedConfig,
-          explanations: [
-            {
-              success: true,
-              mvConfig: {
-                minGranularity: '1 hour',
-                tableName: 'metrics_rollup_1h',
+      jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+        fromPartial({
+          data: {
+            optimizedConfig: optimizedConfig,
+            explanations: [
+              {
+                success: true,
+                mvConfig: {
+                  minGranularity: '1 hour',
+                  tableName: 'metrics_rollup_1h',
+                },
               },
-            },
-          ],
-        },
-        isLoading: false, // MV optimization finished loading
-      } as any);
+            ],
+          },
+          isLoading: false, // MV optimization finished loading
+        }),
+      );
 
       const mockResponse = createMockQueryResponse([
         {

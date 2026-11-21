@@ -7,6 +7,7 @@ import {
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import { act, renderHook } from '@testing-library/react';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import { MetricsDataType, NumberFormat } from '@/types';
 import * as utils from '@/utils';
@@ -360,7 +361,7 @@ describe('getTableConnectionsForConnection', () => {
 describe('formatNumber', () => {
   it('handles undefined/null values', () => {
     expect(formatNumber(undefined)).toBe('N/A');
-    expect(formatNumber(null as any)).toBe('N/A');
+    expect(formatNumber(fromAny(null))).toBe('N/A');
   });
 
   it('returns string representation when no format options provided', () => {
@@ -1111,10 +1112,10 @@ describe('stripTrailingSlash', () => {
   });
 
   it('should throw an error for non-string values', () => {
-    expect(() => stripTrailingSlash(123 as any)).toThrow(
+    expect(() => stripTrailingSlash(fromAny(123))).toThrow(
       'URL must be a non-empty string',
     );
-    expect(() => stripTrailingSlash({} as any)).toThrow(
+    expect(() => stripTrailingSlash(fromAny({}))).toThrow(
       'URL must be a non-empty string',
     );
   });

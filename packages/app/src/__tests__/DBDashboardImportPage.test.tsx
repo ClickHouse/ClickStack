@@ -342,7 +342,7 @@ describe('Dashboard import - all tile types', () => {
     expect(parsed.success).toBe(true);
 
     const displayTypes = new Set(
-      allTileTypesTemplate.tiles.map(t => (t.config as any).displayType),
+      allTileTypesTemplate.tiles.map(t => t.config.displayType),
     );
     // markdown, number, line, stacked_bar, table, pie, heatmap, search
     expect(displayTypes.size).toBe(8);

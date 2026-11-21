@@ -1,10 +1,12 @@
-import type {
-  OnClickDashboard,
-  OnClickExternal,
-  OnClickSearch,
+import {
+  type OnClickDashboard,
+  type OnClickExternal,
+  type OnClickSearch,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { notifications } from '@mantine/notifications';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { useDashboards } from '@/dashboard';
 import { useOnClickLinkBuilder } from '@/hooks/useOnClickLinkBuilder';
@@ -37,21 +39,25 @@ const dateRange: [Date, Date] = [
 describe('useOnClickLinkBuilder', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.mocked(useSources).mockReturnValue({
-      data: [
-        {
-          id: 'src_1',
-          name: 'HyperDX Logs',
-          kind: 'log',
-          connection: 'c',
-          from: { databaseName: 'd', tableName: 't' },
-          timestampValueExpression: 'Timestamp',
-        },
-      ],
-    } as any);
-    jest.mocked(useDashboards).mockReturnValue({
-      data: [{ id: 'dash_1', name: 'API Latency Drilldown', tiles: [] }],
-    } as any);
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [
+          {
+            id: 'src_1',
+            name: 'HyperDX Logs',
+            kind: SourceKind.Log,
+            connection: 'c',
+            from: { databaseName: 'd', tableName: 't' },
+            timestampValueExpression: 'Timestamp',
+          },
+        ],
+      }),
+    );
+    jest.mocked(useDashboards).mockReturnValue(
+      fromPartial({
+        data: [{ id: 'dash_1', name: 'API Latency Drilldown', tiles: [] }],
+      }),
+    );
   });
 
   it('returns null when no onClick is configured', () => {
