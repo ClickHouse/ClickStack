@@ -34,7 +34,7 @@ import { useSources } from '@/source';
 const createMockChartConfig = (
   overrides: Partial<BuilderChartConfigWithDateRange> = {},
 ): BuilderChartConfigWithDateRange =>
-  ({
+  fromPartial<BuilderChartConfigWithDateRange>({
     timestampValueExpression: '',
     connection: 'foo',
     from: {
@@ -42,10 +42,13 @@ const createMockChartConfig = (
       tableName: 'traces',
     },
     ...overrides,
-  }) as BuilderChartConfigWithDateRange;
+  });
 
 const createMockMetadata = () =>
-  new Metadata({} as ClickhouseClient, {} as MetadataCache);
+  new Metadata(
+    fromPartial<ClickhouseClient>({}),
+    fromPartial<MetadataCache>({}),
+  );
 
 jest.mock('@/source', () => ({
   useSources: jest.fn().mockReturnValue({
@@ -826,12 +829,11 @@ describe('useMultipleAllFields', () => {
     team = {};
     mockMetadata = createMockMetadata();
     jest.spyOn(metadataModule, 'getMetadata').mockReturnValue(mockMetadata);
-    jest.spyOn(api, 'useMe').mockImplementation(
-      () =>
-        ({
-          data: { team },
-          isFetched: true,
-        }) as any,
+    jest.spyOn(api, 'useMe').mockImplementation(() =>
+      fromPartial({
+        data: { team },
+        isFetched: true,
+      }),
     );
     jest
       .spyOn(mockMetadata, 'getColumns')

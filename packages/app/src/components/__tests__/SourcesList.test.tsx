@@ -21,13 +21,13 @@ const makeSource = (
   name: string,
   overrides: Partial<TSource> = {},
 ): TSource =>
-  ({
+  fromPartial({
     id,
     name,
     kind: SourceKind.Log,
     connection: 'conn-a',
     ...overrides,
-  }) as unknown as TSource;
+  });
 
 describe('SourcesList section display', () => {
   beforeEach(() => {
