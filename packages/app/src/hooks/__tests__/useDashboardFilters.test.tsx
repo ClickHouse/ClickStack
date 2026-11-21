@@ -33,7 +33,7 @@ const mockSetState = jest.fn(
 
 jest.mock('nuqs', () => ({
   useQueryState: () => [mockState, mockSetState],
-  createParser: (opts: { parse: Function; serialize: Function }) => opts,
+  createParser: <T,>(opts: T) => opts,
 }));
 
 describe('useDashboardFilters', () => {
