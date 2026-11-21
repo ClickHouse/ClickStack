@@ -1,7 +1,7 @@
 import React from 'react';
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import { act, screen } from '@testing-library/react';
-import { fromPartial } from '@total-typescript/shoehorn';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import DBNumberChart from '@/components/DBNumberChart';
@@ -14,7 +14,11 @@ import {
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useSource } from '@/source';
 import { NumberFormat } from '@/types';
-import { formatNumber, getColorFromCSSToken } from '@/utils';
+import {
+  ChartPaletteToken,
+  formatNumber,
+  getColorFromCSSToken,
+} from '@/utils';
 
 // Mock dependencies
 jest.mock('@/hooks/useChartConfig', () => ({
@@ -576,7 +580,7 @@ describe('DBNumberChart', () => {
         ...baseTestConfig,
         // Simulate a legacy or hand-edited dashboard with an unknown
         // value sneaking past the schema (e.g. an old hex code).
-        color: 'definitely-not-a-token' as any,
+        color: fromAny<ChartPaletteToken, string>('definitely-not-a-token'),
       };
 
       renderWithMantine(<DBNumberChart config={config} />);
@@ -595,7 +599,7 @@ describe('DBNumberChart', () => {
       // CSS-token lookup.
       const config = {
         ...baseTestConfig,
-        color: 'chart-1' as any,
+        color: fromAny<ChartPaletteToken, string>('chart-1'),
       };
 
       renderWithMantine(<DBNumberChart config={config} />);
