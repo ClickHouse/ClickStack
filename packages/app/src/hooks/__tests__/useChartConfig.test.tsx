@@ -18,9 +18,11 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { prometheusApi } from '@/api';
 import { useClickhouseClient } from '@/clickhouse';
 import {
+  alignChunkColumns,
   appendChunk,
   getGranularityAlignedTimeWindows,
   getMinGranularitySeconds,
+  getQueryWindows,
   mergeQuerySettings,
   useQueriedChartConfig,
 } from '@/hooks/useChartConfig';
@@ -365,6 +367,180 @@ describe('useChartConfig', () => {
           ],
         },
       ]);
+    });
+  });
+
+  describe('getQueryWindows', () => {
+    // A search-style request: exact bounds that don't fall on a bucket
+    const exactConfig = createMockChartConfig({
+      dateRange: [
+        new Date('2025-10-01T10:00:20Z'),
+        new Date('2025-10-01T11:00:20Z'),
+      ],
+      dateRangeEndInclusive: true,
+      granularity: '1 minute',
+      alignDateRangeToGranularity: false,
+    });
+    // The optimizer's rewrite, widened to whole view buckets
+    const mvConfig = createMockChartConfig({
+      ...exactConfig,
+      from: { databaseName: 'default', tableName: 'otel_logs_1m' },
+      select: [{ aggCondition: '', aggFn: 'sum', valueExpression: 'count' }],
+      dateRange: [
+        new Date('2025-10-01T10:00:00Z'),
+        new Date('2025-10-01T11:01:00Z'),
+      ],
+      dateRangeEndInclusive: false,
+    });
+
+    it('reads everything from the source table without a view', () => {
+      expect(getQueryWindows({ config: exactConfig })).toEqual([
+        { config: exactConfig },
+      ]);
+    });
+
+    it('reads an aligned request from the view alone', () => {
+      const alignedConfig = createMockChartConfig({
+        ...exactConfig,
+        alignDateRangeToGranularity: undefined,
+      });
+      expect(getQueryWindows({ config: alignedConfig, mvConfig })).toEqual([
+        { config: mvConfig },
+      ]);
+    });
+
+    it('reads the partial edge buckets of an exact request from the source table', () => {
+      expect(getQueryWindows({ config: exactConfig, mvConfig })).toEqual([
+        {
+          config: exactConfig,
+          window: {
+            dateRange: [
+              new Date('2025-10-01T11:00:00Z'),
+              new Date('2025-10-01T11:00:20Z'),
+            ],
+            dateRangeStartInclusive: true,
+            dateRangeEndInclusive: true,
+          },
+        },
+        {
+          config: {
+            ...mvConfig,
+            dateRange: [
+              new Date('2025-10-01T10:01:00Z'),
+              new Date('2025-10-01T11:00:00Z'),
+            ],
+            dateRangeStartInclusive: true,
+            dateRangeEndInclusive: false,
+          },
+        },
+        {
+          config: exactConfig,
+          window: {
+            dateRange: [
+              new Date('2025-10-01T10:00:20Z'),
+              new Date('2025-10-01T10:01:00Z'),
+            ],
+            dateRangeEndInclusive: false,
+          },
+        },
+      ]);
+    });
+
+    it('reads an exact request shorter than a bucket from the source table', () => {
+      const shortConfig = createMockChartConfig({
+        ...exactConfig,
+        dateRange: [
+          new Date('2025-10-01T10:00:10Z'),
+          new Date('2025-10-01T10:00:50Z'),
+        ],
+      });
+      expect(getQueryWindows({ config: shortConfig, mvConfig })).toEqual([
+        { config: shortConfig },
+      ]);
+    });
+
+    it('needs no edge queries when an exact request falls on bucket boundaries', () => {
+      const onBoundaries = createMockChartConfig({
+        ...exactConfig,
+        dateRange: [
+          new Date('2025-10-01T10:00:00Z'),
+          new Date('2025-10-01T11:00:00Z'),
+        ],
+        dateRangeEndInclusive: false,
+      });
+      expect(getQueryWindows({ config: onBoundaries, mvConfig })).toEqual([
+        {
+          config: {
+            ...mvConfig,
+            dateRange: [
+              new Date('2025-10-01T10:00:00Z'),
+              new Date('2025-10-01T11:00:00Z'),
+            ],
+            dateRangeStartInclusive: true,
+            dateRangeEndInclusive: false,
+          },
+        },
+      ]);
+    });
+
+    it('still reads rows at an inclusive end on a bucket boundary', () => {
+      const inclusiveEnd = createMockChartConfig({
+        ...exactConfig,
+        dateRange: [
+          new Date('2025-10-01T10:00:00Z'),
+          new Date('2025-10-01T11:00:00Z'),
+        ],
+        dateRangeEndInclusive: true,
+      });
+      expect(getQueryWindows({ config: inclusiveEnd, mvConfig })[0]).toEqual({
+        config: inclusiveEnd,
+        window: {
+          dateRange: [
+            new Date('2025-10-01T11:00:00Z'),
+            new Date('2025-10-01T11:00:00Z'),
+          ],
+          dateRangeStartInclusive: true,
+          dateRangeEndInclusive: true,
+        },
+      });
+    });
+
+    it('chunks the view interior and keeps the windows contiguous', () => {
+      const dayConfig = createMockChartConfig({
+        ...exactConfig,
+        dateRange: [
+          new Date('2025-10-01T00:10:00Z'),
+          new Date('2025-10-02T00:10:00Z'),
+        ],
+        granularity: '30 minute',
+      });
+      const windows = getQueryWindows({
+        config: dayConfig,
+        mvConfig,
+        enableQueryChunking: true,
+      });
+      const rangeOf = ({ config, window }: (typeof windows)[number]) =>
+        window?.dateRange ?? config.dateRange;
+      const tableOf = ({ config }: (typeof windows)[number]) =>
+        isBuilderChartConfig(config) ? config.from.tableName : undefined;
+
+      expect(windows.length).toBeGreaterThan(3);
+      expect(tableOf(windows[0])).toBe('otel_logs');
+      expect(rangeOf(windows[0])).toEqual([
+        new Date('2025-10-02T00:00:00Z'),
+        new Date('2025-10-02T00:10:00Z'),
+      ]);
+      expect(tableOf(windows[windows.length - 1])).toBe('otel_logs');
+      expect(rangeOf(windows[windows.length - 1])).toEqual([
+        new Date('2025-10-01T00:10:00Z'),
+        new Date('2025-10-01T00:30:00Z'),
+      ]);
+      for (const window of windows.slice(1, -1)) {
+        expect(tableOf(window)).toBe('otel_logs_1m');
+      }
+      for (let i = 0; i < windows.length - 1; i++) {
+        expect(rangeOf(windows[i + 1])?.[1]).toEqual(rangeOf(windows[i])?.[0]);
+      }
     });
   });
 
@@ -2393,6 +2569,161 @@ describe('useChartConfig', () => {
       expect(queryCall.config.from.tableName).toBe('metrics_rollup_1h');
 
       expect(result2.current.data?.data).toBeDefined();
+    });
+
+    it('reads the partial edge buckets of an exact range from the source table when a view serves the rest', async () => {
+      const config = createMockChartConfig({
+        dateRange: [
+          new Date('2025-10-01T10:00:20Z'),
+          new Date('2025-10-01T11:00:20Z'),
+        ],
+        dateRangeEndInclusive: true,
+        granularity: '1 minute',
+        alignDateRangeToGranularity: false,
+      });
+      const optimizedConfig = createMockChartConfig({
+        ...config,
+        from: { databaseName: 'default', tableName: 'otel_logs_1m' },
+        select: [{ aggCondition: '', aggFn: 'sum', valueExpression: 'count' }],
+        dateRange: [
+          new Date('2025-10-01T10:00:00Z'),
+          new Date('2025-10-01T11:01:00Z'),
+        ],
+        dateRangeEndInclusive: false,
+      });
+      // `any` (rather than an `as` cast) keeps the partial query result off the
+      // no-unsafe-type-assertion budget.
+      const explanationResult = (
+        value: any,
+      ): ReturnType<typeof useMVOptimizationExplanation> => value;
+      jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+        explanationResult({
+          data: { optimizedConfig, explanations: [] },
+          isLoading: false,
+        }),
+      );
+
+      // One row per query, named after the table and window it came from. The
+      // view names the unaliased count after its own merge expression, as
+      // ClickHouse does.
+      const viewCountColumn = 'SUM(toFloat64OrDefault(toString(count)))';
+      mockClickhouseClient.queryChartConfig.mockImplementation(
+        async ({ config: queried }) => {
+          const range = queried.dateRange;
+          if (!isBuilderChartConfig(queried) || !range) {
+            throw new Error('Expected a builder config with a date range');
+          }
+          const response = createMockQueryResponse([
+            {
+              'count()': '1',
+              SeverityText: queried.from.tableName,
+              __hdx_time_bucket: range[0].toISOString(),
+            },
+          ]);
+          if (queried.from.tableName !== 'otel_logs_1m') {
+            return response;
+          }
+          return {
+            ...response,
+            meta: response.meta?.map(column =>
+              column.name === 'count()'
+                ? { ...column, name: viewCountColumn }
+                : column,
+            ),
+            data: response.data.map(({ 'count()': count, ...row }) => ({
+              ...row,
+              [viewCountColumn]: count,
+            })),
+          };
+        },
+      );
+
+      const { result } = renderHook(() => useQueriedChartConfig(config), {
+        wrapper,
+      });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+      const queried = mockClickhouseClient.queryChartConfig.mock.calls.map(
+        ([{ config: c }]) => {
+          const range = c.dateRange;
+          if (!isBuilderChartConfig(c) || !range) {
+            throw new Error('Expected a builder config with a date range');
+          }
+          return [c.from.tableName, range.map(d => d.toISOString())];
+        },
+      );
+      expect(queried).toEqual([
+        ['otel_logs', ['2025-10-01T11:00:00.000Z', '2025-10-01T11:00:20.000Z']],
+        [
+          'otel_logs_1m',
+          ['2025-10-01T10:01:00.000Z', '2025-10-01T11:00:00.000Z'],
+        ],
+        ['otel_logs', ['2025-10-01T10:00:20.000Z', '2025-10-01T10:01:00.000Z']],
+      ]);
+      // Oldest first, like a single query's result
+      expect(result.current.data?.data.map(row => row.SeverityText)).toEqual([
+        'otel_logs',
+        'otel_logs_1m',
+        'otel_logs',
+      ]);
+      // One name for the count across both tables
+      expect(result.current.data?.data.map(row => row['count()'])).toEqual([
+        '1',
+        '1',
+        '1',
+      ]);
+      expect(
+        result.current.data?.data.some(row => viewCountColumn in row),
+      ).toBe(false);
+      expect(result.current.data?.meta?.map(column => column.name)).toEqual([
+        'count()',
+        'SeverityText',
+        '__hdx_time_bucket',
+      ]);
+    });
+  });
+
+  describe('alignChunkColumns', () => {
+    const reference = [
+      { name: 'count()', type: 'UInt64' },
+      { name: 'ServiceName', type: 'LowCardinality(String)' },
+    ];
+
+    it('renames columns by position to the reference names', () => {
+      const chunk = {
+        meta: [
+          { name: 'SUM(count)', type: 'Float64' },
+          { name: 'ServiceName', type: 'LowCardinality(String)' },
+        ],
+        data: [{ 'SUM(count)': 4, ServiceName: 'api' }],
+        rows: 1,
+      };
+      expect(alignChunkColumns(chunk, reference)).toEqual({
+        meta: [
+          { name: 'count()', type: 'Float64' },
+          { name: 'ServiceName', type: 'LowCardinality(String)' },
+        ],
+        data: [{ 'count()': 4, ServiceName: 'api' }],
+        rows: 1,
+      });
+    });
+
+    it('leaves a chunk alone when the names already match or the shapes differ', () => {
+      const matching = {
+        meta: reference,
+        data: [{ 'count()': '4', ServiceName: 'api' }],
+        rows: 1,
+      };
+      expect(alignChunkColumns(matching, reference)).toBe(matching);
+
+      const otherShape = {
+        meta: [{ name: 'SUM(count)', type: 'Float64' }],
+        data: [{ 'SUM(count)': 4 }],
+        rows: 1,
+      };
+      expect(alignChunkColumns(otherShape, reference)).toBe(otherShape);
     });
   });
 
