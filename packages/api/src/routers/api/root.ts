@@ -48,7 +48,11 @@ const loginRateLimiter = rateLimiter({
     getServerSpan()?.setAttribute('hyperdx.login.rate_limited', true);
     // The app's login page submits a form; the CLI posts JSON.
     if (req.is('application/json')) {
-      res.status(429).json({ error: 'tooManyAttempts' });
+      res.status(429).json({
+        error: 'tooManyAttempts',
+        message:
+          'Too many failed login attempts. Please wait a few minutes and try again.',
+      });
       return;
     }
     res.redirect(

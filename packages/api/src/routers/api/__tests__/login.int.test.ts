@@ -83,10 +83,17 @@ describe('POST /login/password rate limit', () => {
   });
 
   it('answers JSON clients such as the CLI with a 429', async () => {
-    const res = await getAgent(server)
-      .post('/login/password')
-      .send({ email: MOCK_USER.email, password: 'wrong-password' });
+    const attempt = () =>
+      getAgent(server)
+        .post('/login/password')
+        .send({ email: 'json-client@example.com', password: 'wrong-password' });
+    for (let i = 0; i < LOGIN_MAX_FAILED_ATTEMPTS; i++) {
+      await attempt();
+    }
+
+    const res = await attempt();
     expect(res.status).toBe(429);
-    expect(res.body).toEqual({ error: 'tooManyAttempts' });
+    expect(res.body.error).toBe('tooManyAttempts');
+    expect(res.body.message).toMatch(/too many failed login attempts/i);
   });
 });
