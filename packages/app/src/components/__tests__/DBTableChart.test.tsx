@@ -45,6 +45,7 @@ jest.mock('@/source', () => ({
   // group-by column inference under test matches production behavior.
   getBuilderValueColumnCount:
     jest.requireActual('@/source').getBuilderValueColumnCount,
+  getFormulaConfig: jest.requireActual('@/source').getFormulaConfig,
 }));
 
 jest.mock('@/HDXMultiSeriesTableChart', () => ({
@@ -58,6 +59,9 @@ jest.mock('@/hooks/useOnClickLinkBuilder', () => ({
 
 jest.mock('@/hooks/useResultColumnFilterKeys', () => ({
   useResultColumnFilterKeys: jest.fn(() => new Map()),
+  getBuilderGroupByColumns: jest.requireActual(
+    '@/hooks/useResultColumnFilterKeys',
+  ).getBuilderGroupByColumns,
 }));
 
 jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
@@ -437,6 +441,65 @@ describe('DBTableChart', () => {
         'AvgDuration',
         'ServiceName',
         'SpanName',
+      ]);
+    });
+  });
+
+  describe('column sort ids', () => {
+    it('quotes aliased columns and leaves unaliased expressions bare', () => {
+      const row = {
+        'count()': 10,
+        'duration min': 42,
+        'per call': 4.2,
+        ServiceName: 'web',
+        'span name': 'GET /',
+      };
+      jest.mocked(useOffsetPaginatedQuery).mockReturnValue({
+        data: {
+          data: [row],
+          meta: Object.keys(row).map(name => ({ name, type: 'String' })),
+          chSql: { sql: '', params: {} },
+          window: {
+            startTime: new Date(),
+            endTime: new Date(),
+            windowIndex: 0,
+            direction: 'DESC' as const,
+          },
+        },
+        fetchNextPage: jest.fn(),
+        hasNextPage: false,
+        isLoading: false,
+        isFetching: false,
+        isError: false,
+        error: null,
+        isPlaceholderData: false,
+      });
+
+      renderWithMantine(
+        <DBTableChart
+          config={{
+            ...baseTestConfig,
+            select: [
+              { aggFn: 'count' as const, valueExpression: '' },
+              {
+                aggFn: 'avg' as const,
+                valueExpression: 'Duration',
+                alias: 'duration min',
+              },
+            ],
+            formulas: [{ expression: 'B / A', alias: 'per call' }],
+            groupBy: 'ServiceName, SpanName AS "span name"',
+          }}
+        />,
+      );
+
+      const columns = jest.mocked(Table).mock.calls.at(-1)![0].columns;
+      expect(columns.map(c => c.id)).toEqual([
+        'count()',
+        '"duration min"',
+        '"per call"',
+        'ServiceName',
+        '"span name"',
       ]);
     });
   });
