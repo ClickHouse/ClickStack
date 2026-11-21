@@ -218,6 +218,8 @@ const SearchConfigSchema = z.object({
   where: z.string(),
   whereLanguage: z.enum(['sql', 'lucene']),
   orderBy: z.string(),
+  limitAfter: z.string(),
+  limitUntil: z.string(),
   filters: z.array(
     z.union([
       z.object({
@@ -567,6 +569,8 @@ function SaveSearchModalComponent({
               searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
             source: searchedConfig.source ?? '',
             orderBy: searchedConfig.orderBy ?? '',
+            limitAfter: searchedConfig.limitAfter ?? '',
+            limitUntil: searchedConfig.limitUntil ?? '',
             filters: searchedConfig.filters ?? [],
             tags: tags,
           },
@@ -595,6 +599,8 @@ function SaveSearchModalComponent({
               searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
             source: searchedConfig.source ?? '',
             orderBy: searchedConfig.orderBy ?? '',
+            limitAfter: searchedConfig.limitAfter ?? '',
+            limitUntil: searchedConfig.limitUntil ?? '',
             filters: searchedConfig.filters ?? [],
             tags: tags,
           });
@@ -818,7 +824,16 @@ function useLiveUpdate({
  * and returns a chart config.
  */
 function useSearchedConfigToChartConfig(
-  { select, source, whereLanguage, where, filters, orderBy }: SearchConfig,
+  {
+    select,
+    source,
+    whereLanguage,
+    where,
+    filters,
+    orderBy,
+    limitAfter,
+    limitUntil,
+  }: SearchConfig,
   defaultSearchConfig?: Partial<SearchConfig>,
 ) {
   const { data: sourceObj, isLoading } = useSource({
@@ -839,6 +854,8 @@ function useSearchedConfigToChartConfig(
         select: select || defaultSearchConfig?.select || null,
         displayType: DisplayType.Search,
         ...(resolvedOrderBy != null ? { orderBy: resolvedOrderBy } : {}),
+        limitAfter: limitAfter || defaultSearchConfig?.limitAfter,
+        limitUntil: limitUntil || defaultSearchConfig?.limitUntil,
       });
 
       return {
@@ -857,6 +874,8 @@ function useSearchedConfigToChartConfig(
     whereLanguage,
     defaultOrderBy,
     orderBy,
+    limitAfter,
+    limitUntil,
   ]);
 }
 
@@ -936,6 +955,8 @@ const queryStateMap = {
   whereLanguage: parseAsStringEnum<'sql' | 'lucene'>(['sql', 'lucene']),
   filters: parseAsJsonEncoded<Filter[]>(),
   orderBy: parseAsStringEncoded,
+  limitAfter: parseAsStringEncoded,
+  limitUntil: parseAsStringEncoded,
 };
 
 /**
@@ -1260,6 +1281,8 @@ function DBSearchPageContent() {
             : defaultSourceId),
         filters: searchedConfig.filters ?? [],
         orderBy: searchedConfig.orderBy ?? '',
+        limitAfter: searchedConfig.limitAfter ?? '',
+        limitUntil: searchedConfig.limitUntil ?? '',
       },
       resetOptions: {
         keepDirtyValues: true,
@@ -1295,6 +1318,8 @@ function DBSearchPageContent() {
       source: _savedSearch?.source,
       filters: _savedSearch?.filters ?? [],
       orderBy: _savedSearch?.orderBy || defaultOrderBy,
+      limitAfter: _savedSearch?.limitAfter ?? '',
+      limitUntil: _savedSearch?.limitUntil ?? '',
     };
   }, [searchedSource, inputSource, savedSearch, defaultOrderBy, savedSearchId]);
 
@@ -1328,6 +1353,8 @@ function DBSearchPageContent() {
         source: searchedConfig?.source ?? undefined,
         filters: searchedConfig?.filters ?? [],
         orderBy: searchedConfig?.orderBy ?? '',
+        limitAfter: searchedConfig?.limitAfter ?? '',
+        limitUntil: searchedConfig?.limitUntil ?? '',
       });
     }
   }, [searchedConfig, reset, prevSearched]);
@@ -1358,6 +1385,8 @@ function DBSearchPageContent() {
         whereLanguage: savedSearch.whereLanguage as 'sql' | 'lucene',
         filters: savedSearch.filters ?? [],
         orderBy: savedSearch.orderBy ?? '',
+        limitAfter: savedSearch.limitAfter ?? '',
+        limitUntil: savedSearch.limitUntil ?? '',
       });
       return;
     }
@@ -1375,6 +1404,8 @@ function DBSearchPageContent() {
         whereLanguage: getStoredLanguage() ?? 'lucene',
         filters: [],
         orderBy: '',
+        limitAfter: '',
+        limitUntil: '',
       });
       return;
     }
@@ -1423,7 +1454,16 @@ function DBSearchPageContent() {
     ({ recordExploration = true }: { recordExploration?: boolean } = {}) => {
       onSearch(displayedTimeInputValue);
       handleSubmit(
-        ({ select, where, whereLanguage, source, filters, orderBy }) => {
+        ({
+          select,
+          where,
+          whereLanguage,
+          source,
+          filters,
+          orderBy,
+          limitAfter,
+          limitUntil,
+        }) => {
           setSearchedConfig({
             select,
             where,
@@ -1431,6 +1471,8 @@ function DBSearchPageContent() {
             source,
             filters,
             orderBy,
+            limitAfter,
+            limitUntil,
           });
           if (
             recordExploration &&
@@ -1722,11 +1764,15 @@ function DBSearchPageContent() {
         searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
       filters: searchedConfig.filters ?? [],
       orderBy: searchedConfig.orderBy ?? '',
+      limitAfter: searchedConfig.limitAfter ?? '',
+      limitUntil: searchedConfig.limitUntil ?? '',
     }),
     [
       chartSourceId,
       searchedConfig.filters,
       searchedConfig.orderBy,
+      searchedConfig.limitAfter,
+      searchedConfig.limitUntil,
       searchedConfig.select,
       searchedConfig.where,
       searchedConfig.whereLanguage,
@@ -1793,6 +1839,8 @@ function DBSearchPageContent() {
               searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
             source: searchedConfig.source ?? '',
             orderBy: searchedConfig.orderBy ?? '',
+            limitAfter: searchedConfig.limitAfter ?? '',
+            limitUntil: searchedConfig.limitUntil ?? '',
             filters: searchedConfig.filters ?? [],
             tags: newTags,
           },
@@ -2521,19 +2569,67 @@ function DBSearchPageContent() {
         sourceId={inputSource}
       />
     );
+    const limitAfter = (
+      <SQLInlineEditorControlled
+        tableConnection={inputSourceTableConnection}
+        control={control}
+        name="limitAfter"
+        defaultValue={defaultSearchConfig.limitAfter}
+        onSubmit={onSubmit}
+        label="AFTER"
+        placeholder="start_expr"
+        size="xs"
+        allowMultiline={allowMultiline}
+        dateRange={searchedTimeRange}
+        sourceId={inputSource}
+      />
+    );
+    const limitUntil = (
+      <SQLInlineEditorControlled
+        tableConnection={inputSourceTableConnection}
+        control={control}
+        name="limitUntil"
+        defaultValue={defaultSearchConfig.limitUntil}
+        onSubmit={onSubmit}
+        label="UNTIL"
+        placeholder="end_expr"
+        size="xs"
+        allowMultiline={allowMultiline}
+        dateRange={searchedTimeRange}
+        sourceId={inputSource}
+      />
+    );
+    const limitClause = (
+      <Flex
+        gap="sm"
+        style={{ maxWidth: 720, width: '100%' }}
+        data-testid="limit-range-fields"
+      >
+        <Box style={{ flex: '1 1 0%', minWidth: 140 }}>{limitAfter}</Box>
+        <Box style={{ flex: '1 1 0%', minWidth: 140 }}>{limitUntil}</Box>
+      </Flex>
+    );
     if (stacked) {
       return (
         <>
           {select}
           {orderBy}
+          {limitClause}
         </>
       );
     }
     return (
-      <>
-        <Box style={{ flex: '1 1 0%', minWidth: 100 }}>{select}</Box>
-        <Box style={{ maxWidth: 400, width: '20%' }}>{orderBy}</Box>
-      </>
+      <Flex
+        direction="column"
+        gap="xs"
+        style={{ flex: '1 1 0%', minWidth: 0 }}
+      >
+        <Flex gap="sm" align="flex-start">
+          <Box style={{ flex: '1 1 0%', minWidth: 100 }}>{select}</Box>
+          <Box style={{ maxWidth: 400, width: '20%' }}>{orderBy}</Box>
+        </Flex>
+        {limitClause}
+      </Flex>
     );
   };
 
@@ -2679,6 +2775,7 @@ function DBSearchPageContent() {
           px="sm"
           pt={isCompact ? 4 : 'sm'}
           wrap={isCompact ? 'wrap' : 'nowrap'}
+          align="flex-start"
         >
           <SourceSelectControlled
             key={`${savedSearchId}`}
@@ -3181,6 +3278,32 @@ function DBSearchPageContent() {
                                   formatData={false}
                                 />
                               </Grid.Col>
+                              {chartConfig.limit?.after ? (
+                                <>
+                                  <Grid.Col span={2}>
+                                    <Text>AFTER</Text>
+                                  </Grid.Col>
+                                  <Grid.Col span={10}>
+                                    <SQLPreview
+                                      data={chartConfig.limit.after}
+                                      formatData={false}
+                                    />
+                                  </Grid.Col>
+                                </>
+                              ) : null}
+                              {chartConfig.limit?.until ? (
+                                <>
+                                  <Grid.Col span={2}>
+                                    <Text>UNTIL</Text>
+                                  </Grid.Col>
+                                  <Grid.Col span={10}>
+                                    <SQLPreview
+                                      data={chartConfig.limit.until}
+                                      formatData={false}
+                                    />
+                                  </Grid.Col>
+                                </>
+                              ) : null}
                               <Grid.Col span={2}>
                                 <Text>
                                   {chartConfig.whereLanguage === 'lucene'
