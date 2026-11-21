@@ -1139,7 +1139,7 @@ describe('renderChartConfig', () => {
       //   Row B: ResourceAttributes={service.name: api},           Attributes={host: h1}
       //
       // AttributesHash is now computed as the variadic
-      //   cityHash64(ScopeAttributes, ResourceAttributes, Attributes)
+      //   cityHash64(ScopeName, ScopeAttributes, ResourceAttributes, Attributes)
       // for all metric schemas (Map and JSON), so the two rows hash
       // distinctly: each lands in its own series. Both rows are then the
       // first row of their respective series, the lagInFrame Rate is NULL
