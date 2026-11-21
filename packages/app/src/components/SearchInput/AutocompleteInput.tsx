@@ -58,14 +58,14 @@ export default function AutocompleteInput({
   // Rows the query is shown across before the textarea starts scrolling.
   const maxVisibleRows = 4;
 
-  const [isSearchInputFocused, _setIsSearchInputFocused] = useState(false);
+  const [isSearchInputFocused, setIsSearchInputFocused] = useState(false);
   const [isInputDropdownOpen, setIsInputDropdownOpen] = useState(false);
-  const setIsSearchInputFocused = useCallback(
+  const updateSearchInputFocus = useCallback(
     (state: boolean) => {
-      _setIsSearchInputFocused(state);
+      setIsSearchInputFocused(state);
       setIsInputDropdownOpen(state);
     },
-    [_setIsSearchInputFocused],
+    [setIsSearchInputFocused],
   );
   const [rightSectionWidth, setRightSectionWidth] = useState<number | 'auto'>(
     'auto',
@@ -240,12 +240,12 @@ export default function AutocompleteInput({
             onFocus={() => {
               setSelectedAutocompleteIndex(-1);
               setSelectedQueryHistoryIndex(-1);
-              setIsSearchInputFocused(true);
+              updateSearchInputFocus(true);
             }}
             onBlur={() => {
               setSelectedAutocompleteIndex(-1);
               setSelectedQueryHistoryIndex(-1);
-              setIsSearchInputFocused(false);
+              updateSearchInputFocus(false);
             }}
             onKeyDown={e => {
               if (

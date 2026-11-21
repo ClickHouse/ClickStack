@@ -430,8 +430,8 @@ export default function NamespaceDetailsSidePanel(props: {
 
   return (
     <NamespaceDetailsSidePanelInner
-      {...props}
       key={namespaceName || 'empty'}
+      {...props}
       namespaceName={namespaceName}
       setNamespaceName={setNamespaceName}
     />
