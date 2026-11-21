@@ -1539,8 +1539,8 @@ describe('useEventsAroundFocus', () => {
 
     // Verify results were combined correctly
     expect(result.rows.length).toBe(2);
-    expect((result.rows[0] as any).Body).toBe('before focus');
-    expect((result.rows[1] as any).Body).toBe('after focus');
+    expect(result.rows[0]).toMatchObject({ Body: 'before focus' });
+    expect(result.rows[1]).toMatchObject({ Body: 'after focus' });
   });
 
   it('handles empty data correctly', () => {
