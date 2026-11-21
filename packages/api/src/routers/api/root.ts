@@ -10,10 +10,53 @@ import { handleAuthError, redirectToDashboard } from '@/middleware/auth';
 import TeamInvite from '@/models/teamInvite';
 import User from '@/models/user'; // TODO -> do not import model directly
 import { setupTeamDefaults } from '@/setupDefaults';
+import { getCounter, getServerSpan } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import passport from '@/utils/passport';
+import rateLimiter from '@/utils/rateLimiter';
 import { isMongoConnected, mongoReadyStateName } from '@/utils/readiness';
 import { passwordSchema } from '@/utils/validators';
+
+export const LOGIN_MAX_FAILED_ATTEMPTS = 10;
+
+const loginRateLimitedCounter = getCounter('hyperdx.api.login.rate_limited', {
+  description:
+    'Count of password logins refused because the email had too many recent failed attempts.',
+});
+
+// passport-local reads the email from the body, then the query string.
+const getLoginEmail = (req: express.Request) => {
+  const email = req.body?.email || req.query.email;
+  return typeof email === 'string' ? email.trim().toLowerCase() : '';
+};
+
+// Only failed logins count. Success and failure both answer 303, and req.user
+// is already set for a signed-in session, so success is marked on the route
+// after passport accepts the password. The key is the email, not the IP: behind
+// the app's /api proxy, req.ip is the proxy or whatever X-Forwarded-For the
+// client sends.
+const loginRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: LOGIN_MAX_FAILED_ATTEMPTS,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req, res) => res.locals.loginSucceeded === true,
+  keyGenerator: req => getLoginEmail(req) || req.ip || 'unknown',
+  handler: (req, res) => {
+    loginRateLimitedCounter.add(1);
+    getServerSpan()?.setAttribute('hyperdx.login.rate_limited', true);
+    // The app's login page submits a form; the CLI posts JSON.
+    if (req.is('application/json')) {
+      res.status(429).json({ error: 'tooManyAttempts' });
+      return;
+    }
+    res.redirect(
+      303,
+      `${config.FRONTEND_REDIRECT_BASE}/login?err=tooManyAttempts`,
+    );
+  },
+});
 
 const registrationSchema = z
   .object({
@@ -70,10 +113,15 @@ router.get('/installation', async (_, res: InstallationEspRes, next) => {
 
 router.post(
   '/login/password',
+  loginRateLimiter,
   passport.authenticate('local', {
     failWithError: true,
     failureMessage: true,
   }),
+  (_req, res, next) => {
+    res.locals.loginSucceeded = true;
+    next();
+  },
   redirectToDashboard,
   handleAuthError,
 );
