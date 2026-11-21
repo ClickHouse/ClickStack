@@ -1,5 +1,70 @@
 # @hyperdx/cli
 
+## 0.9.1
+
+### Patch Changes
+
+- a25e945e7: feat(cli): `hdx mcp install` can keep several ClickStack servers side by side
+
+  `--name <server-name>` adds the MCP server under a name you choose, so a second
+  ClickStack instance no longer overwrites the first. When the key belongs to more
+  than one team, the installer asks which teams to add a server for and adds one
+  entry per team. When it finds more than one agent it asks which to set up.
+
+## 0.9.0
+
+### Minor Changes
+
+- 7935c64bc: feat: add `hdx mcp install` to connect AI agents without pasting a key
+
+  `npx @hyperdx/cli mcp install` asks for a personal access key or an
+  organization API key with hidden input, checks it, and adds the ClickStack MCP
+  server to Claude Code, Codex, Cursor, and VS Code. Team Settings now leads with
+  this command, so the key no longer has to go into a copied command or an agent
+  chat. The per-agent snippets remain for setting up one agent by hand.
+
+### Patch Changes
+
+- d7df729e6: chore: GitHub links (changelog, support, package metadata) now point at `ClickHouse/ClickStack`, and `docker-compose.yml` pulls the app image as `clickhouse/clickstack`
+- e2754d203: fix: use SHA256 instead of MD5 for JSON row lookup WHERE clauses so row
+  details and drill-down work on FIPS-enabled ClickHouse deployments
+
+## 0.8.0
+
+### Minor Changes
+
+- 0b1e0784: Add dashboard and saved-search authoring commands to the CLI:
+
+  - `hdx dashboards list` (default subcommand) gains `--query` name filtering and `--format table|json|csv`
+  - `hdx dashboards export --id <id-or-name>` prints a dashboard definition as JSON, round-trip compatible with import
+  - `hdx dashboards create` accepts either a full definition (`--file <json>`) or inline charts (`--name` + repeatable `--chart` / `--chart-file`, with automatic grid layout), plus `--if-not-exists`
+  - `hdx dashboards import --file <json>` recreates an exported dashboard, with `--if-not-exists` and `--name-override`
+  - `hdx saved-searches` command group: `list` and `create` (`--name/--source/--where/--where-language/--select/--order-by/--tags`)
+
+  Definitions are validated locally against the shared schema before being sent, and missing tile ids are generated automatically. Also fixes `getSavedSearches()` to call the correct `/saved-search` API path (the previous `/saved-searches` path always returned 404).
+
+### Patch Changes
+
+- 5253b861: fix: Stop abbreviating values between 500 and 999 as "0.5k"/"0.8k" on chart axes and in large number format
+
+## 0.7.0
+
+### Minor Changes
+
+- 68082b67: feat: add stacked line (stacked area) time-series display type
+
+## 0.6.4
+
+### Patch Changes
+
+- 416c92a0: fix: stop discarding chart axis-tick decimals for large numbers
+
+  Axis ticks at or above 1k were always rounded to a whole number regardless of the configured Number Format, so nearby values (e.g. 950 and 1080) could both render as `1k` — ticks now use as much precision as the axis's width allows, on both the web app and CLI terminal charts. Also fixed: a tightly fit Y-axis could show two ticks with the identical rounded label.
+
+- c42dda80: fix: use compact duration labels on terminal chart axis ticks
+
+  `axisTickFormatter` is a documented port of the web's `formatAxisTick` (fixed in #3148) and is expected to stay behaviorally in sync with it, but it fell through to the wide `formatDurationMs` instead of the compact formatter for duration-formatted charts. `hdx chart` now renders the same short labels (e.g. "13m" instead of "13.33min") as the web app.
+
 ## 0.6.3
 
 ### Patch Changes

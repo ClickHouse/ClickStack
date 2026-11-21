@@ -60,7 +60,12 @@ import {
   PairingWarning,
 } from '@/utils/sourceFieldSuggestions';
 
-import { DEFAULT_DATABASE, PROMETHEUS_PLACEHOLDER } from './constants';
+import {
+  DEFAULT_DATABASE,
+  getSourceKindLabel,
+  PROMETHEUS_PLACEHOLDER,
+  SOURCE_KIND_LABELS,
+} from './constants';
 import {
   CORRELATION_FIELD_MAP,
   CorrelationField,
@@ -575,11 +580,9 @@ export function TableSourceForm({
 
   return (
     <div
-      style={
-        {
-          // maxWidth: 700
-        }
-      }
+      style={{
+        // maxWidth: 700
+      }}
     >
       <Stack gap="md" mb="md">
         <Flex justify="space-between" align="center" mb="lg">
@@ -626,16 +629,34 @@ export function TableSourceForm({
                 withAsterisk
               >
                 <Group>
-                  <Radio value={SourceKind.Log} label="Log" />
-                  <Radio value={SourceKind.Trace} label="Trace" />
+                  <Radio
+                    value={SourceKind.Log}
+                    label={SOURCE_KIND_LABELS[SourceKind.Log]}
+                  />
+                  <Radio
+                    value={SourceKind.Trace}
+                    label={SOURCE_KIND_LABELS[SourceKind.Trace]}
+                  />
                   {IS_METRICS_ENABLED && (
-                    <Radio value={SourceKind.Metric} label="OTEL Metrics" />
+                    <Radio
+                      value={SourceKind.Metric}
+                      label={SOURCE_KIND_LABELS[SourceKind.Metric]}
+                    />
                   )}
                   {IS_SESSIONS_ENABLED && (
-                    <Radio value={SourceKind.Session} label="Session" />
+                    <Radio
+                      value={SourceKind.Session}
+                      label={SOURCE_KIND_LABELS[SourceKind.Session]}
+                    />
                   )}
                   {IS_PROMQL_ENABLED && (
-                    <Radio value={SourceKind.Promql} label="PromQL" />
+                    <Radio
+                      value={SourceKind.Promql}
+                      label={getSourceKindLabel(
+                        SourceKind.Promql,
+                        selectedConnection,
+                      )}
+                    />
                   )}
                 </Group>
               </Radio.Group>
@@ -715,7 +736,7 @@ export function TableSourceForm({
             variant="secondary"
             size="sm"
             color="gray"
-            mt="md"
+            mt={querySettingFields.length ? 'md' : 0}
             disabled={querySettingFields.length >= 10}
             onClick={() => {
               if (querySettingFields.length < 10) {
@@ -733,6 +754,7 @@ export function TableSourceForm({
         setValue={setValue}
         kind={kind}
         sourceId={sourceId}
+        isPrometheusEndpoint={isPrometheusOnlyConnection}
       />
       <Group justify="flex-end" mt="lg">
         {onCancel && (

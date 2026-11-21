@@ -13,7 +13,9 @@ import { CopySnippet } from './CopySnippet';
 import { DeeplinkInstall } from './DeeplinkInstall';
 import {
   buildAllSnippets,
+  buildCliInstallCommand,
   type BuiltSnippets,
+  CODEX_TOKEN_ENV_VAR,
   type DeploymentShape,
 } from './installSnippets';
 
@@ -63,6 +65,13 @@ export default function McpInstallPanel({ deployment }: McpInstallPanelProps) {
 
   return (
     <Stack gap="md">
+      <CopySnippet
+        label="Run in your terminal. It asks for an API key, then sets up Claude Code, Codex, Cursor, and VS Code:"
+        snippet={buildCliInstallCommand(deployment)}
+      />
+      <Text size="sm" fw={500}>
+        Or set up one agent by hand:
+      </Text>
       <SegmentedControl
         fullWidth
         value={host}
@@ -162,11 +171,17 @@ function HostInstall({ host, snippets, accessKey }: HostInstallProps) {
 
     case 'codex-cli':
       return (
-        <CopySnippet
-          label="Paste in your terminal:"
-          snippet={snippets.codexCli}
-          accessKey={accessKey}
-        />
+        <Stack gap="xs">
+          <CopySnippet
+            label="Paste in your terminal:"
+            snippet={snippets.codexCli}
+            accessKey={accessKey}
+          />
+          <Text size="xs" c="dimmed">
+            Codex reads {CODEX_TOKEN_ENV_VAR} each time it starts, so also set
+            it in your shell profile.
+          </Text>
+        </Stack>
       );
 
     case 'opencode':

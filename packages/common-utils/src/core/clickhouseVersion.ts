@@ -173,3 +173,24 @@ export function supportsMergeTreeTextIndex(
 ): boolean {
   return isClickHouseVersionAtLeast(version, MERGE_TREE_TEXT_INDEX_MIN);
 }
+
+const PROMETHEUS_HTTP_API_MIN: ClickHouseVersion = [26, 6, 0, 0];
+
+export function supportsPrometheusHttpApi(
+  version: ClickHouseVersion | undefined,
+): boolean {
+  return isClickHouseVersionAtLeast(version, PROMETHEUS_HTTP_API_MIN);
+}
+
+/**
+ * First release whose Prometheus HTTP API serves `/api/v1/labels` and
+ * `/api/v1/label/<name>/values`. Older handlers answer both with a 400
+ * ("not implemented").
+ */
+const PROMETHEUS_LABELS_API_MIN: ClickHouseVersion = [26, 9, 0, 0];
+
+export function supportsPrometheusLabelsApi(
+  version: ClickHouseVersion | undefined,
+): boolean {
+  return isClickHouseVersionAtLeast(version, PROMETHEUS_LABELS_API_MIN);
+}

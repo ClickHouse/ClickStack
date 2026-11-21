@@ -9,16 +9,24 @@ import {
   JSDataType,
   ResponseJSON,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { isMetricChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
-  convertDateRangeToGranularityString,
+  DEFAULT_PROMQL_REDUCER,
+  getQueriedPromqlSeries,
+} from '@hyperdx/common-utils/dist/core/promql';
+import { getPromqlChartRange } from '@hyperdx/common-utils/dist/core/promqlChart';
+import { isMetricChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
+import { SERIES_KEY_JOINER } from '@hyperdx/common-utils/dist/core/seriesNameTemplate';
+import {
   convertGranularityToSeconds,
   convertToCategoricalChartConfig,
   convertToNumberChartConfig,
   convertToTableChartConfig,
   getAlignedDateRange,
+  getPercentileAggFnLevel,
+  getTimeChartGranularity,
   Granularity,
   hasPositiveSeriesLimit,
+  TIME_SERIES_DISPLAY_TYPE_BY_NAME,
 } from '@hyperdx/common-utils/dist/core/utils';
 import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import {
@@ -27,10 +35,14 @@ import {
   BuilderSavedChartConfig,
   ChartConfigWithDateRange,
   ChartConfigWithOptDateRange,
+  ChartPaletteToken,
+  DateRange,
   DisplayType,
   Filter,
   isSearchableSource,
   MetricsDataType as MetricsDataTypeV2,
+  PromqlChartConfig,
+  resolveChartPaletteToken,
   SourceKind,
   SQLInterval,
   TMetricSource,
@@ -42,13 +54,22 @@ import { notifications } from '@mantine/notifications';
 import DateRangeIndicator from './components/charts/DateRangeIndicator';
 import { MVOptimizationExplanationResult } from './hooks/useMVOptimizationExplanation';
 import {
+  encodeJsonUrlParamValue,
+  encodeUrlParamValue,
+} from './utils/urlParamEncoding';
+import {
   DEFAULT_SERIES_LIMIT,
   MAX_RENDERED_TIME_CHART_SERIES,
 } from './defaults';
 import { getMetricNameSql } from './otelSemanticConventions';
 import { AggFn, TableChartSeries, TimeChartSeries } from './types';
 import { NumberFormat } from './types';
-import { getColorProps, getLogLevelColorOrder, logLevelColor } from './utils';
+import {
+  getColorFromCSSToken,
+  getColorProps,
+  getLogLevelColorOrder,
+  logLevelColor,
+} from './utils';
 
 type SortOrder = 'asc' | 'desc';
 
@@ -92,15 +113,6 @@ export const DEFAULT_CHART_CONFIG: Omit<
   alignDateRangeToGranularity: true,
 };
 
-function getTimeChartGranularity(
-  granularity: string | undefined,
-  dateRange: [Date, Date],
-) {
-  return granularity === 'auto' || granularity == null
-    ? convertDateRangeToGranularityString(dateRange, 80)
-    : granularity;
-}
-
 function getTimeChartDateRange(
   dateRange: [Date, Date],
   alignDateRangeToGranularity: boolean | undefined,
@@ -112,6 +124,51 @@ function getTimeChartDateRange(
 }
 
 export const MAX_TIME_CHART_SERIES = DEFAULT_SERIES_LIMIT;
+
+/**
+ * Converts the given config into one that is suitable for a tile that shows
+ * 1 value per series (number, pie, and bar tiles). The reducer defaults to
+ * the last value.
+ */
+export function convertToReducedPromqlChartConfig(
+  config: PromqlChartConfig & DateRange,
+): PromqlChartConfig & DateRange {
+  return {
+    ...config,
+    ...getPromqlChartRange(config),
+    promqlExpression: getQueriedPromqlSeries(config).map(series => ({
+      ...series,
+      reducer: series.reducer ?? DEFAULT_PROMQL_REDUCER,
+    })),
+  };
+}
+
+/**
+ * The config for the sparkline behind a PromQL number tile: the tile's query
+ * with no reducer, so the buckets are plotted rather than collapsed.
+ *
+ * Intentionally matches convertToReducedPromqlChartConfig except for the reducer,
+ * so that react-query keys remain consistent between the reduced and sparkline versions.
+ */
+export function convertToPromqlSparklineChartConfig(
+  config: PromqlChartConfig & DateRange,
+): PromqlChartConfig & DateRange {
+  const reduced = convertToReducedPromqlChartConfig(config);
+  return {
+    ...reduced,
+    promqlExpression: getQueriedPromqlSeries(reduced).map(series => ({
+      ...series,
+      reducer: undefined,
+    })),
+  };
+}
+
+/** A PromQL table tile's queried config. */
+export function convertToPromqlTableChartConfig(
+  config: PromqlChartConfig & DateRange,
+): PromqlChartConfig & DateRange {
+  return { ...config, ...getPromqlChartRange(config) };
+}
 
 export function convertToTimeChartConfig(
   config: ChartConfigWithDateRange,
@@ -129,6 +186,7 @@ export function convertToTimeChartConfig(
   const granularity = getTimeChartGranularity(
     config.granularity,
     config.dateRange,
+    config.minGranularitySeconds,
   );
 
   const dateRange = getTimeChartDateRange(
@@ -173,12 +231,14 @@ export function useTimeChartSettings(
     | 'fillNulls'
     | 'granularity'
     | 'alignDateRangeToGranularity'
+    | 'minGranularitySeconds'
   >,
 ) {
   return useMemo(() => {
     const granularity = getTimeChartGranularity(
       config.granularity,
       config.dateRange,
+      config.minGranularitySeconds,
     );
 
     const dateRange = getTimeChartDateRange(
@@ -196,7 +256,7 @@ export function useTimeChartSettings(
   }, [config]);
 }
 
-export const ChartKeyJoiner = ' · ';
+export const ChartKeyJoiner = SERIES_KEY_JOINER;
 const PreviousPeriodSuffix = ' (previous)';
 
 /**
@@ -454,7 +514,7 @@ function inferValueColumns(
   );
 }
 
-function inferGroupColumns(meta: Array<{ name: string; type: string }>) {
+export function inferGroupColumns(meta: Array<{ name: string; type: string }>) {
   return filterColumnMetaByType(meta, [
     JSDataType.String,
     JSDataType.Map,
@@ -468,6 +528,7 @@ export function formatResponseForCategoricalChart(
   data: ResponseJSON<Record<string, unknown>>,
   getColor: (index: number, label: string) => string,
   applyDefaultOrder: boolean = true,
+  maxGroups: number = DEFAULT_MAX_CATEGORICAL_GROUPS,
 ): Array<{ label: string; value: number; color: string }> {
   if (data.meta == null) {
     throw new Error('No meta data found in response');
@@ -505,7 +566,7 @@ export function formatResponseForCategoricalChart(
   }
 
   return labelsAndValues
-    .slice(0, DEFAULT_MAX_CATEGORICAL_GROUPS)
+    .slice(0, Math.min(maxGroups, DEFAULT_MAX_CATEGORICAL_GROUPS))
     .map((entry, index) => ({
       ...entry,
       color: getColor(index, entry.label),
@@ -570,6 +631,8 @@ export interface LineData {
   displayName: string;
   /** The original result column name this series' values were pulled from. */
   valueColumnName: string;
+  /** The series' raw group-by values, in group column order. */
+  groupValues: unknown[];
   color: string;
   isDashed?: boolean;
 }
@@ -578,8 +641,33 @@ interface LineDataWithOptionalColor extends Omit<LineData, 'color'> {
   color?: string;
 }
 
+/**
+ * Series colors set on a chart's select items, keyed by result-column name
+ * (the item's alias), in the shape formatResponseForTimeChart's
+ * `seriesColors` takes. Tokens go through resolveChartPaletteToken, as on
+ * table and number tiles, so a legacy token maps to its hue and an
+ * unrecognized one is skipped: that series falls back to the positional
+ * palette instead of failing the whole chart.
+ */
+export function getSelectSeriesColors(
+  config: ChartConfigWithDateRange,
+): Record<string, ChartPaletteToken> | undefined {
+  if (!isBuilderChartConfig(config) || !Array.isArray(config.select)) {
+    return undefined;
+  }
+  const entries: [string, ChartPaletteToken][] = [];
+  for (const selectItem of config.select) {
+    const token = resolveChartPaletteToken(selectItem.color);
+    if (selectItem.alias && token) {
+      entries.push([selectItem.alias, token]);
+    }
+  }
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function setLineColors(
   sortedLineData: LineDataWithOptionalColor[],
+  seriesColors?: Record<string, ChartPaletteToken>,
 ): LineData[] {
   // Ensure that the current and previous period lines are the same color
   const lineColorByCurrentPeriodKey = new Map<string, string>();
@@ -590,10 +678,15 @@ function setLineColors(
     if (lineColorByCurrentPeriodKey.has(currentPeriodKey)) {
       line.color = lineColorByCurrentPeriodKey.get(currentPeriodKey);
     } else if (!line.color) {
-      line.color = getColorProps(
-        colorIndex++,
-        line.displayName ?? line.dataKey,
-      );
+      const seriesName = line.displayName ?? line.dataKey;
+      // A color set on the series' select item (keyed by its result-column name)
+      // wins over the positional palette, so a series keeps the same hue no
+      // matter how the data sorts it. A pinned series does not consume a
+      // positional slot, so unpinned series keep their natural palette order.
+      const pinnedToken = seriesColors?.[line.valueColumnName];
+      line.color = pinnedToken
+        ? getColorFromCSSToken(pinnedToken)
+        : getColorProps(colorIndex++, seriesName);
       lineColorByCurrentPeriodKey.set(currentPeriodKey, line.color);
     } else {
       lineColorByCurrentPeriodKey.set(currentPeriodKey, line.color);
@@ -720,6 +813,7 @@ function addResponseToFormattedData({
           previousPeriodKey: `${currentPeriodKey}${PreviousPeriodSuffix}`,
           displayName: keyName,
           valueColumnName,
+          groupValues: groupColumnNames.map(name => row[name]),
           color: applyLogLevelColor
             ? logLevelColor(row[groupColumnNames[0]])
             : undefined,
@@ -744,6 +838,7 @@ export function formatResponseForTimeChart({
   hiddenSeries = [],
   previousPeriodOffsetSeconds = 0,
   maxSeries = MAX_RENDERED_TIME_CHART_SERIES,
+  seriesColors,
 }: {
   dateRange: [Date, Date];
   granularity?: SQLInterval;
@@ -759,6 +854,14 @@ export function formatResponseForTimeChart({
    * every series (the "load all" escape hatch behind the hidden-series notice).
    */
   maxSeries?: number;
+  /**
+   * Pin specific series (keyed by result-column name) to a palette token instead
+   * of the positional palette, so their color is stable across sessions and can
+   * avoid hues reserved for other meanings (e.g. keeping latency off error red).
+   * DBTimeChart derives this from each select item's `color`
+   * (getSelectSeriesColors) when its caller opts in with `applySelectColors`.
+   */
+  seriesColors?: Record<string, ChartPaletteToken>;
 }) {
   const meta = currentPeriodResponse.meta;
 
@@ -812,10 +915,18 @@ export function formatResponseForTimeChart({
   }
 
   const logLevelColorOrder = getLogLevelColorOrder();
+  // Series are otherwise ordered by first appearance in the response, which
+  // ClickHouse does not keep stable between runs. Colors are assigned by
+  // position, so tie-break by key to keep each series' color stable.
   let sortedLineData = Object.values(lineDataMap).sort((a, b) => {
     return (
       logLevelColorOrder.findIndex(color => color === a.color) -
-      logLevelColorOrder.findIndex(color => color === b.color)
+        logLevelColorOrder.findIndex(color => color === b.color) ||
+      (a.currentPeriodKey < b.currentPeriodKey
+        ? -1
+        : a.currentPeriodKey > b.currentPeriodKey
+          ? 1
+          : 0)
     );
   });
 
@@ -993,7 +1104,7 @@ export function formatResponseForTimeChart({
     (a, b) => a[timestampColumn.name] - b[timestampColumn.name],
   );
 
-  const sortedLineDataWithColors = setLineColors(sortedLineData);
+  const sortedLineDataWithColors = setLineColors(sortedLineData, seriesColors);
 
   // Count of LOGICAL groups actually rendered, in the same unit as
   // hiddenSeriesCount — so a comparison chart (current + previous entries per
@@ -1022,16 +1133,11 @@ const mapV1AggFnToV2 = (aggFn?: AggFn): AggFnV2 | undefined => {
   }
   // Map rate-based aggregations to their base aggregation
   if (aggFn.endsWith('_rate')) {
-    return mapV1AggFnToV2(aggFn.replace('_rate', '') as AggFn);
+    return mapV1AggFnToV2(aggFn.replace(/_rate$/, '') as AggFn);
   }
 
   // Map percentiles to quantile
-  if (
-    aggFn === 'p50' ||
-    aggFn === 'p90' ||
-    aggFn === 'p95' ||
-    aggFn === 'p99'
-  ) {
+  if (getPercentileAggFnLevel(aggFn) != null) {
     return 'quantile';
   }
 
@@ -1083,7 +1189,7 @@ export const convertV1ChartConfigToV2 = (
     granularity?: Granularity;
     dateRange: [Date, Date];
     seriesReturnType: 'ratio' | 'column';
-    displayType?: 'stacked_bar' | 'line';
+    displayType?: 'stacked_bar' | 'stacked_line' | 'line';
     name?: string;
     fillNulls?: number | false;
     sortOrder?: SortOrder;
@@ -1107,8 +1213,7 @@ export const convertV1ChartConfigToV2 = (
   }
 
   const firstSeries = series[0];
-  const convertedDisplayType =
-    displayType === 'stacked_bar' ? DisplayType.StackedBar : DisplayType.Line;
+  const convertedDisplayType = TIME_SERIES_DISPLAY_TYPE_BY_NAME[displayType];
 
   if (firstSeries.table === 'logs') {
     // TODO: this might not work properly since logs + traces are mixed in v1
@@ -1130,8 +1235,12 @@ export const convertV1ChartConfigToV2 = (
         const metricDataType = z
           .nativeEnum(MetricsDataTypeV2)
           .parse(rawMetricDataType?.toLowerCase());
+        const percentileLevel = getPercentileAggFnLevel(
+          s.aggFn?.replace(/_rate$/, ''),
+        );
         return {
           aggFn: mapV1AggFnToV2(s.aggFn),
+          ...(percentileLevel != null ? { level: percentileLevel } : {}),
           metricType: metricDataType,
           valueExpression: field,
           metricName,
@@ -1174,6 +1283,23 @@ export function tryExpandConfigVariables<
   }
 }
 
+const NO_LOG_SOURCE_WARNING_DISMISSED_KEY =
+  'drilldown-metric-correlated-log-warning';
+
+// Called while rendering (chart tooltips), so it must not throw when storage is
+// blocked (sandboxed iframe, disabled cookies) or missing (SSR).
+function isNoLogSourceWarningDismissed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return (
+      window.localStorage.getItem(NO_LOG_SOURCE_WARNING_DISMISSED_KEY) ===
+      'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Build search URL for viewing events based on group-by values
  * Used by both chart clicks and table row clicks
@@ -1209,9 +1335,21 @@ export function buildEventsSearchUrl({
         ? source.logSourceId
         : undefined;
     if (logSourceId == null) {
+      if (isNoLogSourceWarningDismissed()) return null;
       notifications.show({
         color: 'yellow',
-        message: 'No log source is associated with the selected metric source.',
+        message:
+          'Drill-down is unavailable for metric sources that lack correlated log sources',
+        id: 'no-log-source-associated',
+        closeButtonProps: {
+          onClick: () => {
+            try {
+              localStorage.setItem(NO_LOG_SOURCE_WARNING_DISMISSED_KEY, 'true');
+            } catch {
+              // don't do anything
+            }
+          },
+        },
       });
       return null;
     }
@@ -1263,11 +1401,19 @@ export function buildEventsSearchUrl({
   const from = dateRange[0].getTime();
   const to = dateRange[1].getTime();
 
+  // `where`, `select` and `filters` carry the search page parsers' own encoding
+  // layer under the query string's. When the search page later writes any
+  // other param, nuqs re-renders every value from the once-decoded query string
+  // without escaping newlines, and the browser strips them — so a
+  // single-encoded multi-line `where` comes back with its lines joined.
   const params: Record<string, string> = {
     source: source?.id ?? '',
-    where: where,
+    where: encodeUrlParamValue(where),
     whereLanguage: whereLanguage,
-    filters: JSON.stringify([...(config.filters ?? []), ...additionalFilters]),
+    filters: encodeJsonUrlParamValue([
+      ...(config.filters ?? []),
+      ...additionalFilters,
+    ]),
     isLive: 'false',
     from: from.toString(),
     to: to.toString(),
@@ -1277,7 +1423,7 @@ export function buildEventsSearchUrl({
   if (isMetricChart) {
     params.where = '';
     params.whereLanguage = 'lucene';
-    params.filters = JSON.stringify([]);
+    params.filters = encodeJsonUrlParamValue([]);
     params.source =
       (source.kind === SourceKind.Metric || source.kind === SourceKind.Trace
         ? source.logSourceId
@@ -1288,7 +1434,7 @@ export function buildEventsSearchUrl({
   // eventTableSelect is used for charts that override select (like histograms with count)
   // to preserve the original table's select expression
   if (config.eventTableSelect) {
-    params.select = config.eventTableSelect;
+    params.select = encodeUrlParamValue(config.eventTableSelect);
   }
 
   return `/search?${new URLSearchParams(params).toString()}`;

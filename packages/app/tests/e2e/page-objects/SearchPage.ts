@@ -5,6 +5,7 @@
 import { expect, Locator, Page } from '@playwright/test';
 
 import { FilterComponent } from '../components/FilterComponent';
+import { HeatmapComponent } from '../components/HeatmapComponent';
 import { InfrastructurePanelComponent } from '../components/InfrastructurePanelComponent';
 import { PatternSidePanelComponent } from '../components/PatternSidePanelComponent';
 import { SavedSearchModalComponent } from '../components/SavedSearchModalComponent';
@@ -12,7 +13,14 @@ import { SearchPageAlertModalComponent } from '../components/SearchPageAlertModa
 import { SidePanelComponent } from '../components/SidePanelComponent';
 import { TableComponent } from '../components/TableComponent';
 import { TimePickerComponent } from '../components/TimePickerComponent';
-import { dismissSqlAutocomplete } from '../utils/locators';
+import { WhereInputComponent } from '../components/WhereInputComponent';
+import { DEFAULT_TRACES_SOURCE_NAME } from '../utils/constants';
+import {
+  borderedBox,
+  dismissSqlAutocomplete,
+  replaceEditorText,
+} from '../utils/locators';
+import type { MultilineField } from '../utils/multiline-input';
 
 type SaveSearchModalProps = {
   update: boolean;
@@ -25,8 +33,10 @@ export class SearchPage {
   readonly patternSidePanel: PatternSidePanelComponent;
   readonly infrastructure: InfrastructurePanelComponent;
   readonly filters: FilterComponent;
+  readonly heatmap: HeatmapComponent;
+  readonly whereInput: WhereInputComponent;
   readonly savedSearchModal: SavedSearchModalComponent;
-  readonly savedSearchNameTitle: Locator;
+  readonly savedSearchNameInput: Locator;
   readonly alertModal: SearchPageAlertModalComponent;
   readonly defaultTimeout: number = 3000;
   private readonly alertsButtonLocator: Locator;
@@ -36,10 +46,7 @@ export class SearchPage {
   private readonly searchInput: Locator;
   private readonly searchButton: Locator;
   private readonly saveSearchButton: Locator;
-  private readonly languageSelect: Locator;
   private readonly updateSearchButton: Locator;
-  private readonly luceneTab: Locator;
-  private readonly sqlTab: Locator;
   private readonly sourceSelector: Locator;
 
   constructor(page: Page, defaultTimeout: number = 3000) {
@@ -55,25 +62,19 @@ export class SearchPage {
     this.patternSidePanel = new PatternSidePanelComponent(page);
     this.infrastructure = new InfrastructurePanelComponent(page);
     this.filters = new FilterComponent(page);
+    this.heatmap = new HeatmapComponent(page);
     this.savedSearchModal = new SavedSearchModalComponent(page);
     this.alertModal = new SearchPageAlertModalComponent(page);
     this.alertsButtonLocator = page.getByTestId('alerts-button');
-    this.savedSearchNameTitle = page.locator(
-      '[data-testid="saved-search-name"]',
-    );
+    this.savedSearchNameInput = page.getByTestId('saved-search-name');
 
     // Define page-specific locators
     this.searchForm = page.getByTestId('search-form');
+    this.whereInput = new WhereInputComponent(page, this.searchForm);
     this.searchInput = page.getByTestId('search-input');
     this.searchButton = page.getByTestId('search-submit-button');
     this.saveSearchButton = page.getByTestId('save-search-button');
     this.updateSearchButton = page.getByTestId('update-search-button');
-    const whereLanguageSwitch = page.getByTestId('where-language-switch');
-    this.languageSelect = whereLanguageSwitch.getByRole('combobox', {
-      name: 'Query language',
-    });
-    this.sqlTab = page.getByRole('option', { name: 'SQL', exact: true });
-    this.luceneTab = page.getByRole('option', { name: 'Lucene', exact: true });
     this.sourceSelector = page.getByTestId('source-selector');
   }
 
@@ -107,6 +108,11 @@ export class SearchPage {
   }
 
   async selectSource(sourceName: string) {
+    // Clicking the option that is already selected deselects it. Leave an
+    // existing match alone.
+    if ((await this.sourceSelector.inputValue()) === sourceName) {
+      return;
+    }
     await this.sourceSelector.click();
     await this.page
       .getByRole('option', { name: sourceName, exact: true })
@@ -116,6 +122,56 @@ export class SearchPage {
   /** The "Event Patterns" analysis-mode tab in the filters sidebar. */
   get eventPatternsTab() {
     return this.page.getByRole('tab', { name: 'Event Patterns' });
+  }
+
+  /** The "Event Deltas" analysis-mode tab, shown only for trace sources. */
+  get eventDeltasTab() {
+    return this.page.getByRole('tab', { name: 'Event Deltas' });
+  }
+
+  async switchToEventDeltas() {
+    await this.eventDeltasTab.click();
+    await expect(this.page).toHaveURL(/[?&]mode=delta/);
+  }
+
+  get chartErrorState() {
+    return this.page.getByTestId('chart-error-state');
+  }
+
+  /** DBDeltaChart legend entries shown only while a selection is compared. */
+  get deltaSelectionLegend() {
+    return this.page.getByText('Selection', { exact: true });
+  }
+
+  get deltaBackgroundLegend() {
+    return this.page.getByText('Background', { exact: true });
+  }
+
+  /** DBDeltaChart hint shown while there is no selection to compare. */
+  get deltaNoSelectionHint() {
+    return this.page.getByText(
+      'Select an area on the chart above to enable comparisons',
+    );
+  }
+
+  get heatmapSettingsDrawer() {
+    return this.page.getByRole('dialog', { name: 'Display Settings' });
+  }
+
+  async openHeatmapSettings() {
+    await this.page.getByTestId('heatmap-settings-button').click();
+    await expect(this.heatmapSettingsDrawer).toBeVisible();
+  }
+
+  async setHeatmapScale(scale: 'Log' | 'Linear') {
+    await this.heatmapSettingsDrawer.getByText(scale, { exact: true }).click();
+  }
+
+  async applyHeatmapSettings() {
+    await this.heatmapSettingsDrawer
+      .getByRole('button', { name: 'Apply' })
+      .click();
+    await expect(this.heatmapSettingsDrawer).toBeHidden();
   }
 
   /**
@@ -151,6 +207,30 @@ export class SearchPage {
       .nth(rowIndex)
       .locator('td > button > div')
       .nth(PATTERN_LIST_LEVEL_COLUMN_INDEX);
+  }
+
+  /** The Pattern-column cell of a pattern-list row (see patternListLevelCell). */
+  patternListPatternCell(rowIndex = 0) {
+    const PATTERN_LIST_PATTERN_COLUMN_INDEX = 3;
+    return this.patternListRows
+      .nth(rowIndex)
+      .locator('td > button > div')
+      .nth(PATTERN_LIST_PATTERN_COLUMN_INDEX);
+  }
+
+  /** Active-filter pills for filters added from the Event Patterns view. */
+  get patternFilterPills() {
+    return this.page.getByTestId('active-filter-pill-pattern');
+  }
+
+  /** Hover a pattern-list row and click one of its filter buttons. */
+  async clickPatternRowAction(
+    name: 'Filter for this pattern' | 'Exclude this pattern',
+    rowIndex = 0,
+  ) {
+    const row = this.patternListRows.nth(rowIndex);
+    await row.hover();
+    await row.getByRole('button', { name }).click();
   }
 
   /** Open the first pattern's sample flyout and wait for it to render. */
@@ -205,6 +285,83 @@ export class SearchPage {
     await expect(this.sidePanel.tabs).toBeVisible();
   }
 
+  /** The selection menu button in the table header, once rows are selected. */
+  get selectionCount() {
+    return this.page.getByTestId('row-selection-count');
+  }
+
+  /** Only rendered while live tail is stopped. */
+  get resumeLiveTailButton() {
+    return this.page.getByRole('button', { name: 'Resume Live Tail' });
+  }
+
+  async resumeLiveTail() {
+    await this.resumeLiveTailButton.click();
+  }
+
+  /** Opens the selection menu and picks one of its actions. */
+  private async clickSelectionMenuItem(testId: string) {
+    await this.selectionCount.click();
+    await this.page.getByTestId(testId).click();
+  }
+
+  async copySelectedRows(format: 'csv' | 'json' = 'csv') {
+    await this.clickSelectionMenuItem(`row-selection-copy-${format}`);
+  }
+
+  /** The toast confirming a clipboard copy of the selected rows. */
+  getCopiedSelectionToast() {
+    return this.page.getByText(/copied \d+ rows? as (CSV|JSON)/i);
+  }
+
+  async clearRowSelection() {
+    await this.clickSelectionMenuItem('row-selection-clear');
+  }
+
+  /**
+   * Download the selected rows and return the CSV text. The export triggers a
+   * client-side anchor download, so capture the Playwright download event and
+   * read its stream.
+   */
+  async downloadSelectedRowsCsv(): Promise<{
+    filename: string;
+    content: string;
+  }> {
+    const downloadPromise = this.page.waitForEvent('download');
+    await this.clickSelectionMenuItem('row-selection-download-csv');
+    const download = await downloadPromise;
+    const stream = await download.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return {
+      filename: download.suggestedFilename(),
+      content: Buffer.concat(chunks).toString('utf-8'),
+    };
+  }
+
+  /**
+   * Open the waterfall's spans filter — a `SearchWhereInput` with
+   * `allowMultiline={false}` in both SQL and Lucene.
+   */
+  async openTraceSpansFilter(): Promise<WhereInputComponent> {
+    await this.selectSource(DEFAULT_TRACES_SOURCE_NAME);
+    await this.timePicker.selectRelativeTime('Last 1 days');
+    await this.submitEmptySearch();
+    await expect(this.table.firstRow).toBeVisible();
+    await this.table.clickFirstRow();
+    await expect(this.sidePanel.container).toBeVisible();
+    await expect(this.sidePanel.getTab('trace')).toBeVisible({
+      timeout: 15_000,
+    });
+    await this.sidePanel.clickTab('trace');
+    await this.sidePanel.toggleTraceFilters();
+    const whereInput = this.sidePanel.traceSpansWhereInput;
+    await expect(whereInput.languageSwitch).toBeVisible();
+    return whereInput;
+  }
+
   /**
    * Clear the search input
    */
@@ -216,16 +373,14 @@ export class SearchPage {
    * Switch to SQL mode
    */
   async switchToSQLMode() {
-    await this.languageSelect.click();
-    await this.sqlTab.click();
+    await this.whereInput.selectLanguage('SQL');
   }
 
   /**
    * Switch to Lucene mode
    */
   async switchToLuceneMode() {
-    await this.languageSelect.click();
-    await this.luceneTab.click();
+    await this.whereInput.selectLanguage('Lucene');
   }
 
   /**
@@ -260,6 +415,23 @@ export class SearchPage {
 
     // Wait for new results to populate
     await this.table.waitForRowsToPopulate();
+  }
+
+  /**
+   * Mark the live document so a later `hasSurvivedReload` can tell a
+   * client-side route change from a full page load, which replaces the
+   * document and with it the marker.
+   */
+  async markDocument() {
+    await this.page.evaluate(() => {
+      document.documentElement.dataset.e2eDocumentMarker = 'true';
+    });
+  }
+
+  async hasSurvivedReload() {
+    return this.page.evaluate(
+      () => document.documentElement.dataset.e2eDocumentMarker === 'true',
+    );
   }
 
   /**
@@ -312,11 +484,62 @@ export class SearchPage {
     return this.page.getByText(/Error loading/i);
   }
 
+  /** Move focus into the WHERE input, whichever language it is rendering. */
+  async focusWhereInput() {
+    await this.whereInput.focus();
+  }
+
+  /**
+   * Border colors of the two halves of the WHERE control. They sit flush
+   * against each other, so a focus state on only one reads as half-focused.
+   */
+  async getWhereBorderColors(): Promise<{
+    languageSwitch: string;
+    input: string;
+  }> {
+    return this.whereInput.borderColors();
+  }
+
   /**
    * Get SELECT editor (CodeMirror)
    */
   getSELECTEditor() {
     return this.page.locator('.cm-content').first();
+  }
+
+  async getSelectBorderColor(): Promise<string> {
+    return this.selectClauseField().visibleBox.evaluate(
+      el => getComputedStyle(el).borderTopColor,
+    );
+  }
+
+  async getOrderByBorderColor(): Promise<string> {
+    return this.orderByClauseField().visibleBox.evaluate(
+      el => getComputedStyle(el).borderTopColor,
+    );
+  }
+
+  /** The SELECT / ORDER BY clause editors as growth-assertable fields. */
+  selectClauseField(): MultilineField {
+    return this.clauseField(this.getSELECTEditor());
+  }
+
+  orderByClauseField(): MultilineField {
+    return this.clauseField(this.getOrderByEditor());
+  }
+
+  /** Empty a clause editor so it starts from one short line. */
+  async clearClause(field: MultilineField) {
+    await field.focusTarget.press('ControlOrMeta+A');
+    await field.focusTarget.press('Backspace');
+  }
+
+  private clauseField(content: Locator): MultilineField {
+    return {
+      focusTarget: content,
+      growthBox: content,
+      visibleBox: borderedBox(content),
+    };
   }
 
   /**
@@ -350,6 +573,81 @@ export class SearchPage {
     await this.page.keyboard.type(orderByStatement);
     // CLoses Autocomplete Modal if open
     await this.page.keyboard.press('Escape');
+  }
+
+  get groupByButton() {
+    return this.page.getByTestId('search-group-by-button');
+  }
+
+  get groupByDropdown() {
+    return this.page.getByTestId('search-group-by-dropdown');
+  }
+
+  async openGroupBy() {
+    await this.groupByButton.click();
+    await expect(this.groupByDropdown).toBeVisible();
+  }
+
+  /** Replace the histogram group by with `fields`, picked from the key list. */
+  async setGroupByFields(fields: string[]) {
+    await this.openGroupBy();
+    await this.groupByDropdown.getByRole('button', { name: 'Clear' }).click();
+    for (const field of fields) {
+      await this.groupByDropdown
+        .getByTestId('search-group-by-search')
+        .fill(field);
+      await this.groupByDropdown
+        .getByRole('checkbox', { name: field, exact: true })
+        .check();
+    }
+    await this.applyGroupBy();
+  }
+
+  async openGroupBySqlTab() {
+    await this.groupByDropdown.getByText('SQL', { exact: true }).click();
+  }
+
+  /** Replace the histogram group by with a SQL expression list. */
+  async setGroupBySql(sql: string) {
+    await this.openGroupBy();
+    await this.openGroupBySqlTab();
+    await replaceEditorText(
+      this.page,
+      this.groupByDropdown.locator('.cm-content'),
+      sql,
+    );
+    await dismissSqlAutocomplete(this.page);
+    await this.applyGroupBy();
+  }
+
+  private async applyGroupBy() {
+    await this.groupByDropdown.getByRole('button', { name: 'Apply' }).click();
+    await expect(this.groupByDropdown).toBeHidden();
+  }
+
+  getDroppedGroupByToast(fields: string) {
+    return this.page.getByText(
+      `Group by ${fields} didn't apply to this source`,
+      { exact: false },
+    );
+  }
+
+  getHistogramLegend() {
+    return this.getHistogram().locator('.recharts-legend-wrapper');
+  }
+
+  /** Pin the histogram tooltip and focus its first series. */
+  async focusFirstHistogramSeries() {
+    const focusButton = this.page
+      .locator('[data-testid^="chart-focus-series-"]')
+      .first();
+    // Recharts only pins on a click that lands on a bucket, so the click
+    // itself is part of what gets retried.
+    await expect(async () => {
+      await this.getHistogram().click();
+      await expect(focusButton).toBeVisible({ timeout: 2000 });
+    }).toPass({ timeout: 30000 });
+    await focusButton.click();
   }
 
   /**
@@ -419,11 +717,11 @@ export class SearchPage {
   }
 
   get luceneModeTab() {
-    return this.luceneTab;
+    return this.page.getByRole('option', { name: 'Lucene', exact: true });
   }
 
   get sqlModeTab() {
-    return this.sqlTab;
+    return this.page.getByRole('option', { name: 'SQL', exact: true });
   }
 
   get sourceDropdown() {

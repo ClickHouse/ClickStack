@@ -1,9 +1,9 @@
-# HyperDX Architecture
+# ClickStack Architecture
 
 ## Core Services
 
-- **HyperDX UI (`packages/app`)**: Next.js frontend serving the user interface
-- **HyperDX API (`packages/api`)**: Node.js/Express backend handling queries and business logic
+- **ClickStack UI (`packages/app`)**: Next.js frontend serving the user interface
+- **ClickStack API (`packages/api`)**: Node.js/Express backend handling queries and business logic
 - **OpenTelemetry Collector**: Receives and processes telemetry data
 - **ClickHouse**: Primary data store for all telemetry (logs, metrics, traces)
 - **MongoDB**: Metadata storage (users, dashboards, alerts, saved searches)
@@ -70,7 +70,8 @@ the OpenAPI spec and `yarn lint:openapi` to validate it.
 
 `scripts/ci/check-openapi-sync.sh` (run by `make ci-lint` and by CI) fails if the
 committed spec is stale. `swaggerOptions` in `src/utils/swagger.ts` is also an
-input, and the spec is in `.prettierignore` because docgen owns its formatting.
+input, and the spec is in `ignorePatterns` in `.oxfmtrc.json` because docgen owns
+its formatting.
 
 ### MCP Server (`src/mcp/`)
 
@@ -87,6 +88,9 @@ Key, rate-limited to 600 req/min.
   tracing)
 - **Dev/debug**: `yarn dev:mcp` launches the MCP Inspector for interactive
   testing
+- **Response size**: each tool call records the UTF-8 bytes it returns
+  (`mcp.tool.response.size_bytes` span attribute,
+  `hyperdx.mcp.tool.response.size_bytes` histogram)
 
 See `MCP.md` in the repo root for user-facing setup instructions.
 

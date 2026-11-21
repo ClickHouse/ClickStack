@@ -1,10 +1,9 @@
 ## base #############################################################################################
-ARG OTEL_COLLECTOR_VERSION=0.155.0
-ARG OTEL_COLLECTOR_CORE_VERSION=1.61.0
+ARG OTEL_COLLECTOR_VERSION=0.165.0
+ARG OTEL_COLLECTOR_CORE_VERSION=1.71.0
 
 FROM otel/opentelemetry-collector-opampsupervisor:${OTEL_COLLECTOR_VERSION} AS supervisor
-FROM hairyhenderson/gomplate:v4.3.3-alpine AS gomplate
-FROM kukymbr/goose-docker@sha256:0cd025636df126e7f66472861ca4db3683bc649be46cd1f6ef1a316209058e23 AS goose
+FROM hairyhenderson/gomplate:v5.3.1-alpine AS gomplate
 
 # Build the custom HyperDX collector binary using OCB (OpenTelemetry Collector Builder).
 # This replaces the pre-built otel/opentelemetry-collector-contrib image so we can
@@ -12,8 +11,10 @@ FROM kukymbr/goose-docker@sha256:0cd025636df126e7f66472861ca4db3683bc649be46cd1f
 # Note: Build context must be repo root (use: docker build -f docker/otel-collector/Dockerfile .)
 # Note: The official OCB image may ship an older Go than the contrib modules require,
 # so we copy the ocb binary into a golang base with a newer toolchain.
+# The golang image is pinned by digest: a floating tag invalidates the multi-minute
+# OCB compile whenever upstream republishes it. Bump the tag and digest together.
 FROM otel/opentelemetry-collector-builder:${OTEL_COLLECTOR_VERSION} AS ocb-bin
-FROM golang:1.26-alpine AS ocb-builder
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS ocb-builder
 ARG OTEL_COLLECTOR_VERSION
 ARG OTEL_COLLECTOR_CORE_VERSION
 COPY --from=ocb-bin /usr/local/bin/ocb /usr/local/bin/ocb
@@ -25,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=ocb-gomod \
     CGO_ENABLED=0 ocb --config=builder-config.yaml
 
 # Build the Go migration tool with full TLS support for ClickHouse
-FROM golang:1.26-alpine AS migrate-builder
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS migrate-builder
 WORKDIR /build
 COPY packages/otel-collector/go.mod packages/otel-collector/go.sum ./
 RUN go mod download
@@ -33,7 +34,7 @@ COPY packages/otel-collector/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /migrate ./cmd/migrate
 
 # From: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/aa5c3aa4c7ec174361fcaf908de8eaca72263078/cmd/opampsupervisor/Dockerfile#L18
-FROM alpine:3.23@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 AS base
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS base
 
 ARG USER_UID=10001
 ARG USER_GID=10001
@@ -47,9 +48,6 @@ RUN apk add --no-cache ca-certificates && \
 
 # Copy gomplate binary from the gomplate image
 COPY --from=gomplate /bin/gomplate /usr/local/bin/gomplate
-
-# Copy goose binary for shell-based migrations (default)
-COPY --from=goose /bin/goose /usr/local/bin/goose
 
 # Copy migrate binary (Go-based goose migration tool with full TLS support)
 COPY --from=migrate-builder /migrate /usr/local/bin/migrate
@@ -68,7 +66,7 @@ FROM base AS dev
 LABEL org.opencontainers.image.vendor="HyperDX" \
   org.opencontainers.image.title="HyperDX OTel Collector (Dev)" \
   org.opencontainers.image.description="OpenTelemetry Collector for HyperDX development" \
-  org.opencontainers.image.source="https://github.com/hyperdxio/hyperdx" \
+  org.opencontainers.image.source="https://github.com/ClickHouse/ClickStack" \
   org.opencontainers.image.licenses="MIT"
 
 COPY --chown=10001:10001 docker/otel-collector/config.yaml /etc/otelcol-contrib/config.yaml
@@ -79,7 +77,7 @@ COPY --chown=10001:10001 docker/otel-collector/config.standalone.promql.yaml /et
 COPY --chown=10001:10001 docker/otel-collector/supervisor_docker.yaml.tmpl /etc/otel/supervisor.yaml.tmpl
 COPY --chown=10001:10001 docker/otel-collector/schema /etc/otel/schema
 
-EXPOSE 4317 4318 13133
+EXPOSE 4317 4318 13133 8125/udp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -q --spider http://localhost:13133/ || exit 1
@@ -92,7 +90,7 @@ FROM base AS prod
 LABEL org.opencontainers.image.vendor="HyperDX" \
   org.opencontainers.image.title="HyperDX OTel Collector" \
   org.opencontainers.image.description="OpenTelemetry Collector for HyperDX observability platform" \
-  org.opencontainers.image.source="https://github.com/hyperdxio/hyperdx" \
+  org.opencontainers.image.source="https://github.com/ClickHouse/ClickStack" \
   org.opencontainers.image.licenses="MIT"
 
 COPY --chown=10001:10001 docker/otel-collector/config.yaml /etc/otelcol-contrib/config.yaml
@@ -103,7 +101,7 @@ COPY --chown=10001:10001 docker/otel-collector/config.standalone.promql.yaml /et
 COPY --chown=10001:10001 docker/otel-collector/supervisor_docker.yaml.tmpl /etc/otel/supervisor.yaml.tmpl
 COPY --chown=10001:10001 docker/otel-collector/schema /etc/otel/schema
 
-EXPOSE 4317 4318 13133
+EXPOSE 4317 4318 13133 8125/udp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -q --spider http://localhost:13133/ || exit 1

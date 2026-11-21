@@ -1,5 +1,7 @@
 import express from 'express';
+import omit from 'lodash/omit';
 
+import { EXTERNAL_API_RATE_LIMIT_MAX } from '@/config';
 import { validateUserAccessKey } from '@/middleware/auth';
 import alertsRouter from '@/routers/external-api/v2/alerts';
 import chartsRouter from '@/routers/external-api/v2/charts';
@@ -16,16 +18,18 @@ const router = express.Router();
 
 const defaultRateLimiter = rateLimiter({
   windowMs: 60 * 1000, // 1 minute
-  max: 100, // Limit each API key to 100 requests per `window`
+  max: EXTERNAL_API_RATE_LIMIT_MAX, // Limit each API key to this many requests per `window`
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   keyGenerator: rateLimiterKeyGenerator,
 });
 
 router.get('/', validateUserAccessKey, (req, res) => {
+  const user = req.user?.toJSON();
   res.json({
     version: 'v2',
-    user: req.user?.toJSON(),
+    // A service account's accessKey is its org key hash; don't hand it out.
+    user: user?.isVirtual ? omit(user, 'accessKey') : user,
   });
 });
 

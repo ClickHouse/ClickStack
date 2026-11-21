@@ -94,6 +94,9 @@ const nextConfig = {
   // when running dev and E2E simultaneously (e.g. NEXT_DIST_DIR=.next-e2e)
   ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   reactCompiler: true,
+  // click-ui ships per-component CSS imports from node_modules, which Next
+  // rejects as global CSS unless the package is transpiled.
+  transpilePackages: ['@clickhouse/click-ui'],
   basePath: basePath,
   env: {
     // Ensures bundler-time replacements for client/server code that references this env var
@@ -108,8 +111,7 @@ const nextConfig = {
     '@opentelemetry/instrumentation',
     '@opentelemetry/sdk-node',
     '@opentelemetry/auto-instrumentations-node',
-    '@hyperdx/node-opentelemetry',
-    '@hyperdx/instrumentation-sentry-node',
+    '@clickhouse/clickstack-node',
     // Outside of Vercel preview deployments, the `/api/[...all]` catch-all
     // proxies to a separately-deployed API service and never imports the
     // `@hyperdx/api` package at runtime. Mark it (and its subpaths) as a
@@ -118,6 +120,10 @@ const nextConfig = {
     // do not pull in passport-saml, mongoose, AWS SDK, etc.
     ...(process.env.HDX_PREVIEW_INLINE_API !== 'true' ? ['@hyperdx/api'] : []),
   ],
+  // Build-only tool that the server trace picks up; its Go binary shows up in image CVE scans.
+  outputFileTracingExcludes: {
+    '*': ['**/node_modules/esbuild/**', '**/node_modules/@esbuild/**'],
+  },
   typescript: {
     tsconfigPath: 'tsconfig.build.json',
   },

@@ -5,6 +5,7 @@ import {
   UseFormTrigger,
   useWatch,
 } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { TableConnection } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   hasFilterEffect,
@@ -16,7 +17,7 @@ import {
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { Alert, Box, Divider, Group, Radio } from '@mantine/core';
+import { Alert, Box, Group, Radio } from '@mantine/core';
 import { IconAlertTriangle } from '@tabler/icons-react';
 
 import { CheckBoxControlled } from '@/components/InputControlled';
@@ -26,6 +27,7 @@ import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from '@/components/SourceSchemaPreview';
 import { SourceSelectControlled } from '@/components/SourceSelect';
+import { useResolvedReference } from '@/components/sourceSelectUtils';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { useSource } from '@/source';
 import { getMetricTableName } from '@/utils';
@@ -59,7 +61,11 @@ export const QueryExpressionFilterEditForm = ({
   showVariableOptions,
 }: QueryExpressionFilterEditFormProps) => {
   const sourceId = useWatch({ control, name: 'source' });
-  const { data: source } = useSource({ id: sourceId });
+  // A data source variable can select a source of a kind this filter can't use
+  const { data: source } = useSource({
+    id: useResolvedReference(sourceId),
+    kinds: QUERY_EXPRESSION_FILTER_SOURCE_KINDS,
+  });
 
   const metricType = useWatch({ control, name: 'sourceMetricType' });
   const tableName = source && getMetricTableName(source, metricType);
@@ -136,6 +142,7 @@ export const QueryExpressionFilterEditForm = ({
           isSchemaPreviewEnabled={isSourceSchemaPreviewEnabled(source)}
           disabled={!!presetSource}
           allowedSourceKinds={QUERY_EXPRESSION_FILTER_SOURCE_KINDS}
+          allowSourceVariables
         />
         <SourceSchemaPreview
           source={source}
@@ -178,10 +185,10 @@ export const QueryExpressionFilterEditForm = ({
       >
         <SQLInlineEditorControlled
           tableConnection={tableConnection}
+          sourceId={sourceId}
           control={control}
           name="expression"
           placeholder="SQL column or expression"
-          language="sql"
           enableHotkey
           rules={{ required: true }}
           parentRef={TOOLTIP_PORTAL_TARGET}
@@ -198,7 +205,6 @@ export const QueryExpressionFilterEditForm = ({
           control={control}
           name="where"
           languageName="whereLanguage"
-          showLabel={false}
           allowMultiline={true}
           sqlPlaceholder="Filter for dropdown values"
           lucenePlaceholder="Filter for dropdown values"
@@ -209,7 +215,7 @@ export const QueryExpressionFilterEditForm = ({
 
       {showVariableOptions && (
         <>
-          <Divider />
+          <Separator size="xs" />
           <CheckBoxControlled
             control={control}
             name="isBroadcastEnabled"
@@ -237,13 +243,14 @@ export const QueryExpressionFilterEditForm = ({
               comboboxProps={{ withinPortal: true }}
               placeholder="All sources"
               allowedSourceKinds={QUERY_EXPRESSION_FILTER_SOURCE_KINDS}
+              allowSourceVariables
             />
           </CustomInputWrapper>
         </Box>
       )}
       {showVariableOptions && (
         <>
-          <Divider />
+          <Separator size="xs" />
           <CheckBoxControlled
             control={control}
             name="isVariableEnabled"

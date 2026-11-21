@@ -1,24 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Control, UseFormSetValue, useWatch } from 'react-hook-form';
 import {
-  TableConnection,
-  tcFromSource,
-} from '@hyperdx/common-utils/dist/core/metadata';
-import {
   displayTypeSupportsRawSqlAlerts,
   validateRawSqlChartConfig,
   validateRawSqlForAlert,
 } from '@hyperdx/common-utils/dist/core/utils';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   ChartVariable,
   RawSqlChartConfig,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
-import {
-  DisplayType,
-  isLogSource,
-  isMetricSource,
-  isTraceSource,
-} from '@hyperdx/common-utils/dist/types';
+import { DisplayType, isMetricSource } from '@hyperdx/common-utils/dist/types';
 import {
   Alert,
   Box,
@@ -30,22 +23,25 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
-import { IconBell, IconHelpCircle } from '@tabler/icons-react';
+import { IconHelpCircle } from '@tabler/icons-react';
 
 import { ConnectionSelectControlled } from '@/components/ConnectionSelect';
+import { AlertPanelButton } from '@/components/DBEditTimeChartForm/AlertPanelButton';
 import { OnClickFormButton } from '@/components/DBEditTimeChartForm/OnClickForm/OnClickFormButton';
 import { TileAlertEditor } from '@/components/DBEditTimeChartForm/TileAlertEditor';
 import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from '@/components/SourceSchemaPreview';
 import { SourceSelectControlled } from '@/components/SourceSelect';
+import { useResolvedReference } from '@/components/sourceSelectUtils';
 import { SQLEditorControlled } from '@/components/SQLEditor/SQLEditor';
 import { type SQLCompletion } from '@/components/SQLEditor/utils';
 import { IS_LOCAL_MODE } from '@/config';
 import useResizable from '@/hooks/useResizable';
 import { useSources } from '@/source';
-import { getAllMetricTables, usePrevious } from '@/utils';
+import { getTableConnectionsForConnection, usePrevious } from '@/utils';
 import { DEFAULT_TILE_ALERT } from '@/utils/alerts';
+import { resolveConnectionSourceSync } from '@/utils/connectionSourceSync';
 
 import { SQL_PLACEHOLDERS } from './constants';
 import { RawSqlChartInstructions } from './RawSqlChartInstructions';
@@ -54,66 +50,10 @@ import { buildRawSqlCompletions } from './utils';
 
 import resizeStyles from '@/../styles/ResizablePanel.module.scss';
 
-type ConnectionSourceSyncResult =
-  | { field: 'connection'; value: string }
-  | { field: 'source'; value: '' }
-  | null;
-
-/**
- * Decides how the `connection` and `source` form fields should be kept in sync
- * in raw SQL mode. Extracted as a pure function so the behavior can be unit
- * tested independently of the component's effect.
- */
-export function resolveConnectionSourceSync({
-  source,
-  connection,
-  prevSource,
-  prevConnection,
-  sources,
-}: {
-  source: string | undefined;
-  connection: string | undefined;
-  prevSource: string | undefined;
-  prevConnection: string | undefined;
-  sources: { id: string; connection: string }[] | undefined;
-}): ConnectionSourceSyncResult {
-  if (!sources) return null;
-
-  // When the source changes, sync the connection to match.
-  if (source !== prevSource) {
-    const sourceConnection = sources.find(s => s.id === source)?.connection;
-    if (sourceConnection && sourceConnection !== connection) {
-      return { field: 'connection', value: sourceConnection };
-    }
-    return null;
-  }
-
-  // Set a default connection when none is selected.
-  if (!connection) {
-    const defaultConnection = sources[0]?.connection;
-    if (defaultConnection) {
-      return { field: 'connection', value: defaultConnection };
-    }
-    return null;
-  }
-
-  // When the connection changes, clear the source only if the currently
-  // selected source doesn't belong to the new connection. This avoids clearing
-  // a source that was just carried over (e.g. from builder mode), where the
-  // connection change above was itself triggered by the source.
-  if (connection !== prevConnection && prevConnection !== undefined) {
-    const sourceConnection = sources.find(s => s.id === source)?.connection;
-    if (source && sourceConnection !== connection) {
-      return { field: 'source', value: '' };
-    }
-  }
-
-  return null;
-}
-
 export default function RawSqlChartEditor({
   control,
   setValue,
+  allowedSourceKinds,
   onOpenDisplaySettings,
   onSubmit,
   isDashboardForm,
@@ -126,6 +66,7 @@ export default function RawSqlChartEditor({
 }: {
   control: Control<ChartEditorFormState>;
   setValue: UseFormSetValue<ChartEditorFormState>;
+  allowedSourceKinds: SourceKind[];
   onOpenDisplaySettings: () => void;
   onSubmit: (suppressErrorNotification?: boolean) => void;
   isDashboardForm: boolean;
@@ -143,8 +84,12 @@ export default function RawSqlChartEditor({
   const { data: sources } = useSources();
 
   const displayType = useWatch({ control, name: 'displayType' });
-  const connection = useWatch({ control, name: 'connection' });
-  const source = useWatch({ control, name: 'source' });
+  // Source and connection variable references autocomplete and expand macros
+  // as the source and connection they currently select.
+  const storedConnection = useWatch({ control, name: 'connection' });
+  const connection = useResolvedReference(storedConnection);
+  const storedSource = useWatch({ control, name: 'source' });
+  const source = useResolvedReference(storedSource);
   const sqlTemplate = useWatch({ control, name: 'sqlTemplate' });
   const chartName = useWatch({ control, name: 'name' });
   const sourceObject = sources?.find(s => s.id === source);
@@ -192,23 +137,36 @@ export default function RawSqlChartEditor({
       };
     }, [debouncedRawSqlConfig, isDashboardForm]);
 
-  const prevSource = usePrevious(source);
+  const prevSource = usePrevious(storedSource);
   const prevConnection = usePrevious(connection);
 
   useEffect(() => {
     const update = resolveConnectionSourceSync({
-      source,
+      source: storedSource,
       connection,
       prevSource,
       prevConnection,
       sources,
     });
-    if (update?.field === 'connection') {
+    // A connection variable stays as picked; the tile shows a mismatch
+    // instead of having its reference replaced
+    if (
+      update?.field === 'connection' &&
+      parseVariableReference(storedConnection) == null
+    ) {
       setValue('connection', update.value);
     } else if (update?.field === 'source') {
       setValue('source', update.value);
     }
-  }, [connection, prevConnection, prevSource, setValue, source, sources]);
+  }, [
+    connection,
+    storedConnection,
+    prevConnection,
+    prevSource,
+    setValue,
+    storedSource,
+    sources,
+  ]);
 
   const placeholderSQl = SQL_PLACEHOLDERS[displayType ?? DisplayType.Table];
 
@@ -220,38 +178,21 @@ export default function RawSqlChartEditor({
   const [isSourceSchemaPreviewOpen, setIsSourceSchemaPreviewOpen] =
     useState(false);
 
-  const tableConnections: TableConnection[] = useMemo(() => {
-    if (!sources) return [];
-    return sources
-      .filter(s => s.connection === connection && !s.disabled)
-      .flatMap(source => {
-        const tables: TableConnection[] = getAllMetricTables(source);
-
-        if (!isMetricSource(source)) {
-          tables.push(tcFromSource(source));
-        }
-
-        if (
-          (isLogSource(source) || isTraceSource(source)) &&
-          source.materializedViews
-        ) {
-          tables.push(
-            ...source.materializedViews.map(mv => ({
-              databaseName: mv.databaseName,
-              tableName: mv.tableName,
-              connectionId: source.connection,
-            })),
-          );
-        }
-
-        return tables;
-      });
-  }, [sources, connection]);
+  const tableConnections = useMemo(
+    () => getTableConnectionsForConnection(sources, connection),
+    [sources, connection],
+  );
 
   const alertTooltip =
     displayType === DisplayType.Number
       ? 'The threshold will be evaluated against the last numeric column in the first query result'
       : 'The threshold will be evaluated against the last numeric column in each query result';
+
+  const showAlertButton =
+    alert != null ||
+    (displayTypeSupportsRawSqlAlerts(displayType) &&
+      alertsEnabled &&
+      !IS_LOCAL_MODE);
 
   return (
     <Stack gap="xs">
@@ -264,6 +205,8 @@ export default function RawSqlChartEditor({
             control={control}
             name="connection"
             size="xs"
+            allowConnectionVariables
+            data-testid="connection-selector"
           />
           <Group align="center" gap={8} mx="md">
             <Text size="sm" ps="md">
@@ -281,7 +224,11 @@ export default function RawSqlChartEditor({
           <SourceSelectControlled
             control={control}
             name="source"
+            data-testid="source-selector"
+            allowedSourceKinds={allowedSourceKinds}
+            allowSourceVariables
             connectionId={connection}
+            variableConnection={storedConnection}
             size="xs"
             clearable
             placeholder="None"
@@ -296,27 +243,19 @@ export default function RawSqlChartEditor({
           />
         </Group>
         <Group gap="xs">
-          {displayTypeSupportsRawSqlAlerts(displayType) &&
-            alertsEnabled &&
-            !alert &&
-            !IS_LOCAL_MODE && (
-              <Button
-                variant="subtle"
-                data-testid="alert-button"
-                size="sm"
-                color={'gray'}
-                onClick={() =>
-                  setValue('alert', {
-                    ...DEFAULT_TILE_ALERT,
-                    ...(chartName && { displayName: chartName }),
-                  })
-                }
-              >
-                <IconBell size={14} className="me-2" />
-                Add Alert
-              </Button>
-            )}
-
+          {showAlertButton && (
+            <AlertPanelButton
+              hasAlert={alert != null}
+              error={alertErrorMessage}
+              warning={alertWarningMessage}
+              onAddAlert={() =>
+                setValue('alert', {
+                  ...DEFAULT_TILE_ALERT,
+                  ...(chartName && { displayName: chartName }),
+                })
+              }
+            />
+          )}
           <Group>
             {displayType === DisplayType.Table && (
               <OnClickFormButton

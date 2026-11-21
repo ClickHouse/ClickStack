@@ -5,13 +5,13 @@ import { Stack, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 
 import api from '@/api';
+import { useBrandDisplayName } from '@/brand';
 import { useTablesDirect } from '@/clickhouse';
 import { DBTableSelectControlled } from '@/components/DBTableSelect';
 import { SourceSelectControlled } from '@/components/SourceSelect';
 import { useMetadataWithSettings } from '@/hooks/useMetadata';
 import { useMetricsSeriesTableAvailability } from '@/hooks/useMetricsSeriesTableAvailability';
 import { isValidMetricTable, useSource } from '@/source';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 import {
   matchMetricTables,
   matchSeriesTable,
@@ -19,6 +19,7 @@ import {
 
 import { DEFAULT_DATABASE, OTEL_CLICKHOUSE_EXPRESSIONS } from './constants';
 import { FormRow } from './FormRow';
+import { MinAutoGranularityFormRow } from './MinAutoGranularityFormRow';
 import { TableModelProps } from './types';
 
 export function MetricTableModelForm({
@@ -81,7 +82,7 @@ export function MetricTableModelForm({
               if (!isValid) {
                 notifications.show({
                   color: 'red',
-                  message: `${newValue} is not a valid OTEL ${metricType} schema.`,
+                  message: `${newValue} is not a valid OTel ${metricType} schema.`,
                 });
               }
             }
@@ -116,7 +117,7 @@ export function MetricTableModelForm({
           if (!isValid) {
             notifications.show({
               color: 'red',
-              message: `${seriesTable} is not a valid OTEL series schema.`,
+              message: `${seriesTable} is not a valid OTel series schema.`,
             });
           }
         }
@@ -320,6 +321,7 @@ export function MetricTableModelForm({
         >
           <SourceSelectControlled control={control} name="logSourceId" />
         </FormRow>
+        <MinAutoGranularityFormRow control={control} />
       </Stack>
     </>
   );

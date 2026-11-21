@@ -63,6 +63,7 @@ type CollectorConfig = {
           cors: {
             allowed_origins: string[];
             allowed_headers: string[];
+            max_age: number;
           };
           include_metadata: boolean;
           auth?: {
@@ -76,6 +77,7 @@ type CollectorConfig = {
         scrape_configs: Array<{
           job_name: string;
           scrape_interval: string;
+          scheme?: string;
           static_configs: Array<{
             targets: string[];
           }>;
@@ -149,7 +151,7 @@ type CollectorConfig = {
     prometheusremotewrite?: {
       endpoint: string;
       tls: {
-        insecure: boolean;
+        insecure: string;
       };
       resource_to_telemetry_conversion: {
         enabled: boolean;
@@ -205,6 +207,11 @@ export const buildOtelCollectorConfig = (
             cors: {
               allowed_origins: ['*'],
               allowed_headers: ['*'],
+              // Without Access-Control-Max-Age, Chrome caches a preflight for only 5 s, which is
+              // how often the browser SDK exports, so about half of its requests were preflights.
+              // Ten minutes already removes nearly all of them while keeping a policy change from
+              // lingering in browsers.
+              max_age: 600,
             },
             include_metadata: true,
           },
@@ -216,12 +223,19 @@ export const buildOtelCollectorConfig = (
             {
               job_name: 'otelcol',
               scrape_interval: '30s',
+              static_configs: [{ targets: ['0.0.0.0:8888'] }],
+            },
+            // Separate job because the collector's own endpoint is always
+            // plain HTTP, while ClickHouse may be served over https. The
+            // default keeps collector images that predate
+            // HYPERDX_PROMETHEUS_SCHEME on http.
+            {
+              job_name: 'clickhouse',
+              scrape_interval: '30s',
+              scheme: '${env:HYPERDX_PROMETHEUS_SCHEME:-http}',
               static_configs: [
                 {
-                  targets: [
-                    '0.0.0.0:8888',
-                    '${env:CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT}',
-                  ],
+                  targets: ['${env:CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT}'],
                 },
               ],
             },
@@ -294,7 +308,7 @@ export const buildOtelCollectorConfig = (
       // The pipeline `processors:` lists are intentionally declared in the
       // bootstrap config (docker/otel-collector/config.yaml) instead of here,
       // so that users can swap them via CUSTOM_OTELCOL_CONFIG_FILE. See
-      // https://github.com/hyperdxio/hyperdx/pull/2351: when the OpAMP
+      // https://github.com/ClickHouse/ClickStack/pull/2351: when the OpAMP
       // remote config sets `processors:` on a pipeline, it overwrites the
       // bootstrap+custom merge, which prevents users from substituting
       // their own processor (e.g. a memory_limiter with limit_percentage
@@ -336,10 +350,14 @@ export const buildOtelCollectorConfig = (
     );
 
     if (config.IS_PROMQL_ENABLED && otelCollectorConfig.exporters) {
+      // The collector's entrypoint.sh derives the scheme and TLS mode from
+      // CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT. The defaults keep plain HTTP
+      // for collector images that predate it.
       otelCollectorConfig.exporters.prometheusremotewrite = {
-        endpoint: 'http://${env:CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT}/write',
+        endpoint:
+          '${env:HYPERDX_PROMETHEUS_SCHEME:-http}://${env:CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT}/write',
         tls: {
-          insecure: true,
+          insecure: '${env:HYPERDX_PROMETHEUS_TLS_INSECURE:-true}',
         },
         resource_to_telemetry_conversion: {
           enabled: true,

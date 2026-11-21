@@ -1,8 +1,10 @@
 import {
   BaseSourceSchema,
   LogSourceSchema,
+  MapKeyIndexPartSelection,
   MetricsDataType,
   MetricSourceSchema,
+  PROMQL_SOURCE_BACKENDS,
   PromqlSourceSchema,
   QuerySettings,
   SessionSourceSchema,
@@ -157,7 +159,9 @@ export const LogSource = Source.discriminator<ILogSource>(
     serviceNameExpression: String,
     serviceVersionExpression: String,
     severityTextExpression: String,
+    severityNumberExpression: String,
     bodyExpression: String,
+    eventNameExpression: String,
     eventAttributesExpression: String,
     resourceAttributesExpression: String,
     displayedTimestampValueExpression: String,
@@ -167,6 +171,7 @@ export const LogSource = Source.discriminator<ILogSource>(
     spanIdExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
@@ -185,6 +190,11 @@ export const LogSource = Source.discriminator<ILogSource>(
     metadataMaterializedViews: {
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
+    },
+    mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
     },
     orderByExpression: String,
   }),
@@ -219,6 +229,7 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     spanLinksValueExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
@@ -236,6 +247,11 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     metadataMaterializedViews: {
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
+    },
+    mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
     },
     orderByExpression: String,
   }),
@@ -271,6 +287,15 @@ const MetricTablesSchema = new Schema(
   { _id: false },
 );
 
+// See MinAutoGranularitySchema in @hyperdx/common-utils, shared by the metric
+// and PromQL sources. The setter mirrors that schema's '' -> undefined
+// preprocess, since validateRequest doesn't write the parsed body back to
+// req.body.
+const minAutoGranularityField = {
+  type: String,
+  set: (v: string | null | undefined) => (v === '' ? undefined : v),
+};
+
 type IMetricSource = Extract<ISource, { kind: SourceKind.Metric }>;
 export const MetricSource = Source.discriminator<IMetricSource>(
   SourceKind.Metric,
@@ -284,6 +309,7 @@ export const MetricSource = Source.discriminator<IMetricSource>(
     logSourceId: String,
     // Unified metrics series table. Available only when `isMetricsSeriesTableEnabled` is set on the team document.
     seriesTable: String,
+    minAutoGranularity: minAutoGranularityField,
   }),
 );
 
@@ -293,5 +319,8 @@ export const MetricSource = Source.discriminator<IMetricSource>(
 type IPromqlSource = Extract<ISource, { kind: SourceKind.Promql }>;
 export const PromqlSource = Source.discriminator<IPromqlSource>(
   SourceKind.Promql,
-  new Schema<Extract<ISource, { kind: SourceKind.Promql }>>({}),
+  new Schema<Extract<ISource, { kind: SourceKind.Promql }>>({
+    minAutoGranularity: minAutoGranularityField,
+    promqlBackend: { type: String, enum: PROMQL_SOURCE_BACKENDS },
+  }),
 );

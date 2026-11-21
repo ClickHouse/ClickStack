@@ -1,5 +1,389 @@
 # @hyperdx/common-utils
 
+## 0.36.0
+
+### Minor Changes
+
+- fe96b722b: feat: add `buildCompactPatternPredicate`
+
+  It builds the same match as `buildPatternPredicate` in much shorter SQL, for
+  pattern filters that are kept in a URL. `parsePatternPredicate` reads both
+  forms.
+
+- d311d82e2: feat: share the Event Patterns drill-down predicate
+
+  `templateToRegex` and `buildPatternPredicate`, which the MCP server uses to
+  build the `clickstack_event_patterns` drill-down filter, are now in
+  `@hyperdx/common-utils/dist/drain`. New options match templates mined with extra
+  delimiters (`extraDelimiters`) or by Python Drain3 (`whitespace: 'python'`), and
+  `parsePatternPredicate` reads a predicate back into its value expression and
+  template. Without options the output is the same as the MCP server's.
+
+- 743c3c1a6: feat: add an optional "Row key expression" to log and trace sources. When set,
+  the side panel's row lookup selects and filters on only those columns instead of
+  detecting keys from table metadata.
+- a7744e82a: feat: add data source and connection variable types to dashboards
+- a7744e82a: feat: add connection variables for raw SQL tiles, SQL query filters, and
+  connection-scoped data source variables
+
+### Patch Changes
+
+- f15b849da: feat: Ad hoc dashboard filter finishing touches
+
+  - Add an `IN` operator. `IN` conditions on the same key are OR'd into one
+    `IN (...)` condition for SQL, or one `=~"a|b"` matcher for PromQL.
+  - Ad hoc filters always broadcast (`isBroadcastEnabled: true`), and their
+    variable name is only a unique identifier. It is no longer declared as a
+    `$variable`.
+  - Warn when another ad hoc filter already applies to the same sources.
+  - Collapse the filter input to three conditions behind a "+N more" toggle.
+
+- 02a40929d: feat: `clickstack_save_alert` accepts `note` and `numConsecutiveWindows`
+
+  Updates that omit either field now keep the stored value instead of clearing it;
+  send `null` to clear.
+
+- 272c51486: fix: support numeric range searches on String attributes
+
+  Range searches with numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, failed with "no supertype for types
+  String, UInt8". They now compare with `toFloat64OrNull`; values that aren't
+  numbers don't match. `>`, `<`, `>=` and `<=` still compare String fields as
+  text; use a range such as `:[1000 TO *]` for a numeric comparison.
+
+- 3acd5ba1a: feat: create SQL query dashboard filters and fill their dropdowns
+
+  Dashboard filters can now take their values from a ClickHouse SQL query. The filter editor offers a "SQL query values" type with a connection, a SQL editor, and a preview of the values. The dropdown lists the query's first column in the order it returns, up to 10,000 values, and the query can use the time macros and other filters' variables.
+
+- 5b50c31c9: feat: add the SQL query dashboard filter type to the dashboard schema
+
+  A `SQL_QUERY` filter stores a ClickHouse connection and a SQL template whose first column fills the filter's dropdown. It is variable-only. Validation flags templates that use `$__sourceTable` or `$__filters`, or whose macros and variable references can't expand. The filter is not yet exposed through the external API or MCP, and has no editor or values lookup yet.
+
+## 0.35.0
+
+### Minor Changes
+
+- 2d17de5d7: feat: serve PromQL label lookups from ClickHouse's Prometheus HTTP API
+
+  On ClickHouse 26.9+ with the `prometheus_api_v1` handler, `/labels` and `/label/:name/values` for a ClickHouse-backed PromQL source now proxy to the handler instead of querying the TimeSeries tags table with SQL. Older servers, servers without the handler, and sources set to `table-function` keep the SQL path, so a source that runs queries over HTTP on 26.6-26.8 still gets label autocomplete.
+
+### Patch Changes
+
+- ac913ceb3: feat: Choose how a PromQL source on ClickHouse is evaluated (the Prometheus HTTP API or the `prometheusQuery` table functions) instead of probing the server on every query. Without a choice the server is still probed, but the answer is now kept for 5 minutes. A source set to the HTTP API against a server that does not serve it fails with a clear error. Onboarding pins a PromQL source it detects to the HTTP API when the server serves it.
+
+## 0.34.0
+
+### Minor Changes
+
+- 142c9cc87: feat: narrow ad hoc dashboard filter suggestions with a condition
+
+  An ad hoc filter on SQL sources can now carry a SQL or Lucene "Keys and values
+  filter", like a queried filter's dropdown values filter, that limits the rows
+  its keys and values are suggested from. It can reference the dashboard's other
+  variables. While it references a required filter with nothing selected, the ad
+  hoc filter can't add or edit conditions and names the filter it is waiting on.
+  Failed suggestions now show the database's error message.
+
+- cd0e9edfa: feat: add optional `titleEmoji` webhook option; `false` removes the emoji prefix from notification titles sent through that webhook
+- 0b7926d1d: feat: Team members can create team-owned API keys with a description and expiry that keep working after their creator leaves.
+
+### Patch Changes
+
+- 9269f7784: fix: "Denoise results" now removes noise on typical data. A pattern now counts as noisy above 5% of sampled events instead of 10%, which often matched nothing. Patterns that include error or warning lines are never hidden. The MCP `denoise` option uses the same 5% threshold. Denoise also mines the source's body column instead of the last table column, removes ANSI-colored rows that match a noisy pattern, says when results can't be denoised, and shows hidden patterns as a short summary with a shortened, expandable list.
+- e2754d203: fix: use SHA256 instead of MD5 for JSON row lookup WHERE clauses so row
+  details and drill-down work on FIPS-enabled ClickHouse deployments
+- 22f824c6e: fix: keep JSON path segments with special characters quoted in row detail lookups
+- 642533255: perf: PromQL label lookups with `match[]` read only the matched metrics' tags
+  rows when every selector names its metric
+- d0dd06fe8: fix: count legacy STATUS_CODE_ERROR spans as errors on the service map and trace
+  waterfall
+- 5584f84bb: fix: make clickstack_event_patterns drill-down snippets executable
+
+  Each pattern's `whereSnippet` is now a SQL predicate (`whereLanguage: "sql"`) that keeps the template's token order and variable positions and includes the caller's filter and the source table filter, so passing it to `clickstack_search` returns the pattern's events. Before, a template like `Sending <*> rows` produced `Body:"Sending rows"`, which matched nothing, and map fields produced Lucene that failed to parse. `bodyExpression` now also accepts `JSONExtractString(<column>, '<key>', ...)` to mine a field inside JSON bodies, and the tool reports sample coverage and the actual trend bucket interval and boundaries.
+
+  `clickstack_event_patterns`, `clickstack_emerging_signals` and dashboard event-pattern tiles now apply the log source's `tableFilterExpression`, so their counts can drop for sources that set one. `minePatterns` now reports each cluster's own template; before, it could report the template of a different same-length cluster that some members did not fit.
+
+- 41b2b742a: feat: fall back to server MergeTree settings to detect persisted `_block_number` and `_block_offset` columns when the table's CREATE query omits them
+- 442d6dfd9: fix: refresh cached table columns after 5 minutes
+
+  The shared metadata cache kept each table's `DESCRIBE` result for the life of
+  the process, so the API did not see columns added with `ALTER TABLE`, such as
+  new MATERIALIZED columns, until it restarted. Cached columns now expire after 5
+  minutes. Other cached metadata is unchanged.
+
+- eb2439ed0: fix: leave metric points with no recorded value out of charts and alerts
+
+  When a scraped series goes away or a scrape fails, the collector's `prometheus`
+  receiver sends a point flagged "no recorded value" (a Prometheus staleness
+  marker), and the ClickHouse exporter stores it as zeros. Metric charts and
+  alerts read it as a real value: a gauge's `min` and `avg` dropped and `count`
+  included the series that went away, and a counter or histogram that came back
+  after the marker counted its whole total again. Metric queries now skip points
+  with this flag.
+
+- 0a5237e6c: fix: reject alerts on dashboard tiles the alert checker never evaluates (PromQL
+  tiles, and builder tiles with unsupported display types), and drop them when a
+  dashboard is saved
+- 78143c81a: feat: on ClickHouse Cloud, read `system.shared_merge_tree_settings` when detecting `_block_number` and `_block_offset` columns, falling back to `system.merge_tree_settings` per key
+- b1d4e60f8: fix: PromQL label lookups (dashboard variables, label autocomplete) now work on TimeSeries tables of schema version 8, the default from ClickHouse 26.10. These keep each series' time range in a separate time ranges table instead of the tags table's min_time/max_time, so match[] failed with "requires store_min_time_and_max_time = 1" and time-bounded lookups read the whole tags table.
+
+## 0.33.0
+
+### Minor Changes
+
+- 0212c7bd3: feat: Expose alert tags to Generic and incident.io webhook bodies as `{{tags}}` (comma-separated, or iterate with `{{#each tags}}`), and include them in the default incident.io body's `metadata.tags`, so one shared webhook can route alerts by owning team
+
+### Patch Changes
+
+- e88f71695: fix: keep backtick-quoted column names that contain a comma intact when toggling search columns or editing group by
+- e5ba5dfde: fix: Keep string literals as written when rewriting `Map['key'] = 'value'` filters to the key-value items index, so values containing quotes or backslashes match instead of returning no rows
+
+## 0.32.0
+
+### Minor Changes
+
+- 95aef70f: Add an optional `eventNameExpression` to log sources, pointing at the
+  OpenTelemetry log EventName. Source auto-detection sets it when an OTel log
+  table has a string `EventName` column. The field is stored and editable only:
+  nothing reads it yet. HDX-5787
+- bc47e485: Add an optional `severityNumberExpression` to log sources, pointing at the
+  numeric OpenTelemetry SeverityNumber (1-24). Source auto-detection sets it when
+  an OTel log table has an integer `SeverityNumber` column. The field is stored
+  and editable only: log levels still come from the severity text.
+- cfa865bd: feat: expose group-by values to webhook body templates as `{{var.<column>}}`, and keep them on resolve notifications
+
+### Patch Changes
+
+- 92058236: feat: Broadcast adhoc dashboard filter conditions
+- 3e9185d1: feat: Filter search tile cells into adhoc dashboard filters
+- 180a1f1d: feat: Filter table tile group-by cells into adhoc dashboard filters
+- a682ce13: feat: Render adhoc dashboard filter inputs
+- 9891a791: feat: Add ad hoc dashboard filter schemas and types
+- 43b09a7d: feat: Add UI for configuring adhoc dashboard filters
+- 0000fa4b: feat: Add a line interpolation display setting (smooth, linear, step)
+- eb72cfa1: feat(mcp): add `clickstack_service_health`, a one-call per-service health report for a trace source (throughput, error rate, p50/p95/p99, top error groups), compared with yesterday and ranked worst first
+- 03f9fd5a: fix(mcp): describe every MCP tool input, drop descriptions that restate schema constraints, and keep tool descriptions under Claude Code's 2 KB limit
+- 5cabc115: feat: Support distribution heatmaps calculated from promql data
+- a4b63953: fix: render percentile aggregations (`p50`, `p90`, `p95`, `p99`) as `quantile`
+  at the matching level. A chart config with `aggFn: 'p95'` rendered as the
+  nonexistent ClickHouse function `p95If`. The AI assistant now returns
+  percentiles with a level instead of a bare `quantile` (median), and v1 metric
+  chart conversion keeps the percentile level.
+- 3bedfab3: feat: Support histogram heatmaps from PromQL bucket metrics
+- c94d12c3: fix: Resolve PromQL queries through the source instead of a caller-supplied connection and table
+
+  The `/api/v1/prometheus/*` routes now take `sourceId` instead of `connectionId`, and read the connection and TimeSeries table from that PromQL source. Caller-supplied `database`/`table` params are ignored for ClickHouse and no longer forwarded to external Prometheus endpoints. Saved PromQL chart configs now require `source` and no longer persist `connection`, so provisioned dashboards with PromQL tiles must set `source`.
+
+- 85675fc8: perf: stream filter values into the UI as each query finishes instead of
+  waiting for all of them
+- af6e7f6b: Add a description field to the tile editor. The description is now stored on the
+  tile's chart config next to its name, and is kept for series tiles in the
+  external Dashboards API.
+- 02080f20: Add an optional tile description, accepted by the external Dashboards API and
+  shown as an info tooltip next to the tile name.
+- dab6eb89: fix: Read and show time picker ranges in the display time zone, so applying a range with "Use UTC time" on no longer shifts it for users west of UTC
+- ce6654dd: refactor: Store the time display setting as a time zone instead of a UTC switch, converting existing settings, and remove the `isUTC` option from `formatDate`
+- 28168ae6: fix: Floor the time filter start to the precision of a coarse timestamp column (DateTime, DateTime64 below ms) when a finer column also filters the range, so a sub-second start no longer drops the rest of that tick; make the external API v2 search `maxResults` cap configurable via `EXTERNAL_API_SEARCH_MAX_RESULTS` (defaults to 2000, the previous hardcoded value)
+- 807cd9a5: fix: the webhook form now compiles the body template as you edit it and shows
+  the Handlebars error with its line and column. A broken template used to give
+  no feedback until an alert failed to deliver.
+
+## 0.31.0
+
+### Minor Changes
+
+- 6873416d: feat: Add a series mode to builder heatmaps
+- ff5befa8: Support "Minimum auto granularity" on PromQL sources. It floors the step of charts on auto granularity, as it does for metric sources, and `$__rate_interval` now uses it as the source's scrape interval (still 15s when unset) instead of always assuming 15s. A granularity picked on a tile is never changed.
+- d8b1cdfa: feat: Attribute PromQL queries to the dashboard, tile or search that issued them, through both the `prometheusQuery`/`prometheusQueryRange` table functions and ClickHouse's Prometheus HTTP API
+- ab703243: feat: attribute ClickHouse queries to the dashboard, tile, search or alert that
+  issued them
+
+  A row in `system.query_log` previously couldn't be attributed to the part of
+  HyperDX that produced it. Now every query HyperDX runs has a small JSON
+  `log_comment`, plus a `query_id` starting with `hdx-`.
+
+  Attribute load after the fact:
+
+  ```sql
+  SELECT
+      JSONExtractString(log_comment, 'surface') AS surface,
+      JSONExtractString(log_comment, 'dashboard') AS dashboard,
+      JSONExtractString(log_comment, 'tile') AS tile,
+      count(),
+      sum(read_rows)
+  FROM system.query_log
+  WHERE type = 'QueryFinish' AND log_comment != '' AND query_id like 'hdx-%'
+  GROUP BY ALL
+  ORDER BY sum(read_rows) DESC
+  ```
+
+  Or spot a query while it is still running, in `system.processes`, where the
+  `query_id` names the surface with no JSON parsing needed.
+
+  The payload records which part of the product asked (a dashboard, a search, an
+  alert, an MCP tool, the chart explorer, session replay, field lookups, and so
+  on), the dashboard and tile or saved search id, the source id, and on the server
+  the trace id of the request. Field lookups and autocomplete are labelled too, so
+  they can be told apart from a user's chart queries.
+
+  The exception is queries that skip settings processing: the `system.settings`,
+  server version and Cloud-detection probes, and the onboarding connection check.
+  They get a `query_id` but an empty `log_comment`.
+
+- 68082b67: feat: add stacked line (stacked area) time-series display type
+
+### Patch Changes
+
+- 07c93656: fix: cast FixedString columns before implicit hasToken search
+
+  A bare search term against a FixedString column such as OTel TraceId compiled to
+  hasToken(lower(TraceId), ...), which ClickHouse rejects. Those haystacks are now
+  CAST to String first.
+
+- 0b855534: fix: fall back to the Map key scan when the text index read fails
+
+  `getMapKeys` returned an empty list whenever its `mergeTreeTextIndex` query
+  failed, so the rollup and bounded `mapKeys` scan paths never ran. ClickHouse
+  refuses `mergeTreeTextIndex` with `ACCESS_DENIED` on any table with a row
+  policy, which left search autocomplete with no Map keys on those tables. A
+  failed text index read now falls through to the next strategy. After a row
+  policy denial it skips the key rollup table, which the policy doesn't cover,
+  and reads keys only from the policy-filtered source table.
+
+- 0846f3b2: Include the requested Map-key limit in metadata cache keys so MCP discovery and AI field discovery cannot reuse each other's differently limited results.
+- e61461be: feat: auto-detect a PromQL source during onboarding
+
+  When PromQL is enabled (`NEXT_PUBLIC_ENABLE_PROMQL=true`), onboarding source auto-detection now also creates a PromQL source for a ClickHouse TimeSeries engine table. It prefers `prometheus.metrics` (the table the ClickHouse Prometheus docs suggest), then a table named `metrics_ts`, and otherwise picks the only TimeSeries table on the connection. A service with only a TimeSeries table is no longer sent to manual source setup.
+
+- 1be9de8f: feat: Add a promql variable format that escapes based on single/multi-select
+- 0d2425d5: feat: Allow configuring dashboard filters as single-select
+- 1ce8b88e: fix: rank Map keys by frequency when a text index serves key discovery
+
+  The two `mergeTreeTextIndex` paths in `getMapKeys` grouped keys and applied
+  `LIMIT maxKeys` with no `ORDER BY`, so on a column with more keys than the
+  limit the filter sidebar showed an arbitrary subset. They now order by
+  `sum(cardinality) DESC, key`, which keeps the most frequent keys, as the key
+  rollup path already does with `sum(count) DESC`.
+
+## 0.30.0
+
+### Minor Changes
+
+- 8a9fcd2f: feat: Support macros in PromQL charts
+- 08d9a908: feat: Plot several PromQL expressions on one chart
+- d9e2c58b: Add a per-source floor for auto granularity. A metric source can now set "Minimum auto granularity" (Team Settings → Sources → your Metrics source) so that auto-inferred time buckets never go below it — useful when the underlying metric is reported on a fixed interval (e.g. a 60s scrape), since a short selected date range can otherwise auto-infer a smaller bucket than that interval and render a sparse/steppy series (alternating real-sample/empty buckets). Mirrors Grafana's per-datasource "Min interval" setting. Unset (the default) preserves the existing unfloored behavior, and an explicit (non-auto) granularity chosen on a tile is never affected.
+
+### Patch Changes
+
+- 1e355ac4: fix: don't scan the whole table to discover Map keys
+
+  `getMapKeys` only applied a time predicate when the caller passed both a date
+  range and a timestamp expression; otherwise the raw `sampledKeys` scan ran with
+  no `WHERE` and touched every part of the table. It now defaults a missing date
+  range to the last 24 hours and skips the raw scan entirely when there is no
+  timestamp expression to filter on. The chart, alert and dashboard-filter
+  editors pass the source and date range they already have so Map keys keep
+  autocompleting there.
+
+- 793fe19e: feat: Substitute dashboard variables in markdown tiles
+- ec4f5087: fix: allow grouping gauge and sum metric charts by materialized and alias columns
+
+  Grouping or selecting a MATERIALIZED or ALIAS column on a gauge or sum metric chart failed with `Unknown expression identifier`, because the intermediate query didn't carry those columns through.
+
+- a8a72c11: fix: Support instant queries and reductions on PromQL number tiles
+- 8cfb2672: feat: Support background sparklines on PromQL range number tiles
+- 4570d5ee: feat: Support pie and bar tiles on PromQL sources
+- 78ed5921: feat: Support table tiles on PromQL sources
+- 23423c13: fix: Show distribution only labels a value "<1%" when the sample shows it is rare, not when it has no matching rows, and shows 100% when the field's filter allows only that value
+- 19182e7e: fix: only split a query at a standalone SETTINGS keyword
+
+  `extractSettingsClauseFromEnd` cut the query at the first "settings" anywhere in
+  it, including inside a string or an identifier. A multi-series metric chart with
+  a metric such as `app.settings.reloads` produced SQL with an unterminated
+  string, and a SQL filter on a column such as `AppSettings` was rewritten to
+  reference `App`. The keyword now has to stand alone outside quotes.
+
+## 0.29.0
+
+### Minor Changes
+
+- e31e5d8d: Offer dashboard tile alerts for Terraform import. `clickhouse_clickstack_alert`
+  gained `source = "tile"` with `dashboard_id`/`tile_id` in provider 3.28.0, so
+  the bulk export and the per-alert menu now include tile alerts instead of
+  skipping every alert that is not a saved-search one. A file carrying a tile
+  alert asks for `>= 3.28.0` and explains the hand edit its generated config
+  needs; an export without one still installs on 3.25.x. A tile alert is withheld
+  when its tile has a blank or duplicated name — the provider's `tile_ids` map is
+  keyed by tile name and omits those, so the alert could only be pinned to a
+  literal id the next dashboard apply can re-mint — or when its dashboard is
+  provisioned, since ProvisionDashboardsTask rewrites those tiles wholesale. Both
+  decisions are made server-side, on the import manifest and on the alerts
+  listing, because neither response carries a dashboard's sibling tile names.
+- f007c37f: Add a context-aware getting-started checklist to the sidebar for recently-created teams. After the setup steps (connect ClickHouse, add data) complete, a second phase tracks product-usage milestones persisted per user on `user.onboardingData`: exploring data, building a dashboard, setting up an alert, and using the MCP server. Completion is recorded server-side so it counts from the UI, the external REST API v2, or an MCP tool; the card can be dismissed and reappears if a new task is added to the registry.
+- 3876d6b9: Fill the metric name select from the table's primary index, so it populates almost immediately instead of waiting on an aggregation over the data. On a source reporting ~4,900 gauge metrics the first options appear in ~30ms rather than ~770ms, and they stream in progressively rather than arriving all at once. A small spinner replaces the dropdown chevron while more are still on the way.
+
+  The picker now has two modes. **Browsing** streams `MetricName` out of the sparse primary index via the `mergeTreeIndex` table function — one row per granule mark instead of a full column scan. Because the index only records the value at each granule boundary, that list is a subset, weighted towards metrics that actually carry data (index-visible metrics have a median ~32k datapoints against ~14 for the rest). **Typing** switches to the exhaustive, relevance-ranked `GROUP BY` search, so any metric the index omitted is still reachable by name. The placeholder reads "Search metrics..." to invite that.
+
+  Two details that matter in use: while the first search for a pattern is in flight the browse list is held and filtered client-side, so the options never blank out mid-keystroke; and the dropdown's render cap is raised to 500 to match the server-side page size, so a search that is not reported as truncated is fully renderable.
+
+  Browsing falls back to the exhaustive listing when the index cannot be read at all — a server older than 24.2, a Distributed or non-MergeTree metric table, or a schema whose primary key omits `MetricName` — so no deployment loses the picker.
+
+  `Metadata` gains `streamDistinctIndexValues`, an async generator generic over table and column, so any primary-key column (`ServiceName`, for instance) can be listed the same way. `streamToAsyncIterator` moves from `packages/app`'s session code into `common-utils` beside the ClickHouse client, and a new `useStreamingQuery` hook accumulates an async iterable into a React Query cache entry, publishing partial results on a throttle.
+
+- 972634d2: Report the whole alert condition in the `{{sourceQuery}}` webhook template
+  variable. It read only a chart's top-level `where`, so an alert defined by a
+  per-series `aggCondition` — a common shape — still rendered empty. The variable
+  now reports every part of the condition the alert query actually applies: a
+  chart's `where` plus the `aggCondition` of the series the alert reads, and a
+  saved search's `where` plus its pinned filters. A chart's pinned filters are
+  deliberately excluded, since a tile or inline alert does not apply them. The
+  value is truncated at 2000 characters.
+
+  Editing an alert off a `between` or `outside` comparator now clears the stored
+  `thresholdMax` instead of leaving the old bound on the document, where it was
+  also served by the alerts APIs and would advertise a range that no longer
+  fires. Webhook templates already guarded against this on read.
+
+  The webhook form's variable list and the API's fallback body template both
+  derive from one list in common-utils, which `buildWebhookTemplateVariables` is
+  typed against, so a variable cannot be added without appearing in both places.
+  The "Send test" payload carries a sample value for every variable, so a body
+  template can be checked before an alert fires.
+
+  The documented guard for an optional number is now
+  `{{#unless (eq thresholdMax undefined)}}` rather than `{{#if thresholdMax}}`,
+  which treats a legitimate bound of `0` as absent.
+
+### Patch Changes
+
+- 482d2cb0: feat: Paginate the alerts page
+- 5311d63c: fix: give incident.io webhooks a body incident.io accepts
+
+  An incident.io webhook saved without a body was sent the generic `{"text": ...}` payload, which has neither of the two fields incident.io requires, so every delivery was rejected and no alert was ever raised. It now gets an incident.io payload carrying a deduplication key that is stable across a firing and its resolve, so incident.io closes the alert it opened, plus the alert id, status, condition and evaluation window in `metadata` for routing. The webhook body editor and its list of template variables are also available when incident.io is the selected service, not only for Generic, so the payload can be tailored to an alert source's configured fields.
+
+- 96ac6b1b: fix: disable per-part subcolumn size calculation on ClickHouse 26.3+
+
+  ClickHouse 26.3 turned on
+  `allow_calculating_subcolumns_sizes_for_merge_tree_reading` by default, which
+  makes PREWHERE planning fetch per-part sizes for every map key a query
+  references. On SharedMergeTree that is one S3 GET per (key × active part), it
+  runs before any row is read, and `max_execution_time` does not interrupt it.
+  Queries referencing many attribute keys — the LLM dashboard reads ~64 — could
+  spend minutes in planning. Queries now send the setting as `0` when the server
+  supports it.
+
+- 84c67f4b: fix: show only the delivery time in an alert's notification duration
+
+  The notification duration on an alert's evaluation list was timing everything an alert does once it decides to fire: building the message title and links, querying the log lines that go in the body, rendering the template, and then delivering it. That made the column read in seconds while the webhook underneath it answered in milliseconds — the column and its own per-target breakdown disagreed, and the figure was dominated by work that has nothing to do with how fast the notification target responded. It now times the delivery alone. Evaluations already recorded keep their old figure and will read high.
+
+- cfacdbe5: feat: relative date ranges for dashboards can now be saved
+- 806d242e: feat: page and filter GET /alerts server-side
+- f7ae72c2: refactor: Extract PromQL functions, PromqlExpressionEditor, and ChartSeriesControls
+- b1e48b99: fix: Quote column identifiers when opening row details
+- 78a33ba4: feat: Allow configuring dashboard filters as required
+- bef61fbc: feat: Scope tags endpoint by resource type
+- b4840573: feat: Optionally apply the dashboard's filter selections to the tile editor preview
+
 ## 0.28.1
 
 ### Patch Changes

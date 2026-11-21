@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { parseAsJson, parseAsString, useQueryState } from 'nuqs';
 import { useForm } from 'react-hook-form';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import { SavedChartConfig, SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   Alert,
@@ -15,7 +16,6 @@ import {
   Divider,
   Group,
   Loader,
-  Pill,
   Skeleton,
   Stack,
   Text,
@@ -29,6 +29,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 
 import api from '@/api';
+import { useBrandDisplayName, usePageTitle } from '@/brand';
 import { DEFAULT_CHART_CONFIG } from '@/ChartUtils';
 import EditTimeChartForm from '@/components/DBEditTimeChartForm';
 import { InputControlled } from '@/components/InputControlled';
@@ -37,9 +38,8 @@ import { IS_ALERT_DETAILS_ENABLED } from '@/config';
 import { useChartAssistant } from '@/hooks/ai';
 import { useAlertSeededChartConfig } from '@/hooks/useAlertSeededChartConfig';
 import { useResolvedSourceParam } from '@/hooks/useResolvedSourceParam';
-import { withAppNav } from '@/layout';
+import { withAppNavForSurface } from '@/layout';
 import { useSources } from '@/source';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 import { useDefaultTimeRange, useNewTimeQuery } from '@/timeQuery';
 import { useLocalStorage } from '@/utils';
 import { buildInlineAlertPayload } from '@/utils/alerts';
@@ -166,7 +166,7 @@ function AIAssistant({
             <Text size="xxs">AI Assistant [A]</Text>
           </Group>
         </Button>
-        <Pill size="xs">Experimental</Pill>
+        <Badge size="sm" text="Experimental" state="info" />
       </Group>
       <Collapse expanded={opened}>
         {opened && (
@@ -202,7 +202,7 @@ function AIAssistant({
           </form>
         )}
       </Collapse>
-      <Divider />
+      <Separator size="xs" />
     </Box>
   );
 }
@@ -211,7 +211,7 @@ const DEFAULT_INTERVAL = 'Past 1h';
 
 function DBChartExplorerPage() {
   const defaultTimeRange = useDefaultTimeRange(DEFAULT_INTERVAL);
-  const brandName = useBrandDisplayName();
+  const title = usePageTitle('Chart Explorer');
   const {
     searchedTimeRange,
     displayedTimeInputValue,
@@ -316,7 +316,7 @@ function DBChartExplorerPage() {
   return (
     <Box data-testid="chart-explorer-page" p="sm">
       <Head>
-        <title>Chart Explorer - {brandName}</title>
+        <title>{title}</title>
       </Head>
       <OnboardingModal />
       <AIAssistant
@@ -362,6 +362,6 @@ const DBChartExplorerPageDynamic = dynamic(async () => DBChartExplorerPage, {
 });
 
 // @ts-expect-error next/dynamic component type does not include the getLayout static
-DBChartExplorerPageDynamic.getLayout = withAppNav;
+DBChartExplorerPageDynamic.getLayout = withAppNavForSurface('chart-explorer');
 
 export default DBChartExplorerPageDynamic;

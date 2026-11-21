@@ -34,7 +34,7 @@ This is a **monorepo** with six packages:
   comparison workflow.
 
 **Data flow**: Apps → OpenTelemetry Collector → ClickHouse (telemetry data) /
-MongoDB (configuration/metadata)
+a MongoDB-compatible store (configuration/metadata; DocumentDB in local dev)
 
 ## Development Setup (HOW)
 
@@ -44,7 +44,8 @@ yarn dev            # Start full stack with worktree-isolated ports
 ```
 
 The project uses **Yarn 4.13.0** workspaces. Docker Compose manages ClickHouse,
-MongoDB, and the OTel Collector.
+DocumentDB (the local metadata store, which the API reaches over the Mongo wire
+protocol), and the OTel Collector.
 
 **This repo is multi-agent friendly.** `yarn dev`, `make dev-int`, and
 `make dev-e2e` all use slot-based port isolation so multiple worktrees can run
@@ -69,6 +70,8 @@ directory:
   `useConfirm` for confirmation dialogs, `EmptyState`, and where shared code
   already lives), so copying the conventions of the component you are editing is
   not sufficient.
+- `agent_docs/naming_objects.md` - How users name and rename objects
+  (`InlineNameInput`). Read before adding or changing any name field
 - `agent_docs/observability.md` - Instrumentation standards (tracing, metrics,
   context) and the shared helpers (read when adding or changing a feature)
 
@@ -245,7 +248,29 @@ efficient and accurate:
    your agent to produce tests before writing implementation code. See the
    Testing section below for the commands to use.
 
-5. **Ensure a changeset exists before pushing a PR.** Any change to a published
+5. **Attach before/after screenshots to any PR that changes the UI.** Anything
+   visible in `packages/app` needs a "Before" (`main`) and "After" (branch)
+   image in the PR template's screenshots table, taken on the same screen, data,
+   viewport, and theme. Use a short video for interactions. If you can't capture
+   screenshots yourself (no browser tool), say so in the PR description and
+   leave the table for the human author to fill; never submit an empty table
+   silently. See
+   [CONTRIBUTING.md](CONTRIBUTING.md#ui-changes-need-beforeafter-screenshots).
+
+6. **Write reproduction steps a reviewer can follow.** Fill in the PR
+   template's "How to reproduce" section with numbered steps that show the
+   problem on `main` and the fix on the branch. Start from
+   [play.hyperdx.io](https://play.hyperdx.io) when the bug shows there, or from
+   `yarn app:dev:local` connected to the demo server (onboarding → "Connect to
+   Demo Server"; the PR's Vercel preview runs the same local mode). Full-stack
+   `yarn dev` pre-provisions a local ClickHouse connection and never shows that
+   button, so use it only when the change needs the API. Name UI elements by
+   visible text, and list any env vars,
+   feature flags, schema, or seed data needed. When filing issues, apply the
+   same standard. See
+   [CONTRIBUTING.md](CONTRIBUTING.md#reproducing-issues-and-prs).
+
+7. **Ensure a changeset exists before pushing a PR.** Any change to a published
    package (`@hyperdx/app`, `@hyperdx/api`, `@hyperdx/otel-collector`, etc.) that
    is user-facing or affects behavior must include a changeset in `.changeset/`.
    Add one with `yarn changeset` (or create the markdown file by hand following
@@ -253,7 +278,7 @@ efficient and accurate:
    pushing the branch. Skip only for changes that don't warrant a release (docs,
    internal tooling, tests, CI).
 
-6. **The root `CHANGELOG.md` is generated at release time.** During each
+8. **The root `CHANGELOG.md` is generated at release time.** During each
    release, CI writes an AI-generated cross-package summary section into the
    root `CHANGELOG.md` on the "Release HyperDX" PR. Review and edit it there
    like any other file — but keep the `<!-- hyperdx-release-notes … -->` comment
@@ -335,6 +360,34 @@ The generator calls the Claude Code CLI, not
 and rejects `push`, and everything it adds on top of the CLI — a token, entity
 context, PR comments — is what this job deliberately does without.
 
+## Responding to review feedback
+
+Two bots review every PR (Claude Code Review inline + summary, Deep Review
+summary). No finding blocks merge automatically; a maintainer decides what
+lands. Severity tells you what they will expect.
+
+1. **Triage before you touch code.** Two questions per comment: did this PR
+   introduce the problem (would reverting the PR make it go away?), and how
+   severe is it?
+   - Critical or major (P0/P1) that this PR introduced, in new or edited code:
+     fix it before asking for review. A maintainer will require it if it is
+     real.
+   - Minor (P2/P3) that this PR introduced: your call. Fix if small, else
+     reply.
+   - A defect that was already there before this PR, or a suggestion to widen
+     the change (hoist, dedupe, refactor neighbours, fix other call sites):
+     never fix here, whatever the severity. Reply in the thread with one
+     sentence; if it is critical, say so plainly so a maintainer sees it. The
+     reviewer reads replies and does not re-report what a human has answered.
+2. **Do not touch files the PR did not already touch** unless fixing a defect
+   in this PR's own change requires it.
+3. **Push review fixes as new commits, not a force-push.** The repo
+   squash-merges, so commit count never reaches `main`; review history does.
+4. **After two rounds of bot findings, stop.** Ask a maintainer to look at the
+   scope instead of addressing more automated comments. A PR that keeps
+   growing to satisfy a bot is drifting from its purpose.
+5. A finding you disagree with is not a defect. Say so and move on.
+
 ## GitHub Action Workflow (when invoked via @claude)
 
 When working on issues or PRs through the GitHub Action:
@@ -409,7 +462,7 @@ default `/workspace` directory, the slot is **76**, so services are at:
 - **App**: http://localhost:30276
 - **API**: http://localhost:30176
 - **ClickHouse**: http://localhost:30576
-- **MongoDB**: localhost:30476
+- **DocumentDB**: localhost:30476
 
 ### Key commands reference
 
@@ -423,7 +476,7 @@ reference. Quick summary:
 
 ### First-time registration
 
-When the dev stack starts fresh (empty MongoDB), the app shows a registration
+When the dev stack starts fresh (empty DocumentDB), the app shows a registration
 page. Create any account to get started — no external auth provider is needed.
 
 ---

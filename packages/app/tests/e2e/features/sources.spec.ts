@@ -24,7 +24,9 @@ const LOG_FIELDS = [
   'Service Name Expression',
   'Service Version Expression',
   'Log Level Expression',
+  'Severity Number Expression',
   'Body Expression',
+  'Event Name Expression',
   'Log Attributes Expression',
   'Resource Attributes Expression',
   'Displayed Timestamp Column',
@@ -80,12 +82,12 @@ const editableSourcesData = [
   {
     name: DEFAULT_LOGS_SOURCE_NAME,
     fields: LOG_FIELDS,
-    radioButtonName: 'Log',
+    radioButtonName: 'Logs',
   },
   {
     name: DEFAULT_TRACES_SOURCE_NAME,
     fields: TRACE_FIELDS,
-    radioButtonName: 'Trace',
+    radioButtonName: 'Traces',
   },
 ];
 
@@ -94,12 +96,12 @@ const allSourcesData = [
   {
     name: DEFAULT_METRICS_SOURCE_NAME,
     fields: METRIC_FIELDS,
-    radioButtonName: 'OTEL Metrics',
+    radioButtonName: 'OTel metrics',
   },
   {
     name: DEFAULT_SESSIONS_SOURCE_NAME,
     fields: SESSION_FIELDS,
-    radioButtonName: 'Session',
+    radioButtonName: 'Sessions',
   },
 ];
 
@@ -341,14 +343,14 @@ test.describe('Sources Functionality', { tag: ['@sources'] }, () => {
       'should show series Table field when isMetricsSeriesTableEnabled is on',
       { tag: ['@full-stack'] },
       async () => {
-        setTeamFlag('isMetricsSeriesTableEnabled', true);
+        await setTeamFlag('isMetricsSeriesTableEnabled', true);
         try {
           await searchPage.goto();
           await searchPage.sourceActionsMenu.click();
           await searchPage.createNewSourceItem.click();
 
           await searchPage.page
-            .getByLabel('OTEL Metrics', { exact: true })
+            .getByLabel('OTel metrics', { exact: true })
             .click();
           await searchPage.sourceModalShowOptionalFields();
 
@@ -358,7 +360,7 @@ test.describe('Sources Functionality', { tag: ['@sources'] }, () => {
 
           await searchPage.page.keyboard.press('Escape');
         } finally {
-          setTeamFlag('isMetricsSeriesTableEnabled', false);
+          await setTeamFlag('isMetricsSeriesTableEnabled', false);
         }
       },
     );
@@ -367,7 +369,7 @@ test.describe('Sources Functionality', { tag: ['@sources'] }, () => {
       'should warn when the configured series table does not match the series table schema',
       { tag: ['@full-stack'] },
       async ({ page }) => {
-        setTeamFlag('isMetricsSeriesTableEnabled', true);
+        await setTeamFlag('isMetricsSeriesTableEnabled', true);
 
         const API_URL = getApiUrl();
         const metricSources = await getSources(page, 'metric');
@@ -415,7 +417,7 @@ test.describe('Sources Functionality', { tag: ['@sources'] }, () => {
           ).toBeVisible({ timeout: 20000 });
         } finally {
           await page.request.delete(`${API_URL}/sources/${createdSourceId}`);
-          setTeamFlag('isMetricsSeriesTableEnabled', false);
+          await setTeamFlag('isMetricsSeriesTableEnabled', false);
         }
       },
     );

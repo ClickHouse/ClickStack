@@ -6,7 +6,7 @@
 // Run by claude-code-review.yml before the (expensive) review step.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -187,6 +187,9 @@ test('duplicate findings within one run collapse to a single comment', () => {
 const WORKFLOW = fileURLToPath(
   new URL('../../../workflows/claude-code-review.yml', import.meta.url),
 );
+const DEEP_REVIEW = fileURLToPath(
+  new URL('../../../workflows/deep-review.yml', import.meta.url),
+);
 
 function gateParse(body) {
   const line = readFileSync(WORKFLOW, 'utf8')
@@ -248,27 +251,26 @@ test('an unhealthy run stamps NO parseable marker, so the gate fails open', () =
   assert.match(body, /did not complete/);
 });
 
-test('minor findings are folded, not dropped', () => {
-  // Measured on the eval set: minor-severity findings carry 29-57% of everything a human
-  // independently flagged, so filtering them costs about half the recall.
-  const unanchored = [
-    { file: 'src/x.ts', severity: 'minor', title: 'small one', body: 'fix' },
-    { file: 'src/y.ts', severity: 'major', title: 'big one', body: 'fix' },
-  ];
+test('P3 findings are folded, not dropped', () => {
+  // Measured on the eval set: low-graded findings carry a large share of everything a human
+  // independently flagged, so filtering them costs recall. Folding costs none.
+  const small = { file: 'src/x.ts', severity: 'minor', priority: 'P3', title: 'small one', body: 'fix' };
+  const big = { file: 'src/y.ts', severity: 'major', priority: 'P1', title: 'big one', body: 'fix' };
   const body = helpers.renderSummary({
-    findings: unanchored,
-    unanchored,
+    findings: [small, big],
+    unanchored: [big],
+    collapsed: [small],
     posted: 0,
     healthy: true,
     diffHash: HASH,
     promptHash: HASH,
   });
-  assert.match(body, /<details><summary>1 minor<\/summary>/);
+  assert.match(body, /<details><summary>🔵 1 P3 — no action needed before merge<\/summary>/);
   assert.match(body, /small one/, 'folded, but present');
   const detailsAt = body.indexOf('<details>');
   assert.ok(
     body.indexOf('big one') < detailsAt,
-    'non-minor findings render above the fold',
+    'P0-P2 findings render above the fold',
   );
 });
 
@@ -289,7 +291,7 @@ test('a clean diff produces an explicit all-clear', () => {
   );
 });
 
-test('an unrecognized severity degrades to minor rather than throwing', () => {
+test('an unrecognized severity degrades to minor, and an ungraded minor is still posted', () => {
   const f = {
     file: 'src/a.ts',
     line: 11,
@@ -303,7 +305,8 @@ test('an unrecognized severity degrades to minor rather than throwing', () => {
     diffText: DIFF,
     existingComments: [],
   });
-  assert.match(inline[0].comment.body, /\*\*minor\*\*/);
+  // No grade, so nothing may be folded: an ungraded minor is shown as P2, inline.
+  assert.match(inline[0].comment.body, /\*\*P2\*\*/);
 });
 
 test('a deleted file does not leak its hunk onto the previously seen file', () => {
@@ -425,6 +428,225 @@ test('the dedup marker is exactly what commentBody emits', () => {
   );
 });
 
+test('every inline comment carries the advisory footer, with the dedup marker last', () => {
+  // The reader is usually the author's coding agent; without the footer it treats every
+  // finding as a task. The marker stays last so truncation can never cut it off.
+  const f = { file: 'src/a.ts', line: 11, title: 'x', body: 'y' };
+  const body = helpers.commentBody(f);
+  assert.ok(
+    body.includes(helpers.inlineFooter(f)),
+    'inline comment must carry the footer',
+  );
+  assert.match(body, /AGENTS\.md#responding-to-review-feedback/);
+  const lines = body.trimEnd().split('\n');
+  assert.match(
+    lines.at(-1),
+    /^<!-- hdxr:[0-9a-f]{16}(?: [^>]*)? -->$/,
+    'marker must be the last line',
+  );
+  const footerAt = lines.indexOf(helpers.inlineFooter(f));
+  assert.ok(
+    footerAt >= 0 && footerAt < lines.length - 1,
+    'footer must precede the marker',
+  );
+});
+
+test('the guide link points at a heading that exists in AGENTS.md, in both bots', () => {
+  // Every posted comment links here. Renaming the heading would dead-link all of them
+  // with no failing check anywhere else, so derive the anchor from the heading text.
+  const root = p => fileURLToPath(new URL(p, import.meta.url));
+  // CI runs this file from the sparse `.trusted` checkout in claude-code-review.yml,
+  // where AGENTS.md exists only because that sparse-checkout list names it.
+  const agentsPath = root('../../../../AGENTS.md');
+  assert.ok(
+    existsSync(agentsPath),
+    `${agentsPath} is missing: keep AGENTS.md in the sparse-checkout list of claude-code-review.yml`,
+  );
+  assert.match(
+    readFileSync(WORKFLOW, 'utf8'),
+    /^\s+AGENTS\.md$/m,
+    'claude-code-review.yml must sparse-checkout AGENTS.md for this test to run in CI',
+  );
+  const agents = readFileSync(agentsPath, 'utf8');
+  const heading = '## Responding to review feedback';
+  assert.ok(
+    agents.split('\n').includes(heading),
+    `AGENTS.md must contain the line "${heading}"`,
+  );
+  const anchor = `#${heading.slice(3).toLowerCase().replace(/\s+/g, '-')}`;
+  assert.ok(
+    helpers.GUIDE_URL.endsWith(anchor),
+    `GUIDE_URL must end with ${anchor}`,
+  );
+  // deep-review.yml appends its own copy of the footer in shell; keep it on the same anchor.
+  const deepReview = readFileSync(DEEP_REVIEW, 'utf8');
+  // The whole URL, not just the anchor: the two hardcoded copies must point at the same
+  // repo and branch, or one bot's link 404s while the other's works.
+  assert.ok(
+    deepReview.includes(helpers.GUIDE_URL),
+    `deep-review.yml must link ${helpers.GUIDE_URL} verbatim`,
+  );
+  assert.match(
+    deepReview,
+    /FOOTER='<sub>[^\n]*Do not widen the PR/,
+    "deep-review.yml's FOOTER must carry the scope rule the other footers carry",
+  );
+});
+
+test("deep-review's footer gate fires on findings of any shape and not on a clean review", () => {
+  // Same rule as gateParse: lift the pattern out of the workflow and run real grep, or a
+  // drift between the prompt's finding format and the gate silently drops every footer.
+  const line = readFileSync(DEEP_REVIEW, 'utf8')
+    .split('\n')
+    .find(l => l.trim().startsWith('HAS_FINDINGS_RE='));
+  assert.ok(line, 'could not find HAS_FINDINGS_RE= in deep-review.yml');
+  const re = line.trim().slice('HAS_FINDINGS_RE='.length).replace(/^'|'$/g, '');
+  const matches = body => {
+    try {
+      execFileSync('grep', ['-qE', re], { input: body });
+      return true;
+    } catch (e) {
+      if (e.status === 1) return false;
+      throw e;
+    }
+  };
+  const head = '<!-- deep-review -->\n## Deep Review\n\n';
+  const clean = `${head}✅ No critical issues found.\n\n---\n**Reviewers (5):** a, b.\n`;
+  const p2 = `${head}✅ No critical issues found.\n\n### 🟡 P2 -- recommended\n\n- **\`a/b.ts:3\`** -- issue.\n`;
+  const p3Only = `${head}✅ No critical issues found.\n\n<details>\n<summary>🔵 P3 nitpicks (1)</summary>\n\n- **\`a/b.ts:3\`** -- nit.\n\n</details>\n`;
+  const numbered = `${head}### 🔴 P0/P1 -- must fix\n\n1. a/b.ts:3 -- issue.\n`;
+  assert.equal(matches(clean), false, 'a clean review gets no footer');
+  assert.equal(
+    matches(p2),
+    true,
+    'P2 advice under a clean headline still gets the footer',
+  );
+  assert.equal(matches(p3Only), true, 'a P3-only review gets the footer');
+  assert.equal(
+    matches(numbered),
+    true,
+    'the gate must not depend on bullet shape',
+  );
+});
+
+test("deep-review's prior-comments filter recognizes our own inline comments", () => {
+  // deep-review.yml drops our output from prior-comments.md by marker. Inline comments
+  // carry only the dedup marker, so OURS must match what commentBody emits, or every
+  // finding flows back to the previous-comments persona as "unaddressed feedback".
+  const wf = readFileSync(DEEP_REVIEW, 'utf8');
+  const ours = [
+    ...wf.match(/const OURS = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g),
+  ].map(m => m[1]);
+  const inline = helpers.commentBody({
+    file: 'src/a.ts',
+    line: 11,
+    title: 'x',
+    body: 'y',
+  });
+  assert.ok(
+    ours.some(m => inline.includes(m)),
+    `OURS ${JSON.stringify(ours)} must match an inline comment`,
+  );
+  const humanReply = 'Pre-existing, out of scope for this PR.';
+  assert.ok(
+    !ours.some(m => humanReply.includes(m)),
+    'a human reply must still pass the filter',
+  );
+});
+
+test('the footer is severity-aware: critical and major say a maintainer will expect a fix, minor says your call', () => {
+  // "Advisory, not blocking" alone left an agent unable to tell a real ship-blocker from a
+  // nit. Nothing gates merge mechanically, so the footer states what the human will expect.
+  const at = severity => ({
+    file: 'src/a.ts',
+    line: 11,
+    severity,
+    title: 'x',
+    body: 'y',
+  });
+  const critical = helpers.inlineFooter(at('critical'));
+  const major = helpers.inlineFooter(at('major'));
+  const minor = helpers.inlineFooter(at('minor'));
+  assert.equal(
+    major,
+    critical,
+    'critical and major carry the same expectation',
+  );
+  assert.notEqual(minor, critical);
+  assert.match(critical, /maintainer will expect this fixed/);
+  assert.match(minor, /Fix if it is a small defect/);
+  for (const footer of [critical, minor]) {
+    assert.match(
+      footer,
+      /Do not widen the PR/,
+      'scope rule applies at every severity',
+    );
+    assert.match(footer, /AGENTS\.md#responding-to-review-feedback/);
+  }
+  // An unknown severity degrades to minor everywhere else; the footer must agree.
+  assert.equal(helpers.inlineFooter(at('bogus')), minor);
+  assert.match(
+    helpers.commentBody(at('critical')),
+    /maintainer will expect this fixed/,
+  );
+});
+
+test('a summary with findings leads with the agent notice; clean and unhealthy runs do not', () => {
+  const f = {
+    file: 'src/a.ts',
+    line: 11,
+    severity: 'major',
+    title: 'x',
+    body: 'y',
+  };
+  const base = {
+    unanchored: [],
+    skipped: [],
+    duplicates: [],
+    posted: 1,
+    diffHash: HASH,
+    promptHash: HASH,
+  };
+  const withFindings = helpers.renderSummary({
+    ...base,
+    findings: [f],
+    healthy: true,
+  });
+  assert.ok(
+    withFindings.includes(helpers.AGENT_NOTICE),
+    'summary must carry the notice',
+  );
+  // Before the tally, so an agent reading top-down meets the rule before the first finding.
+  assert.ok(
+    withFindings.indexOf(helpers.AGENT_NOTICE) <
+      withFindings.indexOf('finding(s)'),
+    'notice must precede the findings',
+  );
+  assert.match(withFindings, /blocks merge automatically/);
+  assert.match(withFindings, /fix before asking for review/);
+
+  const clean = helpers.renderSummary({
+    ...base,
+    findings: [],
+    posted: 0,
+    healthy: true,
+  });
+  assert.ok(
+    !clean.includes(helpers.AGENT_NOTICE),
+    'nothing to triage on a clean run',
+  );
+  const broken = helpers.renderSummary({
+    ...base,
+    findings: [f],
+    healthy: false,
+    reason: 'x',
+  });
+  assert.ok(
+    !broken.includes(helpers.AGENT_NOTICE),
+    'no findings were posted on an unhealthy run',
+  );
+});
+
 test('the summary accounts for findings skipped as already-posted', () => {
   const body = helpers.renderSummary({
     findings: [
@@ -532,7 +754,7 @@ test('the reviewer schema and the renderer agree on the severity enum', () => {
   const props = schema.properties.findings.items;
   assert.deepEqual(
     props.properties.severity.enum.slice().sort(),
-    Object.keys(helpers.ICON).slice().sort(),
+    [...helpers.SEVERITIES].sort(),
     'severity enum drifted from the icons the renderer knows',
   );
   for (const required of props.required) {
@@ -580,8 +802,8 @@ test('collapsed duplicates are excluded from the headline count', () => {
   assert.match(body, /1 duplicate\(s\) collapsed/);
 });
 
-test('severity tallies sum to the headline total when duplicates collapse', () => {
-  // A per-severity count over every finding would not add up to the distinct total.
+test('priority tallies sum to the headline total when duplicates collapse', () => {
+  // A per-priority count over every finding would not add up to the distinct total.
   const a = {
     file: 'a.ts',
     line: 1,
@@ -606,14 +828,11 @@ test('severity tallies sum to the headline total when duplicates collapse', () =
     diffHash: HASH,
     promptHash: HASH,
   });
-  const m =
-    /\*\*(\d+)\*\* finding\(s\).*?(\d+) critical.*?(\d+) major.*?(\d+) minor/.exec(
-      body,
-    );
+  const m = /\*\*(\d+)\*\* finding\(s\).*?(\d+) P0\/P1.*?(\d+) P2.*?(\d+) P3/.exec(body);
   assert.ok(m, 'headline not found');
-  const [, total, crit, major, minor] = m.map(Number);
+  const [, total, high, mid, low] = m.map(Number);
   assert.equal(total, 2, 'distinct findings');
-  assert.equal(crit + major + minor, total, 'severities must sum to the total');
+  assert.equal(high + mid + low, total, 'priorities must sum to the total');
 });
 
 test('an over-long summary is truncated but keeps the state marker', () => {
@@ -690,6 +909,10 @@ test('an oversized single finding is capped so it cannot 422 the whole batch', (
   const body = helpers.commentBody(f);
   assert.ok(body.length <= 65536, `inline body must fit, got ${body.length}`);
   assert.match(body, /_\(truncated\)_/);
+  assert.ok(
+    body.includes(helpers.inlineFooter(f)),
+    'footer must survive truncation',
+  );
   // The dedup marker must survive, or the finding reposts on every push.
   assert.ok(
     helpers.seenFingerprints([{ body }]).has(helpers.fingerprint(f)),
@@ -723,4 +946,190 @@ test('the summary renders the finding body, not just the title', () => {
     'the fix text must reach the reader',
   );
   assert.match(body, /None could be anchored to changed lines/);
+});
+
+const graded = (over = {}) => ({
+  file: 'src/a.ts',
+  line: 11,
+  title: 't',
+  body: 'b',
+  severity: 'major',
+  priority: 'P2',
+  hasFailureMode: true,
+  reachableToday: false,
+  ...over,
+});
+
+test('a P3 is folded into the summary even when its line is anchorable', () => {
+  const { inline, collapsed, unanchored } = helpers.buildInlineComments({
+    findings: [graded({ priority: 'P3', severity: 'minor' }), graded({ title: 'keep me' })],
+    diffText: DIFF,
+    existingComments: [],
+  });
+  assert.equal(inline.length, 1);
+  assert.match(inline[0].comment.body, /^🟡 \*\*P2\*\* — keep me/);
+  assert.equal(collapsed.length, 1);
+  assert.deepEqual(unanchored, []);
+});
+
+test('the inline header shows only the priority, and the marker records what decided it', () => {
+  const body = helpers.commentBody(graded({ severity: 'minor', reachableToday: true }));
+  assert.match(body, /^🟡 \*\*P2\*\* — t\n/);
+  assert.ok(!/\*\*(critical|major|minor)\*\*/.test(body), 'severity must not be rendered');
+  assert.match(body, /<!-- hdxr:[0-9a-f]{16} p=P2 sev=minor reach=true -->$/);
+});
+
+test('comments posted before this change (no marker attributes) still dedup', () => {
+  // Every open PR carries old-format markers and old severity headers.
+  const f = graded({ title: 'already said' });
+  const old = { path: 'src/a.ts', body: `🟠 **major** — already said\n\nfix\n\n<!-- hdxr:${helpers.fingerprint(f)} -->` };
+  const { inline, collapsed, skipped } = helpers.buildInlineComments({
+    findings: [f],
+    diffText: DIFF,
+    existingComments: [old],
+  });
+  assert.deepEqual(inline, []);
+  assert.deepEqual(collapsed, []);
+  assert.equal(skipped.length, 1);
+  assert.equal(helpers.titleFromBody(old.body), 'already said');
+  assert.equal(helpers.titleFromBody('🟡 **P2** — new form'), 'new form');
+});
+
+//
+// Real titles, verbatim. Each RESTATED pair is ONE defect the reviewer reworded on a later
+// push; before title similarity each hashed differently, opened its own thread, and the
+// author thumbed the repeats down. Do not replace them with synthetic strings: SIMILAR_TITLE
+// is calibrated against exactly this distribution.
+const RESTATED = [
+  [
+    'Reading only the `tags` map returns an empty list for labels promoted by `tags_to_columns`',
+    'Reading only the `tags` map silently returns `[]` for labels promoted by `tags_to_columns`',
+  ], // 0.700
+  [
+    "New `start`/`end` params on the app's `labelValues` client have no caller",
+    'New `start`/`end` params on `prometheusApi.labelValues` have no caller',
+  ], // 0.429
+];
+
+// THE FLOOR, and why the threshold is not lower: two distinct real defects on one file in
+// PR #3129, both upvoted, the second critical, at 0.333 -- the same score as a reword on
+// #3039 that is therefore NOT caught. Catching it would suppress a critical. We take the miss.
+const DISTINCT = [
+  'All-in-one auth image now signs every user out on each container restart',
+  'The all-in-one auth image still signs sessions with the public secret `hyperdx is cool`',
+];
+
+const postedComment = (title, file = 'src/a.ts') => ({
+  path: file,
+  body: helpers.commentBody({ file, line: 11, severity: 'minor', title, body: 'fix' }),
+});
+
+test('a reworded restatement of a posted finding is not posted again', () => {
+  for (const [first, reworded] of RESTATED) {
+    const { inline, unanchored, skipped } = helpers.buildInlineComments({
+      // On #3039 the reword also arrived at a different severity.
+      findings: [{ file: 'src/a.ts', line: 11, severity: 'major', title: reworded, body: 'fix' }],
+      diffText: DIFF,
+      existingComments: [postedComment(first)],
+    });
+    assert.deepEqual(inline, [], `posted again: ${reworded}`);
+    assert.deepEqual(unanchored, []);
+    assert.equal(skipped.length, 1, `not counted as unchanged: ${reworded}`);
+  }
+});
+
+test('two distinct findings on one file are not collapsed', () => {
+  const [a, b] = DISTINCT;
+  const { inline } = helpers.buildInlineComments({
+    findings: [{ file: 'src/a.ts', line: 11, severity: 'critical', title: b, body: 'fix' }],
+    diffText: DIFF,
+    existingComments: [postedComment(a)],
+  });
+  assert.equal(inline.length, 1, 'threshold too low: this suppresses a critical finding');
+});
+
+test('similar titles on different files stay separate findings', () => {
+  const [first, reworded] = RESTATED[0];
+  const { inline } = helpers.buildInlineComments({
+    // src/b.ts is a new file in DIFF, so line 1 is commentable.
+    findings: [{ file: 'src/b.ts', line: 1, severity: 'major', title: reworded, body: 'fix' }],
+    diffText: DIFF,
+    existingComments: [postedComment(first)],
+  });
+  assert.equal(inline.length, 1, 'same words about another file are another finding');
+});
+
+test('the workflow grades, applies, and hands folded findings to the summary', () => {
+  const wf = readFileSync(WORKFLOW, 'utf8');
+  const step = name => {
+    const at = wf.indexOf(`- name: ${name}`);
+    assert.ok(at >= 0, `missing step: ${name}`);
+    const next = wf.indexOf('\n      - ', at + 1);
+    return wf.slice(at, next < 0 ? undefined : next);
+  };
+  const grade = step('Grade finding priority');
+  assert.match(grade, /continue-on-error: true/, 'a failed grade must not cost the review');
+  assert.match(grade, /--model sonnet/, 'pinned to the model the prompt was measured with');
+  assert.match(grade, /--allowedTools "Read"\n/);
+  assert.match(grade, /"reachableToday"/);
+  assert.ok(
+    wf.indexOf('- name: Verify the trusted tree was not modified') <
+      wf.indexOf('- name: Prepare priority grading input'),
+    'the trusted helper must be verified before the grading steps require it',
+  );
+  assert.match(
+    step('Test review helpers'),
+    /__tests__\/priority\.test\.mjs/,
+    'every helper test file must run before a review is paid for',
+  );
+  const summary = step('Render review summary');
+  assert.match(summary, /collapsed: JSON\.parse/);
+  assert.match(summary, /graded: /);
+});
+
+test('the gate hash covers the grading prompt', () => {
+  const sh = readFileSync(
+    fileURLToPath(new URL('../trusted-hash.sh', import.meta.url)),
+    'utf8',
+  );
+  assert.match(sh, /prompts\/code-review-regrade\.md/, 'editing it must re-review open PRs');
+});
+
+test('short titles that share a word or two are not merged', () => {
+  // Jaccard alone scores these 0.5, above SIMILAR_TITLE, but they need different fixes.
+  const { inline } = helpers.buildInlineComments({
+    findings: [{ file: 'src/a.ts', line: 11, severity: 'major', title: 'Missing retry in fetchUser', body: 'fix' }],
+    diffText: DIFF,
+    existingComments: [postedComment('Missing timeout in fetchUser')],
+  });
+  assert.equal(inline.length, 1, 'a distinct finding was discarded as a restatement');
+});
+
+test('the summary counts a reworded pair once, as delivery does', () => {
+  const [first, reworded] = RESTATED[0];
+  const a = { file: 'src/a.ts', line: 11, severity: 'major', title: first, body: 'x' };
+  const b = { ...a, title: reworded };
+  const { duplicates } = helpers.buildInlineComments({ findings: [a, b], diffText: DIFF, existingComments: [] });
+  assert.equal(duplicates.length, 1);
+  const body = helpers.renderSummary({
+    findings: [a, b], unanchored: [], duplicates, posted: 1, healthy: true, diffHash: HASH, promptHash: HASH,
+  });
+  assert.match(body, /\*\*1\*\* finding\(s\)/, 'headline counted both restatements');
+});
+
+test('a restatement of a skipped restatement is a duplicate, matching the summary', () => {
+  // F1 restates an existing comment (skipped); F2 restates F1 but shares too few words with
+  // the original. Delivery and distinctFindings must agree that F2 is not new.
+  const old = postedComment('Reading only the `tags` map returns an empty list for labels promoted by `tags_to_columns`');
+  const f1 = { file: 'src/a.ts', line: 11, severity: 'minor', body: 'x',
+    title: 'Reading only the `tags` map silently returns `[]` for labels promoted by `tags_to_columns`' };
+  const f2 = { ...f1, title: 'Only the `tags` map is read, so `tags_to_columns` labels silently come back as `[]`' };
+  const t = helpers.titleTokens;
+  assert.ok(helpers.similarTitles(t(f1.title), t(f2.title)), 'fixture: F2 must restate F1');
+  assert.ok(!helpers.similarTitles(t(helpers.titleFromBody(old.body)), t(f2.title)), 'fixture: F2 must not match the original');
+  const { inline, skipped, duplicates } = helpers.buildInlineComments({ findings: [f1, f2], diffText: DIFF, existingComments: [old] });
+  assert.deepEqual(inline, []);
+  assert.equal(skipped.length, 1);
+  assert.equal(duplicates.length, 1);
+  assert.equal(helpers.distinctFindings([f1, f2]).length, 1);
 });

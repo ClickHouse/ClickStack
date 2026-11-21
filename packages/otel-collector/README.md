@@ -16,7 +16,10 @@ Dockerfile:
 1. The `ocb` binary is copied from the official
    `otel/opentelemetry-collector-builder:<version>` image
 2. It's placed into a `golang:<version>-alpine` base (the official OCB image may
-   ship an older Go than the contrib modules require)
+   ship an older Go than the contrib modules require). The base is pinned by
+   digest in both Dockerfiles so upstream republishes don't invalidate the OCB
+   compile cache; bump the tag and digest together in both files
+   (`docker buildx imagetools inspect golang:<tag>` prints the digest)
 3. Version placeholders in `builder-config.yaml` are substituted via `sed`
 4. `ocb` compiles the custom binary from the resolved manifest
 
@@ -68,6 +71,7 @@ custom OTel configurations without rebuilding the collector.
 | `k8scluster`    | contrib | user configs                                            |
 | `kubeletstats`  | contrib | user configs                                            |
 | `prometheus`    | contrib | OpAMP controller, smoke tests                           |
+| `statsd`        | contrib | user configs                                            |
 
 ### Processors
 
@@ -322,6 +326,86 @@ run (`otelcontribcol --config ...`, not just `validate`): it reaches
 `span_metrics` connector, confirming `validate`'s static schema/graph
 checks aren't hiding a startup-only failure here.
 
+## Ingesting StatsD metrics
+
+`statsdreceiver` is compiled in so StatsD-formatted metrics can be ingested
+directly, without a separate StatsD-to-OTLP bridge — this covers any StatsD
+client, not just a particular vendor's dialect. It also understands the
+DogStatsD tag extension: valued tags (`#tag:value`) work with no extra
+config, but bare tags (`#mytag`, no value) need `enable_simple_tags: true`
+(set below) or they're silently dropped.
+
+**This component does not support horizontally-scaled deployments** — not
+a HyperDX-specific limitation, it's stated directly in the upstream
+component's own docs. Aggregation state lives independently in each
+collector instance's memory with no cross-replica coordination, so the
+same metric landing on two different replicas (e.g. behind a
+load-balanced Service) gets aggregated separately by each one instead of
+together, silently splitting/undercounting it. HyperDX's default
+deployments (`docker-compose.yml`, the all-in-one image) run the
+OpAMP-managed collector as a single instance, so this doesn't bite out of
+the box — it only matters once *some* collector instance ingesting
+`statsd` is scaled to multiple replicas, at which point that traffic
+needs to go to one dedicated single-replica instance instead.
+
+`docker-compose.yml`/`docker-compose.dev.yml` have an `8125/udp` port
+mapping for the `otel-collector` service, commented out by default —
+uncomment it to enable statsd ingestion. It's opt-in rather than always
+on because a fixed host port mapping fails that service's entire startup
+if something else on the host (e.g. a local StatsD daemon or Datadog
+Agent) already owns 8125/udp, which would otherwise break the default
+stack for anyone not using this feature. The standalone/all-in-one images
+also `EXPOSE 8125/udp` (metadata only, doesn't reserve the host port on
+its own).
+
+**In standalone mode**, `metrics` is a plain pipeline in your own config
+file, so add `statsd` to it directly:
+
+```yaml
+receivers:
+  statsd:
+    # Defaults to localhost:8125, which only accepts local traffic -
+    # 0.0.0.0 is required here since traffic arrives from outside the
+    # container (the published port above forwards to the container's
+    # own loopback otherwise).
+    endpoint: 0.0.0.0:8125
+    enable_simple_tags: true
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp/hyperdx, statsd]
+```
+
+**In OpAMP supervisor mode** (HyperDX's default), editing the `metrics`
+pipeline this way will not work: `receivers:`/`exporters:` on it are set
+dynamically by `opampController.ts`, and the remote config overwrites
+(not merges) those keys — see the [span metrics section
+above](#computing-span-metrics-from-ingested-traces) for the same
+behavior. Adding `statsd` to `metrics.receivers` from
+`CUSTOM_OTELCOL_CONFIG_FILE` gets silently dropped: no error, the receiver
+just starts and is wired to nothing. Use a separate pipeline name instead,
+which the remote config never touches:
+
+```yaml
+receivers:
+  statsd:
+    endpoint: 0.0.0.0:8125
+    enable_simple_tags: true
+service:
+  pipelines:
+    metrics/statsd:
+      receivers: [statsd]
+      exporters: [clickhouse]
+      processors: [memory_limiter, batch]
+```
+
+Both shapes are verified against the real compiled binary via
+`otelcontribcol validate --config`, and the standalone shape was also
+actually run (`otelcontribcol --config ...`, not just `validate`),
+reaching `"Everything is ready. Begin running and processing data."` —
+the same rigor as the span metrics section above, using the same
+multi-`--config` merge the container actually uses.
+
 ## Overriding base components via `CUSTOM_OTELCOL_CONFIG_FILE`
 
 The collector ships with a default `memory_limiter` processor sized for a
@@ -352,13 +436,13 @@ processors:
 service:
   pipelines:
     traces:
-      processors: [memory_limiter/custom, batch]
+      processors: [memory_limiter/custom, transform/session_id, batch]
     metrics:
       processors: [memory_limiter/custom, batch]
     logs/out-default:
-      processors: [memory_limiter/custom, transform, batch]
+      processors: [memory_limiter/custom, transform, transform/session_id, batch]
     logs/out-rrweb:
-      processors: [memory_limiter/custom, batch]
+      processors: [memory_limiter/custom, transform/session_id, batch]
 ```
 
 After restart, the collector instantiates `memory_limiter/custom` (and not
@@ -385,9 +469,9 @@ processors:
 service:
   pipelines:
     traces:
-      processors: [memory_limiter, batch/lowlatency]
+      processors: [memory_limiter, transform/session_id, batch/lowlatency]
     logs/out-default:
-      processors: [memory_limiter, transform, batch/lowlatency]
+      processors: [memory_limiter, transform, transform/session_id, batch/lowlatency]
 ```
 
 Notes:
@@ -491,7 +575,8 @@ args:
 ### Files you do NOT need to change
 
 - `packages/otel-collector/builder-config.yaml` — uses placeholders, substituted
-  at build time
+  at build time. The exception is stable (v1.x) components such as
+  `k8sattributesprocessor`: copy their version from the upstream manifest
 - `docker-compose.dev.yml` — reads from `.env` automatically
 - `docker-compose.ci.yml` — reads from `.env` automatically
 
@@ -525,7 +610,7 @@ codebase without needing to publish a Go module tag on every change.
    ```yaml
    receivers:
      - gomod:
-         github.com/hyperdxio/hyperdx/packages/otel-collector/receiver/myreceiver
+         github.com/ClickHouse/ClickStack/packages/otel-collector/receiver/myreceiver
          v0.0.0
        path: ./receiver/myreceiver
    ```

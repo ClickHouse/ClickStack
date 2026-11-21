@@ -1,7 +1,8 @@
 import { useCallback } from 'react';
 import SqlString from 'sqlstring';
+import { Separator } from '@clickhouse/click-ui';
 import { TTraceSource } from '@hyperdx/common-utils/dist/types';
-import { Button, Divider, Group, Stack, Text } from '@mantine/core';
+import { Button, Group, Stack, Text } from '@mantine/core';
 import {
   IconActivity,
   IconClock,
@@ -13,6 +14,12 @@ import {
 import { formatDurationMs } from '@/utils';
 
 import {
+  buildServiceMapDimensionsWhere,
+  formatServiceMapDimensions,
+} from './dimensions';
+import {
+  buildServiceMapErrorWhere,
+  ERROR_RATE_HIGH,
   formatApproximateNumber,
   formatRate,
   navigateToTraceSearch,
@@ -28,6 +35,8 @@ export default function ServiceMapTooltip({
   source,
   dateRange,
   serviceName,
+  dimensions,
+  groupBy,
   isSingleTrace,
   isFocused,
   onFocus,
@@ -41,6 +50,10 @@ export default function ServiceMapTooltip({
   source: TTraceSource;
   dateRange: [Date, Date];
   serviceName: string;
+  // Values of the extra group-by expressions for this node, in groupBy order.
+  dimensions: string[];
+  // The extra group-by SQL expressions, so search links can pin each value.
+  groupBy: string[];
   isSingleTrace?: boolean;
   // Whether the map is currently scoped to this service (the focus toggle is on)
   // — flips the focus CTA to a "clear" action.
@@ -56,37 +69,39 @@ export default function ServiceMapTooltip({
   // Only alarm (red) once errors are non-trivial; a fraction of a percent reads
   // as amber and a clean service stays neutral-danger-free.
   const errorColor =
-    errorPercentage >= 5
+    errorPercentage >= ERROR_RATE_HIGH
       ? 'var(--color-text-danger)'
       : 'var(--color-chart-warning)';
+
+  const dimensionsLabel = formatServiceMapDimensions(dimensions);
+  const dimensionsWhere = buildServiceMapDimensionsWhere(groupBy, dimensions);
 
   const handleRequestsClick = useCallback(() => {
     navigateToTraceSearch({
       dateRange,
       source,
-      where: SqlString.format("? = ? AND ? IN ('Server', 'Consumer')", [
-        SqlString.raw(source.serviceNameExpression ?? 'ServiceName'),
-        serviceName,
-        SqlString.raw(source.spanKindExpression ?? 'SpanKind'),
-      ]),
+      where:
+        SqlString.format("? = ? AND ? IN ('Server', 'Consumer')", [
+          SqlString.raw(source.serviceNameExpression ?? 'ServiceName'),
+          serviceName,
+          SqlString.raw(source.spanKindExpression ?? 'SpanKind'),
+        ]) + dimensionsWhere,
     });
-  }, [dateRange, source, serviceName]);
+  }, [dateRange, source, serviceName, dimensionsWhere]);
 
   const handleErrorsClick = useCallback(() => {
     navigateToTraceSearch({
       dateRange,
       source,
-      where: SqlString.format(
-        "? = ? AND ? IN ('Server', 'Consumer') AND ? = 'Error'",
-        [
-          SqlString.raw(source.serviceNameExpression ?? 'ServiceName'),
+      where:
+        buildServiceMapErrorWhere({
+          serviceNameExpression: source.serviceNameExpression ?? 'ServiceName',
           serviceName,
-          SqlString.raw(source.spanKindExpression ?? 'SpanKind'),
-          SqlString.raw(source.statusCodeExpression ?? 'StatusCode'),
-        ],
-      ),
+          spanKindExpression: source.spanKindExpression ?? 'SpanKind',
+          statusCodeExpression: source.statusCodeExpression ?? 'StatusCode',
+        }) + dimensionsWhere,
     });
-  }, [dateRange, source, serviceName]);
+  }, [dateRange, source, serviceName, dimensionsWhere]);
 
   const showMetrics =
     totalRequests > 0 && (requestsPerSecond != null || latencyMs != null);
@@ -104,7 +119,19 @@ export default function ServiceMapTooltip({
       >
         {serviceName}
       </Text>
-      <Divider color="var(--color-border)" />
+      {dimensionsLabel ? (
+        <Text
+          size="xs"
+          c="var(--color-text-muted)"
+          px="xs"
+          lineClamp={1}
+          title={dimensionsLabel}
+          data-testid="service-map-tooltip-dimensions"
+        >
+          {dimensionsLabel}
+        </Text>
+      ) : null}
+      <Separator size="xs" />
       <Button
         onClick={handleRequestsClick}
         variant="subtle"
@@ -153,7 +180,7 @@ export default function ServiceMapTooltip({
       ) : null}
       {onFocus ? (
         <>
-          <Divider color="var(--color-border)" />
+          <Separator size="xs" />
           <Button
             onClick={onFocus}
             variant="secondary"

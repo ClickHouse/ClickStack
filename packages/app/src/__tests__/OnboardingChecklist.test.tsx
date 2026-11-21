@@ -24,8 +24,8 @@ jest.mock('@/source', () => ({ useSources: jest.fn() }));
 jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
 }));
-jest.mock('@/theme/ThemeProvider', () => ({
-  useBrandDisplayName: () => 'HyperDX',
+jest.mock('@/brand', () => ({
+  useBrandDisplayName: () => 'ClickStack',
 }));
 
 const mockUseMe = jest.mocked(api.useMe);
@@ -141,7 +141,7 @@ describe('OnboardingChecklist', () => {
 
     renderChecklist();
 
-    expect(screen.getByText('Get started with HyperDX')).toBeInTheDocument();
+    expect(screen.getByText('Get started with ClickStack')).toBeInTheDocument();
     expect(screen.getByText('Build a dashboard')).toBeInTheDocument();
     expect(screen.getByText('Explore your data')).toBeInTheDocument();
     // 1 of 4 product tasks complete.
@@ -170,7 +170,7 @@ describe('OnboardingChecklist', () => {
     renderChecklist();
 
     expect(
-      screen.queryByText('Get started with HyperDX'),
+      screen.queryByText('Get started with ClickStack'),
     ).not.toBeInTheDocument();
     expect(screen.queryByText('Set up ClickHouse')).not.toBeInTheDocument();
   });
@@ -184,7 +184,7 @@ describe('OnboardingChecklist', () => {
     renderChecklist();
 
     expect(
-      screen.queryByText('Get started with HyperDX'),
+      screen.queryByText('Get started with ClickStack'),
     ).not.toBeInTheDocument();
     expect(screen.queryByText('Set up ClickHouse')).not.toBeInTheDocument();
   });
@@ -201,7 +201,7 @@ describe('OnboardingChecklist', () => {
     renderChecklist();
 
     expect(
-      screen.queryByText('Get started with HyperDX'),
+      screen.queryByText('Get started with ClickStack'),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/You're all set/)).not.toBeInTheDocument();
     expect(dismissMutate).not.toHaveBeenCalled();
@@ -219,7 +219,7 @@ describe('OnboardingChecklist', () => {
       setSetup(true, /* loading */ true);
       const { rerender } = renderChecklist();
       expect(
-        screen.queryByText('Get started with HyperDX'),
+        screen.queryByText('Get started with ClickStack'),
       ).not.toBeInTheDocument();
       expect(screen.queryByText(/You're all set/)).not.toBeInTheDocument();
 
@@ -238,7 +238,7 @@ describe('OnboardingChecklist', () => {
       });
       expect(screen.queryByText(/You're all set/)).not.toBeInTheDocument();
       expect(
-        screen.queryByText('Get started with HyperDX'),
+        screen.queryByText('Get started with ClickStack'),
       ).not.toBeInTheDocument();
     } finally {
       jest.useRealTimers();
@@ -296,7 +296,7 @@ describe('OnboardingChecklist', () => {
 
     renderChecklist();
 
-    expect(screen.getByText('Get started with HyperDX')).toBeInTheDocument();
+    expect(screen.getByText('Get started with ClickStack')).toBeInTheDocument();
     expect(screen.getByText('3/4')).toBeInTheDocument();
   });
 
@@ -342,7 +342,7 @@ describe('OnboardingChecklist', () => {
 
     renderChecklist();
 
-    expect(screen.getByText('Get started with HyperDX')).toBeInTheDocument();
+    expect(screen.getByText('Get started with ClickStack')).toBeInTheDocument();
   });
 
   it('hides the product phase for a team older than the product window (>7 days)', () => {
@@ -353,7 +353,36 @@ describe('OnboardingChecklist', () => {
     renderChecklist();
 
     expect(
-      screen.queryByText('Get started with HyperDX'),
+      screen.queryByText('Get started with ClickStack'),
     ).not.toBeInTheDocument();
+  });
+
+  it('escapes quotes and backslashes in source names in the has-data probe condition', () => {
+    // The probe's `type: 'sql'` filter renders via UNSAFE_RAW_SQL, so source
+    // names must be escaped or they break out of the string literal and inject
+    // arbitrary SQL run against ClickHouse for teammates. ClickHouse also honors
+    // C-style backslash escapes inside single-quoted literals, so a lone
+    // backslash must be doubled too — the table/database values below exercise
+    // both the quote and backslash paths independently.
+    setMe({ completedTasks: [], isDismissed: false });
+    setSetup(true);
+    mockUseSources.mockReturnValue({
+      data: [
+        {
+          id: 's1',
+          connection: 'c1',
+          from: { databaseName: 'db\\x', tableName: "t' OR 1=1 --" },
+        },
+      ],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useSources>);
+
+    renderChecklist();
+
+    const filter =
+      mockUseQueriedChartConfig.mock.calls.at(-1)?.[0]?.filters?.[0];
+    const condition =
+      filter && 'condition' in filter ? filter.condition : undefined;
+    expect(condition).toBe("table = 't'' OR 1=1 --' AND database = 'db\\\\x'");
   });
 });

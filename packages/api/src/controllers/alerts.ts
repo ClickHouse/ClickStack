@@ -2,12 +2,17 @@ import {
   displayTypeSupportsBuilderAlerts,
   displayTypeSupportsRawSqlAlerts,
   isFormulaSourceKind,
+  savedChartConfigSupportsAlerts,
   validateRawSqlForAlert,
 } from '@hyperdx/common-utils/dist/core/utils';
-import { isRawSqlSavedChartConfig } from '@hyperdx/common-utils/dist/guards';
+import {
+  isPromqlSavedChartConfig,
+  isRawSqlSavedChartConfig,
+} from '@hyperdx/common-utils/dist/guards';
+import { configUsesReferenceVariable } from '@hyperdx/common-utils/dist/referenceVariables';
 import { isRangeThresholdType } from '@hyperdx/common-utils/dist/types';
 import { groupBy } from 'lodash';
-import { Types } from 'mongoose';
+import { type FilterQuery, Types } from 'mongoose';
 import { z } from 'zod';
 
 import { recordOnboardingTaskCompletion } from '@/controllers/user';
@@ -91,13 +96,25 @@ export const validateAlertInput = async (
       throw new Api400Error('Tile not found');
     }
 
-    if (tile.config != null && isRawSqlSavedChartConfig(tile.config)) {
-      if (!displayTypeSupportsRawSqlAlerts(tile.config.displayType)) {
+    // The alert checker cannot evaluate these tiles, so the alert would never run.
+    if (tile.config != null && !savedChartConfigSupportsAlerts(tile.config)) {
+      if (configUsesReferenceVariable(tile.config)) {
         throw new Api400Error(
-          'Alerts on Raw SQL tiles are only supported for Line, Stacked Bar, or Number display types',
+          'Alerts are not supported on tiles that use a data source or connection variable',
         );
       }
+      if (isPromqlSavedChartConfig(tile.config)) {
+        throw new Api400Error('Alerts are not supported on PromQL tiles');
+      }
+      const tileKind = isRawSqlSavedChartConfig(tile.config)
+        ? 'Raw SQL tiles'
+        : 'dashboard tiles';
+      throw new Api400Error(
+        `Alerts on ${tileKind} are only supported for Line, Stacked Bar, or Number display types`,
+      );
+    }
 
+    if (tile.config != null && isRawSqlSavedChartConfig(tile.config)) {
       const { errors } = validateRawSqlForAlert(tile.config);
       if (errors.length > 0) {
         throw new Api400Error(
@@ -378,8 +395,11 @@ export const updateAlert = async (
   return alert;
 };
 
-export const countAlerts = async (teamId: ObjectId) => {
-  return Alert.countDocuments({ team: teamId });
+export const countAlerts = async (
+  teamId: ObjectId,
+  filter: FilterQuery<IAlert> = {},
+) => {
+  return Alert.countDocuments({ ...filter, team: teamId });
 };
 
 export const getAlertById = async (
@@ -390,6 +410,34 @@ export const getAlertById = async (
     _id: alertId,
     team: teamId,
   });
+};
+
+export const silenceAlert = async (
+  alertId: ObjectId | string,
+  teamId: ObjectId | string,
+  userId: ObjectId,
+  until: Date,
+) => {
+  const alert = await getAlertById(alertId, teamId);
+  if (!alert) {
+    return null;
+  }
+  alert.silenced = { by: userId, at: new Date(), until };
+  await alert.save();
+  return alert;
+};
+
+export const unsilenceAlert = async (
+  alertId: ObjectId | string,
+  teamId: ObjectId | string,
+) => {
+  const alert = await getAlertById(alertId, teamId);
+  if (!alert) {
+    return null;
+  }
+  alert.silenced = undefined;
+  await alert.save();
+  return alert;
 };
 
 export const getTeamDashboardAlertsByDashboardAndTile = async (
@@ -491,12 +539,18 @@ const DISPLAY_REF_POPULATE = [
   { path: 'dashboard', select: 'name tags tiles.id tiles.config.name' },
 ];
 
+/** Populate (and project) the search or dashboard reference of an alert document in place */
+export const populateAlertDisplayRefs = (
+  alert: NonNullable<Awaited<ReturnType<typeof getAlertById>>>,
+) => alert.populate<AlertWithDisplayRefs>(DISPLAY_REF_POPULATE);
+
 /** Get alerts, with a populated (and projected) search or dashboard reference */
 export const getAlertsWithDisplayRefs = async (
   teamId: ObjectId,
   { limit, offset }: { limit: number; offset: number },
+  filter: FilterQuery<IAlert> = {},
 ) => {
-  return Alert.find({ team: teamId })
+  return Alert.find({ ...filter, team: teamId })
     .sort({ _id: 1 })
     .skip(offset)
     .limit(limit)
@@ -514,29 +568,42 @@ export const getAlertWithDisplayRefs = async (
   }).populate<AlertWithDisplayRefs>(DISPLAY_REF_POPULATE);
 };
 
-export const getAlertsEnhanced = async (teamId: ObjectId) => {
-  return Alert.find({ team: teamId }).populate<{
-    savedSearch: ISavedSearch;
-    dashboard: IDashboard;
-    createdBy?: IUser;
-    silenced?: IAlert['silenced'] & {
-      by: IUser;
-    };
-  }>(['savedSearch', 'dashboard', 'createdBy', 'silenced.by']);
+/** Represents the documents populated and projected by ALERT_PAGE_POPULATE */
+export type AlertPageRefs = {
+  // `_id` is not in the select below but Mongo returns it anyway
+  savedSearch: Pick<ISavedSearch, '_id' | 'name' | 'tags'> | null;
+  dashboard:
+    | (Pick<IDashboard, '_id' | 'name' | 'provisioned' | 'tags'> & {
+        tiles: { id: string; config?: { name?: string } }[];
+      })
+    | null;
+  createdBy?: Pick<IUser, 'email' | 'name'>;
+  silenced?: IAlert['silenced'] & {
+    by: Pick<IUser, 'email'>;
+  };
 };
+
+/**
+ * Projections for the internal alerts surfaces (the alerts page and the alert
+ * detail endpoint), kept to what the response actually renders.
+ */
+export const ALERT_PAGE_POPULATE = [
+  { path: 'savedSearch', select: 'name tags' },
+  {
+    path: 'dashboard',
+    select: 'name provisioned tags tiles.id tiles.config.name',
+  },
+  { path: 'createdBy', select: 'email name' },
+  { path: 'silenced.by', select: 'email' },
+];
 
 export const getAlertEnhanced = async (
   alertId: ObjectId | string,
   teamId: ObjectId,
 ) => {
-  return Alert.findOne({ _id: alertId, team: teamId }).populate<{
-    savedSearch: ISavedSearch;
-    dashboard: IDashboard;
-    createdBy?: IUser;
-    silenced?: IAlert['silenced'] & {
-      by: IUser;
-    };
-  }>(['savedSearch', 'dashboard', 'createdBy', 'silenced.by']);
+  return Alert.findOne({ _id: alertId, team: teamId }).populate<AlertPageRefs>(
+    ALERT_PAGE_POPULATE,
+  );
 };
 
 export const deleteAlert = async (id: string, teamId: ObjectId) => {

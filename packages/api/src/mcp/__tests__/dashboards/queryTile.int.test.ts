@@ -11,6 +11,7 @@ import {
   seedExponentialHistogramMetric,
 } from '@/fixtures';
 import { callTool, getFirstText } from '@/mcp/__tests__/mcpTestUtils';
+import Dashboard from '@/models/dashboard';
 import { Source } from '@/models/source';
 
 import { setupDashboardTests } from './setup';
@@ -438,6 +439,71 @@ describe('MCP Dashboard Tools - clickstack_query_tile', () => {
     expect(result.isError).toBeFalsy();
   });
 
+  it('returns time-bucketed rows for a series-mode heatmap tile', async () => {
+    const logSource = await Source.create({
+      kind: SourceKind.Log,
+      team: ctx.team._id,
+      from: { databaseName: DEFAULT_DATABASE, tableName: DEFAULT_LOGS_TABLE },
+      timestampValueExpression: 'Timestamp',
+      connection: ctx.connection._id,
+      name: 'Series Heatmap Logs',
+      bodyExpression: 'Body',
+      severityTextExpression: 'SeverityText',
+    });
+    const now = new Date();
+    const logs: Parameters<typeof bulkInsertLogs>[0] = [];
+    for (const minutesAgo of [10, 5]) {
+      for (const serviceName of ['svc-a', 'svc-b']) {
+        logs.push({
+          Body: `series heatmap log ${serviceName} ${minutesAgo}`,
+          ServiceName: serviceName,
+          SeverityText: 'INFO',
+          Timestamp: new Date(now.getTime() - minutesAgo * 60 * 1000),
+        });
+      }
+    }
+    await bulkInsertLogs(logs);
+
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Series Heatmap Dashboard',
+        tiles: [
+          {
+            name: 'Count by service',
+            config: {
+              displayType: 'heatmap',
+              heatmapMode: 'series',
+              sourceId: logSource._id.toString(),
+              select: [{ aggFn: 'count' }],
+              groupBy: 'ServiceName',
+            },
+          },
+        ],
+      },
+    );
+    if (createResult.isError) {
+      throw new Error(getFirstText(createResult));
+    }
+    const dashboard = JSON.parse(getFirstText(createResult));
+
+    const result = await callTool(ctx.client!, 'clickstack_query_tile', {
+      dashboardId: dashboard.id,
+      tileId: dashboard.tiles[0].id,
+      startTime: new Date(now.getTime() - 15 * 60 * 1000).toISOString(),
+      endTime: new Date(now.getTime() + 60 * 1000).toISOString(),
+    });
+
+    expect(result.isError).toBeFalsy();
+    const parsed: { result: { data: Array<Record<string, string>> } } =
+      JSON.parse(getFirstText(result));
+    expect(parsed.result.data).toHaveLength(4);
+    for (const row of parsed.result.data) {
+      expect(row).toHaveProperty('__hdx_time_bucket');
+    }
+  });
+
   // Regression: a metric source rendered as a categorical (bar/pie) tile with a
   // groupBy runs the chart config through convertToCategoricalChartConfig, which
   // structuredClones it. `source.metricTables` is a live Mongoose subdocument
@@ -826,6 +892,30 @@ describe('MCP Dashboard Tools - clickstack_query_tile', () => {
       };
     };
 
+    // clickstack_search has no variable context, so each snippet must carry
+    // the expanded selection and return only the selected service's rows.
+    const expectDrilldownServices = async (text: string, service: string) => {
+      const { patterns } = JSON.parse(text);
+      expect(patterns.length).toBeGreaterThan(0);
+      for (const p of patterns) {
+        expect(p.whereSnippet).not.toContain('$__filter');
+        expect(p.whereSnippet).not.toContain('$service');
+        const search = await callTool(ctx.client!, 'clickstack_search', {
+          sourceId: logSourceId,
+          startTime,
+          endTime,
+          where: p.whereSnippet,
+          whereLanguage: 'sql',
+          columns: 'ServiceName',
+        });
+        expect(search.isError).toBeFalsy();
+        const rows: { ServiceName: string }[] = JSON.parse(getFirstText(search))
+          .result.data;
+        expect(rows.length).toBeGreaterThan(0);
+        for (const r of rows) expect(r.ServiceName).toBe(service);
+      }
+    };
+
     it('expands $__filter to a no-op on an event_patterns tile with nothing selected', async () => {
       const dashboard = await saveDashboard([eventPatternsTile()]);
 
@@ -866,6 +956,7 @@ describe('MCP Dashboard Tools - clickstack_query_tile', () => {
       expect(sampledCount).toBe(2);
       expect(bodies.some(b => b.includes('checkout'))).toBe(true);
       expect(bodies.some(b => b.includes('payments'))).toBe(false);
+      await expectDrilldownServices(getFirstText(result), 'checkout');
     });
 
     it('expands a Lucene variable reference on an event_patterns tile', async () => {
@@ -888,6 +979,7 @@ describe('MCP Dashboard Tools - clickstack_query_tile', () => {
       expect(totalCount).toBe(1);
       expect(bodies.some(b => b.includes('checkout'))).toBe(false);
       expect(bodies.some(b => b.includes('payments'))).toBe(true);
+      await expectDrilldownServices(getFirstText(result), 'payments');
     });
 
     it('reports an event_patterns macro naming a variable the dashboard does not declare', async () => {
@@ -1280,6 +1372,87 @@ describe('MCP Dashboard Tools - clickstack_query_tile', () => {
 
       expect(rows).toHaveLength(3);
       expect(rows.map(r => r.ServiceName)).toEqual(['svc-e', 'svc-d', 'svc-c']);
+    });
+  });
+
+  describe('reference variables', () => {
+    const createVariableDashboard = (savedFilterValues: unknown[] = []) =>
+      new Dashboard({
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            id: 'variable-tile',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 3,
+            config: {
+              name: 'Count',
+              source: '$traces',
+              displayType: 'number',
+              select: [{ aggFn: 'count', valueExpression: '' }],
+              where: '',
+            },
+          },
+        ],
+        filters: [
+          {
+            id: 'ds-filter',
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+            minSelections: 1,
+            maxSelections: 1,
+            isBroadcastEnabled: false,
+            isVariableEnabled: true,
+          },
+        ],
+        savedFilterValues,
+        team: ctx.team._id,
+      }).save();
+
+    it("runs a tile on its data source variable's saved selection", async () => {
+      const dashboard = await createVariableDashboard([
+        {
+          type: 'variable',
+          name: 'traces',
+          values: [ctx.traceSource._id.toString()],
+        },
+      ]);
+
+      const result = await callTool(ctx.client!, 'clickstack_query_tile', {
+        dashboardId: dashboard._id.toString(),
+        tileId: 'variable-tile',
+      });
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it('runs a tile on a selection passed in variableValues', async () => {
+      const dashboard = await createVariableDashboard();
+
+      const result = await callTool(ctx.client!, 'clickstack_query_tile', {
+        dashboardId: dashboard._id.toString(),
+        tileId: 'variable-tile',
+        variableValues: [
+          { name: 'traces', values: [ctx.traceSource._id.toString()] },
+        ],
+      });
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it('reports a data source variable with no selection', async () => {
+      const dashboard = await createVariableDashboard();
+
+      const result = await callTool(ctx.client!, 'clickstack_query_tile', {
+        dashboardId: dashboard._id.toString(),
+        tileId: 'variable-tile',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain('$traces variable');
     });
   });
 });

@@ -1,9 +1,14 @@
 import React from 'react';
 import Link from 'next/link';
 import cx from 'classnames';
+import { Badge } from '@clickhouse/click-ui';
+import {
+  setAttributes,
+  setUser,
+  startNewSession,
+} from '@clickhouse/clickstack-browser';
 import {
   Avatar,
-  Badge,
   Button,
   Group,
   Menu,
@@ -60,7 +65,7 @@ export const AppNavCloudBanner = () => {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Get Started for Free
+          Get started for free
         </Button>
       </div>
     </div>
@@ -155,7 +160,7 @@ export const AppNavUserMenu = ({
             component={Link}
             leftSection={<IconSettings size={16} />}
           >
-            Team Settings
+            Team settings
           </Menu.Item>
         )}
         <Menu.Item
@@ -163,7 +168,7 @@ export const AppNavUserMenu = ({
           leftSection={<IconUserCog size={16} />}
           onClick={onClickUserPreferences}
         >
-          User Preferences
+          User preferences
         </Menu.Item>
         {logoutUrl && (
           <>
@@ -174,6 +179,12 @@ export const AppNavUserMenu = ({
               leftSection={<IconLogout size={16} />}
               component={Link}
               href={logoutUrl}
+              onClick={() => {
+                // The next user on this device gets a RUM session of their own
+                setUser(null);
+                setAttributes(null);
+                startNewSession();
+              }}
             >
               Logout
             </Menu.Item>
@@ -287,7 +298,7 @@ export const AppNavHelpMenu = ({
             target="_blank"
             rel="noopener noreferrer"
           >
-            Setup Instructions
+            Setup instructions
           </Menu.Item>
           <Menu.Item
             data-testid="keyboard-shortcuts-menu-item"
@@ -304,7 +315,7 @@ export const AppNavHelpMenu = ({
             target="_blank"
             rel="noopener noreferrer"
           >
-            Discord Community
+            Discord community
           </Menu.Item>
 
           <Menu.Divider />
@@ -388,17 +399,15 @@ export const AppNavLink = ({
       </span>
       {!isCollapsed && isBeta && (
         <Badge
-          size="xs"
-          color="blue"
-          variant="light"
+          size="sm"
+          text="Beta"
+          state="info"
           className={styles.navItemBadge}
-        >
-          Beta
-        </Badge>
+        />
       )}
       {!isCollapsed && onToggle && (
         <Tooltip
-          label={isExpanded ? 'Hide Favorites' : 'Show Favorites'}
+          label={isExpanded ? 'Hide favorites' : 'Show favorites'}
           position="right"
         >
           <button

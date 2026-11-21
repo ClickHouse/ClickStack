@@ -1,4 +1,8 @@
-import { WebhookService } from '@hyperdx/common-utils/dist/types';
+import {
+  DEFAULT_INCIDENT_IO_WEBHOOK_BODY,
+  WebhookService,
+} from '@hyperdx/common-utils/dist/types';
+import dns from 'dns';
 import { ObjectId } from 'mongodb';
 
 import { AlertState } from '@/models/alert';
@@ -9,6 +13,7 @@ import {
   handleSendGenericWebhook,
 } from '@/tasks/checkAlerts/transports/generic';
 import type { Message } from '@/tasks/checkAlerts/transports/types';
+import { WebhookUrlValidationError } from '@/utils/validators';
 
 const message: Message = {
   hdxLink: 'https://example.test/alert',
@@ -88,6 +93,48 @@ describe('handleSendGenericWebhook — per-attempt timeout', () => {
   }, 2000); // short test-level timeout: a regression here should fail fast, not stall on Jest's default 30s
 });
 
+describe('handleSendGenericWebhook — DNS resolution', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('blocks a public hostname that resolves to loopback, without retrying', async () => {
+    // The real undici fetch + Agent pair that production uses.
+    jest
+      .mocked(global.fetch)
+      .mockImplementationOnce(jest.requireActual('undici').fetch);
+    const lookupSpy = jest
+      .spyOn(dns, 'lookup')
+      .mockImplementation((...args: any[]) =>
+        args[2](null, [{ address: '127.0.0.1', family: 4 }]),
+      );
+    const loopbackChannel: any = {
+      type: 'webhook',
+      channel: { ...webhook, url: 'http://127-0-0-1.nip.io/' },
+    };
+
+    await expect(
+      handleSendGenericWebhook(loopbackChannel, message),
+    ).rejects.toThrow(WebhookUrlValidationError);
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
+  }, 2000);
+
+  it('unwraps a block nested deeper in the cause chain, without retrying', async () => {
+    const blocked = new WebhookUrlValidationError('blocked');
+    jest
+      .mocked(global.fetch)
+      .mockClear()
+      .mockRejectedValueOnce(
+        new TypeError('fetch failed', {
+          cause: new Error('connect failed', { cause: blocked }),
+        }),
+      );
+
+    await expect(handleSendGenericWebhook(channel, message)).rejects.toBe(
+      blocked,
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  }, 2000);
+});
+
 describe('buildWebhookTemplateVariables', () => {
   it('exposes the enriched variables alongside the original set', () => {
     const vars = buildWebhookTemplateVariables({
@@ -126,11 +173,48 @@ describe('buildWebhookTemplateVariables', () => {
     expect(vars.sourceQuery).toBe('Body: \\"error\\"');
   });
 
+  it('exposes group-by values as JSON-escaped var.<column> entries', () => {
+    const vars = buildWebhookTemplateVariables({
+      ...message,
+      groupValues: { customer_id: 'acme "eu"' },
+    });
+    const rendered = createHandlebarsWithHelpers().compile(
+      '{"summary": "{{var.customer_id}} has an elevated error rate"}',
+      { noEscape: true },
+    )(vars);
+    expect(JSON.parse(rendered).summary).toBe(
+      'acme "eu" has an elevated error rate',
+    );
+    expect(buildWebhookTemplateVariables(message).var).toEqual({});
+  });
+
+  it('exposes tags as a comma-joined string and as a JSON-escaped list', () => {
+    const vars = buildWebhookTemplateVariables({
+      ...message,
+      tags: ['team-payments', 'say "hi"'],
+    });
+    const render = (template: string) =>
+      JSON.parse(
+        createHandlebarsWithHelpers().compile(template, { noEscape: true })(
+          vars,
+        ),
+      );
+
+    expect(render('{"tags": "{{tags}}"}').tags).toBe('team-payments,say "hi"');
+    // The array form published in docs/alert-webhook-template-variables.md.
+    expect(
+      render(
+        '{"tags": [{{#each tags}}"{{this}}"{{#unless @last}}, {{/unless}}{{/each}}]}',
+      ).tags,
+    ).toEqual(['team-payments', 'say "hi"']);
+  });
+
   it('renders enriched fields as empty strings (never "undefined") when absent', () => {
     const vars = buildWebhookTemplateVariables(message);
     expect(vars.alertId).toBe('');
     expect(vars.status).toBe('');
     expect(vars.note).toBe('');
+    expect(vars.tags).toEqual([]);
     expect(vars.startTimeISO).toBe(new Date(0).toISOString());
     // A raw number renders as an empty slot when absent, not "undefined".
     expect(vars.thresholdMax).toBeUndefined();
@@ -158,5 +242,98 @@ describe('the documented guard for an optional numeric variable', () => {
     [0, { threshold: 5, threshold_max: 0 }],
   ])('renders valid JSON for thresholdMax=%s', (thresholdMax, expected) => {
     expect(JSON.parse(render(thresholdMax))).toEqual(expected);
+  });
+});
+
+describe('the default incident.io body', () => {
+  const render = (overrides: Partial<Message>) =>
+    JSON.parse(
+      createHandlebarsWithHelpers().compile(DEFAULT_INCIDENT_IO_WEBHOOK_BODY, {
+        noEscape: true,
+      })(
+        buildWebhookTemplateVariables({
+          ...message,
+          alertId: 'alert-1',
+          status: 'firing',
+          comparator: '>=',
+          threshold: 5,
+          value: 42,
+          groupKey: 'checkout',
+          ...overrides,
+        }),
+      ),
+    );
+
+  it('sends a stable deduplication key and a status incident.io accepts', () => {
+    const firing = render({ state: AlertState.ALERT });
+    const resolved = render({ state: AlertState.OK, status: 'resolved' });
+
+    expect(firing.status).toBe('firing');
+    expect(resolved.status).toBe('resolved');
+    // Only an OK resolves: a state that never reported recovery must not close
+    // the incident.
+    expect(render({ state: AlertState.INSUFFICIENT_DATA }).status).toBe(
+      'firing',
+    );
+    // The same key on both is what closes the alert incident.io opened.
+    expect(resolved.deduplication_key).toBe(firing.deduplication_key);
+    expect(firing.deduplication_key).toBe('evt-1');
+    expect(firing.metadata).toMatchObject({
+      alert_id: 'alert-1',
+      hyperdx_status: 'firing',
+      comparator: '>=',
+      threshold: '5',
+      value: '42',
+      group_key: 'checkout',
+    });
+    expect(render({ tags: ['team-payments', 'prod'] }).metadata.tags).toBe(
+      'team-payments,prod',
+    );
+  });
+
+  it('stays valid JSON when the alert carries no optional values', () => {
+    const rendered = render({
+      alertId: undefined,
+      status: 'no_data',
+      comparator: undefined,
+      threshold: undefined,
+      value: undefined,
+      groupKey: undefined,
+    });
+
+    expect(rendered.status).toBe('firing');
+    expect(rendered.metadata).toMatchObject({
+      hyperdx_status: 'no_data',
+      threshold_max: '',
+      value: '',
+      tags: '',
+    });
+  });
+});
+
+describe('a webhook saved without a body', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const sentBody = async (service: WebhookService) => {
+    const fetchMock: any = jest.fn(async () => new Response('ok'));
+    global.fetch = fetchMock;
+    const bodylessChannel: any = {
+      type: 'webhook',
+      channel: { ...webhook, service, url: 'https://example.test/hook' },
+    };
+    await handleSendGenericWebhook(bodylessChannel, message);
+    return JSON.parse(fetchMock.mock.calls[0][1].body);
+  };
+
+  it('falls back to the body its service expects', async () => {
+    expect(await sentBody(WebhookService.Generic)).toHaveProperty('text');
+    expect(await sentBody(WebhookService.IncidentIO)).toMatchObject({
+      title: 'title',
+      status: 'firing',
+      deduplication_key: 'evt-1',
+    });
   });
 });

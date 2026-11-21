@@ -5,23 +5,13 @@ import {
   UseFormSetValue,
   useWatch,
 } from 'react-hook-form';
+import { Badge } from '@clickhouse/click-ui';
 import { validateFormula } from '@hyperdx/common-utils/dist/core/formula';
-import {
-  ActionIcon,
-  Badge,
-  Button,
-  Divider,
-  Group,
-  Text,
-  TextInput,
-  Tooltip,
-} from '@mantine/core';
+import { TextInput } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconTrash } from '@tabler/icons-react';
 
+import { ChartSeriesControls } from '@/components/ChartEditor/ChartSeriesControls';
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
-import { TextInputControlled } from '@/components/InputControlled';
-import { FORMAT_ICONS } from '@/components/NumberFormat';
 import SeriesNumberFormatDrawer from '@/components/SeriesNumberFormatDrawer';
 
 type ChartFormulaEditorProps = {
@@ -83,49 +73,16 @@ export function ChartFormulaEditor({
 
   return (
     <>
-      <Divider
-        label={
-          <Group gap="xs">
-            <Badge size="sm" radius="sm" variant="light" color="teal">
-              Formula
-            </Badge>
-            <Text size="xxs">Alias</Text>
-            <div style={{ width: 150 }}>
-              <TextInputControlled
-                name={`${namePrefix}alias`}
-                control={control}
-                placeholder="Formula alias"
-                onChange={() => onSubmit()}
-                size="xs"
-                data-testid="formula-alias-input"
-              />
-            </div>
-            <Button
-              variant="subtle"
-              color="gray"
-              size="xs"
-              onClick={() => onRemoveFormula(index)}
-              data-testid="formula-remove-button"
-            >
-              <IconTrash size={14} className="me-2" />
-              Remove Formula
-            </Button>
-            <Tooltip label="Edit formula display format">
-              <ActionIcon
-                variant="subtle"
-                color="gray"
-                size="xs"
-                onClick={openNumberFormat}
-                aria-label="Edit formula display format"
-              >
-                {FORMAT_ICONS[numberFormat?.output ?? 'number']}
-              </ActionIcon>
-            </Tooltip>
-          </Group>
-        }
-        labelPosition="right"
-        mb={8}
-        mt="sm"
+      <ChartSeriesControls
+        control={control}
+        aliasName={`${namePrefix}alias`}
+        aliasPlaceholder="Formula alias"
+        index={index}
+        numberFormat={numberFormat}
+        onSubmit={onSubmit}
+        onRemove={onRemoveFormula}
+        onOpenNumberFormat={openNumberFormat}
+        leadingSection={<Badge size="sm" text="Formula" state="success" />}
       />
       <Controller
         control={control}

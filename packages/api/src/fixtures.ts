@@ -22,6 +22,7 @@ import { AlertInterval, AlertSource } from '@/models/alert';
 import Server from '@/server';
 import logger from '@/utils/logger';
 import { MetricModel } from '@/utils/logParser';
+import { withRetry } from '@/utils/retry';
 
 import { ExternalDashboardTile } from './utils/zod';
 
@@ -141,7 +142,13 @@ export const closeDB = async () => {
   if (!config.IS_CI) {
     throw new Error('ONLY execute this in CI env 😈 !!!');
   }
-  await mongooseConnection.dropDatabase();
+  // DocumentDB intermittently fails dropDatabase while background index builds
+  // run (WriteConflict 112, or InternalError 1); a retry clears it.
+  await withRetry(() => mongooseConnection.dropDatabase(), {
+    maxRetries: 5,
+    initialDelayMs: 200,
+    retryOnlyOnStatus: [1, 112],
+  });
   await mongoose.disconnect();
 };
 
@@ -302,6 +309,10 @@ export type TimeSeriesFixtureSeries = {
  * `withSamples: true` also writes a sample at each series' `startSec` and
  * `endSec`. A `match[]` lookup matches only series that have a sample in the
  * window, so on a tags-only table every selector answers nothing.
+ *
+ * `timeRanges: true` creates a schema version 8 table (ClickHouse 26.10+),
+ * which keeps each series' time range in a separate time ranges inner table
+ * instead of the tags table's min_time/max_time.
  */
 export const seedTimeSeriesTagsTable = async ({
   table,
@@ -309,12 +320,14 @@ export const seedTimeSeriesTagsTable = async ({
   database = DEFAULT_DATABASE,
   storeTimeBounds = true,
   withSamples = false,
+  timeRanges = false,
 }: {
   table: string;
   series: TimeSeriesFixtureSeries[];
   database?: string;
   storeTimeBounds?: boolean;
   withSamples?: boolean;
+  timeRanges?: boolean;
 }) => {
   if (withSamples && !storeTimeBounds) {
     throw new Error(
@@ -323,11 +336,29 @@ export const seedTimeSeriesTagsTable = async ({
   }
 
   await dropTimeSeriesTable({ table, database });
-  await executeTimeSeriesSqlCommand(
-    `CREATE TABLE ${database}.${table} ENGINE = TimeSeries${
-      storeTimeBounds ? '' : ' SETTINGS store_min_time_and_max_time = 0'
-    }`,
-  );
+  const create = (settings: string[]) =>
+    executeTimeSeriesSqlCommand(
+      `CREATE TABLE ${database}.${table} ENGINE = TimeSeries${
+        settings.length ? ` SETTINGS ${settings.join(', ')}` : ''
+      }`,
+    );
+  if (timeRanges) {
+    await create([
+      'version = 8',
+      `store_time_ranges = ${storeTimeBounds ? 1 : 0}`,
+    ]);
+  } else {
+    const settings = storeTimeBounds ? [] : ['store_min_time_and_max_time = 0'];
+    // ClickHouse 26.10 creates version 8 tables by default, without
+    // min_time/max_time in the tags table: pin version 7 where the server
+    // knows the setting (older servers don't, and use that layout anyway).
+    try {
+      await create([...settings, 'version = 7']);
+    } catch (e) {
+      if (!/Unknown setting 'version'/.test(String(e))) throw e;
+      await create(settings);
+    }
+  }
 
   const quoted = (v: string) => `'${v.replace(/'/g, "\\'")}'`;
   const mapLiteral = (tags: Record<string, string>) =>
@@ -335,17 +366,14 @@ export const seedTimeSeriesTagsTable = async ({
       .flatMap(([k, v]) => [quoted(k), quoted(v)])
       .join(', ')})`;
 
-  const columns = storeTimeBounds
-    ? '(metric_name, tags, all_tags, min_time, max_time)'
-    : '(metric_name, tags, all_tags)';
+  const boundsInTags = storeTimeBounds && !timeRanges;
+  const columns = boundsInTags
+    ? '(metric_name, tags, min_time, max_time)'
+    : '(metric_name, tags)';
   const values = series
     .map(s => {
-      const row = [
-        quoted(s.metricName),
-        mapLiteral(s.tags),
-        mapLiteral({ __name__: s.metricName, ...s.tags }),
-      ];
-      if (storeTimeBounds) {
+      const row = [quoted(s.metricName), mapLiteral(s.tags)];
+      if (boundsInTags) {
         row.push(
           `toDateTime64(${s.startSec}, 3)`,
           `toDateTime64(${s.endSec}, 3)`,
@@ -359,13 +387,27 @@ export const seedTimeSeriesTagsTable = async ({
     `INSERT INTO TABLE FUNCTION timeSeriesTags('${database}', '${table}') ${columns} VALUES ${values}`,
   );
 
-  // The engine derives `id` from the tags, so the samples are read back out of
-  // the tags table rather than recomputed here.
+  // The engine derives `id` from the tags, so ids are read back out of the
+  // tags table rather than recomputed here.
+  if (timeRanges && storeTimeBounds) {
+    for (const s of series) {
+      await executeTimeSeriesSqlCommand(
+        `INSERT INTO TABLE FUNCTION timeSeriesTimeRanges('${database}', '${table}')
+         SELECT id, toDateTime64(${s.startSec}, 3), toDateTime64(${s.endSec}, 3)
+         FROM timeSeriesTags('${database}', '${table}')
+         WHERE metric_name = ${quoted(s.metricName)} AND tags = ${mapLiteral(s.tags)}`,
+      );
+    }
+  }
   if (withSamples) {
+    const bounds = timeRanges
+      ? `(SELECT id, min(min_time) AS min_time, max(max_time) AS max_time
+          FROM timeSeriesTimeRanges('${database}', '${table}') GROUP BY id)`
+      : `timeSeriesTags('${database}', '${table}')`;
     await executeTimeSeriesSqlCommand(
       `INSERT INTO TABLE FUNCTION timeSeriesData('${database}', '${table}')
        SELECT id, ts AS timestamp, 1 AS value
-       FROM timeSeriesTags('${database}', '${table}')
+       FROM ${bounds}
        ARRAY JOIN [min_time, max_time] AS ts`,
     );
   }
@@ -438,6 +480,7 @@ export const bulkInsertLogs = async (
     ServiceName: string;
     SeverityText: string;
     Timestamp: Date;
+    LogAttributes?: Record<string, string>;
   }[],
 ) => {
   if (!config.IS_CI) {
@@ -453,17 +496,19 @@ export const bulkInsertLogs = async (
 // the on-disk row is byte-identical to today's behaviour. New tests that need
 // to exercise the cross-scope attribute hashing (see HDX-4466) can opt in by
 // passing one or both maps explicitly.
-export const bulkInsertMetricsGauge = async (
-  metrics: {
-    MetricName: string;
-    ResourceAttributes: Record<string, string>;
-    ScopeAttributes?: Record<string, string>;
-    Attributes?: Record<string, string>;
-    ServiceName: string;
-    TimeUnix: Date;
-    Value: number;
-  }[],
-) => {
+type NumberMetricPoint = {
+  MetricName: string;
+  MetricUnit?: string;
+  MetricDescription?: string;
+  ResourceAttributes: Record<string, string>;
+  ScopeAttributes?: Record<string, string>;
+  Attributes?: Record<string, string>;
+  ServiceName: string;
+  TimeUnix: Date;
+  Value: number;
+};
+
+export const bulkInsertMetricsGauge = async (metrics: NumberMetricPoint[]) => {
   if (!config.IS_CI) {
     throw new Error('ONLY execute this in CI env 😈 !!!');
   }
@@ -474,17 +519,10 @@ export const bulkInsertMetricsGauge = async (
 };
 
 export const bulkInsertMetricsSum = async (
-  metrics: {
+  metrics: (NumberMetricPoint & {
     AggregationTemporality: number;
     IsMonotonic: boolean;
-    MetricName: string;
-    ResourceAttributes: Record<string, string>;
-    ScopeAttributes?: Record<string, string>;
-    Attributes?: Record<string, string>;
-    ServiceName: string;
-    TimeUnix: Date;
-    Value: number;
-  }[],
+  })[],
 ) => {
   if (!config.IS_CI) {
     throw new Error('ONLY execute this in CI env 😈 !!!');

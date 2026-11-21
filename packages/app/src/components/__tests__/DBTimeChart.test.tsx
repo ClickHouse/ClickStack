@@ -1,6 +1,5 @@
 import React from 'react';
-import { MantineProvider } from '@mantine/core';
-import { Notifications } from '@mantine/notifications';
+import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -10,16 +9,25 @@ import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import {
   DBTimeChart,
   decodeSeriesGroupFilters,
+  getSeriesFilterEntries,
 } from '@/components/DBTimeChart';
 import MVOptimizationIndicator from '@/components/MaterializedViews/MVOptimizationIndicator';
 import { MAX_LOADABLE_TIME_CHART_SERIES } from '@/defaults';
-import { useQueriedChartConfig } from '@/hooks/useChartConfig';
+import {
+  getMinGranularitySeconds,
+  useQueriedChartConfig,
+} from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useSource } from '@/source';
 
 // Mock dependencies
 jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
+  getMinGranularitySeconds: jest.fn().mockReturnValue(undefined),
+}));
+
+jest.mock('@/hooks/useResultColumnFilterKeys', () => ({
+  useResultColumnFilterKeys: jest.fn(() => new Map()),
 }));
 
 jest.mock('@/hooks/useMVOptimizationExplanation', () => ({
@@ -153,6 +161,68 @@ describe('DBTimeChart', () => {
     expect(secondCallOptions.enabled).toBe(false);
   });
 
+  describe('empty state', () => {
+    const emptyResult = {
+      data: {
+        data: [],
+        meta: [
+          { name: 'timestamp', type: 'DateTime' },
+          { name: 'value', type: 'UInt64' },
+        ],
+        rows: 0,
+        isComplete: true,
+      },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      isPlaceholderData: false,
+    };
+    // Zero-filled buckets would otherwise render an empty line, not the empty state.
+    const emptyConfig = { ...baseTestConfig, fillNulls: false as const };
+    const isPreviousPeriod = (config: { dateRange: [Date, Date] }) =>
+      config.dateRange[0] < baseTestConfig.dateRange[0];
+
+    it('shows loading while the query is still fetching', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        ...emptyResult,
+        data: { ...emptyResult.data, isComplete: false },
+        isFetching: true,
+      });
+
+      renderWithMantine(<DBTimeChart config={emptyConfig} />);
+
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+    });
+
+    it('shows no data when the previous-period query fails', () => {
+      mockUseQueriedChartConfig.mockImplementation(config =>
+        isPreviousPeriod(config)
+          ? {
+              data: undefined,
+              isLoading: false,
+              isFetching: false,
+              isError: true,
+              error: new Error('previous period failed'),
+              isSuccess: false,
+              isPlaceholderData: false,
+            }
+          : emptyResult,
+      );
+
+      renderWithMantine(
+        <DBTimeChart
+          config={{ ...emptyConfig, compareToPreviousPeriod: true }}
+        />,
+      );
+
+      expect(
+        screen.getByText('No data found within time range.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading Chart Data...')).toBeNull();
+    });
+  });
+
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
     jest.mocked(useSource).mockReturnValue({
@@ -216,6 +286,29 @@ describe('DBTimeChart', () => {
     const options = jest.mocked(useMVOptimizationExplanation).mock.calls[0][1];
     expect(options?.enabled).toBe(true);
   });
+
+  it.each([
+    ['controlled', jest.fn()],
+    ['uncontrolled', undefined],
+  ])(
+    'renders a stacked chart as lines when comparing to the previous period (%s)',
+    (_, setDisplayType) => {
+      renderWithMantine(
+        <DBTimeChart
+          config={{
+            ...baseTestConfig,
+            displayType: DisplayType.StackedBar,
+            compareToPreviousPeriod: true,
+          }}
+          setDisplayType={setDisplayType}
+        />,
+      );
+
+      expect(
+        screen.getByTestId(`display-switcher-${DisplayType.Line}`),
+      ).toHaveAttribute('data-active', 'true');
+    },
+  );
 
   describe('load-all series escape hatch', () => {
     // A high-cardinality group-by response: MAX_RENDERED_TIME_CHART_SERIES (250)
@@ -303,8 +396,7 @@ describe('DBTimeChart', () => {
       // survive — this also guards against dateRange being reintroduced into
       // queryShapeIdentity, which would make live-range ticks re-cap the chart.
       rerender(
-        <MantineProvider>
-          <Notifications />
+        <TestProviders>
           <DBTimeChart
             config={{
               ...groupByConfig,
@@ -314,7 +406,7 @@ describe('DBTimeChart', () => {
               ],
             }}
           />
-        </MantineProvider>,
+        </TestProviders>,
       );
 
       // The opt-in survives: no series are re-hidden, so the affordance stays
@@ -345,10 +437,9 @@ describe('DBTimeChart', () => {
       // Change the query shape (a positive seriesLimit below GROUP_COUNT keeps
       // series hidden), which should reset the opt-in and re-show the affordance.
       rerender(
-        <MantineProvider>
-          <Notifications />
+        <TestProviders>
           <DBTimeChart config={{ ...groupByConfig, seriesLimit: 5 }} />
-        </MantineProvider>,
+        </TestProviders>,
       );
 
       expect(
@@ -505,6 +596,43 @@ describe('DBTimeChart', () => {
     expect(dateRangeIndicatorCall.mvGranularity).toBeUndefined();
   });
 
+  it("floors 'auto' granularity to the source's minAutoGranularity setting", () => {
+    // A 15-minute range with the default maxBuckets=80 would otherwise infer
+    // '15 second' (ceil(900/80)=12 <= 15) - well under a 60s floor.
+    const config = {
+      ...baseTestConfig,
+      granularity: 'auto',
+      dateRange: [
+        new Date('2024-01-01T00:00:00Z'),
+        new Date('2024-01-01T00:15:00Z'),
+      ] as [Date, Date],
+    };
+
+    jest.mocked(getMinGranularitySeconds).mockReturnValueOnce(60);
+
+    renderWithMantine(<DBTimeChart config={config} />);
+
+    const firstCallConfig = mockUseQueriedChartConfig.mock.calls[0][0];
+    expect(firstCallConfig.granularity).toBe('1 minute');
+  });
+
+  it("does not floor 'auto' granularity when the source has no minAutoGranularity set", () => {
+    const config = {
+      ...baseTestConfig,
+      granularity: 'auto',
+      dateRange: [
+        new Date('2024-01-01T00:00:00Z'),
+        new Date('2024-01-01T00:15:00Z'),
+      ] as [Date, Date],
+    };
+
+    // getMinGranularitySeconds already defaults to undefined per the module mock above.
+    renderWithMantine(<DBTimeChart config={config} />);
+
+    const firstCallConfig = mockUseQueriedChartConfig.mock.calls[0][0];
+    expect(firstCallConfig.granularity).toBe('15 second');
+  });
+
   describe('raw SQL line chart', () => {
     const rawSqlConfig = {
       configType: 'sql' as const,
@@ -607,6 +735,74 @@ describe('DBTimeChart', () => {
       expect(() =>
         renderWithMantine(<DBTimeChart config={rawSqlConfig} />),
       ).not.toThrow();
+    });
+  });
+
+  describe('getSeriesFilterEntries', () => {
+    const filterKeyByColumn = new Map([
+      ['svc', 'ServiceName'],
+      ['SeverityText', 'SeverityText'],
+      ['attrs', 'LogAttributes'],
+    ]);
+    const entries = (groupValues: unknown[], groupColumns: string[]) =>
+      getSeriesFilterEntries({
+        line: { groupValues },
+        groupColumns,
+        filterKeyByColumn,
+      });
+
+    it('keys each group value by its column filter key', () => {
+      expect(entries(['api', 'error'], ['svc', 'SeverityText'])).toEqual([
+        { key: 'ServiceName', value: 'api' },
+        { key: 'SeverityText', value: 'error' },
+      ]);
+    });
+
+    it('stringifies a number group value', () => {
+      expect(entries([200], ['svc'])).toEqual([
+        { key: 'ServiceName', value: '200' },
+      ]);
+    });
+
+    it('returns nothing when a group column has no filter key', () => {
+      expect(entries(['api', 'x'], ['svc', 'unknown'])).toBeUndefined();
+    });
+
+    it('returns nothing for a null group value', () => {
+      expect(entries(['api', null], ['svc', 'SeverityText'])).toBeUndefined();
+    });
+
+    it('returns nothing for an object or array group value', () => {
+      expect(entries([{ a: '1' }], ['attrs'])).toBeUndefined();
+      expect(entries([['a', 1]], ['attrs'])).toBeUndefined();
+    });
+
+    it('returns nothing without a series or group columns', () => {
+      expect(
+        getSeriesFilterEntries({
+          line: undefined,
+          groupColumns: ['svc'],
+          filterKeyByColumn,
+        }),
+      ).toBeUndefined();
+      expect(entries([], [])).toBeUndefined();
+    });
+
+    it('returns the labels of a PromQL series, except __name__', () => {
+      const seriesName = 'up{job="api"}';
+      expect(
+        getSeriesFilterEntries({
+          line: { groupValues: [seriesName] },
+          groupColumns: ['series_name'],
+          filterKeyByColumn: new Map(),
+          promqlSeriesLabels: {
+            [seriesName]: { __name__: 'up', job: 'api', pod: 'a' },
+          },
+        }),
+      ).toEqual([
+        { key: 'job', value: 'api' },
+        { key: 'pod', value: 'a' },
+      ]);
     });
   });
 

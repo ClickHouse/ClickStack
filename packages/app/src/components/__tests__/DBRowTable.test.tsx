@@ -1,12 +1,52 @@
-import { screen, waitFor } from '@testing-library/react';
+import { Provider } from 'jotai';
+import type { ReactElement } from 'react';
+import type { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
+import { renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import {
   appendSelectWithAdditionalKeys,
+  getPersistedBlockColumns,
   RawLogTable,
+  useConfigWithAdditionalSelect,
 } from '@/components/DBRowTable';
 import * as useChartConfigModule from '@/hooks/useChartConfig';
-import { RowWhereResult } from '@/hooks/useRowWhere';
+import { RowWhereResult, WithClause } from '@/hooks/useRowWhere';
+import { RowClickAction, UserPreferences } from '@/useUserPreferences';
+
+const mockSetQueryState = jest.fn();
+
+// useConfigWithAdditionalSelect reads table metadata through react-query
+// hooks that return a large UseQueryResult; the hook only reads `data`.
+// Reading the handles back through `requireMock` keeps them typed as mocks
+// without asserting a complete UseQueryResult.
+jest.mock('@/hooks/useMetadata', () => ({
+  ...jest.requireActual('@/hooks/useMetadata'),
+  useTableMetadata: jest.fn(),
+  useColumns: jest.fn(),
+  useMergeTreeSettings: jest.fn(),
+}));
+
+const {
+  useTableMetadata: mockUseTableMetadata,
+  useColumns: mockUseColumns,
+  useMergeTreeSettings: mockUseMergeTreeSettings,
+} = jest.requireMock<{
+  useTableMetadata: jest.Mock;
+  useColumns: jest.Mock;
+  useMergeTreeSettings: jest.Mock;
+}>('@/hooks/useMetadata');
+
+// The inline expanded row reads the row query params through nuqs, which needs
+// a mounted Next router. Routing every setter through one mock lets tests assert
+// which param the expanded row's side panel button writes.
+jest.mock('nuqs', () => ({
+  ...jest.requireActual('nuqs'),
+  useQueryState: (key: string) => [
+    null,
+    (value: unknown) => mockSetQueryState(key, value),
+  ],
+}));
 
 const mockRowWhereResult: RowWhereResult = { where: '', aliasWith: [] };
 
@@ -42,6 +82,47 @@ describe('RawLogTable', () => {
     );
 
     expect(await screen.findByTestId('db-row-table-no-results')).toBeTruthy();
+  });
+
+  describe('Row selection', () => {
+    // Rows are virtualized and jsdom gives the scroll container no height, so
+    // only the header and the action bar are observable here. Checkbox clicks
+    // are covered by tests/e2e/features/search/row-multi-select.spec.ts.
+    const baseProps = {
+      displayedColumns: ['col1', 'col2'],
+      rows: [{ col1: 'value1', col2: 'value2' }],
+      isLoading: false,
+      dedupRows: false,
+      hasNextPage: false,
+      onRowDetailsClick: () => {},
+      generateRowId: () => mockRowWhereResult,
+      columnTypeMap: new Map(),
+      showExpandButton: false,
+    };
+
+    // The table is shared with dashboards, Kubernetes panels and side panels,
+    // none of which opt in.
+    it('adds no leading column unless selection is enabled', () => {
+      const { container } = renderWithMantine(<RawLogTable {...baseProps} />);
+
+      expect(container.querySelectorAll('th')).toHaveLength(2);
+    });
+
+    it('adds a leading header cell when selection is enabled', () => {
+      const { container } = renderWithMantine(
+        <RawLogTable {...baseProps} enableRowSelection />,
+      );
+
+      expect(container.querySelectorAll('th')).toHaveLength(3);
+    });
+
+    it('shows no selection menu before anything is selected', () => {
+      renderWithMantine(<RawLogTable {...baseProps} enableRowSelection />);
+
+      expect(
+        screen.queryByTestId('row-selection-count'),
+      ).not.toBeInTheDocument();
+    });
   });
 
   describe('Sorting', () => {
@@ -194,6 +275,268 @@ describe('RawLogTable', () => {
       const headers = container.querySelectorAll('th');
       expect(headers).toHaveLength(2);
       expect((headers[0] as HTMLElement).style.width).not.toBe('250px');
+    });
+  });
+
+  describe('Row click behavior', () => {
+    const ROW_ID = 'Timestamp = 1';
+    const VIEWPORT_HEIGHT = 900;
+
+    // The table is virtualized and jsdom performs no layout, so every element
+    // measures 0px and the virtualizer renders no rows at all. Fake just enough
+    // geometry for one screenful. Same approach as the MetricExplorer tests.
+    let rectSpy: jest.SpyInstance;
+    let clientHeightSpy: jest.SpyInstance;
+
+    beforeAll(() => {
+      rectSpy = jest
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          const height =
+            this.dataset.testid === 'search-results-table'
+              ? VIEWPORT_HEIGHT
+              : 23;
+          return {
+            width: 580,
+            height,
+            top: 0,
+            left: 0,
+            right: 580,
+            bottom: height,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+          };
+        });
+      clientHeightSpy = jest
+        .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+        .mockReturnValue(VIEWPORT_HEIGHT);
+    });
+
+    afterAll(() => {
+      rectSpy.mockRestore();
+      clientHeightSpy.mockRestore();
+    });
+
+    const baseProps = {
+      displayedColumns: ['col1'],
+      rows: [{ col1: 'value1' }],
+      isLoading: false,
+      dedupRows: false,
+      hasNextPage: false,
+      generateRowId: () => ({ where: ROW_ID, aliasWith: [] }),
+      getRowWhere: () => ({ where: ROW_ID, aliasWith: [] }),
+      columnTypeMap: new Map(),
+      renderRowDetails: () => <div>row details</div>,
+    };
+
+    // A fresh jotai store per render keeps the stored preference from leaking
+    // into the next test through the module-level preferences atom.
+    const renderTable = (ui: ReactElement, rowClickAction?: RowClickAction) => {
+      window.localStorage.clear();
+      if (rowClickAction) {
+        window.localStorage.setItem(
+          'hdx-user-preferences',
+          JSON.stringify({
+            colorMode: 'dark',
+            rowClickAction,
+          } satisfies Partial<UserPreferences>),
+        );
+      }
+      return renderWithMantine(<Provider>{ui}</Provider>);
+    };
+
+    it('opens the side panel on row click by default', async () => {
+      const onRowDetailsClick = jest.fn();
+
+      renderTable(
+        <RawLogTable {...baseProps} onRowDetailsClick={onRowDetailsClick} />,
+      );
+
+      await userEvent.click(
+        await screen.findByRole('button', {
+          name: 'View details for log entry',
+        }),
+      );
+
+      expect(onRowDetailsClick).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByTestId(`expanded-row-${ROW_ID}`),
+      ).not.toBeInTheDocument();
+      // A row click already opens the panel, so the hover button would be a
+      // second way to do the same thing.
+      expect(
+        screen.queryByRole('button', { name: 'Open in side panel' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('expands the row inline when its body is clicked', async () => {
+      const onRowDetailsClick = jest.fn();
+
+      renderTable(
+        <RawLogTable {...baseProps} onRowDetailsClick={onRowDetailsClick} />,
+        'expand',
+      );
+
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Expand log row' }),
+      );
+
+      const expandedRow = await screen.findByTestId(`expanded-row-${ROW_ID}`);
+      expect(expandedRow).toBeVisible();
+      expect(onRowDetailsClick).not.toHaveBeenCalled();
+
+      // The expanded row keeps the side panel one click away, via URL params
+      // rather than `onRowDetailsClick`.
+      await userEvent.click(
+        within(expandedRow).getByRole('button', {
+          name: 'Open in side panel',
+        }),
+      );
+
+      expect(mockSetQueryState).toHaveBeenCalledWith('rowWhere', ROW_ID);
+    });
+
+    // A table with its own `id` column must not overwrite the WHERE clause the
+    // expanded row queries with (#3370).
+    it('passes the row where clause to row details when the row has an id column', async () => {
+      const aliasWith: WithClause[] = [
+        {
+          name: 'body',
+          sql: { sql: 'Body', params: {} },
+          isSubquery: false,
+        },
+      ];
+      const renderRowDetails = jest.fn(() => <div>row details</div>);
+
+      renderTable(
+        <RawLogTable
+          {...baseProps}
+          rows={[
+            { col1: 'value1', id: 'a5c1334f-9b43-44db-abc3-3412220272dd.0.0' },
+          ]}
+          generateRowId={() => ({ where: ROW_ID, aliasWith })}
+          renderRowDetails={renderRowDetails}
+          onRowDetailsClick={() => {}}
+        />,
+        'expand',
+      );
+
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Expand log row' }),
+      );
+
+      await screen.findByTestId(`expanded-row-${ROW_ID}`);
+      expect(renderRowDetails).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: ROW_ID, aliasWith, col1: 'value1' }),
+      );
+    });
+
+    it('collapses an expanded row when its body is clicked again', async () => {
+      renderTable(
+        <RawLogTable {...baseProps} onRowDetailsClick={() => {}} />,
+        'expand',
+      );
+
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Expand log row' }),
+      );
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Collapse log row' }),
+      );
+
+      expect(
+        screen.queryByTestId(`expanded-row-${ROW_ID}`),
+      ).not.toBeInTheDocument();
+    });
+
+    it('opens the side panel from the row hover button', async () => {
+      const onRowDetailsClick = jest.fn();
+
+      renderTable(
+        <RawLogTable {...baseProps} onRowDetailsClick={onRowDetailsClick} />,
+        'expand',
+      );
+
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Open in side panel' }),
+      );
+
+      expect(onRowDetailsClick).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByTestId(`expanded-row-${ROW_ID}`),
+      ).not.toBeInTheDocument();
+    });
+
+    // The expanded row is rendered by the expand-button column, so tables that
+    // hide it have nowhere to put inline details.
+    it('opens the side panel on row click when the expand button is hidden', async () => {
+      const onRowDetailsClick = jest.fn();
+
+      renderTable(
+        <RawLogTable
+          {...baseProps}
+          showExpandButton={false}
+          onRowDetailsClick={onRowDetailsClick}
+        />,
+        'expand',
+      );
+
+      await userEvent.click(
+        await screen.findByRole('button', {
+          name: 'View details for log entry',
+        }),
+      );
+
+      expect(onRowDetailsClick).toHaveBeenCalledTimes(1);
+    });
+
+    // The ClickHouse dashboard's slow-query list renders inline details with no
+    // side panel behind them.
+    it('expands inline regardless of the preference when there is no side panel', async () => {
+      renderTable(<RawLogTable {...baseProps} />, 'sidePanel');
+
+      const rowBody = await screen.findByRole('button', {
+        name: 'Expand log row',
+      });
+      expect(
+        screen.queryByRole('button', { name: 'Open in side panel' }),
+      ).not.toBeInTheDocument();
+
+      await userEvent.click(rowBody);
+
+      expect(await screen.findByTestId(`expanded-row-${ROW_ID}`)).toBeVisible();
+      // The expanded row's maximize button would only write URL params nothing
+      // reads, so it stays hidden here too.
+      expect(
+        screen.queryByRole('button', { name: 'Open in side panel' }),
+      ).not.toBeInTheDocument();
+    });
+
+    // With the panel open it stays the active surface, so a row click moves it
+    // rather than expanding rows behind it.
+    it('moves the open side panel on row click instead of expanding', async () => {
+      const onRowDetailsClick = jest.fn();
+
+      renderTable(
+        <RawLogTable
+          {...baseProps}
+          highlightedLineId="some-other-row"
+          onRowDetailsClick={onRowDetailsClick}
+        />,
+        'expand',
+      );
+
+      await userEvent.click(
+        await screen.findByRole('button', {
+          name: 'View details for log entry',
+        }),
+      );
+
+      expect(onRowDetailsClick).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByTestId(`expanded-row-${ROW_ID}`),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -487,6 +830,453 @@ describe('appendSelectWithAdditionalKeys', () => {
       additionalKeysLength: 5,
       select:
         'Timestamp,ServiceName,Body,__hdx_id,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_number,_block_offset',
+    });
+  });
+});
+
+describe('getPersistedBlockColumns', () => {
+  const engine = (settings: string) =>
+    `MergeTree PARTITION BY toDate(Timestamp) ORDER BY (ServiceName, Timestamp) SETTINGS index_granularity = 8192${settings}`;
+
+  it('returns both block columns when both are persisted', () => {
+    expect(
+      getPersistedBlockColumns(
+        engine(
+          ', enable_block_number_column = 1, enable_block_offset_column = 1',
+        ),
+      ),
+    ).toEqual(['_block_number', '_block_offset']);
+  });
+
+  it('returns only _block_offset when only enable_block_offset_column is set', () => {
+    expect(
+      getPersistedBlockColumns(engine(', enable_block_offset_column = 1')),
+    ).toEqual(['_block_offset']);
+  });
+
+  it('returns only _block_number when only enable_block_number_column is set', () => {
+    expect(
+      getPersistedBlockColumns(engine(', enable_block_number_column = 1')),
+    ).toEqual(['_block_number']);
+  });
+
+  it('returns nothing when neither setting is present', () => {
+    expect(getPersistedBlockColumns(engine(''))).toEqual([]);
+    expect(getPersistedBlockColumns('')).toEqual([]);
+  });
+
+  it('accepts true as an enabled value', () => {
+    expect(
+      getPersistedBlockColumns(engine(', enable_block_offset_column = true')),
+    ).toEqual(['_block_offset']);
+  });
+
+  it('falls back to the server setting when the table does not set it', () => {
+    const serverSettings = new Map([
+      ['enable_block_number_column', '1'],
+      ['enable_block_offset_column', '1'],
+    ]);
+    expect(getPersistedBlockColumns(engine(''), serverSettings)).toEqual([
+      '_block_number',
+      '_block_offset',
+    ]);
+    expect(
+      getPersistedBlockColumns(
+        engine(', enable_block_number_column = 1'),
+        new Map([['enable_block_offset_column', '1']]),
+      ),
+    ).toEqual(['_block_number', '_block_offset']);
+  });
+
+  it('prefers the table setting over the server setting', () => {
+    expect(
+      getPersistedBlockColumns(
+        engine(', enable_block_number_column = 0'),
+        new Map([
+          ['enable_block_number_column', '1'],
+          ['enable_block_offset_column', '0'],
+        ]),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('useConfigWithAdditionalSelect', () => {
+  const config: BuilderChartConfigWithDateRange = {
+    connection: 'conn',
+    from: { databaseName: 'default', tableName: 'otel_logs' },
+    select: 'Timestamp, ServiceName, Body',
+    where: '',
+    whereLanguage: 'sql',
+    timestampValueExpression: 'Timestamp',
+    dateRange: [new Date(0), new Date(1)],
+  };
+
+  const mockMetadata = ({
+    engine = 'MergeTree',
+    engineFull,
+    columns = [],
+    mergeTreeSettings = new Map(),
+    isMergeTreeSettingsLoading = false,
+  }: {
+    engine?: string;
+    engineFull: string;
+    columns?: { name: string; type: string }[];
+    mergeTreeSettings?: Map<string, string>;
+    isMergeTreeSettingsLoading?: boolean;
+  }) => {
+    mockUseTableMetadata.mockReturnValue({
+      data: {
+        primary_key: 'toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp',
+        partition_key: 'toDate(Timestamp)',
+        engine,
+        engine_full: engineFull,
+      },
+    });
+    mockUseColumns.mockReturnValue({ data: columns });
+    // react-query never reports a disabled query as loading
+    mockUseMergeTreeSettings.mockImplementation(
+      (_connectionId: string, { enabled }: { enabled: boolean }) => ({
+        data: isMergeTreeSettingsLoading ? undefined : mergeTreeSettings,
+        isLoading: enabled && isMergeTreeSettingsLoading,
+      }),
+    );
+  };
+
+  afterEach(() => {
+    mockUseTableMetadata.mockReset();
+    mockUseColumns.mockReset();
+    mockUseMergeTreeSettings.mockReset();
+  });
+
+  it('keeps the full-row lookup, with _block_offset as a tiebreaker, when only the offset column is persisted', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree PARTITION BY toDate(Timestamp) ORDER BY (toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp) SETTINGS index_granularity = 8192, enable_block_offset_column = 1',
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_offset',
+    );
+    expect(result.current?.additionalKeysLength).toBe(3);
+    expect(result.current?.rowKeyColumns).toBeUndefined();
+  });
+
+  it('keeps the full-row lookup, with _block_number as a tiebreaker, when only the number column is persisted', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree ORDER BY Timestamp SETTINGS enable_block_number_column = 1',
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_number',
+    );
+    expect(result.current?.rowKeyColumns).toBeUndefined();
+  });
+
+  it('restricts the row lookup to PK + both block columns when both are persisted', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree ORDER BY Timestamp SETTINGS enable_block_number_column = 1, enable_block_offset_column = 1',
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_number,_block_offset',
+    );
+    expect(result.current?.rowKeyColumns).toEqual(
+      new Set([
+        'toDate(Timestamp)',
+        'toStartOfFiveMinutes(Timestamp)',
+        'ServiceName',
+        'Timestamp',
+        '_block_number',
+        '_block_offset',
+      ]),
+    );
+    expect(result.current?.rowKeyColumns?.has('Body')).toBe(false);
+  });
+
+  // The OTel exporter's default otel_logs omits both settings and keys on a
+  // second-precision TimestampTime, so PK + a server-enabled _block_offset is
+  // not unique.
+  it('keeps the full-row lookup when only the server enables _block_offset', () => {
+    mockUseTableMetadata.mockReturnValue({
+      data: {
+        primary_key: 'ServiceName, TimestampTime',
+        partition_key: 'toDate(TimestampTime)',
+        engine: 'SharedMergeTree',
+        engine_full:
+          "SharedMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}') PARTITION BY toDate(TimestampTime) PRIMARY KEY (ServiceName, TimestampTime) ORDER BY (ServiceName, TimestampTime, Timestamp) SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1",
+      },
+    });
+    mockUseColumns.mockReturnValue({ data: [] });
+    mockUseMergeTreeSettings.mockReturnValue({
+      data: new Map([
+        ['enable_block_number_column', '0'],
+        ['enable_block_offset_column', '1'],
+      ]),
+      isLoading: false,
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(mockUseMergeTreeSettings).toHaveBeenCalledWith('conn', {
+      enabled: true,
+    });
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,TimestampTime,toDate(TimestampTime),_block_offset',
+    );
+    expect(result.current?.rowKeyColumns).toBeUndefined();
+  });
+
+  it('keeps __hdx_id alongside a lone block column in the full-row lookup', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree ORDER BY Timestamp SETTINGS enable_block_offset_column = 1',
+      columns: [{ name: '__hdx_id', type: 'String' }],
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_offset,__hdx_id',
+    );
+    expect(result.current?.rowKeyColumns).toBeUndefined();
+  });
+
+  it('does not add __hdx_id when both block columns are persisted', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree ORDER BY Timestamp SETTINGS enable_block_number_column = 1, enable_block_offset_column = 1',
+      columns: [{ name: '__hdx_id', type: 'String' }],
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_number,_block_offset',
+    );
+    expect(result.current?.rowKeyColumns?.has('__hdx_id')).toBe(false);
+  });
+
+  it('falls back to __hdx_id and the full row when no block column is persisted', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree ORDER BY Timestamp SETTINGS index_granularity = 8192',
+      columns: [{ name: '__hdx_id', type: 'String' }],
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),__hdx_id',
+    );
+    expect(result.current?.rowKeyColumns).toBeUndefined();
+  });
+
+  it('ignores block columns for aggregate queries without a sourceId', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree ORDER BY Timestamp SETTINGS enable_block_offset_column = 1',
+    });
+
+    const { result } = renderHook(() => useConfigWithAdditionalSelect(config));
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp)',
+    );
+    expect(result.current?.rowKeyColumns).toBeUndefined();
+  });
+
+  it('uses the server MergeTree settings when the table does not set them', () => {
+    mockMetadata({
+      engine: 'SharedMergeTree',
+      engineFull:
+        'SharedMergeTree ORDER BY Timestamp SETTINGS index_granularity = 8192',
+      mergeTreeSettings: new Map([
+        ['enable_block_number_column', '1'],
+        ['enable_block_offset_column', '1'],
+      ]),
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_number,_block_offset',
+    );
+    expect(result.current?.rowKeyColumns?.has('_block_number')).toBe(true);
+    expect(result.current?.rowKeyColumns?.has('_block_offset')).toBe(true);
+  });
+
+  it('ignores the server MergeTree settings for non-MergeTree engines', () => {
+    mockMetadata({
+      engine: 'Merge',
+      engineFull: "Merge('default', '^otel_logs')",
+      mergeTreeSettings: new Map([['enable_block_number_column', '1']]),
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(mockUseMergeTreeSettings).toHaveBeenCalledWith('conn', {
+      enabled: false,
+    });
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp)',
+    );
+    expect(result.current?.rowKeyColumns).toBeUndefined();
+  });
+
+  it('skips the server MergeTree settings when the table sets both', () => {
+    mockMetadata({
+      engineFull:
+        'MergeTree ORDER BY Timestamp SETTINGS enable_block_number_column = 0, enable_block_offset_column = 0',
+      mergeTreeSettings: new Map([
+        ['enable_block_number_column', '1'],
+        ['enable_block_offset_column', '1'],
+      ]),
+      isMergeTreeSettingsLoading: true,
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(mockUseMergeTreeSettings).toHaveBeenCalledWith('conn', {
+      enabled: false,
+    });
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp)',
+    );
+  });
+
+  it('waits for the server MergeTree settings before returning a config', () => {
+    mockMetadata({
+      engineFull: 'MergeTree ORDER BY Timestamp',
+      isMergeTreeSettingsLoading: true,
+    });
+
+    const { result, rerender } = renderHook(() =>
+      useConfigWithAdditionalSelect(config, 'source-id'),
+    );
+
+    expect(mockUseMergeTreeSettings).toHaveBeenCalledWith('conn', {
+      enabled: true,
+    });
+    expect(result.current).toBeUndefined();
+
+    mockMetadata({
+      engineFull: 'MergeTree ORDER BY Timestamp',
+      mergeTreeSettings: new Map([['enable_block_offset_column', '1']]),
+    });
+    rerender();
+
+    expect(result.current?.select).toBe(
+      'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_offset',
+    );
+  });
+
+  describe('with a row key expression', () => {
+    const metadataLoading = () => {
+      mockUseTableMetadata.mockReturnValue({ data: undefined });
+      mockUseColumns.mockReturnValue({ data: undefined });
+      mockUseMergeTreeSettings.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+      });
+    };
+
+    it('restricts the row lookup to the listed columns', () => {
+      metadataLoading();
+
+      const { result } = renderHook(() =>
+        useConfigWithAdditionalSelect(
+          config,
+          'source-id',
+          'ServiceName, Timestamp, _block_number, _block_offset',
+        ),
+      );
+
+      expect(result.current?.select).toBe(
+        'Timestamp,ServiceName,Body,_block_number,_block_offset',
+      );
+      expect(result.current?.additionalKeysLength).toBe(2);
+      expect(result.current?.rowKeyColumns).toEqual(
+        new Set(['ServiceName', 'Timestamp', '_block_number', '_block_offset']),
+      );
+      expect(result.current?.rowKeyColumns?.has('Body')).toBe(false);
+    });
+
+    it('returns a config without waiting for table metadata or settings', () => {
+      metadataLoading();
+
+      const { result } = renderHook(() =>
+        useConfigWithAdditionalSelect(
+          config,
+          'source-id',
+          'Timestamp, _block_number, _block_offset',
+        ),
+      );
+
+      expect(mockUseTableMetadata).toHaveBeenCalledWith(expect.anything(), {
+        enabled: false,
+      });
+      expect(mockUseColumns).toHaveBeenCalledWith(expect.anything(), {
+        enabled: false,
+      });
+      expect(mockUseMergeTreeSettings).toHaveBeenCalledWith('conn', {
+        enabled: false,
+      });
+      expect(result.current).toBeDefined();
+    });
+
+    it('does not split inside function calls', () => {
+      metadataLoading();
+
+      const { result } = renderHook(() =>
+        useConfigWithAdditionalSelect(
+          config,
+          'source-id',
+          'toYYYYMM(event_date), service, _block_number, _block_offset',
+        ),
+      );
+
+      expect(result.current?.select).toBe(
+        'Timestamp,ServiceName,Body,event_date,service,_block_number,_block_offset,toYYYYMM(event_date)',
+      );
+      expect(result.current?.additionalKeysLength).toBe(5);
+      expect(result.current?.rowKeyColumns).toEqual(
+        new Set([
+          'toYYYYMM(event_date)',
+          'service',
+          '_block_number',
+          '_block_offset',
+          'event_date',
+        ]),
+      );
     });
   });
 });

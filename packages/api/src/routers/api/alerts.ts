@@ -23,15 +23,22 @@ import {
   deleteAlert,
   getAlertById,
   getAlertEnhanced,
-  getAlertsEnhanced,
+  silenceAlert,
+  unsilenceAlert,
   updateAlert,
   validateAlertInput,
 } from '@/controllers/alerts';
+import { alertsPageQuerySchema, getAlertsPage } from '@/controllers/alertsPage';
 import { AlertSource, getAlertChannels } from '@/models/alert';
 import { IAlertHistory } from '@/models/alertHistory';
 import { resolveAlertDisplayFields } from '@/utils/alerts';
+import { setBusinessContext } from '@/utils/instrumentation';
 import { PreSerialized, sendJson } from '@/utils/serialization';
-import { internalAlertSchema, objectIdSchema } from '@/utils/zod';
+import {
+  internalAlertSchema,
+  mutedUntilSchema,
+  objectIdSchema,
+} from '@/utils/zod';
 
 const router = express.Router();
 
@@ -79,31 +86,24 @@ const formatAlertResponse = (
     ...(alert.dashboard && {
       dashboardId: alert.dashboard._id,
       dashboard: {
+        name: alert.dashboard.name,
         tiles: alert.dashboard.tiles
           .filter(tile => tile.id === alert.tileId)
           .map(tile => ({
             id: tile.id,
-            config: { name: tile.config.name },
+            config: { name: tile.config?.name },
           })),
-        ...pick(alert.dashboard, ['_id', 'updatedAt', 'name', 'tags']),
       },
     }),
     ...(alert.savedSearch && {
       savedSearchId: alert.savedSearch._id,
-      savedSearch: pick(alert.savedSearch, [
-        '_id',
-        'createdAt',
-        'name',
-        'updatedAt',
-        'tags',
-      ]),
+      savedSearch: { name: alert.savedSearch.name },
     }),
     // Inline alerts carry their persisted config so edit surfaces can seed
     // the chart editor and the detail page can render the query — but only on
-    // the single-alert response. The list endpoint is unpaginated, so
-    // attaching every alert's full config (raw SQL templates included) would
-    // bloat every alerts-page load and create a contract that couldn't be
-    // paginated away later.
+    // the single-alert response. Attaching every alert's full config (raw SQL
+    // templates included) would bloat the list; surfaces that need it fetch
+    // the one alert.
     ...(includeChartConfig &&
       alert.chartConfig && { chartConfig: alert.chartConfig }),
     ...pick(alert, [
@@ -130,33 +130,47 @@ const formatAlertResponse = (
 };
 
 type AlertsExpRes = express.Response<AlertsApiResponse>;
-router.get('/', async (req, res: AlertsExpRes, next) => {
-  try {
-    const teamId = req.user?.team;
-    if (teamId == null) {
-      return res.sendStatus(403);
+router.get(
+  '/',
+  processRequest({ query: alertsPageQuerySchema }),
+  async (req, res: AlertsExpRes, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.sendStatus(403);
+      }
+
+      const params = alertsPageQuerySchema.parse(req.query ?? {});
+      const {
+        data: alerts,
+        hasMore,
+        nextCursor,
+      } = await getAlertsPage(teamId, params);
+
+      setBusinessContext({
+        'hyperdx.alerts.list.page_size': alerts.length,
+        'hyperdx.alerts.list.limit': params.limit,
+      });
+
+      const historyMap = await getRecentAlertHistoriesBatch(
+        alerts.map(alert => ({
+          alertId: new ObjectId(alert._id),
+          interval: alert.interval,
+        })),
+        20,
+      );
+
+      const data = alerts.map(alert => {
+        const history = historyMap.get(alert._id.toString()) ?? [];
+        return formatAlertResponse(alert, history);
+      });
+
+      sendJson(res, { data, hasMore, ...(nextCursor && { nextCursor }) });
+    } catch (e) {
+      next(e);
     }
-
-    const alerts = await getAlertsEnhanced(teamId);
-
-    const historyMap = await getRecentAlertHistoriesBatch(
-      alerts.map(alert => ({
-        alertId: new ObjectId(alert._id),
-        interval: alert.interval,
-      })),
-      20,
-    );
-
-    const data = alerts.map(alert => {
-      const history = historyMap.get(alert._id.toString()) ?? [];
-      return formatAlertResponse(alert, history);
-    });
-
-    sendJson(res, { data });
-  } catch (e) {
-    next(e);
-  }
-});
+  },
+);
 
 type AlertExpRes = express.Response<AlertApiResponse>;
 router.get(
@@ -390,12 +404,7 @@ router.post(
   '/:id/silenced',
   validateRequest({
     body: z.object({
-      mutedUntil: z
-        .string()
-        .datetime()
-        .refine(val => new Date(val) > new Date(), {
-          message: 'mutedUntil must be in the future',
-        }),
+      mutedUntil: mutedUntilSchema,
     }),
     params: z.object({
       id: objectIdSchema,
@@ -408,16 +417,15 @@ router.post(
         return res.sendStatus(403);
       }
 
-      const alert = await getAlertById(req.params.id, teamId);
+      const alert = await silenceAlert(
+        req.params.id,
+        teamId,
+        req.user._id,
+        new Date(req.body.mutedUntil),
+      );
       if (!alert) {
         return res.status(404).json({ error: 'Alert not found' });
       }
-      alert.silenced = {
-        by: req.user._id,
-        at: new Date(),
-        until: new Date(req.body.mutedUntil),
-      };
-      await alert.save();
 
       res.sendStatus(200);
     } catch (e) {
@@ -440,12 +448,10 @@ router.delete(
         return res.sendStatus(403);
       }
 
-      const alert = await getAlertById(req.params.id, teamId);
+      const alert = await unsilenceAlert(req.params.id, teamId);
       if (!alert) {
         return res.status(404).json({ error: 'Alert not found' });
       }
-      alert.silenced = undefined;
-      await alert.save();
 
       res.sendStatus(200);
     } catch (e) {

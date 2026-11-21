@@ -42,11 +42,27 @@ $transition-slow: 0.2s ease;
 .navGhost {
   transition: width 0.2s ease;
   will-change: width;
+  flex-shrink: 0;
+}
+
+// Covers the page while the rail's full nav is open on a compact viewport.
+// Dimming sits one layer below the nav, in the same layer as top-level drawers.
+.navScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  border: 0;
+  padding: 0;
+  background: rgb(0 0 0 / 40%);
+  cursor: pointer;
 }
 
 .nav {
-  height: 100vh;
-  max-height: 100vh;
+  // Matches the app shell. The overlay nav is position: fixed with body scroll
+  // locked, so anything laid out past the small viewport is unreachable on a
+  // phone. See --app-viewport-height in styles/globals.css.
+  height: var(--app-viewport-height);
+  max-height: var(--app-viewport-height);
   display: flex;
   flex-flow: column nowrap;
   justify-content: space-between;
@@ -58,6 +74,22 @@ $transition-slow: 0.2s ease;
 
   &Fixed {
     position: fixed;
+  }
+
+  // Same layer as a top-level drawer (`contextZIndex + 10` from
+  // ZIndexContext, see DBRowSidePanel). The scrim is one below. PageHeader
+  // itself is z-index 2, so this covers the page chrome.
+  &Overlay {
+    top: 0;
+    left: 0;
+    z-index: 10;
+    box-shadow: 4px 0 16px rgb(0 0 0 / 25%);
+  }
+
+  // Closing the overlay drops the nav back into the flow. Animating its width
+  // from the overlay width would push the page content sideways first.
+  &CompactRail {
+    transition: none;
   }
 
   &Collapsed {
@@ -109,6 +141,11 @@ $transition-slow: 0.2s ease;
   align-items: center;
   justify-content: center;
   color: var(--color-text);
+
+  // Shrinkable (not growable) so a long label can still ellipsis when the
+  // sidebar is narrow, without stretching this link to fill the empty
+  // header space next to it (that space shouldn't be part of the link).
+  min-width: 0;
 }
 
 .logoIconWrapper {
@@ -118,15 +155,43 @@ $transition-slow: 0.2s ease;
 }
 
 .collapseButton {
-  margin-right: -$spacing-xs;
-  margin-left: -$spacing-xs;
+  /* Click UI token names are camelCase. */
+  /* stylelint-disable custom-property-pattern */
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: var(--click-button-iconButton-sm-space-y)
+    var(--click-button-iconButton-sm-space-x);
+  border: var(--click-button-stroke) solid
+    var(--click-button-iconButton-color-primary-stroke-default);
+  border-radius: var(--click-button-iconButton-radii-all);
+  background: var(--click-button-iconButton-color-primary-background-default);
+  color: var(--click-button-iconButton-color-primary-text-default);
+  cursor: pointer;
+  line-height: 0;
+
+  svg {
+    width: var(--click-image-sm-size-width);
+    height: var(--click-image-sm-size-height);
+  }
+
+  &:hover {
+    border-color: var(--click-button-iconButton-color-primary-stroke-hover);
+    background: var(--click-button-iconButton-color-primary-background-hover);
+    color: var(--click-button-iconButton-color-primary-text-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--click-global-color-outline-default);
+    outline-offset: 2px;
+  }
 
   &Collapsed {
     transform: rotate(180deg);
-    margin-top: 0;
-    margin-right: 0;
-    margin-left: 0;
   }
+  /* stylelint-enable custom-property-pattern */
 }
 
 .scrollContainer {

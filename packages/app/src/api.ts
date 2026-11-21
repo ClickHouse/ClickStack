@@ -2,20 +2,32 @@ import { useCallback } from 'react';
 import Router from 'next/router';
 import type { HTTPError, Options, ResponsePromise } from 'ky';
 import ky from 'ky-universal';
+import {
+  buildLogComment,
+  QUERY_ATTRIBUTION_HEADER,
+  type QueryAttribution,
+} from '@hyperdx/common-utils/dist/clickhouse';
 import type {
   Alert,
   AlertApiResponse,
   AlertEvaluationsApiResponse,
   AlertHistoryRangeApiResponse,
   AlertsApiResponse,
+  CreateOrgApiKeyApiResponse,
+  CreateOrgApiKeyRequest,
   InstallationApiResponse,
   MeApiResponse,
   OnboardingDataApiResponse,
   OnboardingTaskId,
+  OrgApiKeyApiResponse,
+  OrgApiKeysApiResponse,
   PresetDashboard,
   PresetDashboardFilter,
+  PrometheusMatrixResult,
+  PrometheusVectorResult,
   RotateAccessKeyApiResponse,
   RotateApiKeyApiResponse,
+  TagResourceType,
   TeamApiResponse,
   TeamClickHouseSettingsUpdate,
   TeamInvitationsApiResponse,
@@ -27,7 +39,9 @@ import type {
   WebhookTestApiResponse,
   WebhookUpdateApiResponse,
 } from '@hyperdx/common-utils/dist/types';
+import { AlertSource, AlertState } from '@hyperdx/common-utils/dist/types';
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -36,6 +50,7 @@ import {
 
 import { IS_LOCAL_MODE } from './config';
 import { getLocalDashboardTags } from './dashboard';
+import { getLocalSavedSearchTags } from './savedSearch';
 type ServicesResponse = {
   data: Record<
     string,
@@ -76,6 +91,8 @@ const server = ky.create({
   },
   timeout: false,
 });
+
+const ORG_API_KEYS_QUERY_KEY = ['team', 'api-keys'];
 
 export const hdxServer = (
   url: string,
@@ -155,9 +172,65 @@ export function useMarkOnboardingTaskComplete() {
   );
 }
 
+const ALERTS_PAGE_SIZE = 100;
+
+type AlertsQueryParams = {
+  /** Case-insensitive substring of the alert's display name. */
+  search?: string | null;
+  tag?: string | null;
+  source?: AlertSource | null;
+  state?: AlertState | null;
+  /** A user id; narrows the list to alerts that user created. */
+  createdBy?: string | null;
+};
+
+/**
+ * Drops blank filters so the query key is a function of what is actually sent:
+ * the several spellings of "no filter" (`undefined`, `null`, `''`) can't each
+ * open their own cache entry.
+ */
+function normalizeAlertsQueryParams(params: AlertsQueryParams) {
+  const search = params.search?.trim();
+  return {
+    ...(search ? { search } : {}),
+    ...(params.tag ? { tag: params.tag } : {}),
+    ...(params.source ? { source: params.source } : {}),
+    ...(params.state ? { state: params.state } : {}),
+    ...(params.createdBy ? { createdBy: params.createdBy } : {}),
+  };
+}
+
+const TAGS_QUERY_KEY_PREFIX = ['team/tags'] as const;
+
+/** Invalidates every cached tag list */
+export function useInvalidateTags() {
+  const queryClient = useQueryClient();
+  return useCallback(
+    () => queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY_PREFIX }),
+    [queryClient],
+  );
+}
+
+/**
+ * Tags on locally persisted resources. Alerts are cloud-only, so local mode
+ * never has alert tags.
+ */
+function getLocalTags(resourceType?: TagResourceType): string[] {
+  const tags = [
+    ...(resourceType == null || resourceType === 'dashboard'
+      ? getLocalDashboardTags()
+      : []),
+    ...(resourceType == null || resourceType === 'savedSearch'
+      ? getLocalSavedSearchTags()
+      : []),
+  ];
+  return Array.from(new Set(tags));
+}
+
 const api = {
   useCreateAlert() {
     const markOnboardingTaskComplete = useMarkOnboardingTaskComplete();
+    const invalidateTags = useInvalidateTags();
     return useMutation<{ data: Alert }, Error, Alert>({
       mutationFn: async alert =>
         server('alerts', {
@@ -166,6 +239,7 @@ const api = {
         }).json(),
       // Backend records the task; just sync the cache.
       onSuccess: () => {
+        invalidateTags();
         if (!IS_LOCAL_MODE) {
           markOnboardingTaskComplete('alert');
         }
@@ -174,6 +248,7 @@ const api = {
   },
   useUpdateAlert() {
     const markOnboardingTaskComplete = useMarkOnboardingTaskComplete();
+    const invalidateTags = useInvalidateTags();
     return useMutation<{ data: Alert }, Error, { id: string } & Alert>({
       mutationFn: async alert =>
         server(`alerts/${alert.id}`, {
@@ -181,6 +256,7 @@ const api = {
           json: alert,
         }).json(),
       onSuccess: () => {
+        invalidateTags();
         if (!IS_LOCAL_MODE) {
           markOnboardingTaskComplete('alert');
         }
@@ -188,11 +264,15 @@ const api = {
     });
   },
   useDeleteAlert() {
+    const invalidateTags = useInvalidateTags();
     return useMutation<void, Error, string>({
       mutationFn: async (alertId: string) => {
         await server(`alerts/${alertId}`, {
           method: 'DELETE',
         });
+      },
+      onSuccess: () => {
+        invalidateTags();
       },
     });
   },
@@ -269,10 +349,26 @@ const api = {
   getAlertsQueryKey: () => ['alerts'] as const,
   getAlertQueryKey: (alertId: string | undefined) =>
     ['alert', alertId] as const,
-  useAlerts() {
-    return useQuery({
-      queryKey: api.getAlertsQueryKey(),
-      queryFn: () => hdxServer(`alerts`).json<AlertsApiResponse>(),
+  useAlerts(
+    params: AlertsQueryParams = {},
+    { enabled = true }: { enabled?: boolean } = {},
+  ) {
+    const normalized = normalizeAlertsQueryParams(params);
+    return useInfiniteQuery({
+      enabled,
+      queryKey: ['alerts', normalized] as const,
+      queryFn: ({ pageParam: cursor }) =>
+        hdxServer(`alerts`, {
+          searchParams: {
+            limit: ALERTS_PAGE_SIZE,
+            ...normalized,
+            ...(cursor != null && { cursor }),
+          },
+        }).json<AlertsApiResponse>(),
+      initialPageParam: undefined as string | undefined,
+      getNextPageParam: lastPage =>
+        lastPage.hasMore ? lastPage.nextCursor : undefined,
+      placeholderData: keepPreviousData,
     });
   },
   useAlert(alertId: string | undefined) {
@@ -353,11 +449,17 @@ const api = {
     });
   },
   useRotateTeamApiKey() {
+    const queryClient = useQueryClient();
     return useMutation<RotateApiKeyApiResponse, Error | HTTPError>({
       mutationFn: async () =>
         hdxServer(`team/apiKey`, {
           method: 'PATCH',
         }).json<RotateApiKeyApiResponse>(),
+      // The API key exists on both the me and team response
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['me'] });
+        queryClient.invalidateQueries({ queryKey: ['team'] });
+      },
     });
   },
   useRotatePersonalAccessKey() {
@@ -376,6 +478,53 @@ const api = {
           prev == null ? prev : { ...prev, accessKey: data.newAccessKey },
         );
       },
+    });
+  },
+  useOrgApiKeys() {
+    return useQuery<OrgApiKeysApiResponse>({
+      queryKey: ORG_API_KEYS_QUERY_KEY,
+      queryFn: () => hdxServer('team/api-keys').json<OrgApiKeysApiResponse>(),
+    });
+  },
+  useCreateOrgApiKey() {
+    const queryClient = useQueryClient();
+    return useMutation<
+      CreateOrgApiKeyApiResponse,
+      Error | HTTPError,
+      CreateOrgApiKeyRequest
+    >({
+      mutationFn: async json =>
+        hdxServer('team/api-keys', {
+          method: 'POST',
+          json,
+        }).json<CreateOrgApiKeyApiResponse>(),
+      onSuccess: () =>
+        queryClient.invalidateQueries({ queryKey: ORG_API_KEYS_QUERY_KEY }),
+    });
+  },
+  useUpdateOrgApiKey() {
+    const queryClient = useQueryClient();
+    return useMutation<
+      OrgApiKeyApiResponse,
+      Error | HTTPError,
+      { id: string; description: string }
+    >({
+      mutationFn: async ({ id, description }) =>
+        hdxServer(`team/api-keys/${id}`, {
+          method: 'PATCH',
+          json: { description },
+        }).json<OrgApiKeyApiResponse>(),
+      onSuccess: () =>
+        queryClient.invalidateQueries({ queryKey: ORG_API_KEYS_QUERY_KEY }),
+    });
+  },
+  useDeleteOrgApiKey() {
+    const queryClient = useQueryClient();
+    return useMutation<unknown, Error | HTTPError, { id: string }>({
+      mutationFn: async ({ id }) =>
+        hdxServer(`team/api-keys/${id}`, { method: 'DELETE' }),
+      onSuccess: () =>
+        queryClient.invalidateQueries({ queryKey: ORG_API_KEYS_QUERY_KEY }),
     });
   },
   useDismissOnboarding() {
@@ -458,6 +607,8 @@ const api = {
         }
         return hdxServer(`me`).json<MeApiResponse>();
       },
+      staleTime: 1000 * 60,
+      refetchOnWindowFocus: 'always',
     });
   },
   useTeam() {
@@ -479,12 +630,18 @@ const api = {
     });
   },
   useSetTeamName() {
+    const queryClient = useQueryClient();
     return useMutation<{ name: string }, HTTPError, { name: string }>({
       mutationFn: async ({ name }) =>
         hdxServer(`team/name`, {
           method: 'PATCH',
           json: { name },
         }).json<{ name: string }>(),
+      // The name lives in both the `team` and `me` responses
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['me'] });
+        queryClient.invalidateQueries({ queryKey: ['team'] });
+      },
     });
   },
   useUpdateClickhouseSettings() {
@@ -500,15 +657,22 @@ const api = {
         }).json<UpdateClickHouseSettingsApiResponse>(),
     });
   },
-  useTags() {
+  getTagsQueryKey: (resourceType?: TagResourceType) =>
+    [...TAGS_QUERY_KEY_PREFIX, resourceType ?? null] as const,
+  /** Tags that have been added to resources, optionally narrowed to one resource type. */
+  useTags(resourceType?: TagResourceType) {
     return useQuery({
-      queryKey: [`team/tags`],
+      queryKey: api.getTagsQueryKey(resourceType),
       queryFn: IS_LOCAL_MODE
-        ? async () => ({ data: getLocalDashboardTags() })
-        : () => hdxServer(`team/tags`).json<TeamTagsApiResponse>(),
+        ? async () => ({ data: getLocalTags(resourceType) })
+        : () =>
+            hdxServer('team/tags', {
+              searchParams: resourceType ? { resourceType } : undefined,
+            }).json<TeamTagsApiResponse>(),
     });
   },
   useSaveWebhook() {
+    const queryClient = useQueryClient();
     return useMutation<
       WebhookCreateApiResponse,
       Error | HTTPError,
@@ -517,6 +681,7 @@ const api = {
         url: string;
         name: string;
         description: string;
+        titleEmoji?: boolean;
         queryParams?: Record<string, string>;
         headers?: Record<string, string>;
         body?: string;
@@ -527,6 +692,7 @@ const api = {
         url,
         name,
         description,
+        titleEmoji,
         queryParams,
         headers,
         body,
@@ -538,14 +704,19 @@ const api = {
             service,
             url,
             description,
+            titleEmoji,
             queryParams: queryParams || {},
             headers: headers || {},
             body,
           },
         }).json<WebhookCreateApiResponse>(),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['webhooks'] });
+      },
     });
   },
   useUpdateWebhook() {
+    const queryClient = useQueryClient();
     return useMutation<
       WebhookUpdateApiResponse,
       Error | HTTPError,
@@ -555,6 +726,7 @@ const api = {
         url: string;
         name: string;
         description: string;
+        titleEmoji?: boolean;
         queryParams?: Record<string, string>;
         headers?: Record<string, string>;
         body?: string;
@@ -566,6 +738,7 @@ const api = {
         url,
         name,
         description,
+        titleEmoji,
         queryParams,
         headers,
         body,
@@ -577,24 +750,31 @@ const api = {
             service,
             url,
             description,
+            titleEmoji,
             queryParams: queryParams || {},
             headers: headers || {},
             body,
           },
         }).json<WebhookUpdateApiResponse>(),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['webhooks'] });
+      },
     });
   },
   useWebhooks(services: string[]) {
     return useQuery<WebhooksApiResponse, Error>({
-      queryKey: [...services],
+      // Prefixed so webhook mutations can invalidate every service variant.
+      queryKey: ['webhooks', ...services],
       queryFn: () =>
         hdxServer('webhooks', {
           method: 'GET',
           searchParams: [...services.map(service => ['service', service])],
         }).json<WebhooksApiResponse>(),
+      staleTime: 1000 * 60,
     });
   },
   useDeleteWebhook() {
+    const queryClient = useQueryClient();
     return useMutation<
       Record<string, never>,
       Error | HTTPError,
@@ -604,6 +784,9 @@ const api = {
         hdxServer(`webhooks/${id}`, {
           method: 'DELETE',
         }).json(),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['webhooks'] });
+      },
     });
   },
   useTestWebhook() {
@@ -680,17 +863,30 @@ export default api;
 // --------------------------
 // Prometheus API
 // --------------------------
-type PrometheusMetric = Record<string, string>;
-type PrometheusMatrixResult = {
-  metric: PrometheusMetric;
-  values: [number, string][];
-};
-type PrometheusQueryRangeResponse = {
+export type PrometheusQueryRangeResponse = {
   status: 'success' | 'error';
   data?: {
     resultType: 'matrix';
     result: PrometheusMatrixResult[];
   };
+  error?: string;
+};
+/**
+ * An instant query's result. `vector` carries one sample per series; `scalar`
+ * is a bare sample with no labels at all, which `scalar(...)`, `1 + 1` and
+ * `time()` all return.
+ *
+ * `matrix` is reachable here too -- a range-vector selector (`up[5m]`) or a
+ * subquery evaluates to one even on this endpoint -- and carries a series of
+ * samples rather than a single value. `string` carries nothing numeric.
+ */
+export type PrometheusInstantQueryResponse = {
+  status: 'success' | 'error';
+  data?:
+    | { resultType: 'vector'; result: PrometheusVectorResult[] }
+    | { resultType: 'scalar'; result: [number, string] }
+    | { resultType: 'matrix'; result: PrometheusMatrixResult[] }
+    | { resultType: 'string'; result: unknown };
   error?: string;
 };
 type PrometheusLabelsResponse = {
@@ -730,11 +926,28 @@ const uniqueLabels = (
 ): PrometheusLabelsResponse =>
   resp.data ? { ...resp, data: [...new Set(resp.data)] } : resp;
 
+const attributionHeaders = (
+  attribution: QueryAttribution | undefined,
+): Record<string, string> | undefined => {
+  const logComment = buildLogComment(attribution);
+  return logComment ? { [QUERY_ATTRIBUTION_HEADER]: logComment } : undefined;
+};
+
 const prometheusFetch = <T>(
   path: string,
   searchParams: Record<string, string>,
+  signal?: AbortSignal,
+  attribution?: QueryAttribution,
 ): Promise<T> =>
-  withPrometheusError(() => server.post(path, { searchParams }).json<T>());
+  withPrometheusError(() =>
+    server
+      .post(path, {
+        searchParams,
+        signal,
+        headers: attributionHeaders(attribution),
+      })
+      .json<T>(),
+  );
 
 export const prometheusApi = {
   queryRange: (params: {
@@ -742,47 +955,71 @@ export const prometheusApi = {
     start: number;
     end: number;
     step: string;
-    connectionId: string;
-    database?: string;
-    table?: string;
+    sourceId: string;
+    signal?: AbortSignal;
+    attribution?: QueryAttribution;
   }): Promise<PrometheusQueryRangeResponse> =>
-    prometheusFetch('v1/prometheus/query_range', {
-      query: params.query,
-      start: String(params.start),
-      end: String(params.end),
-      step: params.step,
-      connectionId: params.connectionId,
-      ...(params.database ? { database: params.database } : {}),
-      ...(params.table ? { table: params.table } : {}),
-    }),
+    prometheusFetch(
+      'v1/prometheus/query_range',
+      {
+        query: params.query,
+        start: String(params.start),
+        end: String(params.end),
+        step: params.step,
+        sourceId: params.sourceId,
+      },
+      params.signal,
+      params.attribution,
+    ),
+
+  query: (params: {
+    query: string;
+    time: number;
+    sourceId: string;
+    /** Maximum number of series to return. */
+    limit?: number;
+    signal?: AbortSignal;
+    attribution?: QueryAttribution;
+  }): Promise<PrometheusInstantQueryResponse> =>
+    prometheusFetch(
+      'v1/prometheus/query',
+      {
+        query: params.query,
+        time: String(params.time),
+        sourceId: params.sourceId,
+        ...(params.limit ? { limit: String(params.limit) } : {}),
+      },
+      params.signal,
+      params.attribution,
+    ),
 
   labels: (params: {
-    connectionId: string;
-    database?: string;
-    table?: string;
+    sourceId: string;
     start?: number;
     end?: number;
+    attribution?: QueryAttribution;
   }): Promise<PrometheusLabelsResponse> =>
     server
       .get('v1/prometheus/labels', {
         searchParams: labelLookupSearchParams(params),
+        headers: attributionHeaders(params.attribution),
       })
       .json<PrometheusLabelsResponse>()
       .then(uniqueLabels),
 
   labelValues: (params: {
     label: string;
-    connectionId: string;
-    database?: string;
-    table?: string;
+    sourceId: string;
     start?: number;
     end?: number;
     match?: string;
+    attribution?: QueryAttribution;
   }): Promise<PrometheusLabelsResponse> =>
     withPrometheusError(() =>
       server
         .get(`v1/prometheus/label/${params.label}/values`, {
           searchParams: labelLookupSearchParams(params),
+          headers: attributionHeaders(params.attribution),
         })
         .json<PrometheusLabelsResponse>()
         .then(uniqueLabels),
@@ -790,17 +1027,13 @@ export const prometheusApi = {
 };
 
 function labelLookupSearchParams(params: {
-  connectionId: string;
-  database?: string;
-  table?: string;
+  sourceId: string;
   start?: number;
   end?: number;
   match?: string;
 }): Record<string, string> {
   return {
-    connectionId: params.connectionId,
-    ...(params.database ? { database: params.database } : {}),
-    ...(params.table ? { table: params.table } : {}),
+    sourceId: params.sourceId,
     ...(params.start != null ? { start: String(params.start) } : {}),
     ...(params.end != null ? { end: String(params.end) } : {}),
     ...(params.match ? { 'match[]': params.match } : {}),

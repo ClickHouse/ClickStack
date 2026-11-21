@@ -9,6 +9,7 @@ import { useSource } from '@/source';
 
 jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
+  getMinGranularitySeconds: jest.fn().mockReturnValue(undefined),
 }));
 
 jest.mock('@/hooks/useMVOptimizationExplanation', () => ({
@@ -67,6 +68,67 @@ describe('DBBarChart', () => {
 
     renderWithMantine(<DBBarChart config={baseTestConfig} />);
     expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+  });
+
+  describe('refresh indicator', () => {
+    const groupedData = {
+      data: [
+        { status: 'success', count: 100 },
+        { status: 'error', count: 50 },
+      ],
+      meta: [
+        { name: 'status', type: 'String' },
+        { name: 'count', type: 'UInt64' },
+      ],
+    };
+
+    it('pulses while a refetch is showing the previous result', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: groupedData,
+        isLoading: false,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderWithMantine(<DBBarChart config={baseTestConfig} />);
+      expect(
+        screen
+          .getByTestId('bar-chart-container')
+          .querySelector('.effect-pulse'),
+      ).not.toBeNull();
+    });
+
+    it('does not pulse once fresh data has loaded', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: groupedData,
+        isLoading: false,
+        isPlaceholderData: false,
+        isError: false,
+      });
+
+      renderWithMantine(<DBBarChart config={baseTestConfig} />);
+      expect(
+        screen
+          .getByTestId('bar-chart-container')
+          .querySelector('.effect-pulse'),
+      ).toBeNull();
+    });
+
+    it('shows loading instead of the stale empty result during a refetch', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [], meta: groupedData.meta },
+        isLoading: false,
+        isPlaceholderData: true,
+        isError: false,
+      });
+
+      renderWithMantine(<DBBarChart config={baseTestConfig} />);
+      const loadingState = screen.getByText('Loading Chart Data...');
+      expect(
+        loadingState.querySelector('.mantine-Loader-root'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
+    });
   });
 
   it('handles error state correctly', () => {

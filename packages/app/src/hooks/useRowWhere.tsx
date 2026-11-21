@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import MD5 from 'crypto-js/md5';
+import SHA256 from 'crypto-js/sha256';
 import SqlString from 'sqlstring';
 import z from 'zod';
 import {
@@ -7,7 +7,12 @@ import {
   convertCHDataTypeToJSType,
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { aliasMapToWithClauses } from '@hyperdx/common-utils/dist/core/utils';
+import { quoteResultColumnNameIfNeeded } from '@hyperdx/common-utils/dist/core/metadata';
+import {
+  aliasMapToWithClauses,
+  LEFT_UTF8_HASH_CODE_POINTS,
+  leftUtf8Prefix,
+} from '@hyperdx/common-utils/dist/core/utils';
 import { WithClauseSchema } from '@hyperdx/common-utils/dist/types';
 
 const MAX_STRING_LENGTH = 512;
@@ -20,6 +25,9 @@ export const INTERNAL_ROW_FIELDS = {
   ID: '__hyperdx_id',
   ALIAS_WITH: '__hyperdx_alias_with',
 } as const;
+
+export const getRowId = (row: Record<string, any>): string =>
+  row[INTERNAL_ROW_FIELDS.ID];
 
 // Result type for row WHERE clause with alias support
 export type RowWhereResult = {
@@ -80,16 +88,16 @@ export function processRowToWhereClause(
           ]);
         case JSDataType.JSON:
           // Handle case for whole json object, ex: json
-          return SqlString.format(`lower(hex(MD5(toString(?))))=?`, [
+          return SqlString.format(`lower(hex(SHA256(toString(?))))=?`, [
             SqlString.raw(valueExpr),
-            MD5(value).toString(),
+            SHA256(value).toString(),
           ]);
         case JSDataType.Dynamic:
           // Handle case for json element, ex: json.c
 
           // Currently we can't distinguish null or 'null'
           if (value == null || value === 'null') {
-            return SqlString.format(`isNull(??)`, [valueExpr]);
+            return SqlString.format(`isNull(?)`, [SqlString.raw(valueExpr)]);
           }
           if (value.length > 1000 || column.length > 1000) {
             console.warn('Search value/object key too large.');
@@ -109,13 +117,13 @@ export function processRowToWhereClause(
           // Handle the case when string is too long
           if (value.length > MAX_STRING_LENGTH) {
             return SqlString.format(
-              // We need to slice since md5 can be slow on big payloads
-              // which will block the main thread on search table render
-              // UTF8 since js only slices in utf8 points, not bytes
-              `lower(hex(MD5(leftUTF8(?, 1000))))=?`,
+              // Hash only a prefix so huge payloads do not block the main thread.
+              `lower(hex(SHA256(leftUTF8(?, ${LEFT_UTF8_HASH_CODE_POINTS}))))=?`,
               [
                 SqlString.raw(valueExpr),
-                MD5(value.substring(0, 1000)).toString(),
+                SHA256(
+                  leftUtf8Prefix(value, LEFT_UTF8_HASH_CODE_POINTS),
+                ).toString(),
               ],
             );
           }
@@ -144,9 +152,11 @@ export default function useRowWhere({
       new Map(
         meta?.map(c => {
           // if aliasMap is provided, use the alias as the valueExpr
-          // but if the alias is not found, use the column name as the valueExpr
+          // but if the alias is not found, fall back to the column name.
+          // Alias entries are already SQL expressions; a result column name
+          // needs quoting when it isn't one (e.g. `x-host-header`).
           const valueExpr =
-            aliasMap != null ? (aliasMap[c.name] ?? c.name) : c.name;
+            aliasMap?.[c.name] ?? quoteResultColumnNameIfNeeded(c.name);
 
           return [
             c.name,

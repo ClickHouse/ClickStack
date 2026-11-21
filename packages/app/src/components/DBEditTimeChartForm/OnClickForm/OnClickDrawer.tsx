@@ -6,6 +6,7 @@ import {
   UseFormSetValue,
   useWatch,
 } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { validateOnClickTemplate } from '@hyperdx/common-utils/dist/core/linkUrlBuilder';
 import { getFilterExpression } from '@hyperdx/common-utils/dist/filters';
@@ -17,7 +18,6 @@ import {
 import {
   Box,
   Button,
-  Divider,
   Drawer,
   Group,
   SegmentedControl,
@@ -79,7 +79,6 @@ function SearchOnClickFields({ control }: { control: DrawerControl }) {
           name="onClick.whereTemplate"
           languageName="onClick.whereLanguage"
           allowMultiline
-          showLabel={false}
           sqlPlaceholder="ServiceName = '{{ServiceName}}'"
           lucenePlaceholder="ServiceName:{{ServiceName}}"
         />
@@ -162,7 +161,6 @@ function DashboardOnClickFields({
           name="onClick.whereTemplate"
           languageName="onClick.whereLanguage"
           allowMultiline
-          showLabel={false}
           sqlPlaceholder="ServiceName = '{{ServiceName}}'"
           lucenePlaceholder="ServiceName:{{ServiceName}}"
         />
@@ -358,7 +356,7 @@ export default function OnClickDrawer({
           getValues={getValues}
         />
 
-        <Divider />
+        <Separator size="xs" />
         <Group justify="space-between">
           <Button variant="subtle" onClick={handleClose}>
             Cancel

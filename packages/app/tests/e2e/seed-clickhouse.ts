@@ -22,12 +22,18 @@ import {
   E2E_METADATA_MV_LOGS_TABLE,
   E2E_METRICS_GAUGE_TABLE,
   E2E_METRICS_SUM_TABLE,
+  E2E_PROMQL_HISTOGRAM_METRIC_NAME,
   E2E_PROMQL_METRIC_NAME,
   E2E_PROMQL_TABLE,
   E2E_SESSIONS_TABLE,
   E2E_TRACES_MV_TABLE,
   E2E_TRACES_TABLE,
 } from './utils/constants';
+import {
+  generateOtelSessionLogEvents,
+  generateOtelSessionReplayRows,
+  generateOtelSessionSpans,
+} from './seed-otel-sessions';
 
 interface ClickHouseConfig {
   host: string;
@@ -92,6 +98,10 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     serviceName: 'service1',
     resourceAttrValue: 'value1',
     jsonValue: 'value1',
+    // Top-level JSON key that is NOT a bare identifier (`@` prefix). Selecting
+    // it (`ResourceAttributesJSON.`@request_id``) and opening the row must keep
+    // the key backtick-quoted in the detail WHERE clause (HDX-5867).
+    jsonAtKeyValue: 'request-A',
     clusterName: 'cluster1',
     serviceNameHyphen: 'svc-one',
     mapHyphenValue: 'mapval1',
@@ -102,6 +112,7 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     serviceName: 'service2',
     resourceAttrValue: 'value2',
     jsonValue: 'value2',
+    jsonAtKeyValue: 'request-B',
     clusterName: 'cluster2',
     serviceNameHyphen: 'svc-two',
     mapHyphenValue: 'mapval2',
@@ -112,6 +123,7 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     serviceName: 'service3',
     resourceAttrValue: 'value3',
     jsonValue: 'value3',
+    jsonAtKeyValue: 'request-C',
     clusterName: 'cluster3',
     serviceNameHyphen: 'svc-three',
     mapHyphenValue: 'mapval3',
@@ -119,6 +131,10 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     body: 'log body 3',
   },
 ] as const;
+
+// The at-prefixed JSON key seeded into `ResourceAttributesJSON`. Exported so the
+// row-details spec selects and asserts against the same key/values.
+export const INTERESTING_FILTER_KEYS_JSON_AT_KEY = '@request_id';
 
 // A single log whose Body is a JSON string with a flat, dotted key. It lives in
 // the default E2E Logs table (so it shares the E2E Logs source); the unique
@@ -408,8 +424,11 @@ function generateTraceData(
         Math.floor(Math.random() * 500000000) +
         (spansPerTrace - spanIdx) * 100000000;
 
+      // Two pods per service so the service map can be split by pod.
+      const podName = `${service}-pod-${traceIdx % 2}`;
+
       rows.push(
-        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
+        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test','k8s.pod.name':'${podName}'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
       );
 
       // Stop if we've generated enough spans
@@ -577,7 +596,7 @@ function generateK8sGaugeMetrics(
         : startMs;
     for (let sample = 0; sample < samplesPerPod; sample++) {
       const timestampMs = podSlotStart + sample * stepMs;
-      const timestampNs = timestampMs * 1000000;
+      const timestampNs = Math.round(timestampMs * 1000000);
       const _timeUnix = timestampMs / 1000;
 
       // CPU metrics (percentage, 0-100)
@@ -594,39 +613,39 @@ function generateK8sGaugeMetrics(
 
       // k8s.pod.phase
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.phase', 'Pod phase', '', {}, ${timestampNs}, ${timestampNs}, ${phase}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.phase', 'Pod phase', '', {}, '${timestampNs}', '${timestampNs}', ${phase}, 0, [], [], [], [], [])`,
       );
 
       // k8s.container.restarts
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.container.restarts', 'Container restarts', '', {}, ${timestampNs}, ${timestampNs}, ${restarts}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.container.restarts', 'Container restarts', '', {}, '${timestampNs}', '${timestampNs}', ${restarts}, 0, [], [], [], [], [])`,
       );
 
       // container.cpu.utilization (0-100%)
       const containerCpuUtilization =
         5 + (podIdx % 30) + Math.sin(sample / 3) * 3;
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'container.cpu.utilization', 'Container CPU utilization', '%', {}, ${timestampNs}, ${timestampNs}, ${containerCpuUtilization}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'container.cpu.utilization', 'Container CPU utilization', '%', {}, '${timestampNs}', '${timestampNs}', ${containerCpuUtilization}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.cpu.utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu.utilization', 'Pod CPU utilization', '', {}, ${timestampNs}, ${timestampNs}, ${cpuUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu.utilization', 'Pod CPU utilization', '', {}, '${timestampNs}', '${timestampNs}', ${cpuUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.cpu_limit_utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu_limit_utilization', 'Pod CPU limit utilization', '%', {}, ${timestampNs}, ${timestampNs}, ${cpuLimitUtilization}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.cpu_limit_utilization', 'Pod CPU limit utilization', '%', {}, '${timestampNs}', '${timestampNs}', ${cpuLimitUtilization}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.memory.usage
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory.usage', 'Pod memory usage', 'bytes', {}, ${timestampNs}, ${timestampNs}, ${memoryUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory.usage', 'Pod memory usage', 'bytes', {}, '${timestampNs}', '${timestampNs}', ${memoryUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.pod.memory_limit_utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory_limit_utilization', 'Pod memory limit utilization', '%', {}, ${timestampNs}, ${timestampNs}, ${memoryLimitUtilization}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.memory_limit_utilization', 'Pod memory limit utilization', '%', {}, '${timestampNs}', '${timestampNs}', ${memoryLimitUtilization}, 0, [], [], [], [], [])`,
       );
     }
   }
@@ -643,7 +662,7 @@ function generateK8sGaugeMetrics(
 
     for (let sample = 0; sample < samplesPerPod; sample++) {
       const timestampMs = nodeSlotStart + sample * stepMs;
-      const timestampNs = timestampMs * 1000000;
+      const timestampNs = Math.round(timestampMs * 1000000);
 
       const nodeCpuUsage = 30 + (nodeIdx % 30) + Math.sin(sample / 2) * 10;
       const nodeMemoryUsage = (2 + nodeIdx) * 1024 * 1024 * 1024; // 2-4 GB
@@ -653,17 +672,17 @@ function generateK8sGaugeMetrics(
 
       // k8s.node.cpu.utilization
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.cpu.utilization', 'Node CPU utilization', '', {}, ${timestampNs}, ${timestampNs}, ${nodeCpuUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.cpu.utilization', 'Node CPU utilization', '', {}, '${timestampNs}', '${timestampNs}', ${nodeCpuUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.node.memory.usage
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.memory.usage', 'Node memory usage', 'bytes', {}, ${timestampNs}, ${timestampNs}, ${nodeMemoryUsage}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.memory.usage', 'Node memory usage', 'bytes', {}, '${timestampNs}', '${timestampNs}', ${nodeMemoryUsage}, 0, [], [], [], [], [])`,
       );
 
       // k8s.node.condition_ready
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.condition_ready', 'Node condition ready', '', {}, ${timestampNs}, ${timestampNs}, ${nodeConditionReady}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.node.condition_ready', 'Node condition ready', '', {}, '${timestampNs}', '${timestampNs}', ${nodeConditionReady}, 0, [], [], [], [], [])`,
       );
     }
   }
@@ -681,13 +700,13 @@ function generateK8sGaugeMetrics(
 
     for (let sample = 0; sample < samplesPerPod; sample++) {
       const timestampMs = nsSlotStart + sample * stepMs;
-      const timestampNs = timestampMs * 1000000;
+      const timestampNs = Math.round(timestampMs * 1000000);
 
       const resourceAttrs = `{'k8s.cluster.name':'${cluster}','k8s.namespace.name':'${namespace}'}`;
 
       // k8s.namespace.phase
       rows.push(
-        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.namespace.phase', 'Namespace phase', '', {}, ${timestampNs}, ${timestampNs}, ${namespacePhase}, 0, [], [], [], [], [])`,
+        `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.namespace.phase', 'Namespace phase', '', {}, '${timestampNs}', '${timestampNs}', ${namespacePhase}, 0, [], [], [], [], [])`,
       );
     }
   }
@@ -712,7 +731,7 @@ function generateK8sSumMetrics(
 
     const timestampMs =
       podCount > 1 ? startMs + (podIdx / (podCount - 1)) * span : startMs;
-    const timestampNs = timestampMs * 1000000;
+    const timestampNs = Math.round(timestampMs * 1000000);
 
     // Pod uptime in seconds (1-10 hours)
     const uptimeSeconds = (1 + (podIdx % 10)) * 3600;
@@ -722,7 +741,7 @@ function generateK8sSumMetrics(
     // k8s.pod.uptime (Sum metric)
     // AggregationTemporality: 1 = Delta, 2 = Cumulative
     rows.push(
-      `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.uptime', 'Pod uptime', 's', {}, ${timestampNs}, ${timestampNs}, ${uptimeSeconds}, 0, 2, true, [], [], [], [], [])`,
+      `(${resourceAttrs}, '', '', '', {}, 0, '', 'k8s-metrics', 'k8s.pod.uptime', 'Pod uptime', 's', {}, '${timestampNs}', '${timestampNs}', ${uptimeSeconds}, 0, 2, true, [], [], [], [], [])`,
     );
   }
 
@@ -787,7 +806,7 @@ function generateK8sEventLogs(
 function generateInterestingFilterKeyLogData(seedRef: number): string {
   return INTERESTING_FILTER_KEYS_ROWS.map((row, i) => {
     const timestampNs = (seedRef - (i + 1) * 1000) * 1000000;
-    const json = `{"key": {"subKey": {"subSubKey": "${row.jsonValue}"}}}`;
+    const json = `{"key": {"subKey": {"subSubKey": "${row.jsonValue}"}}, "${INTERESTING_FILTER_KEYS_JSON_AT_KEY}": "${row.jsonAtKeyValue}"}`;
     // JSON column with a hyphenated name AND hyphenated nested keys.
     const jsonHyphen = `{"key-1": {"key-2": "${row.jsonHyphenValue}"}}`;
     return (
@@ -1003,9 +1022,19 @@ export async function seedClickHouse(): Promise<void> {
       Duration, StatusCode, StatusMessage, \`Events.Timestamp\`, \`Events.Name\`,
       \`Events.Attributes\`, \`Links.TraceId\`, \`Links.SpanId\`, \`Links.TraceState\`,
       \`Links.Attributes\`
-    ) VALUES ${generateSessionTraces(numDataPoints, startMs, endMs)}
+    ) VALUES ${generateSessionTraces(numDataPoints, startMs, endMs)},
+    ${generateOtelSessionSpans(seedRef)}
   `);
   console.log(`  Inserted ${numDataPoints} session trace data`);
+
+  console.log('  Inserting OTel browser log events...');
+  await client.query(`
+    INSERT INTO ${E2E_CLICKHOUSE_DATABASE}.${E2E_LOGS_TABLE} (
+      Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
+      ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
+      ScopeName, ScopeVersion, ScopeAttributes, LogAttributes, EventName
+    ) VALUES ${generateOtelSessionLogEvents(seedRef)}
+  `);
 
   // Insert session data
   console.log('  Inserting session data...');
@@ -1014,7 +1043,8 @@ export async function seedClickHouse(): Promise<void> {
       Timestamp, TraceId, SpanId, TraceFlags, SeverityText, SeverityNumber,
       ServiceName, Body, ResourceSchemaUrl, ResourceAttributes, ScopeSchemaUrl,
       ScopeName, ScopeVersion, ScopeAttributes, LogAttributes
-    ) VALUES ${generateSessionData(numDataPoints, startMs, endMs)}
+    ) VALUES ${generateSessionData(numDataPoints, startMs, endMs)},
+    ${generateOtelSessionReplayRows(seedRef)}
   `);
   console.log(`  Inserted ${numDataPoints} session entries`);
 
@@ -1101,59 +1131,122 @@ export async function seedClickHouse(): Promise<void> {
   await seedPromqlSeries(client, startMs, endMs);
   console.log(`  Inserted ${SERVICES.length} PromQL series`);
 
+  await seedPromqlHistogram(client, startMs, endMs);
+  console.log(`  Inserted ${SERVICES.length} PromQL histograms`);
+
   console.log('ClickHouse seeding complete');
 }
 
 /**
- * Seed one `E2E_PROMQL_METRIC_NAME` series per service into the TimeSeries
- * table, through the `timeSeries*` table functions that expose its inner
- * tables (the engine names those after the table's UUID, so they can't be
- * addressed directly).
- *
- * A series' identity lives in the tags table while its samples live in the data
- * table, tied together by `id`. Rather than recompute the engine's
- * `reinterpretAsUUID(sipHash128(metric_name, all_tags))` here — where drifting
- * from the schema would silently orphan every sample — the samples select their
- * `id` back out of the tags table.
+ * Insert a metric family and its series into the PromQL table, one sample a
+ * minute across the window. `valueSql` computes the nth sample's value. Written
+ * through the TimeSeries table itself, not its inner tables: the engine derives
+ * each series' `id` and splits samples across inner tables in ways that change
+ * between ClickHouse versions, and rows written around it are invisible to the
+ * PromQL engine.
  */
+async function insertPromqlMetric(
+  client: ReturnType<typeof createClickHouseClient>,
+  startMs: number,
+  endMs: number,
+  family: { name: string; type: string; unit: string; help: string },
+  series: {
+    metricName: string;
+    tags: Record<string, string>;
+    valueSql: string;
+  }[],
+) {
+  const table = `${E2E_CLICKHOUSE_DATABASE}.${E2E_PROMQL_TABLE}`;
+
+  await client.query(`
+    INSERT INTO ${table} (metric_family, type, unit, help)
+    VALUES ('${family.name}', '${family.type}', '${family.unit}', '${family.help}')
+  `);
+
+  const stepMs = 60000;
+  const sampleCount = Math.max(1, Math.floor((endMs - startMs) / stepMs));
+  const rows = series
+    .map(({ metricName, tags, valueSql }) => {
+      const tagArgs = Object.entries(tags)
+        .flatMap(([key, value]) => [`'${key}'`, `'${value}'`])
+        .join(', ');
+      return (
+        `SELECT '${metricName}', map(${tagArgs}), ` +
+        `arrayMap(n -> (fromUnixTimestamp64Milli(toInt64(${startMs} + n * ${stepMs})), ${valueSql}), range(${sampleCount}))`
+      );
+    })
+    .join('\n    UNION ALL\n    ');
+
+  await client.query(`
+    INSERT INTO ${table} (metric_name, tags, samples)
+    ${rows}
+  `);
+}
+
+/** Seed one `E2E_PROMQL_METRIC_NAME` series per service, always 1. */
 async function seedPromqlSeries(
   client: ReturnType<typeof createClickHouseClient>,
   startMs: number,
   endMs: number,
 ) {
-  const ts = (part: 'Tags' | 'Data' | 'Metrics') =>
-    `timeSeries${part}('${E2E_CLICKHOUSE_DATABASE}', '${E2E_PROMQL_TABLE}')`;
+  await insertPromqlMetric(
+    client,
+    startMs,
+    endMs,
+    {
+      name: E2E_PROMQL_METRIC_NAME,
+      type: 'gauge',
+      unit: '',
+      help: 'E2E service liveness',
+    },
+    SERVICES.map(service => ({
+      metricName: E2E_PROMQL_METRIC_NAME,
+      tags: { service },
+      valueSql: '1.0',
+    })),
+  );
+}
 
-  await client.query(`
-    INSERT INTO FUNCTION ${ts('Metrics')} (metric_family_name, type, unit, help)
-    VALUES ('${E2E_PROMQL_METRIC_NAME}', 'gauge', '', 'E2E service liveness')
-  `);
+/**
+ * Each bucket's per-minute increase, keyed by its `le` label. Cumulative, so a
+ * minute adds 1 observation <= 0.1, 2 in (0.1, 0.5], 1 in (0.5, 1] and 1 above.
+ */
+const PROMQL_HISTOGRAM_BUCKET_INCREASES: Record<string, number> = {
+  '0.1': 1,
+  '0.5': 3,
+  '1': 4,
+  '+Inf': 5,
+};
 
-  const tagRows = SERVICES.map(
-    service =>
-      `('${E2E_PROMQL_METRIC_NAME}', map('service', '${service}'), ` +
-      `map('__name__', '${E2E_PROMQL_METRIC_NAME}', 'service', '${service}'), ` +
-      `fromUnixTimestamp64Milli(toInt64(${startMs})), fromUnixTimestamp64Milli(toInt64(${endMs})))`,
-  ).join(',\n');
-
-  await client.query(`
-    INSERT INTO FUNCTION ${ts('Tags')} (metric_name, tags, all_tags, min_time, max_time)
-    VALUES ${tagRows}
-  `);
-
-  // One sample a minute across the seeded window, for every series.
-  const stepMs = 60000;
-  const sampleCount = Math.max(1, Math.floor((endMs - startMs) / stepMs));
-  await client.query(`
-    INSERT INTO FUNCTION ${ts('Data')} (id, timestamp, value)
-    SELECT
-      t.id,
-      fromUnixTimestamp64Milli(toInt64(${startMs} + (n * ${stepMs}))),
-      1
-    FROM ${ts('Tags')} AS t
-    CROSS JOIN (SELECT number AS n FROM numbers(${sampleCount})) AS steps
-    WHERE t.metric_name = '${E2E_PROMQL_METRIC_NAME}'
-  `);
+/**
+ * Seed a classic histogram, `E2E_PROMQL_HISTOGRAM_METRIC_NAME`, per service:
+ * one cumulative counter series per `le` bucket, growing at a fixed rate.
+ */
+async function seedPromqlHistogram(
+  client: ReturnType<typeof createClickHouseClient>,
+  startMs: number,
+  endMs: number,
+) {
+  await insertPromqlMetric(
+    client,
+    startMs,
+    endMs,
+    {
+      name: E2E_PROMQL_HISTOGRAM_METRIC_NAME,
+      type: 'histogram',
+      unit: 'seconds',
+      help: 'E2E request duration',
+    },
+    SERVICES.flatMap(service =>
+      Object.entries(PROMQL_HISTOGRAM_BUCKET_INCREASES).map(
+        ([le, increase]) => ({
+          metricName: `${E2E_PROMQL_HISTOGRAM_METRIC_NAME}_bucket`,
+          tags: { service, le },
+          valueSql: `toFloat64(n * ${increase})`,
+        }),
+      ),
+    ),
+  );
 }
 
 // Allow running directly for testing

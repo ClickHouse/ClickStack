@@ -79,7 +79,40 @@ describe('MCP tool input schemas', () => {
 
     expect(tools.length).toBeGreaterThan(0);
 
-    const offenders = tools.flatMap(tool => walk(tool.inputSchema, tool.name));
+    const offenders = tools.flatMap(tool =>
+      walk(tool.inputSchema, tool.name, providerRejections),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('describe every input property', async () => {
+    const client = await createTestClient(context);
+    const { tools } = await client.listTools();
+
+    expect(tools.length).toBeGreaterThan(0);
+
+    const missing = tools.flatMap(tool =>
+      walk(tool.inputSchema, tool.name, undescribedProperties),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  // zod-to-json-schema emits a reused Zod schema instance as a bare `$ref` to
+  // its first use. The MCP directory flags a top-level parameter rendered that
+  // way as having no type, so build reused schemas with a factory instead.
+  it('do not render a top-level parameter as a bare $ref', async () => {
+    const client = await createTestClient(context);
+    const { tools } = await client.listTools();
+
+    expect(tools.length).toBeGreaterThan(0);
+
+    const offenders = tools.flatMap(tool =>
+      Object.entries(tool.inputSchema.properties ?? {})
+        .filter(([, prop]) => isRecord(prop) && '$ref' in prop)
+        .map(([key]) => `${tool.name}.${key}`),
+    );
 
     expect(offenders).toEqual([]);
   });
@@ -93,13 +126,26 @@ function isUnknownArray(value: unknown): value is unknown[] {
   return Array.isArray(value);
 }
 
-/** JSON pointer path -> problem, for every offending node under `node`. */
-function walk(node: unknown, path: string): string[] {
+type SchemaCheck = (node: Record<string, unknown>, path: string) => string[];
+
+/** JSON pointer path -> problem, for every node under `node` that fails `check`. */
+function walk(node: unknown, path: string, check: SchemaCheck): string[] {
   if (isUnknownArray(node)) {
-    return node.flatMap((child, i) => walk(child, `${path}/${i}`));
+    return node.flatMap((child, i) => walk(child, `${path}/${i}`, check));
   }
   if (!isRecord(node)) return [];
 
+  const found = check(node, path);
+  for (const [key, value] of Object.entries(node)) {
+    found.push(...walk(value, `${path}/${key}`, check));
+  }
+  return found;
+}
+
+function providerRejections(
+  node: Record<string, unknown>,
+  path: string,
+): string[] {
   const found: string[] = [];
 
   const enumValues = node.enum;
@@ -120,9 +166,22 @@ function walk(node: unknown, path: string): string[] {
     );
   }
 
-  for (const [key, value] of Object.entries(node)) {
-    found.push(...walk(value, `${path}/${key}`));
-  }
-
   return found;
+}
+
+function undescribedProperties(
+  node: Record<string, unknown>,
+  path: string,
+): string[] {
+  if (!isRecord(node.properties)) return [];
+  return Object.entries(node.properties).flatMap(([key, prop]) => {
+    if (!isRecord(prop)) return [];
+    // zod-to-json-schema dedupes a reused schema into a bare $ref pointer;
+    // the description lives on the referenced definition.
+    if (Object.keys(prop).length === 1 && '$ref' in prop) return [];
+    const { description } = prop;
+    return typeof description === 'string' && description.trim() !== ''
+      ? []
+      : [`${path}/properties/${key}: missing description`];
+  });
 }

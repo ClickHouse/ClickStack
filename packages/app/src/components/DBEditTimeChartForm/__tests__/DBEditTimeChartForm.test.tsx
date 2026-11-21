@@ -3,6 +3,8 @@ import React from 'react';
 import { useController as mockUseController } from 'react-hook-form';
 import {
   AlertThresholdType,
+  DashboardFilter,
+  DataSourceDashboardFilter,
   DisplayType,
   MetricsDataType,
   SavedChartConfig,
@@ -13,6 +15,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import DBEditTimeChartForm from '@/components/DBEditTimeChartForm';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { useSource } from '@/source';
 import { DEFAULT_TILE_ALERT } from '@/utils/alerts';
 
@@ -40,6 +43,8 @@ jest.mock('@/hooks/useFetchMetricMetadata', () => ({
 
 jest.mock('@/hooks/useMetadata', () => ({
   useMetadataWithSettings: jest.fn().mockReturnValue({}),
+  // The raw SQL editor's completions
+  useMultipleAllFields: jest.fn().mockReturnValue({ data: [] }),
   useGetKeyValues: jest.fn().mockReturnValue({
     data: [
       {
@@ -98,6 +103,11 @@ const metricNameSelectProps: any[] = [];
 // `mock` prefix is required for a jest.mock factory to close over it.
 const mockStagedWhere: string[] = [];
 const mockStagedGroupBy: string[] = [];
+
+// TileAlertEditor asks before removing an alert; these tests always confirm.
+// The `mock` prefix is required for a jest.mock factory to close over it.
+const mockConfirm = jest.fn().mockResolvedValue(true);
+jest.mock('@/useConfirm', () => ({ useConfirm: () => mockConfirm }));
 
 // The explorer has its own suite (MetricExplorer.test.tsx). Here it is stubbed
 // down to "emit a chosen metric", so these tests cover only the form wiring —
@@ -183,6 +193,7 @@ jest.mock('../../SourceSelect', () => ({
         <option value="metric-source">Metric Source</option>
         <option value="log-source">Logs</option>
         <option value="other-source">Other Source</option>
+        <option value="$metrics">$metrics</option>
       </select>
     );
   },
@@ -562,12 +573,13 @@ describe('DBEditTimeChartForm - Add/delete alerts for display type Number', () =
 
     // Find and click the add alert button
     const alertButton = screen.getByTestId('alert-button');
-    expect(alertButton).toHaveTextContent('Add Alert');
+    expect(alertButton).toHaveTextContent('Add alert');
     await userEvent.click(alertButton);
 
-    // Verify that the alert is added
-    const alert = screen.getByTestId('alert-details');
-    expect(alert).toBeInTheDocument();
+    // The new alert's settings open in the side panel
+    expect(screen.getByTestId('alert-panel')).toContainElement(
+      screen.getByTestId('alert-details'),
+    );
   });
 
   it('should remove an alert when clicking the remove alert button', async () => {
@@ -582,7 +594,8 @@ describe('DBEditTimeChartForm - Add/delete alerts for display type Number', () =
     const alert = screen.getByTestId('alert-details');
     expect(alert).toBeInTheDocument();
 
-    expect(addAlertButton).not.toBeVisible();
+    // The button stays, now toggling the panel for the existing alert
+    expect(addAlertButton).toHaveAttribute('aria-expanded', 'true');
 
     const removeAlertButton = screen.getByTestId('remove-alert-button');
     await userEvent.click(removeAlertButton);
@@ -592,6 +605,145 @@ describe('DBEditTimeChartForm - Add/delete alerts for display type Number', () =
 
     // Verify that onSave was not called
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('discards a new alert closed without confirming it', async () => {
+    renderAlertComponent();
+
+    await userEvent.click(screen.getByTestId('alert-button'));
+    await userEvent.click(screen.getByTestId('close-alert-panel-button'));
+
+    expect(screen.queryByTestId('alert-details')).not.toBeInTheDocument();
+    expect(screen.getByTestId('alert-button')).toHaveTextContent('Add alert');
+  });
+
+  it('keeps the panel open when confirming an incomplete alert', async () => {
+    renderAlertComponent();
+
+    // A new alert has no webhook yet.
+    await userEvent.click(screen.getByTestId('alert-button'));
+    await userEvent.click(screen.getByTestId('alert-panel-confirm-button'));
+
+    expect(
+      await screen.findByText("Webhook ID can't be empty"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('alert-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('alert-button')).toHaveTextContent('Add alert');
+  });
+
+  it('starts a new alert without the errors of a discarded one', async () => {
+    renderAlertComponent();
+
+    await userEvent.click(screen.getByTestId('alert-button'));
+    await userEvent.click(screen.getByTestId('alert-panel-confirm-button'));
+    expect(
+      await screen.findByText("Webhook ID can't be empty"),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('close-alert-panel-button'));
+    await userEvent.click(screen.getByTestId('alert-button'));
+
+    expect(screen.getByTestId('alert-details')).toBeInTheDocument();
+    expect(
+      screen.queryByText("Webhook ID can't be empty"),
+    ).not.toBeInTheDocument();
+  });
+
+  describe('with an existing alert', () => {
+    const renderWithExistingAlert = (
+      alert: NonNullable<SavedChartConfig['alert']>,
+      props: Partial<React.ComponentProps<typeof DBEditTimeChartForm>> = {},
+    ) =>
+      renderAlertComponent({
+        chartConfig: {
+          ...defaultChartConfig,
+          displayType: DisplayType.Number,
+          alert,
+        },
+        ...props,
+      });
+
+    const completeAlert = {
+      ...DEFAULT_TILE_ALERT,
+      channels: [{ type: 'webhook' as const, webhookId: 'webhook-1' }],
+    };
+
+    it('opens its settings on request, offering to edit it', async () => {
+      renderWithExistingAlert(completeAlert);
+
+      expect(screen.queryByTestId('alert-panel')).not.toBeInTheDocument();
+      expect(screen.getByTestId('alert-button')).toHaveTextContent(
+        'Edit alert',
+      );
+
+      await userEvent.click(screen.getByTestId('alert-button'));
+
+      expect(screen.getByTestId('alert-panel')).toContainElement(
+        screen.getByTestId('alert-details'),
+      );
+      expect(
+        screen.getByTestId('alert-panel-confirm-button'),
+      ).toHaveTextContent('Update alert');
+    });
+
+    it('keeps the alert when the panel is closed', async () => {
+      renderWithExistingAlert(completeAlert);
+
+      await userEvent.click(screen.getByTestId('alert-button'));
+      await userEvent.click(screen.getByTestId('close-alert-panel-button'));
+
+      expect(screen.queryByTestId('alert-panel')).not.toBeInTheDocument();
+      expect(screen.getByTestId('alert-button')).toHaveTextContent(
+        'Edit alert',
+      );
+    });
+
+    it('keeps the panel open when Edit alert is clicked again', async () => {
+      renderWithExistingAlert(completeAlert);
+
+      await userEvent.click(screen.getByTestId('alert-button'));
+      await userEvent.click(screen.getByTestId('alert-button'));
+
+      expect(screen.getByTestId('alert-panel')).toBeInTheDocument();
+    });
+
+    const nameInput = () => screen.getByTestId('alert-display-name-input');
+
+    it('reverts edits closed without updating', async () => {
+      renderWithExistingAlert(completeAlert);
+
+      await userEvent.click(screen.getByTestId('alert-button'));
+      await userEvent.type(nameInput(), 'Renamed');
+      await userEvent.click(screen.getByTestId('close-alert-panel-button'));
+      await userEvent.click(screen.getByTestId('alert-button'));
+
+      expect(nameInput()).toHaveValue('');
+    });
+
+    it('keeps edits confirmed with Update alert', async () => {
+      renderWithExistingAlert(completeAlert);
+
+      await userEvent.click(screen.getByTestId('alert-button'));
+      await userEvent.type(nameInput(), 'Renamed');
+      await userEvent.click(screen.getByTestId('alert-panel-confirm-button'));
+      await waitFor(() =>
+        expect(screen.queryByTestId('alert-panel')).not.toBeInTheDocument(),
+      );
+      await userEvent.click(screen.getByTestId('alert-button'));
+
+      expect(nameInput()).toHaveValue('Renamed');
+    });
+
+    it('reopens the panel when a save fails on the alert', async () => {
+      const onSave = jest.fn();
+      // No webhook picked, so it can't be saved.
+      renderWithExistingAlert(DEFAULT_TILE_ALERT, { onSave });
+      expect(screen.queryByTestId('alert-panel')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('chart-save-button'));
+
+      expect(await screen.findByTestId('alert-panel')).toBeInTheDocument();
+      expect(onSave).not.toHaveBeenCalled();
+    });
   });
 
   it('shows alert scheduling fields inside advanced settings', async () => {
@@ -651,6 +803,25 @@ describe('DBEditTimeChartForm - Alert variable warning', () => {
       await screen.findByText(
         'This tile references $svc. Alerts run with every dashboard variable in its empty state, not the values selected here.',
       ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the warning on the alert button while the panel is closed', async () => {
+    renderComponent({
+      chartConfig: {
+        ...defaultChartConfig,
+        displayType: DisplayType.Number,
+        where: 'ServiceName:$svc',
+        alert: DEFAULT_TILE_ALERT,
+      },
+      dashboardId: 'test-dashboard-id',
+      variables: [SVC],
+    });
+
+    expect(screen.queryByTestId('alert-panel')).not.toBeInTheDocument();
+    await userEvent.hover(screen.getByTestId('alert-button'));
+    expect(
+      await screen.findByText(/^This tile references \$svc\./),
     ).toBeInTheDocument();
   });
 
@@ -847,6 +1018,13 @@ describe('DBEditTimeChartForm - Metric formulas', () => {
     select: [gaugeSeries, { ...gaugeSeries, metricName: 'test.metric.sum' }],
   };
 
+  // The formula row reuses the shared series controls, so its alias input and
+  // remove button carry the series test ids. Formulas render after the series.
+  const lastSeriesControl = (testId: string) => {
+    const els = screen.getAllByTestId(testId);
+    return els[els.length - 1];
+  };
+
   it('shows the Add Formula button and series letter badges for metric sources', () => {
     renderComponent({ chartConfig: twoSeriesConfig });
 
@@ -861,7 +1039,7 @@ describe('DBEditTimeChartForm - Metric formulas', () => {
     await userEvent.click(screen.getByTestId('add-formula-button'));
 
     expect(screen.getByTestId('formula-expression-input')).toBeInTheDocument();
-    expect(screen.getByTestId('formula-alias-input')).toBeInTheDocument();
+    expect(screen.getAllByTestId('series-alias-input')).toHaveLength(3);
   });
 
   it('shows an inline validation error for a malformed expression', async () => {
@@ -916,7 +1094,7 @@ describe('DBEditTimeChartForm - Metric formulas', () => {
       'A / (A + B) * 100',
     );
     await userEvent.type(
-      screen.getByTestId('formula-alias-input'),
+      lastSeriesControl('series-alias-input'),
       'Share of gauge',
     );
     await userEvent.click(screen.getByTestId('chart-save-button'));
@@ -957,7 +1135,7 @@ describe('DBEditTimeChartForm - Metric formulas', () => {
     });
 
     expect(screen.getByTestId('formula-expression-input')).toBeInTheDocument();
-    await userEvent.click(screen.getByTestId('formula-remove-button'));
+    await userEvent.click(lastSeriesControl('series-remove-button'));
     expect(
       screen.queryByTestId('formula-expression-input'),
     ).not.toBeInTheDocument();
@@ -1218,6 +1396,7 @@ describe('DBEditTimeChartForm - dashboard filters', () => {
   it('can be turned back on once the alert is removed', async () => {
     renderComponent({ getDashboardFilters, chartConfig: configWithAlert });
 
+    await userEvent.click(screen.getByTestId('alert-button'));
     await userEvent.click(screen.getByTestId('remove-alert-button'));
 
     expect(filterSwitch()).toBeChecked();
@@ -1301,6 +1480,9 @@ describe('DBEditTimeChartForm - Inline alerts', () => {
       onSaveAlert,
     });
 
+    // Existing alerts open their panel on request.
+    await userEvent.click(screen.getByTestId('alert-button'));
+
     await userEvent.click(screen.getByTestId('chart-save-alert-button'));
 
     expect(await screen.findByText('Alert name is required')).toBeVisible();
@@ -1312,6 +1494,9 @@ describe('DBEditTimeChartForm - Inline alerts', () => {
     renderInlineAlertForm({
       chartConfig: { ...validNumberConfig, alert: DEFAULT_TILE_ALERT },
     });
+
+    // Existing alerts open their panel on request.
+    await userEvent.click(screen.getByTestId('alert-button'));
 
     const button = screen.getByTestId('alert-tags-button');
     expect(button).toHaveTextContent('0');
@@ -1336,6 +1521,9 @@ describe('DBEditTimeChartForm - Inline alerts', () => {
       },
       onSaveAlert,
     });
+
+    // Existing alerts open their panel on request.
+    await userEvent.click(screen.getByTestId('alert-button'));
 
     await userEvent.type(
       screen.getByTestId('alert-display-name-input'),
@@ -1364,6 +1552,33 @@ describe('DBEditTimeChartForm - Inline alerts', () => {
     expect(screen.getByTestId('chart-save-alert-button')).toBeInTheDocument();
   });
 
+  // The edit-alert modal saves the alert by saving the chart, so the panel's
+  // action saves instead of only closing the panel.
+  it('saves from the panel when the alert saves with the chart', async () => {
+    const onSave = jest.fn();
+    renderInlineAlertForm({
+      chartConfig: {
+        ...validNumberConfig,
+        alert: {
+          ...DEFAULT_TILE_ALERT,
+          displayName: 'Prod error rate',
+          channels: [{ type: 'webhook', webhookId: 'hook-1' }],
+        },
+      },
+      isAlertRequired: true,
+      onSave,
+    });
+
+    expect(
+      screen.queryByTestId('alert-panel-confirm-button'),
+    ).not.toBeInTheDocument();
+    const saveAlertButton = screen.getByTestId('chart-save-alert-button');
+    expect(saveAlertButton).toHaveTextContent('Save alert');
+    await userEvent.click(saveAlertButton);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  });
+
   // The editor requires an alert on this surface, so removing it would leave
   // the save button with nothing to write.
   it('hides the remove control when the alert is required', async () => {
@@ -1374,5 +1589,223 @@ describe('DBEditTimeChartForm - Inline alerts', () => {
 
     expect(screen.getByTestId('alert-details')).toBeInTheDocument();
     expect(screen.queryByTestId('remove-alert-button')).not.toBeInTheDocument();
+  });
+});
+
+describe('DBEditTimeChartForm - Raw SQL data source variables', () => {
+  const logsVariable: DataSourceDashboardFilter = {
+    id: 'logs',
+    type: 'DATA_SOURCE',
+    name: 'logs',
+    variableName: 'logs',
+    allowedSourceKinds: [SourceKind.Log],
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  };
+
+  const rawSqlConfig: SavedChartConfig = {
+    configType: 'sql',
+    displayType: DisplayType.Table,
+    name: 'Raw SQL tile',
+    source: '$logs',
+    connection: 'conn-2',
+    sqlTemplate: 'SELECT count() FROM $__sourceTable',
+  };
+
+  const renderWithSelection = (sourceId: string) =>
+    renderWithMantine(
+      <QueryClientProvider client={queryClient}>
+        <ReferenceVariablesProvider
+          filters={[logsVariable]}
+          values={new Map([['logs', sourceId]])}
+        >
+          <DBEditTimeChartForm
+            chartConfig={rawSqlConfig}
+            dateRange={[new Date('2024-01-01'), new Date('2024-01-02')]}
+            dashboardId="dashboard-1"
+          />
+        </ReferenceVariablesProvider>
+      </QueryClientProvider>,
+    );
+
+  const logSource = (connection: string) => ({
+    id: 'logs-source',
+    kind: SourceKind.Log,
+    name: 'Logs',
+    from: { databaseName: 'default', tableName: 'otel_logs' },
+    connection,
+    timestampValueExpression: 'Timestamp',
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("blocks the preview when the variable's source is on another connection", async () => {
+    mockUseSourceData(logSource('conn-1'));
+    renderWithSelection('logs-source');
+
+    expect(await screen.findByTestId('preview-blocked')).toHaveTextContent(
+      "The selected data source is on a different connection than this tile's query.",
+    );
+  });
+
+  it('blocks only on the unselected variable once filters are not applied', async () => {
+    const globalFilter: DashboardFilter = {
+      id: 'service',
+      type: 'QUERY_EXPRESSION',
+      name: 'Service',
+      expression: 'ServiceName',
+      source: 'logs-source',
+      minSelections: 1,
+      isGlobalRequirement: true,
+    };
+    mockUseSourceData(undefined);
+    renderWithMantine(
+      <QueryClientProvider client={queryClient}>
+        <ReferenceVariablesProvider filters={[logsVariable]} values={new Map()}>
+          <DBEditTimeChartForm
+            chartConfig={rawSqlConfig}
+            dateRange={[new Date('2024-01-01'), new Date('2024-01-02')]}
+            dashboardId="dashboard-1"
+            getDashboardFilters={() => []}
+            unsatisfiedRequiredFilters={[logsVariable, globalFilter]}
+          />
+        </ReferenceVariablesProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByTestId('preview-missing-required-filters'),
+    ).toHaveTextContent(
+      /^Missing required filters or variables: logs, Service\. Select a value for each required filter, or turn off “Apply filters” to preview this tile without them\.$/,
+    );
+
+    await userEvent.click(
+      screen.getByRole('switch', { name: 'Apply filters' }),
+    );
+
+    expect(
+      screen.getByTestId('preview-missing-required-filters'),
+    ).toHaveTextContent(
+      /^Missing required filters or variables: logs\. Select a value for each one to preview this tile\.$/,
+    );
+  });
+
+  it("previews when the variable's source is on the tile's connection", async () => {
+    mockUseSourceData(logSource('conn-2'));
+    renderWithSelection('logs-source');
+
+    await screen.findByTestId('chart-run-query-button');
+    expect(screen.queryByTestId('preview-blocked')).not.toBeInTheDocument();
+  });
+});
+
+describe('DBEditTimeChartForm - Alerts on data source variables', () => {
+  const metricsVariable: DataSourceDashboardFilter = {
+    id: 'metrics',
+    type: 'DATA_SOURCE',
+    name: 'metrics',
+    variableName: 'metrics',
+    allowedSourceKinds: [SourceKind.Metric],
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  };
+
+  const series = {
+    aggFn: 'avg' as const,
+    aggCondition: '',
+    aggConditionLanguage: 'lucene' as const,
+    valueExpression: 'Value',
+    metricType: MetricsDataType.Gauge,
+    metricName: 'test.metric.gauge',
+  };
+
+  const completeAlert = {
+    ...DEFAULT_TILE_ALERT,
+    channels: [{ type: 'webhook' as const, webhookId: 'webhook-1' }],
+  };
+
+  const renderWithAlert = (
+    alert: NonNullable<SavedChartConfig['alert']>,
+    onSave: jest.Mock,
+  ) =>
+    renderWithMantine(
+      <QueryClientProvider client={queryClient}>
+        <ReferenceVariablesProvider
+          filters={[metricsVariable]}
+          values={new Map([['metrics', 'metric-source']])}
+        >
+          <DBEditTimeChartForm
+            chartConfig={{
+              ...defaultChartConfig,
+              displayType: DisplayType.Number,
+              select: [series],
+              alert,
+            }}
+            dateRange={[new Date('2024-01-01'), new Date('2024-01-02')]}
+            dashboardId="dashboard-1"
+            onSave={onSave}
+          />
+        </ReferenceVariablesProvider>
+      </QueryClientProvider>,
+    );
+
+  const removalNotice = /This tile's alert will be removed when you save\./;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseSource.mockImplementation(({ id }: { id?: string }) => ({
+      data:
+        id === 'metric-source'
+          ? {
+              id: 'metric-source',
+              kind: SourceKind.Metric,
+              name: 'Test Metric Source',
+              from: { databaseName: 'default', tableName: '' },
+              connection: 'default',
+              timestampValueExpression: 'Timestamp',
+              metricTables: { gauge: 'metrics.gauge' },
+            }
+          : undefined,
+    }));
+  });
+
+  it('keeps the alert when the source goes to a variable and back', async () => {
+    const onSave = jest.fn();
+    renderWithAlert(completeAlert, onSave);
+    const sourceSelector = screen.getByTestId('source-selector');
+
+    await userEvent.selectOptions(sourceSelector, '$metrics');
+    expect(screen.getByText(removalNotice)).toBeInTheDocument();
+    expect(screen.queryByTestId('alert-button')).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(sourceSelector, 'metric-source');
+    expect(screen.queryByText(removalNotice)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('chart-save-button'));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].alert).toMatchObject(completeAlert);
+  });
+
+  it('saves without the alert while the source is a variable, even an invalid one', async () => {
+    const onSave = jest.fn();
+    // No webhook picked, so the alert alone would block the save
+    renderWithAlert(DEFAULT_TILE_ALERT, onSave);
+
+    await userEvent.selectOptions(
+      screen.getByTestId('source-selector'),
+      '$metrics',
+    );
+    await userEvent.click(screen.getByTestId('chart-save-button'));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const saved = onSave.mock.calls[0][0];
+    expect(saved.source).toBe('$metrics');
+    expect(saved.alert).toBeUndefined();
   });
 });

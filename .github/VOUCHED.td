@@ -1,4 +1,4 @@
-# Vouched contributors for hyperdxio/hyperdx.
+# Vouched contributors for ClickHouse/ClickStack.
 #
 # Pull requests from GitHub users who are not in this list are closed
 # automatically by .github/workflows/vouch.yml. See CONTRIBUTING.md for how to
@@ -25,11 +25,18 @@
 # copilot is listed because vouch only auto-exempts logins ending in "[bot]".
 # GitHub's Copilot coding agent has the login "Copilot", so without an entry
 # its PRs would be closed.
+28hus
 adityapimpalkar
 alex-fedotyev
 alok87
+andrewdunndev
+archat-hash
 arj22
 aryainguz
+bahltushar
+bcanvural
+bferreirq
+bilalatique
 brandon-pereira
 colehpage
 copilot
@@ -37,10 +44,14 @@ dhable
 dkong16
 elizabetdev
 ernestii
+eugeneo17
 fallintoplace
 fleon
 gingerwizard
 gyancr7
+harshul1484
+hercynium FIPS fix for #3390
+igor-kupczynski
 jaggederest
 jeyrathnam
 jordan-simonovski
@@ -48,6 +59,7 @@ juliojimenez
 jwhitaker-gridcog
 karl-power
 knudtty
+krishs01
 kyle-mally-ch
 leticiawebb
 lyhuang
@@ -59,15 +71,18 @@ mikeshi42
 milansanjeev
 mkaesz
 motsc
+mrkaye97 wants to implement improvements to ClickStack
 niladrix719
 peter-leonov-ch
 pttydou wants to improve FE type safety
 pulpdrew
+ralaruri
 rawatprince
 rip21
 sanjams2
 shuvamk
 spencertorres
+squaredg
 teeohhem
 tommyzli
 tsushanth

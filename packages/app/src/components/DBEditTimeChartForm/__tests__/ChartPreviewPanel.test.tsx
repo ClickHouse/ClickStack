@@ -2,6 +2,8 @@ import React from 'react';
 import {
   ChartConfigWithDateRange,
   ChartVariable,
+  DisplayType,
+  PromqlExpressionList,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
@@ -54,17 +56,23 @@ jest.mock('@/components/DBSqlRowTableWithSidebar', () => ({
 jest.mock('@/components/DBHeatmapChart', () => ({
   __esModule: true,
   default: () => <div data-testid="db-heatmap-chart">Heatmap Chart</div>,
-  toHeatmapChartConfig: (config: unknown) => ({
-    heatmapConfig: config,
-    scaleType: 'log' as const,
-  }),
+  toHeatmapQuery: (config: { heatmap?: { mode?: string } }) =>
+    config.heatmap?.mode === 'series'
+      ? { mode: 'series', config }
+      : { mode: 'distribution', config, scaleType: 'log' },
   buildHeatmapBoundsConfig: ({ config }: { config: unknown }) => config,
   buildHeatmapBucketConfig: ({ config }: { config: unknown }) => config,
+  buildHeatmapSeriesConfig: (config: unknown) => config,
+  resolveHeatmapGranularity: jest.requireActual(
+    '@/components/DBHeatmapChart/heatmapQueries',
+  ).resolveHeatmapGranularity,
   HEATMAP_N_BUCKETS: 80,
 }));
 
+const mockUseSource = jest.fn();
 jest.mock('@/source', () => ({
   getFirstTimestampValueExpression: jest.fn().mockReturnValue('Timestamp'),
+  useSource: (opts: { id?: string }) => mockUseSource(opts),
 }));
 
 const dateRange: [Date, Date] = [
@@ -106,6 +114,7 @@ const renderPanel = (
       showSampleEvents={false}
       showGeneratedPromql={false}
       setValue={jest.fn()}
+      setDisplayType={jest.fn()}
       onSubmit={jest.fn()}
       {...overrides}
     />,
@@ -115,6 +124,7 @@ const renderPanel = (
 describe('ChartPreviewPanel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseSource.mockReturnValue({ data: undefined });
   });
 
   describe('when no query has been run', () => {
@@ -263,6 +273,22 @@ describe('ChartPreviewPanel', () => {
       expect(screen.getByText(/Bounds query/i)).toBeInTheDocument();
       expect(screen.getByText(/Heatmap query/i)).toBeInTheDocument();
     });
+
+    it('should show the single time-chart query of a series heatmap', () => {
+      const seriesConfig = {
+        ...baseBuilderConfig,
+        heatmap: { mode: 'series' as const },
+      };
+      renderPanel({
+        queriedConfig: seriesConfig,
+        chartConfigForExplanations: seriesConfig,
+        showGeneratedSql: true,
+        activeTab: 'heatmap',
+      });
+
+      expect(screen.queryByText(/Bounds query/i)).not.toBeInTheDocument();
+      expect(screen.getAllByTestId('chart-sql-preview')).toHaveLength(1);
+    });
   });
 
   describe('generated PromQL section', () => {
@@ -273,13 +299,18 @@ describe('ChartPreviewPanel', () => {
     // and left it undefined off a dashboard.
     const promqlConfig = (
       overrides: {
-        promqlExpression?: string;
+        promqlExpression?: PromqlExpressionList;
+        displayType?: DisplayType;
+        source?: string;
+        granularity?: string;
         variables?: ChartVariable[];
       } = {},
     ): ChartConfigWithDateRange => ({
       configType: 'promql',
+      displayType: DisplayType.Line,
       promqlExpression: EXPRESSION,
       connection: 'default',
+      source: 'source-promql',
       from: { databaseName: 'default', tableName: 'metrics' },
       dateRange,
       ...overrides,
@@ -411,11 +442,70 @@ describe('ChartPreviewPanel', () => {
       await userEvent.hover(wrapper!);
 
       expect(
-        await screen.findByText(/Variables could not be expanded/),
+        await screen.findByText(/Expression could not be expanded/),
       ).toBeInTheDocument();
       expect(
         screen.queryByTestId('chart-promql-preview'),
       ).not.toBeInTheDocument();
+    });
+
+    // Selecting another source doesn't rerun the query, and the chart reads the
+    // floor from the source it ran with, so the preview has to as well.
+    it("expands macros with the queried source's floor, not the selected one's", async () => {
+      const promqlSource = (
+        id: string,
+        minAutoGranularity?: string,
+      ): TSource => ({
+        id,
+        kind: SourceKind.Promql,
+        name: id,
+        connection: 'default',
+        from: { databaseName: 'default', tableName: 'metrics_ts' },
+        timestampValueExpression: 'timestamp',
+        minAutoGranularity,
+      });
+      mockUseSource.mockImplementation(({ id }: { id?: string }) => ({
+        data:
+          id === 'queried' ? promqlSource('queried', '1 minute') : undefined,
+      }));
+
+      renderPanel({
+        queriedConfig: promqlConfig({
+          promqlExpression: 'rate(up[$__rate_interval])',
+          source: 'queried',
+          granularity: '15 second',
+        }),
+        tableSource: promqlSource('selected'),
+        showGeneratedPromql: true,
+      });
+      await openGeneratedPromql();
+
+      // max(15 + 60, 4 * 60). The selected source has no floor, which would
+      // give max(15 + 15, 4 * 15) = 60s.
+      expect(screen.getByTestId('chart-promql-preview')).toHaveTextContent(
+        'rate(up[240s])',
+      );
+    });
+
+    it('shows one preview per expression, labelled by alias', async () => {
+      renderPanel({
+        queriedConfig: promqlConfig({
+          promqlExpression: [
+            { expression: 'e2e_service_up', alias: 'up' },
+            { expression: 'rate(e2e_requests_total[5m])' },
+          ],
+        }),
+        showGeneratedPromql: true,
+      });
+      await openGeneratedPromql();
+
+      const previews = screen.getAllByTestId('chart-promql-preview');
+      expect(previews).toHaveLength(2);
+      expect(previews[0]).toHaveTextContent('e2e_service_up');
+      expect(previews[1]).toHaveTextContent('rate(e2e_requests_total[5m])');
+      expect(screen.getByText('up')).toBeInTheDocument();
+      // Unaliased expressions are numbered rather than left unlabelled.
+      expect(screen.getByText('Expression 2')).toBeInTheDocument();
     });
   });
 
@@ -424,6 +514,7 @@ describe('ChartPreviewPanel', () => {
       queriedConfig: baseBuilderConfig,
       dbTimeChartConfig: baseBuilderConfig,
       missingRequiredFilterNames: ['Service', 'Environment'],
+      canPreviewWithoutFilters: true,
     };
 
     it('names them instead of querying', () => {
@@ -431,7 +522,7 @@ describe('ChartPreviewPanel', () => {
 
       expect(
         screen.getByText(
-          'Missing required filters: Service, Environment. Select a value for each required filter, or turn off “Apply filters” to preview this tile without them.',
+          'Missing required filters or variables: Service, Environment. Select a value for each required filter, or turn off “Apply filters” to preview this tile without them.',
         ),
       ).toBeInTheDocument();
       expect(screen.queryByTestId('db-time-chart')).not.toBeInTheDocument();
@@ -439,6 +530,16 @@ describe('ChartPreviewPanel', () => {
       expect(
         screen.queryByText(/please start by defining/i),
       ).not.toBeInTheDocument();
+    });
+
+    it('leaves out the "Apply filters" hint when turning it off would not help', () => {
+      renderPanel({ ...blockedProps, canPreviewWithoutFilters: false });
+
+      expect(
+        screen.getByTestId('preview-missing-required-filters'),
+      ).toHaveTextContent(
+        /^Missing required filters or variables: Service, Environment\. Select a value for each one to preview this tile\.$/,
+      );
     });
 
     it('does not block a markdown tile, which queries nothing', () => {
@@ -454,8 +555,40 @@ describe('ChartPreviewPanel', () => {
 
       expect(screen.getByTestId('db-time-chart')).toBeInTheDocument();
       expect(
-        screen.queryByText(/Missing required filters/),
+        screen.queryByText(/Missing required filters or variables/),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  describe('when the selections are blocked', () => {
+    const blockedProps = {
+      queriedConfig: baseBuilderConfig,
+      dbTimeChartConfig: baseBuilderConfig,
+      blockedReason: 'The selected data source is on another connection.',
+    };
+
+    it('shows the reason instead of querying', () => {
+      renderPanel(blockedProps);
+
+      expect(screen.getByTestId('preview-blocked')).toHaveTextContent(
+        'The selected data source is on another connection.',
+      );
+      expect(screen.queryByTestId('db-time-chart')).not.toBeInTheDocument();
+    });
+
+    it('shows missing required filters first', () => {
+      renderPanel({ ...blockedProps, missingRequiredFilterNames: ['Service'] });
+
+      expect(
+        screen.getByTestId('preview-missing-required-filters'),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId('preview-blocked')).not.toBeInTheDocument();
+    });
+
+    it('does not block a markdown tile, which queries nothing', () => {
+      renderPanel({ ...blockedProps, activeTab: 'markdown' });
+
+      expect(screen.queryByTestId('preview-blocked')).not.toBeInTheDocument();
     });
   });
 });

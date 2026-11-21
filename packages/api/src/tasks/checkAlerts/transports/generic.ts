@@ -1,12 +1,14 @@
 import { objectHash } from '@hyperdx/common-utils/dist/core/utils';
 import {
-  DEFAULT_GENERIC_WEBHOOK_BODY,
+  getDefaultWebhookBody,
   WebhookService,
   WebhookTemplateVariable,
 } from '@hyperdx/common-utils/dist/types';
 import Handlebars from 'handlebars';
+import _ from 'lodash';
 import { performance } from 'perf_hooks';
 import { serializeError } from 'serialize-error';
+import { Agent, fetch } from 'undici';
 
 import { IWebhook } from '@/models/webhook';
 import {
@@ -23,8 +25,11 @@ import logger from '@/utils/logger';
 import { withRetry } from '@/utils/retry';
 import {
   validateWebhookUrl,
+  webhookLookup,
   WebhookUrlValidationError,
 } from '@/utils/validators';
+
+const webhookDispatcher = new Agent({ connect: { lookup: webhookLookup } });
 
 // Webhook delivery is the last (and most failure-prone) hop of an alert. It
 // happens in the background task, so failures only show up in logs today.
@@ -96,14 +101,20 @@ export const buildWebhookTemplateVariables = (message: Message) =>
     alertType: escapeJsonString(message.alertType ?? ''),
     comparator: escapeJsonString(message.comparator ?? ''),
     groupKey: escapeJsonString(message.groupKey ?? ''),
+    var: _.mapValues(message.groupValues ?? {}, v => escapeJsonString(v)),
     note: escapeJsonString(message.note ?? ''),
     sourceQuery: escapeJsonString(message.sourceQuery ?? ''),
     status: escapeJsonString(message.status ?? ''),
+    // An array so `{{tags}}` renders comma-joined and `{{#each tags}}` works.
+    tags: (message.tags ?? []).map(escapeJsonString),
     teamId: escapeJsonString(message.teamId ?? ''),
     threshold: message.threshold,
     thresholdMax: message.thresholdMax,
     value: message.value,
-  }) satisfies Record<WebhookTemplateVariable, string | number | undefined>;
+  }) satisfies Record<
+    WebhookTemplateVariable,
+    string | number | undefined | string[] | Record<string, string>
+  >;
 
 /**
  * Creates a Handlebars instance with common helpers registered.
@@ -215,9 +226,12 @@ const sendGenericWebhook = async (
 
     // Handlebars.compile throws on undefined; the API/MCP create paths allow an
     // absent body (the UI form applies the same default). An explicit "" is
-    // honored.
+    // honored. The default is per service: incident.io rejects the generic
+    // {"text": ...} payload.
     const bodyTemplate =
-      webhook.body == null ? DEFAULT_GENERIC_WEBHOOK_BODY : webhook.body;
+      webhook.body == null
+        ? getDefaultWebhookBody(webhook.service ?? WebhookService.Generic)
+        : webhook.body;
 
     body = handlebars.compile(bodyTemplate, {
       noEscape: true,
@@ -251,6 +265,13 @@ const sendGenericWebhook = async (
         headers,
         body,
         signal: attemptSignal,
+        dispatcher: webhookDispatcher,
+      }).catch(e => {
+        // Surface a connect-time block as the validation error (a 400), not "fetch failed".
+        for (let c = e; c; c = c.cause) {
+          if (c instanceof WebhookUrlValidationError) throw c;
+        }
+        throw e;
       });
 
       // Disallow redirects to avoid redirect-based SSRF.

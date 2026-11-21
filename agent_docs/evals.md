@@ -28,7 +28,7 @@ compare any two (or more) MCP servers side by side.
 
 | Requirement | Notes |
 |---|---|
-| `yarn dev` running | Each worktree needs `yarn dev` running with a fixed slot. This handles `yarn install`, `yarn build:common-utils`, Docker containers (ClickHouse, MongoDB), and the API server. See [Development Setup](development.md). |
+| `yarn dev` running | Each worktree needs `yarn dev` running with a fixed slot. This handles `yarn install`, `yarn build:common-utils`, Docker containers (ClickHouse, DocumentDB), and the API server. See [Development Setup](development.md). |
 | `ANTHROPIC_API_KEY` or `AI_API_KEY` | Auto-loaded from `.env.local` at the monorepo root. Check `.env.local` in other worktrees for existing keys if missing. |
 | `claude` CLI | Installed globally (`which claude`). The harness spawns it in streaming JSON mode. |
 | `uv` | Only needed for `stdio`-type MCPs (e.g. raw ClickHouse MCP). Install via `curl -LsSf https://astral.sh/uv/install.sh \| sh`. |
@@ -41,7 +41,7 @@ This is the standard workflow for comparing a feature branch against main.
 ### Architecture
 
 Evals run from **one worktree** (the branch being tested). The eval harness
-talks to **two separate HyperDX API instances** running on different slots:
+talks to **two separate ClickStack API instances** running on different slots:
 
 ```
                         ┌──────────────────────┐
@@ -68,14 +68,14 @@ talks to **two separate HyperDX API instances** running on different slots:
 ```
 
 Each slot runs its own ClickHouse instance. `setup-hyperdx` (step 2) creates
-the HyperDX account, Connection, and Sources on each instance, but does **not**
+the ClickStack account, Connection, and Sources on each instance, but does **not**
 seed telemetry data. The `run` command auto-seeds on first run, but only into
 the single ClickHouse specified in the top-level `clickhouse` config — so for
 dual-slot comparisons you must seed each instance explicitly (step 4b).
 
 ### 1. Start both dev stacks
 
-`yarn dev` starts Docker infra (ClickHouse, MongoDB, OTel Collector) **and**
+`yarn dev` starts Docker infra (ClickHouse, DocumentDB, OTel Collector) **and**
 the API + App servers in one command. Run it from each worktree with a fixed
 slot:
 
@@ -106,7 +106,7 @@ curl -s -o /dev/null -w "Slot 99 CH: %{http_code}\n" http://localhost:30599/
 > branch under test).
 
 This registers an eval account, creates a ClickHouse Connection, and creates
-per-scenario Sources on each HyperDX instance. The command is **idempotent** —
+per-scenario Sources on each ClickStack instance. The command is **idempotent** —
 it skips anything that already exists, so it's safe to run every time.
 
 **Skip this step** if `eval.config.branch.json` and `eval.config.main.json`
@@ -189,7 +189,7 @@ curl -s -o /dev/null -w "Main MCP: %{http_code}\n" \
 
 ### 5. Seed both ClickHouse instances
 
-`setup-hyperdx` creates the HyperDX account and Sources but does **not** seed
+`setup-hyperdx` creates the ClickStack account and Sources but does **not** seed
 telemetry data. The `run` command's auto-seed only writes to the single
 ClickHouse in the top-level `clickhouse` config, so you must seed each
 instance explicitly:
@@ -267,10 +267,10 @@ yarn workspace @hyperdx/hdx-eval dev run error-root-cause \
   --mcp hyperdx --model claude-opus-4-6 --runs 3
 ```
 
-### Non-HyperDX MCP (e.g. raw ClickHouse)
+### Non-ClickStack MCP (e.g. raw ClickHouse)
 
 The framework works with any MCP. The `clickhouse` stdio MCP is included by
-default in `eval.config.json` after setup. Use it to compare HyperDX's MCP
+default in `eval.config.json` after setup. Use it to compare ClickStack's MCP
 against querying ClickHouse directly.
 
 ```bash
@@ -326,7 +326,7 @@ Always use the `bash -c 'export HDX_DEV_SLOT=... && source scripts/dev-env.sh
 
 ### Access keys go stale after container restarts
 
-When MongoDB is recreated, the eval account's access key changes. Re-run
+When DocumentDB is recreated, the eval account's access key changes. Re-run
 `setup-hyperdx` against the affected instance and rebuild the combined config.
 
 ### False timeouts

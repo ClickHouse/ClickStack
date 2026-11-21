@@ -1,18 +1,26 @@
 import { validateChartConfigFormulas } from '@hyperdx/common-utils/dist/dashboardValidation';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   addDuplicateTileIdIssues,
+  AdhocDashboardFilterSchema,
+  AdhocFilterValueSchema,
   AggregateFunctionSchema,
   AlertChartConfigSchema,
   alertDisplayNameSchema,
   alertNoteSchema,
+  alertNumConsecutiveWindowsSchema,
   alertTagsSchema,
   AlertThresholdType,
   BackgroundChartSchema,
   ChartPaletteTokenSchema,
+  ConnectionDashboardFilterSchema,
   DASHBOARD_CONTAINER_ID_MAX,
   DASHBOARD_MAX_TILES,
-  MAX_TAG_LENGTH,
-  MAX_TAGS,
+  DataSourceDashboardFilterSchema,
+  HeatmapScaleTypeSchema,
+  LineInterpolationSchema,
+  MAX_LEGEND_TEMPLATE_LENGTH,
+  MAX_PROMQL_EXPRESSIONS,
   MetricFormulaSchema,
   MetricsDataType,
   NumberFormatSchema,
@@ -20,12 +28,18 @@ import {
   OnClickDashboardSchema,
   OnClickExternalSchema,
   OnClickSearchSchema,
+  PromqlHeatmapModeSchema,
   PromqlLabelDashboardFilterSchema,
+  PromqlQueryTypeSchema,
+  PromqlReducerSchema,
   QueryExpressionDashboardFilterSchema,
   scheduleStartAtSchema,
   SearchConditionLanguageSchema as whereLanguageSchema,
+  SQLIntervalSchema,
+  SqlQueryDashboardFilterSchema,
   StaticListDashboardFilterSchema,
   tagsSchema,
+  TILE_DESCRIPTION_MAX_LENGTH,
   validateAlertChannelSelection,
   validateAlertScheduleOffsetMinutes,
   validateAlertThresholdMax,
@@ -42,6 +56,38 @@ import { AlertSource } from '@/models/alert';
 export const objectIdSchema = z.string().refine(val => {
   return Types.ObjectId.isValid(val);
 }, 'Invalid ObjectId');
+
+export const mutedUntilSchema = z
+  .string()
+  .datetime({ offset: true })
+  .refine(val => new Date(val) > new Date(), {
+    message: 'mutedUntil must be in the future',
+  });
+
+/**
+ * A source or connection field: an ObjectId, or a `$name` reference to the
+ * dashboard's data source or connection variable of that name.
+ */
+export const objectIdOrVariableReferenceSchema = z
+  .string()
+  .refine(
+    val => Types.ObjectId.isValid(val) || parseVariableReference(val) != null,
+    'Invalid ObjectId or $variable reference',
+  );
+
+/**
+ * A repeatable query param. Express's parser yields a bare string for a single
+ * occurrence and an array for several, and `?p[]=x` lands on the same key as
+ * `?p=x`. Normalizes both to an array, dropping empty values — `?p=` means
+ * "absent", not "match the empty string" — and collapsing to `undefined` when
+ * nothing is left, so `.optional()` covers both spellings of "not supplied".
+ */
+export const stringListQueryParam = z
+  .union([z.string(), z.array(z.string())])
+  .transform(v => {
+    const values = (Array.isArray(v) ? v : [v]).filter(s => s !== '');
+    return values.length ? values : undefined;
+  });
 
 // ================================
 // Charts & Dashboards (old format)
@@ -63,7 +109,11 @@ const timeChartSeriesSchema = z.object({
   metricDataType: z.optional(z.nativeEnum(MetricsDataType)),
   metricName: z.string().optional(),
   displayType: z
-    .union([z.literal('stacked_bar'), z.literal('line')])
+    .union([
+      z.literal('stacked_bar'),
+      z.literal('stacked_line'),
+      z.literal('line'),
+    ])
     .optional(),
 });
 
@@ -142,11 +192,11 @@ const chartSeriesSchema = z.discriminatedUnion('type', [
 
 // Re-exported from common-utils so existing `@/utils/zod` importers keep working
 // while the canonical definition lives in the shared package.
-export { MAX_TAG_LENGTH, MAX_TAGS, tagsSchema };
+export { tagsSchema };
 
 const externalQueryExpressionFilterShape =
   QueryExpressionDashboardFilterSchema.omit({ source: true }).extend({
-    sourceId: objectIdSchema,
+    sourceId: objectIdOrVariableReferenceSchema,
   });
 
 // A static filter's mode flags each accept exactly one value, so callers may
@@ -159,10 +209,50 @@ const externalStaticListFilterShape = StaticListDashboardFilterSchema.extend({
 const externalPromqlLabelFilterShape = PromqlLabelDashboardFilterSchema.omit({
   source: true,
 }).extend({
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   isBroadcastEnabled: z.literal(false).default(false),
   isVariableEnabled: z.literal(true).default(true),
 });
+
+// `connectionId`/`sourceId` rather than `connection`/`source`, matching raw SQL
+// tiles.
+const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
+  connection: true,
+  source: true,
+}).extend({
+  connectionId: objectIdOrVariableReferenceSchema,
+  sourceId: objectIdOrVariableReferenceSchema.optional(),
+  isBroadcastEnabled: z.literal(false).default(false),
+  isVariableEnabled: z.literal(true).default(true),
+});
+
+// Field names match the stored filter, so it needs no translation.
+const externalAdhocFilterShape = AdhocDashboardFilterSchema.extend({
+  sources: z.array(objectIdOrVariableReferenceSchema).min(1),
+  appliesToSourceIds: z.array(objectIdOrVariableReferenceSchema).optional(),
+  isBroadcastEnabled: z.literal(true).default(true),
+  isVariableEnabled: z.literal(true).default(true),
+});
+
+// Reference variables are always single-select and required, so these
+// fields, like the mode flags, accept one value each and may be omitted.
+const referenceVariableFixedFields = {
+  minSelections: z.literal(1).default(1),
+  maxSelections: z.literal(1).default(1),
+  isBroadcastEnabled: z.literal(false).default(false),
+  isVariableEnabled: z.literal(true).default(true),
+};
+
+const externalDataSourceFilterShape = DataSourceDashboardFilterSchema.omit({
+  connection: true,
+}).extend({
+  connectionId: objectIdOrVariableReferenceSchema.optional(),
+  ...referenceVariableFixedFields,
+});
+
+const externalConnectionFilterShape = ConnectionDashboardFilterSchema.extend(
+  referenceVariableFixedFields,
+);
 
 export const externalDashboardFilterSchemaWithId = z.discriminatedUnion(
   'type',
@@ -170,6 +260,10 @@ export const externalDashboardFilterSchemaWithId = z.discriminatedUnion(
     externalQueryExpressionFilterShape.strict(),
     externalStaticListFilterShape.strict(),
     externalPromqlLabelFilterShape.strict(),
+    externalSqlQueryFilterShape.strict(),
+    externalAdhocFilterShape.strict(),
+    externalDataSourceFilterShape.strict(),
+    externalConnectionFilterShape.strict(),
   ],
 );
 
@@ -186,6 +280,10 @@ export const externalDashboardFilterSchema = z.discriminatedUnion('type', [
   externalQueryExpressionFilterShape.omit({ id: true }).strict(),
   externalStaticListFilterShape.omit({ id: true }).strict(),
   externalPromqlLabelFilterShape.omit({ id: true }).strict(),
+  externalSqlQueryFilterShape.omit({ id: true }).strict(),
+  externalAdhocFilterShape.omit({ id: true }).strict(),
+  externalDataSourceFilterShape.omit({ id: true }).strict(),
+  externalConnectionFilterShape.omit({ id: true }).strict(),
 ]);
 
 export type ExternalDashboardFilter = z.infer<
@@ -193,15 +291,25 @@ export type ExternalDashboardFilter = z.infer<
 >;
 
 /**
- * One entry in a dashboard's `savedFilterValues`: either a rendered SQL
- * predicate, or a selection addressed by the dashboard variable it belongs to.
+ * One entry in a dashboard's `savedFilterValues`: a rendered SQL predicate, a
+ * selection addressed by the dashboard variable it belongs to, or an ad hoc
+ * filter's conditions addressed by its variable name.
  */
+export const externalSqlSavedFilterValueSchema = z.object({
+  type: z.literal('sql').optional().default('sql'),
+  condition: z.string().max(10000),
+});
+
+export const externalVariableSavedFilterValueSchema =
+  VariableFilterValueSchema.strict();
+
+export const externalAdhocSavedFilterValueSchema =
+  AdhocFilterValueSchema.strict();
+
 export const externalDashboardSavedFilterValueSchema = z.union([
-  z.object({
-    type: z.literal('sql').optional().default('sql'),
-    condition: z.string().max(10000),
-  }),
-  VariableFilterValueSchema.strict(),
+  externalSqlSavedFilterValueSchema,
+  externalVariableSavedFilterValueSchema,
+  externalAdhocSavedFilterValueSchema,
 ]);
 
 // ================================
@@ -273,7 +381,15 @@ export const externalDashboardSelectItemSchema = z
         message:
           'Value expression cannot be used with count aggregation function',
       });
-    } else if (!data.valueExpression && data.aggFn !== 'count') {
+    } else if (
+      !data.valueExpression &&
+      data.aggFn !== 'count' &&
+      // A metric select names its value with metricName, which is what
+      // renderChartConfig aggregates; there is no expression to require.
+      // Both fields: renderChartConfig dispatches on metricType and throws
+      // when it is absent, so metricName alone is not a renderable select.
+      !(data.metricName && data.metricType)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
@@ -288,9 +404,9 @@ export type ExternalDashboardSelectItem = z.infer<
 
 const externalDashboardRawSqlChartConfigBaseSchema = z.object({
   configType: z.literal('sql'),
-  connectionId: objectIdSchema,
+  connectionId: objectIdOrVariableReferenceSchema,
   sqlTemplate: z.string().max(100000),
-  sourceId: objectIdSchema.optional(),
+  sourceId: objectIdOrVariableReferenceSchema.optional(),
   numberFormat: NumberFormatSchema.optional(),
 });
 
@@ -313,7 +429,7 @@ const externalFormulasSchema = z.array(MetricFormulaSchema).max(10).optional();
 const externalShowOperandSeriesSchema = z.boolean().optional();
 
 const externalDashboardTimeChartConfigSchema = z.object({
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).min(1).max(20),
   groupBy: z.string().max(10000).optional(),
   asRatio: z.boolean().optional(),
@@ -329,6 +445,7 @@ const externalDashboardLineChartConfigSchema =
     displayType: z.literal('line'),
     compareToPreviousPeriod: z.boolean().optional(),
     fitYAxisToData: z.boolean().optional(),
+    lineInterpolation: LineInterpolationSchema.optional(),
     // Three-state, matching the internal SharedChartSettingsSchema.seriesLimit:
     // omitted = default render cap, 0 = unlimited, positive N = top-N by peak.
     seriesLimit: z.number().int().nonnegative().optional(),
@@ -341,6 +458,7 @@ const externalDashboardLineRawSqlChartConfigSchema =
     fillNulls: z.boolean().optional(),
     alignDateRangeToGranularity: z.boolean().optional(),
     fitYAxisToData: z.boolean().optional(),
+    lineInterpolation: LineInterpolationSchema.optional(),
     // Three-state, matching the internal SharedChartSettingsSchema.seriesLimit:
     // omitted = default render cap, 0 = unlimited, positive N = top-N by peak.
     // Raw SQL Line tiles carry the client-side render cap too, so it must
@@ -368,9 +486,21 @@ const externalDashboardBarRawSqlChartConfigSchema =
     seriesLimit: z.number().int().nonnegative().optional(),
   });
 
+const externalDashboardStackedLineChartConfigSchema =
+  externalDashboardBarChartConfigSchema.extend({
+    displayType: z.literal('stacked_line'),
+    lineInterpolation: LineInterpolationSchema.optional(),
+  });
+
+const externalDashboardStackedLineRawSqlChartConfigSchema =
+  externalDashboardBarRawSqlChartConfigSchema.extend({
+    displayType: z.literal('stacked_line'),
+    lineInterpolation: LineInterpolationSchema.optional(),
+  });
+
 const externalDashboardTableChartConfigSchema = z.object({
   displayType: z.literal('table'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).min(1).max(20),
   groupBy: z.string().max(10000).optional(),
   having: z.string().max(10000).optional(),
@@ -410,7 +540,7 @@ const externalDashboardCategoricalBarRawSqlChartConfigSchema =
 
 const externalDashboardNumberChartConfigSchema = z.object({
   displayType: z.literal('number'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   // Exactly one select item unless `formulas` is set: a formula number tile
   // displays the (single) formula value and its select entries are the
   // formula's operands (e.g. A / (A + B)). The one-item rule for
@@ -450,7 +580,7 @@ const externalDashboardNumberChartConfigSchema = z.object({
 
 const externalDashboardPieChartConfigSchema = z.object({
   displayType: z.literal('pie'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).length(1),
   groupBy: z.string().max(10000).optional(),
   orderBy: z.string().max(10000).optional(),
@@ -461,7 +591,7 @@ const externalDashboardPieChartConfigSchema = z.object({
 
 const externalDashboardCategoricalBarChartConfigSchema = z.object({
   displayType: z.literal('bar'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardSelectItemSchema).length(1),
   groupBy: z.string().max(10000).optional(),
   orderBy: z.string().max(10000).optional(),
@@ -490,14 +620,15 @@ export type ExternalDashboardHeatmapSelectItem = z.infer<
   typeof externalDashboardHeatmapSelectItemSchema
 >;
 
-// Heatmap exposes the row-level filter at the chart-config level (matching
-// the editor: HeatmapSeriesEditor renders a single SearchWhereInput bound
-// to the top-level `where` / `whereLanguage`). There is no groupBy in the
-// heatmap UI (HeatmapSeriesEditor doesn't render one), so it is omitted
-// from the schema.
+// Distribution-mode heatmap. It exposes the row-level filter at the
+// chart-config level (matching the editor: HeatmapSeriesEditor renders a
+// single SearchWhereInput bound to the top-level `where` / `whereLanguage`).
+// Distribution heatmaps have no groupBy, so it is omitted from the schema.
+// `heatmapMode` is optional: an absent mode is 'distribution'.
 const externalDashboardHeatmapChartConfigSchema = z.object({
   displayType: z.literal('heatmap'),
-  sourceId: objectIdSchema,
+  heatmapMode: z.literal('distribution').optional(),
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.array(externalDashboardHeatmapSelectItemSchema).length(1),
   where: z.string().max(10000).optional().default(''),
   // `whereLanguageSchema` (an alias for `SearchConditionLanguageSchema`)
@@ -508,9 +639,18 @@ const externalDashboardHeatmapChartConfigSchema = z.object({
   numberFormat: NumberFormatSchema.optional(),
 });
 
+const externalDashboardHeatmapSeriesChartConfigSchema = z.object({
+  displayType: z.literal('heatmap'),
+  heatmapMode: z.literal('series'),
+  sourceId: objectIdOrVariableReferenceSchema,
+  select: z.array(externalDashboardSelectItemSchema).length(1),
+  groupBy: z.string().max(10000).optional(),
+  numberFormat: NumberFormatSchema.optional(),
+});
+
 const externalDashboardSearchChartConfigSchema = z.object({
   displayType: z.literal('search'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.string().max(10000),
   where: z.string().max(10000).optional().default(''),
   whereLanguage: whereLanguageSchema,
@@ -534,7 +674,7 @@ const externalDashboardMarkdownChartConfigSchema = z.object({
 
 const externalDashboardEventPatternsChartConfigSchema = z.object({
   displayType: z.literal('event_patterns'),
-  sourceId: objectIdSchema,
+  sourceId: objectIdOrVariableReferenceSchema,
   select: z.string().max(10000).optional().default(''),
   where: z.string().max(10000).optional().default(''),
   whereLanguage: whereLanguageSchema,
@@ -545,6 +685,7 @@ const externalDashboardBuilderTileConfigSchema = z.discriminatedUnion(
   [
     externalDashboardLineChartConfigSchema,
     externalDashboardBarChartConfigSchema,
+    externalDashboardStackedLineChartConfigSchema,
     externalDashboardTableChartConfigSchema,
     externalDashboardNumberChartConfigSchema,
     externalDashboardPieChartConfigSchema,
@@ -556,15 +697,32 @@ const externalDashboardBuilderTileConfigSchema = z.discriminatedUnion(
   ],
 );
 
-type ExternalDashboardBuilderTileConfig = z.infer<
-  typeof externalDashboardBuilderTileConfigSchema
->;
+export type ExternalDashboardBuilderTileConfig =
+  | z.infer<typeof externalDashboardBuilderTileConfigSchema>
+  | z.infer<typeof externalDashboardHeatmapSeriesChartConfigSchema>;
+
+/**
+ * Both heatmap modes share `displayType: 'heatmap'`, which a discriminated
+ * union cannot hold twice, so series-mode heatmaps are routed to their own
+ * schema. Any other `heatmapMode` falls through to the distribution schema
+ * and fails its literal.
+ */
+const getExternalBuilderTileConfigSchema = (data: unknown) =>
+  data !== null &&
+  typeof data === 'object' &&
+  'displayType' in data &&
+  data.displayType === 'heatmap' &&
+  'heatmapMode' in data &&
+  data.heatmapMode === 'series'
+    ? externalDashboardHeatmapSeriesChartConfigSchema
+    : externalDashboardBuilderTileConfigSchema;
 
 const externalDashboardRawSqlTileConfigSchema = z.discriminatedUnion(
   'displayType',
   [
     externalDashboardLineRawSqlChartConfigSchema,
     externalDashboardBarRawSqlChartConfigSchema,
+    externalDashboardStackedLineRawSqlChartConfigSchema,
     externalDashboardTableRawSqlChartConfigSchema,
     externalDashboardNumberRawSqlChartConfigSchema,
     externalDashboardPieRawSqlChartConfigSchema,
@@ -574,6 +732,118 @@ const externalDashboardRawSqlTileConfigSchema = z.discriminatedUnion(
 
 export type ExternalDashboardRawSqlTileConfig = z.infer<
   typeof externalDashboardRawSqlTileConfigSchema
+>;
+
+// PromQL tiles mirror `PromqlSavedChartConfig` (common-utils types.ts) and,
+// per display type, the fields the chart editor saves for a PromQL tile
+// (`convertFormStateToSavedChartConfig`). `connection` is not exposed: it is
+// read from the source at query time.
+const externalPromqlRangeExpressionSchema = z.object({
+  expression: z.string().max(10000),
+  alias: z.string().max(10000).optional(),
+});
+
+// Table, number, pie and bar tiles can evaluate an expression at a single
+// instant (`displayTypeSupportsInstantQuery`); other display types drop
+// `queryType` like the editor does.
+const externalPromqlInstantExpressionSchema =
+  externalPromqlRangeExpressionSchema.extend({
+    queryType: PromqlQueryTypeSchema.optional(),
+  });
+
+// Number, pie and bar tiles reduce a range query to one value per series
+// (`displayTypeSupportsReducer`).
+const externalPromqlReducibleExpressionSchema =
+  externalPromqlInstantExpressionSchema.extend({
+    reducer: PromqlReducerSchema.optional(),
+  });
+
+const externalPromqlExpressionListSchema = <T extends z.ZodTypeAny>(item: T) =>
+  z.array(item).min(1).max(MAX_PROMQL_EXPRESSIONS);
+
+const externalPromqlLegendTemplateSchema = z
+  .string()
+  .max(MAX_LEGEND_TEMPLATE_LENGTH)
+  .optional();
+
+const externalPromqlChartConfigBaseSchema = z.object({
+  configType: z.literal('promql'),
+  sourceId: objectIdOrVariableReferenceSchema,
+  // Sets the Prometheus step and `$__interval` of range queries.
+  granularity: z.union([SQLIntervalSchema, z.literal('auto')]).optional(),
+  numberFormat: NumberFormatSchema.optional(),
+});
+
+const externalPromqlStackedChartConfigSchema =
+  externalPromqlChartConfigBaseSchema.extend({
+    displayType: z.literal('stacked_bar'),
+    expressions: externalPromqlExpressionListSchema(
+      externalPromqlRangeExpressionSchema,
+    ),
+    legendTemplate: externalPromqlLegendTemplateSchema,
+    fillNulls: z.boolean().optional(),
+    alignDateRangeToGranularity: z.boolean().optional(),
+    seriesLimit: z.number().int().nonnegative().optional(),
+  });
+
+const externalPromqlCategoricalChartConfigSchema =
+  externalPromqlChartConfigBaseSchema.extend({
+    displayType: z.literal('pie'),
+    expressions: externalPromqlExpressionListSchema(
+      externalPromqlReducibleExpressionSchema,
+    ),
+    legendTemplate: externalPromqlLegendTemplateSchema,
+    // Three-state: omitted = default cap, 0 = unlimited, positive N = top-N.
+    limit: z.number().int().nonnegative().optional(),
+  });
+
+const externalDashboardPromqlTileConfigSchema = z.discriminatedUnion(
+  'displayType',
+  [
+    externalPromqlStackedChartConfigSchema.extend({
+      displayType: z.literal('line'),
+      compareToPreviousPeriod: z.boolean().optional(),
+      lineInterpolation: LineInterpolationSchema.optional(),
+    }),
+    externalPromqlStackedChartConfigSchema,
+    externalPromqlStackedChartConfigSchema.extend({
+      displayType: z.literal('stacked_line'),
+      lineInterpolation: LineInterpolationSchema.optional(),
+    }),
+    externalPromqlChartConfigBaseSchema.extend({
+      displayType: z.literal('table'),
+      expressions: externalPromqlExpressionListSchema(
+        externalPromqlInstantExpressionSchema,
+      ),
+    }),
+    externalPromqlChartConfigBaseSchema.extend({
+      displayType: z.literal('number'),
+      expressions: externalPromqlExpressionListSchema(
+        externalPromqlReducibleExpressionSchema,
+      ),
+      color: ChartPaletteTokenSchema.optional(),
+      colorRules: z.array(NumberTileColorConditionSchema).max(10).optional(),
+      backgroundChart: BackgroundChartSchema.optional(),
+    }),
+    externalPromqlCategoricalChartConfigSchema,
+    externalPromqlCategoricalChartConfigSchema.extend({
+      displayType: z.literal('bar'),
+    }),
+    externalPromqlChartConfigBaseSchema.extend({
+      displayType: z.literal('heatmap'),
+      expressions: externalPromqlExpressionListSchema(
+        externalPromqlRangeExpressionSchema,
+      ),
+      // An absent mode is 'distribution'.
+      heatmapMode: PromqlHeatmapModeSchema.optional(),
+      heatmapScaleType: HeatmapScaleTypeSchema.optional(),
+      legendTemplate: externalPromqlLegendTemplateSchema,
+    }),
+  ],
+);
+
+export type ExternalDashboardPromqlTileConfig = z.infer<
+  typeof externalDashboardPromqlTileConfigSchema
 >;
 
 /**
@@ -587,27 +857,36 @@ const isRawSqlRoutedConfig = (data: unknown): boolean =>
   'configType' in data &&
   data.configType === 'sql';
 
+// Dashboard tiles only: inline alert configs have no PromQL variant.
+const isPromqlRoutedConfig = (data: unknown): boolean =>
+  data !== null &&
+  typeof data === 'object' &&
+  'configType' in data &&
+  data.configType === 'promql';
+
 /**
  * Rejects a `configType` the routing predicate does not recognize. Without
- * this, an unknown value (e.g. `configType: 'promql'`) routes to the builder
- * union, which strips the unrecognized keys and parses a body that asked for
- * something else — so the caller's PromQL config would silently persist as a
- * builder config. Returns true when an issue was raised (caller stops).
+ * this, an unknown value (e.g. `configType: 'promql'` on an alert config)
+ * routes to the builder union, which strips the unrecognized keys and parses a
+ * body that asked for something else — so the caller's config would silently
+ * persist as a builder config. Returns true when an issue was raised (caller
+ * stops).
  */
 const addUnsupportedConfigTypeIssue = (
   data: unknown,
   ctx: z.RefinementCtx,
+  supportedConfigTypes: readonly string[],
 ): boolean => {
   if (
     data !== null &&
     typeof data === 'object' &&
     'configType' in data &&
-    data.configType !== 'sql'
+    !supportedConfigTypes.some(type => type === data.configType)
   ) {
+    const supported = supportedConfigTypes.map(type => `"${type}"`).join(', ');
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message:
-        'configType must be "sql" or omitted (builder configs carry no configType)',
+      message: `configType must be ${supported} or omitted (builder configs carry no configType)`,
       path: ['configType'],
     });
     return true;
@@ -673,25 +952,33 @@ const addConfigTypeRoutedIssues = (
 
 const externalDashboardTileConfigSchema = z
   .custom<
-    ExternalDashboardRawSqlTileConfig | ExternalDashboardBuilderTileConfig
+    | ExternalDashboardRawSqlTileConfig
+    | ExternalDashboardBuilderTileConfig
+    | ExternalDashboardPromqlTileConfig
   >()
   .superRefine((data, ctx) => {
-    if (addUnsupportedConfigTypeIssue(data, ctx)) {
+    if (addUnsupportedConfigTypeIssue(data, ctx, ['sql', 'promql'])) {
       return;
     }
 
     // Route to the correct sub-schema based on configType so Zod's
     // discriminatedUnion can produce targeted field-level errors rather
     // than a generic union failure.
-    const schema = isRawSqlRoutedConfig(data)
-      ? externalDashboardRawSqlTileConfigSchema
-      : externalDashboardBuilderTileConfigSchema;
+    const schema = isPromqlRoutedConfig(data)
+      ? externalDashboardPromqlTileConfigSchema
+      : isRawSqlRoutedConfig(data)
+        ? externalDashboardRawSqlTileConfigSchema
+        : getExternalBuilderTileConfigSchema(data);
 
     const result = schema.safeParse(data);
     if (!result.success) {
       for (const issue of result.error.issues) {
         ctx.addIssue(issue);
       }
+      return;
+    }
+
+    if (isPromqlRoutedConfig(data)) {
       return;
     }
 
@@ -702,11 +989,12 @@ const externalDashboardTileConfigSchema = z
   })
   .transform(data => {
     // Re-parse through the appropriate sub-schema to strip unknown fields.
-    // Safe to call .parse() here — superRefine already validated the data,
-    // so this is guaranteed to succeed.
+    if (isPromqlRoutedConfig(data)) {
+      return externalDashboardPromqlTileConfigSchema.parse(data);
+    }
     return isRawSqlRoutedConfig(data)
       ? externalDashboardRawSqlTileConfigSchema.parse(data)
-      : externalDashboardBuilderTileConfigSchema.parse(data);
+      : getExternalBuilderTileConfigSchema(data).parse(data);
   });
 
 export type ExternalDashboardTileConfig = z.infer<
@@ -744,6 +1032,7 @@ export const externalDashboardTileSchema = z
     // valid container id from the editor always fits.
     containerId: z.string().min(1).max(DASHBOARD_CONTAINER_ID_MAX).optional(),
     tabId: z.string().min(1).max(DASHBOARD_CONTAINER_ID_MAX).optional(),
+    description: z.string().max(TILE_DESCRIPTION_MAX_LENGTH).optional(),
   })
   .superRefine((data, ctx) => {
     if (data.series && data.config) {
@@ -896,6 +1185,11 @@ export const externalAlertBuilderChartConfigSchema = z.discriminatedUnion(
       where: z.string().max(10000).optional(),
       whereLanguage: whereLanguageSchema,
     }),
+    externalDashboardStackedLineChartConfigSchema.extend({
+      name: alertChartConfigNameSchema,
+      where: z.string().max(10000).optional(),
+      whereLanguage: whereLanguageSchema,
+    }),
     externalDashboardNumberChartConfigSchema.extend({
       name: alertChartConfigNameSchema,
       where: z.string().max(10000).optional(),
@@ -913,6 +1207,11 @@ export const externalAlertRawSqlChartConfigSchema = z.discriminatedUnion(
       whereLanguage: rejectedAlertRawSqlWhereField,
     }),
     externalDashboardBarRawSqlChartConfigSchema.extend({
+      name: alertChartConfigNameSchema,
+      where: rejectedAlertRawSqlWhereField,
+      whereLanguage: rejectedAlertRawSqlWhereField,
+    }),
+    externalDashboardStackedLineRawSqlChartConfigSchema.extend({
       name: alertChartConfigNameSchema,
       where: rejectedAlertRawSqlWhereField,
       whereLanguage: rejectedAlertRawSqlWhereField,
@@ -937,7 +1236,7 @@ export type ExternalAlertChartConfig =
 export const externalAlertChartConfigSchema = z
   .custom<ExternalAlertChartConfig>()
   .superRefine((data, ctx) => {
-    if (addUnsupportedConfigTypeIssue(data, ctx)) {
+    if (addUnsupportedConfigTypeIssue(data, ctx, ['sql'])) {
       return;
     }
 
@@ -1006,7 +1305,7 @@ const alertBaseSchema = z.object({
   note: alertNoteSchema,
   displayName: alertDisplayNameSchema,
   tags: alertTagsSchema,
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 // External v2 alert schema. Inline alerts carry their chart config in the
@@ -1060,6 +1359,7 @@ const baseWebhookSchema = {
   name: z.string(),
   url: z.string().optional(),
   description: z.string().optional(),
+  titleEmoji: z.boolean().optional(),
   updatedAt: z.string(),
   createdAt: z.string(),
 };
@@ -1163,6 +1463,7 @@ export const externalWebhookCreateSchema = z
     service: z.nativeEnum(WebhookService),
     url: z.string().url().max(MAX_WEBHOOK_URL_LENGTH),
     description: z.string().max(MAX_WEBHOOK_DESCRIPTION_LENGTH).optional(),
+    titleEmoji: z.boolean().optional(),
     queryParams: z
       .record(webhookQueryParamKeySchema, webhookQueryParamValueSchema)
       .refine(m => Object.keys(m).length <= MAX_WEBHOOK_QUERY_PARAMS, {

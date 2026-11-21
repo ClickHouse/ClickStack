@@ -1,9 +1,13 @@
 name: hdx-e2e
 services:
   db:
-    image: mongo:5.0.32-focal
+    image: hyperdx/documentdb:local
+    build: ../../../../docker/documentdb
+    environment:
+      DOCDB_USER: hyperdx
+      DOCDB_PASSWORD: hyperdx
     ports:
-      - ${HDX_E2E_MONGO_PORT:-21100}:27017
+      - 127.0.0.1:${HDX_E2E_MONGO_PORT:-21100}:10260
     networks:
       - internal
     deploy:
@@ -15,7 +19,7 @@ services:
           memory: 512M
           cpus: '0.5'
   ch-server:
-    image: clickhouse/clickhouse-server:26.5-alpine
+    image: clickhouse/clickhouse-server:26.10.3.7-alpine
     ports:
       - ${HDX_E2E_CH_PORT:-20500}:8123 # http api
       - ${HDX_E2E_CH_NATIVE_PORT:-20600}:9000 # native
