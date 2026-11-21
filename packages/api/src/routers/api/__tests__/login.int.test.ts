@@ -1,4 +1,5 @@
 import { getAgent, getLoggedInAgent, getServer } from '@/fixtures';
+import User from '@/models/user';
 import { LOGIN_MAX_FAILED_ATTEMPTS } from '@/routers/api/root';
 
 const MOCK_USER = {
@@ -80,6 +81,26 @@ describe('POST /login/password rate limit', () => {
 
     const res = await attempt(LOGIN_MAX_FAILED_ATTEMPTS);
     expect(res.headers.location).toContain('/login?err=tooManyAttempts');
+  });
+
+  it('does not count server errors, such as the database being down', async () => {
+    const email = 'outage@example.com';
+    const findByUsername = jest
+      .spyOn(User, 'findByUsername')
+      .mockImplementation(() => {
+        throw new Error('database unavailable');
+      });
+    try {
+      for (let i = 0; i <= LOGIN_MAX_FAILED_ATTEMPTS; i++) {
+        const res = await login(email, 'wrong-password');
+        expect(res.headers.location).toContain('/login?err=unknown');
+      }
+    } finally {
+      findByUsername.mockRestore();
+    }
+
+    const res = await login(email, 'wrong-password');
+    expect(res.headers.location).toContain('/login?err=authFail');
   });
 
   it('answers JSON clients such as the CLI with a 429', async () => {

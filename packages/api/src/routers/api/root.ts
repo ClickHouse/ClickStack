@@ -30,18 +30,18 @@ const getLoginEmail = (req: express.Request) => {
   return typeof email === 'string' ? email.trim().toLowerCase() : '';
 };
 
-// Only failed logins count. Success and failure both answer 303, and req.user
-// is already set for a signed-in session, so success is marked on the route
-// after passport accepts the password. The key is the email, not the IP: behind
-// the app's /api proxy, req.ip is the proxy or whatever X-Forwarded-For the
-// client sends.
+// Only rejected credentials count, not server errors such as the database being
+// down. Every outcome answers 303, and req.user is already set for a signed-in
+// session, so the rejection is marked on the route instead. The key is the
+// email, not the IP: behind the app's /api proxy, req.ip is the proxy or
+// whatever X-Forwarded-For the client sends.
 const loginRateLimiter = rateLimiter({
   windowMs: 15 * 60 * 1000,
   max: LOGIN_MAX_FAILED_ATTEMPTS,
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  requestWasSuccessful: (_req, res) => res.locals.loginSucceeded === true,
+  requestWasSuccessful: (_req, res) => res.locals.loginRejected !== true,
   keyGenerator: req => getLoginEmail(req) || req.ip || 'unknown',
   handler: (req, res) => {
     loginRateLimitedCounter.add(1);
@@ -122,11 +122,18 @@ router.post(
     failWithError: true,
     failureMessage: true,
   }),
-  (_req, res, next) => {
-    res.locals.loginSucceeded = true;
-    next();
-  },
   redirectToDashboard,
+  // passport passes on wrong credentials as an AuthenticationError and server
+  // errors as they are.
+  (
+    err: Error,
+    _req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    res.locals.loginRejected = err.name === 'AuthenticationError';
+    next(err);
+  },
   handleAuthError,
 );
 
