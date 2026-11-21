@@ -10,12 +10,14 @@ import {
   TableMetadata,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import {
+  getAlignedDateRange,
   Granularity,
   splitAndTrimWithBracket,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
   InternalAggregateFunction,
   MaterializedViewConfiguration,
+  SQLIntervalSchema,
 } from '@hyperdx/common-utils/dist/types';
 
 export const MV_AGGREGATE_FUNCTIONS = [
@@ -456,6 +458,8 @@ export async function inferMaterializedViewConfig(
     .map(col => col.name)
     .join(', ');
 
+  const minDate = inferMinDate(mvMetadata, minGranularity);
+
   return {
     databaseName: mvTableMetadata.database,
     tableName: mvTableMetadata.name,
@@ -463,5 +467,31 @@ export async function inferMaterializedViewConfig(
     minGranularity,
     timestampColumn,
     aggregatedColumns,
+    ...(minDate != null ? { minDate } : {}),
   };
+}
+
+/**
+ * The earliest time a materialized view holds complete data for: the start of
+ * the first whole bucket after the view was created. A view only captures rows
+ * inserted after it exists, so treating it as complete for earlier ranges would
+ * undercount them. A backfilled view covers more; the date can be cleared in
+ * the source form then.
+ */
+function inferMinDate(
+  mvMetadata: TableMetadata | undefined,
+  minGranularity: string,
+): string | undefined {
+  const createdAt = mvMetadata?.metadata_modification_time
+    ? new Date(mvMetadata.metadata_modification_time)
+    : undefined;
+  if (createdAt == null || Number.isNaN(createdAt.getTime())) {
+    return undefined;
+  }
+
+  const granularity = SQLIntervalSchema.safeParse(minGranularity);
+  const firstWholeBucket = granularity.success
+    ? getAlignedDateRange([createdAt, createdAt], granularity.data)[1]
+    : createdAt;
+  return firstWholeBucket.toISOString();
 }
