@@ -328,7 +328,7 @@ describe('convertFormStateToSavedChartConfig', () => {
         {
           ...seriesItem,
           metricName: 'cpu.usage',
-          metricType: 'gauge' as any,
+          metricType: MetricsDataType.Gauge,
         },
       ],
     };

@@ -1,5 +1,6 @@
 import { renderChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import { SourceKind, TTraceSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   aggregateServiceMapData,
@@ -445,7 +446,7 @@ describe('getServiceMapQuery', () => {
     const query = await getServiceMapQuery({
       source,
       dateRange,
-      metadata: {} as any,
+      metadata: fromPartial({}),
       samplingFactor: 1,
       groupBy,
     });
