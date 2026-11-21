@@ -1,6 +1,8 @@
+import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import { spotlight } from '@mantine/spotlight';
 import { act, renderHook, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { useDashboards } from '@/dashboard';
 import { useSavedSearches } from '@/savedSearch';
@@ -30,8 +32,8 @@ jest.mock('next/router', () => ({
 jest.mock('../savedSearch');
 jest.mock('../dashboard');
 
-const mockUseSavedSearches = useSavedSearches as jest.Mock;
-const mockUseDashboards = useDashboards as jest.Mock;
+const mockUseSavedSearches = jest.mocked(useSavedSearches);
+const mockUseDashboards = jest.mocked(useDashboards);
 
 describe('useSpotlightActions', () => {
   const mockSavedSearches = {
@@ -42,7 +44,7 @@ describe('useSpotlightActions', () => {
         name: 'save template1',
         select: '',
         where: '200',
-        whereLanguage: 'lucene',
+        whereLanguage: 'lucene' as const,
         orderBy: '',
         source: '67c25aeee3b6d5e2f24437b3',
         tags: [],
@@ -71,13 +73,13 @@ describe('useSpotlightActions', () => {
                 {
                   aggFn: 'count',
                   aggCondition: '200',
-                  aggConditionLanguage: 'lucene',
+                  aggConditionLanguage: 'lucene' as const,
                   valueExpression: '',
                 },
               ],
               where: '',
-              whereLanguage: 'lucene',
-              displayType: 'line',
+              whereLanguage: 'lucene' as const,
+              displayType: DisplayType.Line,
               granularity: 'auto',
               source: '67c25aeee3b6d5e2f24437b3',
             },
@@ -97,8 +99,8 @@ describe('useSpotlightActions', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    mockUseSavedSearches.mockReturnValue(mockSavedSearches);
-    mockUseDashboards.mockReturnValue(mockSavedDashboard);
+    mockUseSavedSearches.mockReturnValue(fromPartial(mockSavedSearches));
+    mockUseDashboards.mockReturnValue(fromPartial(mockSavedDashboard));
   });
   it('saved searches and dashboards should be loaded', () => {
     const { result } = renderHook(() => useSpotlightActions());

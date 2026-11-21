@@ -1,5 +1,6 @@
 import React from 'react';
 import { screen } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import DBHistogramChart, {
@@ -36,7 +37,7 @@ jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
 jest.mock('../charts/DateRangeIndicator', () => jest.fn(() => null));
 
 describe('DBHistogramChart', () => {
-  const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
+  const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
 
   const baseTestConfig = {
     dateRange: [new Date(), new Date()] as [Date, Date],
@@ -50,21 +51,25 @@ describe('DBHistogramChart', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: {
-        data: [{ bucket: '0-10', count: 5 }],
-        meta: [],
-      },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: {
+          data: [{ bucket: '0-10', count: 5 }],
+          meta: [],
+        },
+        isLoading: false,
+        isError: false,
+      }),
+    );
   });
 
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial({
+        data: { id: 'test-source', name: 'Test Source' },
+      }),
+    );
 
     renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 
@@ -101,25 +106,27 @@ describe('DBHistogramChart', () => {
     };
 
     // Mock useMVOptimizationExplanation to return an optimized config with aligned date range
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: {
-          ...config,
-          dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
-        },
-        explanations: [
-          {
-            success: true,
-            mvConfig: {
-              minGranularity: '1 minute',
-              tableName: 'metrics_rollup_1m',
-            },
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: {
+            ...config,
+            dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
           },
-        ],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+          explanations: [
+            {
+              success: true,
+              mvConfig: {
+                minGranularity: '1 minute',
+                tableName: 'metrics_rollup_1m',
+              },
+            },
+          ],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBHistogramChart config={config} />);
 
@@ -142,14 +149,16 @@ describe('DBHistogramChart', () => {
 
   it('does not render DateRangeIndicator when MV optimization has no optimized date range', () => {
     // Mock useMVOptimizationExplanation to return data without an optimized config
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: undefined,
-        explanations: [],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: undefined,
+          explanations: [],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 
@@ -164,12 +173,14 @@ describe('DBHistogramChart', () => {
 
     it('keeps the previous histogram on screen and pulses it while a refresh loads', () => {
       // The new range is still loading behind the previous buckets.
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: buckets,
-        isLoading: true,
-        isPlaceholderData: true,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: buckets,
+          isLoading: true,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 
@@ -180,12 +191,14 @@ describe('DBHistogramChart', () => {
     });
 
     it('does not pulse once fresh buckets load', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: buckets,
-        isLoading: false,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: buckets,
+          isLoading: false,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 
@@ -193,12 +206,14 @@ describe('DBHistogramChart', () => {
     });
 
     it('shows loading instead of the stale empty result during a refetch', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [], meta: [] },
-        isLoading: false,
-        isPlaceholderData: true,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [], meta: [] },
+          isLoading: false,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 
@@ -207,12 +222,14 @@ describe('DBHistogramChart', () => {
     });
 
     it('does not pulse a fresh empty result', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [], meta: [] },
-        isLoading: false,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [], meta: [] },
+          isLoading: false,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 
@@ -222,12 +239,14 @@ describe('DBHistogramChart', () => {
     });
 
     it('shows the loading state before the first buckets arrive', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: undefined,
-        isLoading: true,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: true,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBHistogramChart config={baseTestConfig} />);
 

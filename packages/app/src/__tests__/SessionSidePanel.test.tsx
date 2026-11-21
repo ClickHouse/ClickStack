@@ -69,12 +69,8 @@ jest.mock('@mantine/notifications', () => {
   };
 });
 
-const mockedCopy = copyTextToClipboard as jest.MockedFunction<
-  typeof copyTextToClipboard
->;
-const mockedShow = notifications.show as jest.MockedFunction<
-  typeof notifications.show
->;
+const mockedCopy = jest.mocked(copyTextToClipboard);
+const mockedShow = jest.mocked(notifications.show);
 
 function setLocationHref(url: string) {
   const parsed = new URL(url, 'http://localhost');
