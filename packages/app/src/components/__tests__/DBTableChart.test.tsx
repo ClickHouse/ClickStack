@@ -1,6 +1,7 @@
 import React from 'react';
 import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import { act } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import DBTableChart from '@/components/DBTableChart';
@@ -79,35 +80,39 @@ describe('DBTableChart', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    jest.mocked(useOffsetPaginatedQuery).mockReturnValue({
-      data: {
-        data: [{ column1: 'value1', column2: 'value2' }],
-        meta: [
-          { name: 'column1', type: 'String' },
-          { name: 'column2', type: 'String' },
-        ],
-        chSql: { sql: '', params: {} },
-        window: {
-          startTime: new Date(),
-          endTime: new Date(),
-          windowIndex: 0,
-          direction: 'DESC' as const,
+    jest.mocked(useOffsetPaginatedQuery).mockReturnValue(
+      fromPartial({
+        data: {
+          data: [{ column1: 'value1', column2: 'value2' }],
+          meta: [
+            { name: 'column1', type: 'String' },
+            { name: 'column2', type: 'String' },
+          ],
+          chSql: { sql: '', params: {} },
+          window: {
+            startTime: new Date(),
+            endTime: new Date(),
+            windowIndex: 0,
+            direction: 'DESC' as const,
+          },
         },
-      },
-      fetchNextPage: jest.fn(),
-      hasNextPage: false,
-      isLoading: false,
-      isFetching: false,
-      isError: false,
-      error: null,
-    } as any);
+        fetchNextPage: jest.fn(),
+        hasNextPage: false,
+        isLoading: false,
+        isFetching: false,
+        isError: false,
+        error: null,
+      }),
+    );
   });
 
   it('passes the same config to useMVOptimizationExplanation, useOffsetPaginatedQuery, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial({
+        data: { id: 'test-source', name: 'Test Source' },
+      }),
+    );
 
     renderWithMantine(<DBTableChart config={baseTestConfig} />);
 
@@ -144,25 +149,27 @@ describe('DBTableChart', () => {
     };
 
     // Mock useMVOptimizationExplanation to return an optimized config with aligned date range
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: {
-          ...config,
-          dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
-        },
-        explanations: [
-          {
-            success: true,
-            mvConfig: {
-              minGranularity: '1 minute',
-              tableName: 'metrics_rollup_1m',
-            },
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: {
+            ...config,
+            dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
           },
-        ],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+          explanations: [
+            {
+              success: true,
+              mvConfig: {
+                minGranularity: '1 minute',
+                tableName: 'metrics_rollup_1m',
+              },
+            },
+          ],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBTableChart config={config} />);
 
@@ -268,32 +275,34 @@ describe('DBTableChart', () => {
     // Emulates how the ClickHouse query returns rows for a builder table chart:
     // series columns are produced before groupBy columns.
     beforeEach(() => {
-      jest.mocked(useOffsetPaginatedQuery).mockReturnValue({
-        data: {
-          data: [
-            {
-              Count: 10,
-              AvgDuration: 42,
-              ServiceName: 'web',
-              SpanName: 'GET /',
+      jest.mocked(useOffsetPaginatedQuery).mockReturnValue(
+        fromPartial({
+          data: {
+            data: [
+              {
+                Count: 10,
+                AvgDuration: 42,
+                ServiceName: 'web',
+                SpanName: 'GET /',
+              },
+            ],
+            meta: [],
+            chSql: { sql: '', params: {} },
+            window: {
+              startTime: new Date(),
+              endTime: new Date(),
+              windowIndex: 0,
+              direction: 'DESC' as const,
             },
-          ],
-          meta: [],
-          chSql: { sql: '', params: {} },
-          window: {
-            startTime: new Date(),
-            endTime: new Date(),
-            windowIndex: 0,
-            direction: 'DESC' as const,
           },
-        },
-        fetchNextPage: jest.fn(),
-        hasNextPage: false,
-        isLoading: false,
-        isFetching: false,
-        isError: false,
-        error: null,
-      } as any);
+          fetchNextPage: jest.fn(),
+          hasNextPage: false,
+          isLoading: false,
+          isFetching: false,
+          isError: false,
+          error: null,
+        }),
+      );
     });
 
     const configWithGroupBy = {
@@ -342,31 +351,33 @@ describe('DBTableChart', () => {
       // single computed column for the ratio — not one column per select. The
       // row shape reflects this: 1 series column followed by the groupBy
       // columns.
-      jest.mocked(useOffsetPaginatedQuery).mockReturnValue({
-        data: {
-          data: [
-            {
-              'divide(count(), count())': 0.5,
-              ServiceName: 'web',
-              SpanName: 'GET /',
+      jest.mocked(useOffsetPaginatedQuery).mockReturnValue(
+        fromPartial({
+          data: {
+            data: [
+              {
+                'divide(count(), count())': 0.5,
+                ServiceName: 'web',
+                SpanName: 'GET /',
+              },
+            ],
+            meta: [],
+            chSql: { sql: '', params: {} },
+            window: {
+              startTime: new Date(),
+              endTime: new Date(),
+              windowIndex: 0,
+              direction: 'DESC' as const,
             },
-          ],
-          meta: [],
-          chSql: { sql: '', params: {} },
-          window: {
-            startTime: new Date(),
-            endTime: new Date(),
-            windowIndex: 0,
-            direction: 'DESC' as const,
           },
-        },
-        fetchNextPage: jest.fn(),
-        hasNextPage: false,
-        isLoading: false,
-        isFetching: false,
-        isError: false,
-        error: null,
-      } as any);
+          fetchNextPage: jest.fn(),
+          hasNextPage: false,
+          isLoading: false,
+          isFetching: false,
+          isError: false,
+          error: null,
+        }),
+      );
 
       const ratioConfig = {
         ...baseTestConfig,
@@ -402,32 +413,34 @@ describe('DBTableChart', () => {
         groupByColumnsOnLeft: true,
       };
 
-      jest.mocked(useOffsetPaginatedQuery).mockReturnValue({
-        data: {
-          data: [
-            {
-              Count: 10,
-              AvgDuration: 42,
-              ServiceName: 'web',
-              SpanName: 'GET /',
+      jest.mocked(useOffsetPaginatedQuery).mockReturnValue(
+        fromPartial({
+          data: {
+            data: [
+              {
+                Count: 10,
+                AvgDuration: 42,
+                ServiceName: 'web',
+                SpanName: 'GET /',
+              },
+            ],
+            meta: [],
+            chSql: { sql: '', params: {} },
+            window: {
+              startTime: new Date(),
+              endTime: new Date(),
+              windowIndex: 0,
+              direction: 'DESC' as const,
             },
-          ],
-          meta: [],
-          chSql: { sql: '', params: {} },
-          window: {
-            startTime: new Date(),
-            endTime: new Date(),
-            windowIndex: 0,
-            direction: 'DESC' as const,
           },
-        },
-        fetchNextPage: jest.fn(),
-        hasNextPage: false,
-        isLoading: false,
-        isFetching: false,
-        isError: false,
-        error: null,
-      } as any);
+          fetchNextPage: jest.fn(),
+          hasNextPage: false,
+          isLoading: false,
+          isFetching: false,
+          isError: false,
+          error: null,
+        }),
+      );
 
       renderWithMantine(<DBTableChart config={rawSqlConfig} />);
 
@@ -688,14 +701,16 @@ describe('DBTableChart', () => {
 
   it('does not render DateRangeIndicator when MV optimization has no optimized date range', () => {
     // Mock useMVOptimizationExplanation to return data without an optimized config
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: undefined,
-        explanations: [],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: undefined,
+          explanations: [],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBTableChart config={baseTestConfig} />);
 
