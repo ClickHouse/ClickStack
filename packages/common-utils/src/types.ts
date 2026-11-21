@@ -53,6 +53,7 @@ export enum DisplayType {
   Search = 'search',
   Heatmap = 'heatmap',
   Markdown = 'markdown',
+  Timeline = 'timeline',
   EventPatterns = 'event_patterns',
 }
 
@@ -1766,6 +1767,38 @@ export function getDefaultLineInterpolation(
 // as well: the Zod schema (packages/api/src/utils/zod.ts) and the hand-written
 // OpenAPI JSDoc (packages/api/src/routers/external-api/v2/dashboards.ts), which
 // duplicates this shape for the generated spec.
+
+const TimelineSeriesBaseSchema = z.object({
+  id: z.string(),
+  label: z.string().min(1),
+  source: z.string(),
+  where: z.string().optional(),
+  whereLanguage: SearchConditionLanguageSchema,
+  /** SQL expression whose distinct values split markers into separate lanes. */
+  groupExpression: z.string().optional(),
+});
+
+const TimelineSeriesEventsSchema = TimelineSeriesBaseSchema.extend({
+  mode: z.literal('events'),
+  /** SQL expression that resolves to the marker text shown in tooltips. */
+  labelExpression: z.string().min(1),
+  /** SQL expression that resolves to a severity string per row (e.g. `SeverityText`). Colors markers by severity level. */
+  severityExpression: z.string().optional(),
+});
+
+const TimelineSeriesValueChangeSchema = TimelineSeriesBaseSchema.extend({
+  mode: z.literal('value_change'),
+  /** SQL expression whose value is tracked for changes across rows within each `groupExpression` partition. */
+  trackColumn: z.string().min(1),
+});
+
+export const TimelineSeriesSchema = z.discriminatedUnion('mode', [
+  TimelineSeriesEventsSchema,
+  TimelineSeriesValueChangeSchema,
+]);
+
+export type TimelineSeries = z.infer<typeof TimelineSeriesSchema>;
+
 /**
  * Schema describing settings which are shared between Raw SQL
  * chart configs and Structured ChartBuilder chart configs
@@ -1861,6 +1894,11 @@ export const _ChartConfigSchema = SharedChartSettingsSchema.extend({
   useTextIndexForImplicitColumn: UseTextIndexSchema.optional(),
   sampleWeightExpression: z.string().optional(),
   markdown: z.string().optional(),
+  // Timeline-tile-specific structured-builder series. Lives on the Builder
+  // config alongside `markdown` rather than on SharedChartSettingsSchema
+  // because Raw SQL Timeline tiles emit columns directly and do not use
+  // these series definitions.
+  timelineSeries: z.array(TimelineSeriesSchema).optional(),
   filtersLogicalOperator: z.enum(['AND', 'OR']).optional(),
   filters: z.array(FilterSchema).optional(),
   connection: z.string(),

@@ -97,6 +97,10 @@ export const QUERY_PARAMS_BY_DISPLAY_TYPE: Record<
   [DisplayType.Search]: [],
   [DisplayType.Heatmap]: [],
   [DisplayType.Markdown]: [],
+  [DisplayType.Timeline]: [
+    QUERY_PARAMS.startDateMilliseconds,
+    QUERY_PARAMS.endDateMilliseconds,
+  ],
   [DisplayType.EventPatterns]: [],
 };
 
@@ -125,6 +129,7 @@ export const QUERY_PARAM_EXAMPLES: Record<DisplayType, string> = {
   [DisplayType.Search]: '',
   [DisplayType.Heatmap]: '',
   [DisplayType.Markdown]: '',
+  [DisplayType.Timeline]: '',
   [DisplayType.EventPatterns]: '',
 };
 
