@@ -10,6 +10,7 @@ import {
   UseQueryResult,
 } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import useOffsetPaginatedQuery from '@/hooks/useOffsetPaginatedQuery';
 
@@ -156,7 +157,9 @@ describe('useOffsetPaginatedQuery', () => {
     mockMetadata = {
       getSetting: jest.fn().mockResolvedValue(null),
     };
-    jest.mocked(useMetadataWithSettings).mockReturnValue(mockMetadata as any);
+    jest
+      .mocked(useMetadataWithSettings)
+      .mockReturnValue(fromPartial(mockMetadata));
   });
 
   describe('Time Window Generation', () => {

@@ -1,6 +1,6 @@
-import { UseQueryResult } from '@tanstack/react-query';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   cleanedFacetName,
@@ -75,11 +75,13 @@ const mockDistribution = (
   data: Map<string, number> | undefined,
   error: Error | null = null,
 ) =>
-  jest.mocked(useGetValuesDistribution).mockReturnValue({
-    data,
-    isFetching: false,
-    error,
-  } as UseQueryResult<Map<string, number>>);
+  jest.mocked(useGetValuesDistribution).mockReturnValue(
+    fromPartial({
+      data,
+      isFetching: false,
+      error,
+    }),
+  );
 
 describe('cleanedFacetName', () => {
   describe('basic functionality', () => {

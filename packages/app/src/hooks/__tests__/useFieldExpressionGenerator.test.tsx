@@ -1,5 +1,6 @@
 import { TSource } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import useFieldExpressionGenerator from '@/hooks/useFieldExpressionGenerator';
 import { useJsonColumns } from '@/hooks/useMetadata';
@@ -23,10 +24,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should return undefined getFieldExpression when source is undefined', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: false,
+      }),
+    );
 
     const { result } = renderHook(() => useFieldExpressionGenerator(undefined));
 
@@ -35,10 +38,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should return isLoading true when data is loading', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: true,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useFieldExpressionGenerator(mockSource),
@@ -49,10 +54,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should generate JSON column expression with default convertFn (toString)', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: ['Body', 'Metadata'],
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: ['Body', 'Metadata'],
+        isLoading: false,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useFieldExpressionGenerator(mockSource),
@@ -69,10 +76,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should generate JSON column expression with custom convertFn', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: ['Body', 'Metadata'],
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: ['Body', 'Metadata'],
+        isLoading: false,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useFieldExpressionGenerator(mockSource),
@@ -89,10 +98,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should generate Map column expression with bracket notation', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: ['Body', 'Metadata'],
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: ['Body', 'Metadata'],
+        isLoading: false,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useFieldExpressionGenerator(mockSource),
@@ -108,10 +119,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should handle mixed JSON and Map columns correctly', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: ['Body'],
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: ['Body'],
+        isLoading: false,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useFieldExpressionGenerator(mockSource),
@@ -130,10 +143,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should handle empty jsonColumns array', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: [],
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: [],
+        isLoading: false,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useFieldExpressionGenerator(mockSource),
@@ -150,10 +165,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should pass correct tableConnection to useJsonColumns', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: [],
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: [],
+        isLoading: false,
+      }),
+    );
 
     renderHook(() => useFieldExpressionGenerator(mockSource));
 
@@ -165,10 +182,12 @@ describe('useFieldExpressionGenerator', () => {
   });
 
   it('should handle special characters in keys correctly', () => {
-    jest.mocked(useJsonColumns).mockReturnValue({
-      data: ['Body'],
-      isLoading: false,
-    } as any);
+    jest.mocked(useJsonColumns).mockReturnValue(
+      fromPartial({
+        data: ['Body'],
+        isLoading: false,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useFieldExpressionGenerator(mockSource),

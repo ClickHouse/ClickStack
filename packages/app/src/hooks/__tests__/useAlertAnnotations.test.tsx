@@ -1,5 +1,10 @@
-import { AlertState, AlertTransition } from '@hyperdx/common-utils/dist/types';
+import {
+  AlertHistoryRangeApiResponse,
+  AlertState,
+  AlertTransition,
+} from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromPartial, PartialDeep } from '@total-typescript/shoehorn';
 
 import api from '@/api';
 import {
@@ -108,8 +113,8 @@ describe('useAlertAnnotations', () => {
     new Date('2026-07-01T01:00:00.000Z'),
   ];
 
-  const mockHistory = (data: unknown) =>
-    jest.spyOn(api, 'useAlertHistory').mockReturnValue({ data } as any);
+  const mockHistory = (data: PartialDeep<AlertHistoryRangeApiResponse>) =>
+    jest.spyOn(api, 'useAlertHistory').mockReturnValue(fromPartial({ data }));
 
   afterEach(() => jest.restoreAllMocks());
 
