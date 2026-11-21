@@ -6,10 +6,12 @@ import {
   Filter,
   PromqlConditionFilter,
   PromqlExpressionList,
+  RawSqlConfigWithDateRange,
   SavedChartConfig,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
 import {
@@ -57,12 +59,12 @@ const builderConfig: ChartConfigWithDateRange = {
   granularity: 'auto',
 } as ChartConfigWithDateRange;
 
-const rawSqlConfig = {
-  configType: 'sql' as const,
+const rawSqlConfig: RawSqlConfigWithDateRange = {
+  configType: 'sql',
   sqlTemplate: 'SELECT count() FROM logs',
   connection: 'clickhouse',
   dateRange,
-} as ChartConfigWithDateRange;
+};
 
 const logSource = {
   kind: SourceKind.Log,
@@ -146,11 +148,13 @@ describe('isQueryReady', () => {
 
   it('returns truthy for metric sources with metricTables but empty tableName', () => {
     expect(
-      isQueryReady({
-        ...builderConfig,
-        from: { databaseName: 'default', tableName: '' },
-        metricTables: { gauge: 'metrics.gauge' },
-      } as ChartConfigWithDateRange),
+      isQueryReady(
+        fromPartial({
+          ...builderConfig,
+          from: { databaseName: 'default', tableName: '' },
+          metricTables: { gauge: 'metrics.gauge' },
+        }),
+      ),
     ).toBeTruthy();
   });
 
@@ -163,7 +167,7 @@ describe('isQueryReady', () => {
       isQueryReady({
         ...rawSqlConfig,
         sqlTemplate: '',
-      } as ChartConfigWithDateRange),
+      }),
     ).toBe(false);
   });
 

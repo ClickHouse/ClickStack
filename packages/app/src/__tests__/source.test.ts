@@ -3,6 +3,7 @@ import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   ChartConfigWithOptTimestamp,
   NumberFormat,
+  RawSqlConfigWithDateRange,
   SourceKind,
   TLogSource,
   TTraceSource,
@@ -181,10 +182,10 @@ describe('getEventBody', () => {
 
 describe('getTraceDurationNumberFormat', () => {
   it('returns undefined for non-trace sources', () => {
-    const logSource = {
+    const logSource = fromPartial<TLogSource>({
       kind: SourceKind.Log,
       id: 'log-source',
-    } as TLogSource;
+    });
     const result = getTraceDurationNumberFormat(logSource, {
       valueExpression: 'count()',
     });
@@ -393,26 +394,26 @@ const NUMBER_FORMAT: NumberFormat = { output: 'number' };
 function makeBuilderConfig(
   overrides: Partial<ChartConfigWithOptTimestamp> = {},
 ): ChartConfigWithOptTimestamp {
-  return {
+  return fromPartial({
     connection: 'test-connection',
     source: TRACE_SOURCE.id,
     from: { databaseName: 'default', tableName: 'otel_traces' },
     select: [],
     where: '',
     ...overrides,
-  } as unknown as ChartConfigWithOptTimestamp;
+  });
 }
 
 function makeRawSqlConfig(
-  overrides: Partial<ChartConfigWithOptTimestamp> = {},
+  overrides: Partial<RawSqlConfigWithDateRange> = {},
 ): ChartConfigWithOptTimestamp {
-  return {
+  return fromPartial({
     configType: 'sql',
     sqlTemplate: 'SELECT 1',
     connection: 'test-connection',
     source: TRACE_SOURCE.id,
     ...overrides,
-  } as unknown as ChartConfigWithOptTimestamp;
+  });
 }
 
 describe('useSingleSeriesNumberFormat', () => {
