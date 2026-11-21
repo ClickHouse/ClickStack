@@ -324,9 +324,16 @@ export default function TeamQueryConfigSection() {
             defaultValue={DEFAULT_FILTER_KEYS_FETCH_LIMIT}
             placeholder={`default = ${DEFAULT_FILTER_KEYS_FETCH_LIMIT}`}
             min={1}
-            max={1000}
+            max={10000}
             displayValue={displayValueWithUnit('keys')}
             description={`Default is ${DEFAULT_FILTER_KEYS_FETCH_LIMIT}`}
+          />
+          <ClickhouseSettingForm
+            settingKey="filterValuesExactByDefault"
+            label="Default filter values"
+            tooltip="Default for the search page's Show All Values filter setting. All shows every known value; Exact shows only values matching the current query. Users can still override this in their filter settings."
+            type="boolean"
+            displayValue={value => (value ? 'Exact' : 'All')}
           />
           <ClickhouseSettingForm
             settingKey="fieldMetadataDisabled"

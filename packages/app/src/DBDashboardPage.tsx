@@ -28,11 +28,9 @@ import {
 } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   convertToDashboardTemplate,
-  displayTypeSupportsBuilderAlerts,
-  displayTypeSupportsPromQLAlerts,
-  displayTypeSupportsRawSqlAlerts,
   Granularity,
   isTimeSeriesDisplayType,
+  savedChartConfigSupportsAlerts,
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
   getAdhocFilterTargetsForTile,
@@ -44,6 +42,7 @@ import {
 } from '@hyperdx/common-utils/dist/filters';
 import {
   displayTypeRequiresSource,
+  getSavedConfigAllowedSourceKinds,
   isBuilderChartConfig,
   isBuilderSavedChartConfig,
   isPromqlChartConfig,
@@ -56,6 +55,11 @@ import {
   isImportableDashboard,
 } from '@hyperdx/common-utils/dist/iac';
 import { isMissingFiltersMacro } from '@hyperdx/common-utils/dist/macros';
+import {
+  getConfigReferenceVariables,
+  resolveConfigReferences,
+  restoreConfigReferences,
+} from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AlertState,
   BroadcastFilter,
@@ -161,6 +165,7 @@ import ResourceTerraformPopover from '@/components/Iac/ResourceTerraformPopover'
 import { InlineNameInput } from '@/components/InlineNameInput/InlineNameInput';
 import { PageHeader } from '@/components/PageHeader';
 import { PageLayout } from '@/components/PageLayout';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
 import { TimePicker } from '@/components/TimePicker';
 import {
@@ -173,6 +178,7 @@ import {
   useCreateDashboard,
   useDashboards,
   useDeleteDashboard,
+  withoutAlert,
 } from '@/dashboard';
 import { useAlertAnnotations } from '@/hooks/useAlertAnnotations';
 import { getMinGranularitySeconds } from '@/hooks/useChartConfig';
@@ -411,6 +417,41 @@ const whereLanguageParser = parseAsString.withDefault(
   typeof window !== 'undefined' ? (getStoredLanguage() ?? 'lucene') : 'lucene',
 );
 
+function toWhereLanguage(value: string | null): SearchConditionLanguage {
+  return value === 'sql' || value === 'lucene'
+    ? value
+    : (getStoredLanguage() ?? 'lucene');
+}
+
+// Shared by "Save query" and saving a temporary dashboard so both persist a
+// view the same way.
+function toViewDefaults({
+  where,
+  whereLanguage,
+  rangeSeconds,
+  filterValues,
+}: {
+  where: string;
+  whereLanguage: SearchConditionLanguage;
+  rangeSeconds: number | null;
+  filterValues: Dashboard['savedFilterValues'] | null;
+}): Pick<
+  Dashboard,
+  'savedQuery' | 'savedQueryLanguage' | 'savedFilterValues' | 'savedDateRange'
+> {
+  const savedQuery = where || null;
+  return {
+    savedQuery,
+    savedQueryLanguage: savedQuery ? whereLanguage || 'lucene' : null,
+    savedFilterValues: filterValues ?? [],
+    // The time input shows absolute text even for relative picks, so a saved
+    // range can only be its duration.
+    savedDateRange: rangeSeconds
+      ? { type: 'relative', value: rangeSeconds }
+      : undefined,
+  };
+}
+
 /**
  * A tile that cannot draw its chart yet, explaining why in its place. Keeps the
  * chrome identical to a rendered tile so the toolbar stays usable.
@@ -455,6 +496,7 @@ const Tile = ({
   filters,
   variables,
   unsatisfiedRequiredFilters,
+  referenceVariableNames,
   showAlertAnnotations,
   showReleaseAnnotations,
   isLive,
@@ -489,6 +531,12 @@ const Tile = ({
   variables?: ChartVariable[];
   /** The dashboard's required filters that have nothing selected. */
   unsatisfiedRequiredFilters?: DashboardFilter[];
+  /**
+   * The data source and connection variables the tile's stored config
+   * references. `chart` carries their selections, or the references while
+   * unselected.
+   */
+  referenceVariableNames?: string[];
   // When true, draw alert firing/recovery annotations on this tile's chart.
   showAlertAnnotations?: boolean;
   // When true, draw release markers on this tile's chart.
@@ -604,8 +652,23 @@ const Tile = ({
     id: chart.config.source,
   });
 
+  const usesReferenceVariable = !!referenceVariableNames?.length;
+
   const isSourceMissing =
     !!chart.config.source && isSourceFetched && source == null;
+  // A data source or connection variable can select a source on another
+  // connection than the one a raw SQL tile queries.
+  const isSourceOnOtherConnection =
+    usesReferenceVariable &&
+    source != null &&
+    isRawSqlSavedChartConfig(chart.config) &&
+    source.connection !== chart.config.connection;
+  // A variable's kinds can change after tiles use it, and saves don't check a
+  // source's kind against the tile's display type.
+  const isSourceKindUnsupported =
+    usesReferenceVariable &&
+    source != null &&
+    !getSavedConfigAllowedSourceKinds(chart.config).includes(source.kind);
   const isSourceUnset =
     !!chart.config &&
     isBuilderSavedChartConfig(chart.config) &&
@@ -655,9 +718,15 @@ const Tile = ({
           sourceId: chart.config.source,
           unsatisfiedRequiredFilters,
           referencedVariables: tileVariables,
+          referenceVariableNames,
         }),
       ),
-    [unsatisfiedRequiredFilters, chart.config, tileVariables],
+    [
+      unsatisfiedRequiredFilters,
+      chart.config,
+      tileVariables,
+      referenceVariableNames,
+    ],
   );
   const missingRequiredFilterNames = useMemo<string[]>(
     () => JSON.parse(serializedMissingRequiredFilterNames),
@@ -825,7 +894,7 @@ const Tile = ({
     let tooltip = `Has alert and is in ${alert.state} state`;
     if (alert.silenced?.at) {
       const silencedAt = new Date(alert.silenced.at);
-      // eslint-disable-next-line no-restricted-syntax
+      // eslint-disable-next-line react-hooks/purity
       tooltip += `. Ack'd ${formatRelative(silencedAt, new Date())}`;
     }
     return tooltip;
@@ -929,16 +998,13 @@ const Tile = ({
     return url && addTimeZone(url);
   }, [dateRange, queriedConfig, source, addTimeZone]);
 
+  // An alert must query one fixed source and connection
+  const supportsAlerts =
+    !usesReferenceVariable && savedChartConfigSupportsAlerts(chart.config);
+
   const hoverToolbar = useMemo(() => {
     if (readOnly) return null;
 
-    const isRawSql = isRawSqlSavedChartConfig(chart.config);
-    const isPromQL = isPromqlSavedChartConfig(chart.config);
-    const displayTypeSupportsAlerts = isRawSql
-      ? displayTypeSupportsRawSqlAlerts(chart.config.displayType)
-      : isPromQL
-        ? displayTypeSupportsPromQLAlerts(chart.config.displayType)
-        : displayTypeSupportsBuilderAlerts(chart.config.displayType);
     const canMoveToGroup =
       onMoveToGroup && moveTargets && moveTargets.length > 0;
     return (
@@ -968,7 +1034,7 @@ const Tile = ({
           </Tooltip>
         )}
 
-        {displayTypeSupportsAlerts &&
+        {supportsAlerts &&
           (alert ? (
             // Existing alert: bell with a colored status dot indicator.
             <Indicator
@@ -1073,7 +1139,7 @@ const Tile = ({
     alertTooltip,
     moveTargets,
     replaySearchUrl,
-    chart.config,
+    supportsAlerts,
     chart.id,
     chart.containerId,
     chart.tabId,
@@ -1091,13 +1157,6 @@ const Tile = ({
   const collapsedMenuItems = useMemo(() => {
     if (readOnly) return null;
 
-    const isRawSql = isRawSqlSavedChartConfig(chart.config);
-    const isPromQL = isPromqlSavedChartConfig(chart.config);
-    const showAlerts = isRawSql
-      ? displayTypeSupportsRawSqlAlerts(chart.config.displayType)
-      : isPromQL
-        ? displayTypeSupportsPromQLAlerts(chart.config.displayType)
-        : displayTypeSupportsBuilderAlerts(chart.config.displayType);
     const canMoveToGroup =
       onMoveToGroup && moveTargets && moveTargets.length > 0;
     return (
@@ -1113,7 +1172,7 @@ const Tile = ({
             Replay search
           </Menu.Item>
         )}
-        {showAlerts && (
+        {supportsAlerts && (
           <>
             <Menu.Item
               leftSection={
@@ -1164,7 +1223,7 @@ const Tile = ({
     alertTooltip,
     moveTargets,
     replaySearchUrl,
-    chart.config,
+    supportsAlerts,
     chart.containerId,
     chart.tabId,
     onDeleteClick,
@@ -1255,7 +1314,7 @@ const Tile = ({
               toolbarItems={toolbar}
               data-testid="tile-missing-required-filters"
             >
-              {`Missing required filters: ${missingRequiredFilterNames.join(
+              {`Missing required filters or variables: ${missingRequiredFilterNames.join(
                 ', ',
               )}. Select a value for each to load this tile.`}
             </TilePlaceholder>
@@ -1268,6 +1327,20 @@ const Tile = ({
             <TilePlaceholder title={title} toolbarItems={toolbar}>
               The data source for this tile is not set. Edit the tile to select
               a data source.
+            </TilePlaceholder>
+          ) : isSourceOnOtherConnection ? (
+            <TilePlaceholder title={title} toolbarItems={toolbar}>
+              The selected data source is on a different connection than this
+              tile&apos;s query. Select a source on the same connection.
+            </TilePlaceholder>
+          ) : isSourceKindUnsupported ? (
+            <TilePlaceholder
+              title={title}
+              toolbarItems={toolbar}
+              data-testid="tile-unsupported-source-kind"
+            >
+              The selected data source can&apos;t be used with this chart type.
+              Select a different source.
             </TilePlaceholder>
           ) : (
             <>
@@ -1501,6 +1574,8 @@ const Tile = ({
       filterWarning,
       isSourceMissing,
       isSourceUnset,
+      isSourceOnOtherConnection,
+      isSourceKindUnsupported,
       isBlockedByRequiredFilters,
       missingRequiredFilterNames,
       hasBeenVisible,
@@ -1900,28 +1975,6 @@ function DBDashboardPage({
   const { data: allDashboards } = useDashboards();
 
   const [highlightedTileId] = useQueryState('highlightedTileId');
-  const tableConnections = useMemo(() => {
-    if (!dashboard) return [];
-    const tc: TableConnection[] = [];
-
-    for (const { config } of dashboard.tiles) {
-      if (!isBuilderSavedChartConfig(config)) continue;
-      const source = sources?.find(v => v.id === config.source);
-      if (!source || source.disabled) continue;
-      // TODO: will need to update this when we allow for multiple metrics per chart
-      const firstSelect = config.select[0];
-      const metricType =
-        typeof firstSelect !== 'string' ? firstSelect?.metricType : undefined;
-      const tableName = getMetricTableName(source, metricType);
-      if (!tableName) continue;
-      tc.push({
-        ...tcFromSource(source),
-        tableName,
-      });
-    }
-
-    return tc;
-  }, [dashboard, sources]);
 
   const [granularity, setGranularity] = useQueryState(
     'granularity',
@@ -1966,8 +2019,61 @@ function DBDashboardPage({
     ignoredVariableNames,
     getFilterQueriesForSource,
     variables,
+    referenceVariableValues,
+    resolvedFilters,
+    unresolvedReferenceVariablesByFilterId,
+    incompatibleReferenceVariablesByFilterId,
     unsatisfiedRequiredFilters,
-  } = useDashboardFilters(filters);
+  } = useDashboardFilters(filters, { sources, connections });
+  // Tiles as they query, by ID: source and connection variable references
+  // replaced by the selections. Edits and saves read `dashboard.tiles`, so the
+  // stored references survive.
+  const resolvedTiles = useMemo(
+    () =>
+      new Map(
+        (dashboard?.tiles ?? []).map(tile => {
+          const config = resolveConfigReferences(
+            tile.config,
+            referenceVariableValues,
+          );
+          return [tile.id, config === tile.config ? tile : { ...tile, config }];
+        }),
+      ),
+    [dashboard?.tiles, referenceVariableValues],
+  );
+  // Kept apart from `resolvedTiles` so a tile's list only changes with its config
+  const referenceVariableNamesByTileId = useMemo(
+    () =>
+      new Map(
+        (dashboard?.tiles ?? []).map(tile => [
+          tile.id,
+          getConfigReferenceVariables(tile.config),
+        ]),
+      ),
+    [dashboard?.tiles],
+  );
+
+  const tableConnections = useMemo(() => {
+    const tc: TableConnection[] = [];
+
+    for (const { config } of resolvedTiles.values()) {
+      if (!isBuilderSavedChartConfig(config)) continue;
+      const source = sources?.find(v => v.id === config.source);
+      if (!source || source.disabled) continue;
+      // TODO: will need to update this when we allow for multiple metrics per chart
+      const firstSelect = config.select[0];
+      const metricType =
+        typeof firstSelect !== 'string' ? firstSelect?.metricType : undefined;
+      const tableName = getMetricTableName(source, metricType);
+      if (!tableName) continue;
+      tc.push({
+        ...tcFromSource(source),
+        tableName,
+      });
+    }
+
+    return tc;
+  }, [resolvedTiles, sources]);
 
   const dashboardReady =
     !!dashboard?.id &&
@@ -2149,46 +2255,27 @@ function DBDashboardPage({
   // Sync changes to the URL params into the form
   useEffect(() => {
     setValue('where', where);
-    setValue(
-      'whereLanguage',
-      whereLanguage === 'sql' || whereLanguage === 'lucene'
-        ? whereLanguage
-        : (getStoredLanguage() ?? 'lucene'),
-    );
+    setValue('whereLanguage', toWhereLanguage(whereLanguage));
   }, [setValue, where, whereLanguage]);
 
   const handleSaveQuery = useCallback(() => {
     if (!dashboard || isLocalDashboard) return;
 
-    // Execute the query first (updates URL)
+    // Apply the draft query/time input so what's saved is what's shown.
     onSubmit();
-
-    // Then save to database (reads from form values which were just submitted to URL)
     const formValues = getValues();
-    const currentWhere = formValues.where || null;
-    const currentWhereLanguage = currentWhere
-      ? formValues.whereLanguage || 'lucene'
-      : null;
-    const currentFilterValues = filterValueEntries?.length
-      ? filterValueEntries
-      : [];
-
-    const currentRelativeDateRange = timeRangeInputToSeconds(
-      displayedTimeInputValue,
-      timeZone,
-    );
+    const { savedDateRange, ...defaults } = toViewDefaults({
+      where: formValues.where,
+      whereLanguage: formValues.whereLanguage,
+      rangeSeconds: timeRangeInputToSeconds(displayedTimeInputValue, timeZone),
+      filterValues: filterValueEntries,
+    });
 
     setDashboard(
       produce(dashboard, draft => {
-        draft.savedQuery = currentWhere;
-        draft.savedQueryLanguage = currentWhereLanguage;
-        draft.savedFilterValues = currentFilterValues;
-        // Only supporting relative date range saving ATM
-        if (currentRelativeDateRange) {
-          draft.savedDateRange = {
-            type: 'relative',
-            value: currentRelativeDateRange,
-          };
+        Object.assign(draft, defaults);
+        if (savedDateRange) {
+          draft.savedDateRange = savedDateRange;
         }
       }),
       () => {
@@ -2205,11 +2292,11 @@ function DBDashboardPage({
     dashboard,
     isLocalDashboard,
     setDashboard,
-    getValues,
-    filterValueEntries,
     onSubmit,
-    timeZone,
+    getValues,
     displayedTimeInputValue,
+    timeZone,
+    filterValueEntries,
   ]);
   const handleRemoveSavedQuery = useCallback(() => {
     if (!dashboard || isLocalDashboard) return;
@@ -2406,10 +2493,10 @@ function DBDashboardPage({
     // The filter bar is hidden in kiosk mode, so a click would add conditions
     // the viewer can't see or remove.
     if (isKioskMode) return handlers;
-    for (const tile of dashboard?.tiles ?? []) {
+    for (const tile of resolvedTiles.values()) {
       const sourceId = 'source' in tile.config ? tile.config.source : undefined;
       const targetIds = getAdhocFilterTargetsForTile(
-        filters,
+        resolvedFilters,
         tile.config,
         sourceId,
       ).map(filter => filter.id);
@@ -2420,19 +2507,23 @@ function DBDashboardPage({
       }
     }
     return handlers;
-  }, [isKioskMode, dashboard?.tiles, filters, applyAdhocAction]);
+  }, [isKioskMode, resolvedTiles, resolvedFilters, applyAdhocAction]);
 
   const renderTileComponent = useCallback(
     (chart: Tile) => {
+      const resolvedChart = resolvedTiles.get(chart.id) ?? chart;
       // Resolve the tile's source ID so per-source-scoped filters can be
       // narrowed to only the tiles they target. Builder and RawSQL configs
       // both carry a `source` field; markdown / other configs don't.
       const tileSourceId =
-        'source' in chart.config ? chart.config.source : undefined;
+        'source' in resolvedChart.config
+          ? resolvedChart.config.source
+          : undefined;
       return (
         <Tile
           key={chart.id}
-          chart={chart}
+          chart={resolvedChart}
+          referenceVariableNames={referenceVariableNamesByTileId.get(chart.id)}
           dateRange={searchedTimeRange}
           onEditClick={() => setEditedTile(chart)}
           readOnly={isKioskMode}
@@ -2459,7 +2550,14 @@ function DBDashboardPage({
                         c => c.id === chart.id,
                       );
                       if (chartIndex === -1) return;
-                      draft.tiles[chartIndex] = newChart;
+                      // Keep the source as stored, not as resolved for display
+                      draft.tiles[chartIndex] = {
+                        ...newChart,
+                        config: restoreConfigReferences(
+                          newChart.config,
+                          chart.config,
+                        ),
+                      };
                     }),
                   );
                 }
@@ -2484,14 +2582,7 @@ function DBDashboardPage({
                 ...dashboard,
                 tiles: [
                   ...dashboard.tiles,
-                  {
-                    ...chart,
-                    id: makeId(),
-                    config: {
-                      ...chart.config,
-                      alert: undefined,
-                    },
-                  },
+                  { ...withoutAlert(chart), id: makeId() },
                 ],
               });
             }
@@ -2532,6 +2623,8 @@ function DBDashboardPage({
       );
     },
     [
+      resolvedTiles,
+      referenceVariableNamesByTileId,
       dashboard,
       searchedTimeRange,
       isRefreshEnabled,
@@ -2846,25 +2939,60 @@ function DBDashboardPage({
 
   const createDashboard = useCreateDashboard();
   const onCreateDashboard = useCallback(() => {
+    if (!dashboard) return;
+
+    // The new /dashboards/{id} page drops this page's URL state, so the view
+    // only survives as saved defaults.
+    // Reads the applied URL state rather than calling onSubmit(): its queued
+    // URL update would cancel the navigation to the new dashboard.
+    const [start, end] = searchedTimeRange;
+    const viewDefaults = toViewDefaults({
+      where,
+      whereLanguage: toWhereLanguage(whereLanguage),
+      rangeSeconds: (end.getTime() - start.getTime()) / 1000,
+      filterValues: filterValueEntries,
+    });
+
     createDashboard.mutate(
       {
-        name: 'My Dashboard',
-        tiles: [],
-        tags: [],
+        name: dashboard.name?.trim() ? dashboard.name : 'My New Dashboard',
+        tiles: dashboard.tiles.map(withoutAlert),
+        tags: dashboard.tags ?? [],
+        filters: dashboard.filters,
+        containers: dashboard.containers,
+        ...viewDefaults,
       },
       {
         onSuccess: data => {
           router.push(`/dashboards/${data.id}`);
         },
+        onError: e => {
+          notifications.show({
+            color: 'red',
+            title: 'Unable to save dashboard',
+            message: e.message.slice(0, 100),
+            autoClose: 5000,
+          });
+        },
       },
     );
-  }, [createDashboard, router]);
+  }, [
+    createDashboard,
+    router,
+    dashboard,
+    searchedTimeRange,
+    where,
+    whereLanguage,
+    filterValueEntries,
+  ]);
 
   const [isSaving, setIsSaving] = useState(false);
 
   const hasTiles = dashboard && dashboard.tiles.length > 0;
-  const hasSavedQueryAndFilterDefaults = Boolean(
-    dashboard?.savedQuery || dashboard?.savedFilterValues?.length,
+  const hasSavedDefaults = Boolean(
+    dashboard?.savedQuery ||
+    dashboard?.savedFilterValues?.length ||
+    dashboard?.savedDateRange,
   );
 
   const dashboardMeta =
@@ -2872,7 +3000,8 @@ function DBDashboardPage({
       <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
         {dashboard.createdBy && (
           <span>
-            Created by {dashboard.createdBy.name || dashboard.createdBy.email}.{' '}
+            Created by {dashboard.createdBy.name || dashboard.createdBy.email}
+            .{' '}
           </span>
         )}
         {dashboard.updatedAt && (
@@ -3096,11 +3225,11 @@ function DBDashboardPage({
             leftSection={<IconDeviceFloppy size={16} />}
             onClick={handleSaveQuery}
           >
-            {hasSavedQueryAndFilterDefaults
+            {hasSavedDefaults
               ? 'Update Default Query & Filters'
               : 'Save Query & Filters as Default'}
           </Menu.Item>
-          {hasSavedQueryAndFilterDefaults && (
+          {hasSavedDefaults && (
             <Menu.Item
               data-testid="remove-default-query-filters-menu-item"
               leftSection={<IconX size={16} />}
@@ -3224,7 +3353,10 @@ function DBDashboardPage({
   // `<PageLayout>` return shallow and prevents the tile-grid tree below
   // from being wrapped in an extra indentation level.
   const dashboardBody = (
-    <>
+    <ReferenceVariablesProvider
+      filters={filters}
+      values={referenceVariableValues}
+    >
       <Head>
         <title>{title}</title>
       </Head>
@@ -3273,15 +3405,16 @@ function DBDashboardPage({
         <Paper mt="xs" mb="md" p="md" data-testid="temporary-dashboard-banner">
           <Flex justify="space-between" align="center">
             <Text size="sm">
-              This is a temporary dashboard and can not be saved.
+              This is currently an unsaved, temporary dashboard.
             </Text>
             <Button
               variant="primary"
               fw={400}
               onClick={onCreateDashboard}
+              loading={createDashboard.isPending || createDashboard.isSuccess}
               data-testid="create-dashboard-button"
             >
-              Create New Saved Dashboard
+              Save dashboard
             </Button>
           </Flex>
         </Paper>
@@ -3324,7 +3457,7 @@ function DBDashboardPage({
         )}
       {!isKioskMode && (
         <DashboardFilters
-          filters={filters}
+          filters={resolvedFilters}
           selectionByFilterId={selectionByFilterId}
           onSetFilterValue={setFilterValue}
           adhocConditionsByFilterId={adhocConditionsByFilterId}
@@ -3332,6 +3465,14 @@ function DBDashboardPage({
           dateRange={searchedTimeRange}
           variables={variables}
           unsatisfiedRequiredFilters={unsatisfiedRequiredFilters}
+          referenceVariableValues={referenceVariableValues}
+          unresolvedReferenceVariablesByFilterId={
+            unresolvedReferenceVariablesByFilterId
+          }
+          incompatibleReferenceVariablesByFilterId={
+            incompatibleReferenceVariablesByFilterId
+          }
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
       {/* Selection indicator */}
@@ -3510,9 +3651,11 @@ function DBDashboardPage({
           showVariableOptions
           showRequiredFilterOptions
           variables={variables}
+          dateRange={searchedTimeRange}
+          getDashboardFilters={getFilterQueriesForSource}
         />
       )}
-    </>
+    </ReferenceVariablesProvider>
   );
 
   return (

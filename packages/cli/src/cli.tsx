@@ -32,8 +32,13 @@ import { clearSession, loadSession, setActiveTeam } from '@/utils/config';
 import { parseTimeValue } from '@/utils/editor';
 import { isValidUrl } from '@/utils/url';
 import { uploadSourcemaps } from '@/sourcemaps';
-import { mcpClients } from '@/mcp/install';
-import McpInstallPrompt, { type InstallResult } from '@/mcp/McpInstallPrompt';
+import {
+  DEFAULT_MCP_SERVER_NAME,
+  type InstallResult,
+  isValidServerName,
+  mcpClients,
+} from '@/mcp/install';
+import McpInstallPrompt from '@/mcp/McpInstallPrompt';
 
 // ---- Standalone interactive login for `hdx auth login` -------------
 
@@ -554,7 +559,20 @@ mcp
     'Add the ClickStack MCP server to Claude Code, Codex, Cursor, and VS Code',
   )
   .option('-a, --app-url <url>', 'ClickStack app URL')
+  .option(
+    '-n, --name <name>',
+    'Server name in the agent configs. Use a different name per ClickStack instance to keep several side by side',
+    DEFAULT_MCP_SERVER_NAME,
+  )
   .action(async opts => {
+    if (!isValidServerName(opts.name)) {
+      _origError(
+        chalk.red(
+          '--name must start with a letter or number and contain only letters, numbers, hyphens, and underscores.\n',
+        ),
+      );
+      process.exit(1);
+    }
     if (!process.stdin.isTTY) {
       _origError(
         chalk.red(
@@ -577,6 +595,7 @@ mcp
     const { waitUntilExit } = render(
       <McpInstallPrompt
         initialAppUrl={resolveServer(opts.appUrl)}
+        name={opts.name}
         clients={clients}
         onDone={r => {
           results = r;
@@ -590,11 +609,11 @@ mcp
       process.stdout.write('Cancelled. No configs were changed.\n');
       return;
     }
-    for (const { client, error } of done) {
+    for (const { client, name, error } of done) {
       process.stdout.write(
         error
-          ? chalk.red(`✗ ${client.label}: ${error}\n`)
-          : chalk.green(`✓ ${client.label}`) +
+          ? chalk.red(`✗ ${client.label}: ${name}: ${error}\n`)
+          : chalk.green(`✓ ${client.label}: ${name}`) +
               chalk.dim(` (key stored in ${client.location})\n`),
       );
     }

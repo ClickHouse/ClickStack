@@ -1,5 +1,154 @@
 # @hyperdx/api
 
+## 2.46.0
+
+### Minor Changes
+
+- 6705e505d: feat: Create, read, and update ad hoc dashboard filters through the external API
+
+  `/api/v2/dashboards` now accepts and returns `ADHOC` filters, with SQL and
+  PromQL source types, and their `adhoc` entries in `savedFilterValues`. Each
+  filter's sources must exist and be a kind its `sourceType` supports. MCP still
+  hides ad hoc filters.
+
+- b681cec85: feat(mcp): Create, read, and update ad hoc dashboard filters through the MCP dashboard tools
+
+  `clickstack_save_dashboard`, `clickstack_get_dashboard`, and
+  `clickstack_patch_dashboard` now handle `ADHOC` filters and their `adhoc`
+  saved conditions. PromQL ad hoc filters are offered only while PromQL is
+  enabled, and are hidden and kept on update otherwise. Saved conditions that
+  name no ad hoc filter, or use an operator their filter can't apply, produce a
+  warning.
+
+- 743c3c1a6: feat: add an optional "Row key expression" to log and trace sources. When set,
+  the side panel's row lookup selects and filters on only those columns instead of
+  detecting keys from table metadata.
+- a7744e82a: feat: add data source and connection variable types to dashboards
+- a7744e82a: feat: support data source and connection variables in the external API and MCP
+- a7744e82a: feat: add connection variables for raw SQL tiles, SQL query filters, and
+  connection-scoped data source variables
+
+### Patch Changes
+
+- f15b849da: feat: Ad hoc dashboard filter finishing touches
+
+  - Add an `IN` operator. `IN` conditions on the same key are OR'd into one
+    `IN (...)` condition for SQL, or one `=~"a|b"` matcher for PromQL.
+  - Ad hoc filters always broadcast (`isBroadcastEnabled: true`), and their
+    variable name is only a unique identifier. It is no longer declared as a
+    `$variable`.
+  - Warn when another ad hoc filter already applies to the same sources.
+  - Collapse the filter input to three conditions behind a "+N more" toggle.
+
+- 8952972c9: perf: check-alerts gives each alert only its own previous history, so a tick
+  no longer scans every alert's group history once per alert
+- f42c68a9c: chore: bump `uuid` to 11.1.1 (fixes GHSA-w5hq-g745-h8pq) and drop `@types/uuid`
+- 61999b48f: fix: clear the critical CVEs from the app and collector images by moving the
+  collector to Alpine 3.24, upgrading gomplate to v5 and dropping the unused goose
+  and esbuild binaries. Custom entrypoints that called `goose` directly should
+  call `migrate` with the same schema directory instead.
+- bfb5c834f: Use the log source body expression for bare-text MCP searches, pattern filters,
+  event deltas, and alert alias queries when no implicit search column is set.
+- 02a40929d: feat: `clickstack_save_alert` accepts `note` and `numConsecutiveWindows`
+
+  Updates that omit either field now keep the stored value instead of clearing it;
+  send `null` to clear.
+
+- 8dc1aa791: refactor: the MCP `clickstack_event_patterns` tool builds its drill-down
+  `whereSnippet` with the shared pattern predicate from `@hyperdx/common-utils`
+  instead of its own copy. The snippet is unchanged.
+- 6256667e1: fix(mcp): Rename `clickstack_trace_top_time_consuming_operations` to `clickstack_trace_top_time_consuming_ops`
+
+  The old name was the longest MCP tool name and exceeded the tool-name length
+  limit some MCP clients enforce. Clients that call the tool by its old name
+  need to switch to the new one.
+
+- cf4b70bec: fix: update the Node dependencies flagged as vulnerable in the app image (axios,
+  MCP SDK, express, js-yaml, brace-expansion and others). MCP tool validation
+  errors still name the field that failed under the new MCP SDK, and list the
+  accepted values when a tile's `displayType` is wrong.
+- 272c51486: fix: support numeric range searches on String attributes
+
+  Range searches with numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, failed with "no supertype for types
+  String, UInt8". They now compare with `toFloat64OrNull`; values that aren't
+  numbers don't match. `>`, `<`, `>=` and `<=` still compare String fields as
+  text; use a range such as `:[1000 TO *]` for a numeric comparison.
+
+- cac14ebc8: feat: Name PromQL sources "Time Series" or "Prometheus" by their connection
+
+  The source type for a PromQL source now reads "Time Series" when it queries a
+  ClickHouse TimeSeries table and "Prometheus" when it queries an external
+  Prometheus API. Where no connection is known yet, such as the source form before
+  a connection is picked or a data source variable's kinds, it reads "Time Series
+  / Prometheus". The stored kind is still `promql`.
+
+  The PromQL source created by onboarding auto-detection and the local dev default
+  sources is now named "Time Series" instead of "PromQL".
+
+- fa3a5649e: feat: accept SQL query dashboard filters in the API, external API, and MCP
+
+  Saving a dashboard now rejects a `SQL_QUERY` filter whose connection doesn't belong to the team. The external API and MCP read and write the filter with a `connectionId`, and MCP warns about unknown variables and source-only macros in its SQL.
+
+- 5b50c31c9: feat: add the SQL query dashboard filter type to the dashboard schema
+
+  A `SQL_QUERY` filter stores a ClickHouse connection and a SQL template whose first column fills the filter's dropdown. It is variable-only. Validation flags templates that use `$__sourceTable` or `$__filters`, or whose macros and variable references can't expand. The filter is not yet exposed through the external API or MCP, and has no editor or values lookup yet.
+
+- Updated dependencies [f15b849da]
+- Updated dependencies [fe96b722b]
+- Updated dependencies [02a40929d]
+- Updated dependencies [272c51486]
+- Updated dependencies [d311d82e2]
+- Updated dependencies [743c3c1a6]
+- Updated dependencies [a7744e82a]
+- Updated dependencies [a7744e82a]
+- Updated dependencies [3acd5ba1a]
+- Updated dependencies [5b50c31c9]
+  - @hyperdx/common-utils@0.36.0
+
+## 2.45.0
+
+### Minor Changes
+
+- 2d17de5d7: feat: serve PromQL label lookups from ClickHouse's Prometheus HTTP API
+
+  On ClickHouse 26.9+ with the `prometheus_api_v1` handler, `/labels` and `/label/:name/values` for a ClickHouse-backed PromQL source now proxy to the handler instead of querying the TimeSeries tags table with SQL. Older servers, servers without the handler, and sources set to `table-function` keep the SQL path, so a source that runs queries over HTTP on 26.6-26.8 still gets label autocomplete.
+
+- db4e7ba67: chore: upgrade bundled ClickHouse to 26.10.3.7
+
+  The all-in-one image and the Docker Compose files now use
+  `clickhouse/clickhouse-server:26.10.3.7-alpine`. New TimeSeries tables default
+  to schema version 8, which keeps each series' time range in a separate inner
+  table; existing tables keep their layout. `system.metric_log` switches to the
+  bucketed schema, and rows from before the upgrade move to `system.metric_log_0`.
+
+### Patch Changes
+
+- c17fc16a2: fix: `{{note}}` in webhook bodies now contains the alert's note when the alert
+  fires, not only in "Send test"
+- 1fba1c381: fix: mark the MCP `clickstack_save_webhook` and `clickstack_save_alert` tools as open-world
+
+  Saved webhooks and alerts send HTTP requests to third-party endpoints, so both tools now declare `openWorldHint: true`.
+
+- 7b03880eb: feat: read the MCP PromQL label catalog from ClickHouse's Prometheus HTTP API
+
+  `describe_source` on a ClickHouse-backed PromQL source now lists label and metric names through the `prometheus_api_v1` handler on ClickHouse 26.9+, and falls back to SQL on older servers, servers without the handler, and sources set to `table-function`.
+
+- ac913ceb3: feat: Choose how a PromQL source on ClickHouse is evaluated (the Prometheus HTTP API or the `prometheusQuery` table functions) instead of probing the server on every query. Without a choice the server is still probed, but the answer is now kept for 5 minutes. A source set to the HTTP API against a server that does not serve it fails with a clear error. Onboarding pins a PromQL source it detects to the HTTP API when the server serves it.
+- 7cfd333ea: fix(mcp): drop the health verdict from clickstack_service_health
+
+  The tool no longer labels services critical, degraded or healthy, and no longer
+  tells agents a service needs "no action". Each service keeps its threshold
+  flags, score and a factual summary, so agents reason from the numbers instead of
+  a verdict that service-wide totals can get wrong. `summary.statusCounts` is
+  replaced by `summary.servicesFlagged`, and the span attributes
+  `mcp.service_health.critical_count` and `mcp.service_health.degraded_count` are
+  replaced by `mcp.service_health.flagged_count`.
+
+- Updated dependencies [2d17de5d7]
+- Updated dependencies [ac913ceb3]
+  - @hyperdx/common-utils@0.35.0
+
 ## 2.44.0
 
 ### Minor Changes

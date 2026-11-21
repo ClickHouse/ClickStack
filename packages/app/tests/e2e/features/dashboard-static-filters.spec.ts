@@ -307,9 +307,9 @@ test.describe(
         );
       });
 
-      await test.step('Switching to queried values swaps in the queried fields', async () => {
+      await test.step('Switching to SQL expression values swaps in the expression fields', async () => {
         await dashboardPage.openEditFilterForm('Environment');
-        await dashboardPage.selectFilterType('Queried values');
+        await dashboardPage.selectFilterType('SQL expression values');
         await expect(dashboardPage.getFilterOptionsInput()).toHaveCount(0);
 
         await dashboardPage.selectFilterSource(DEFAULT_LOGS_SOURCE_NAME);

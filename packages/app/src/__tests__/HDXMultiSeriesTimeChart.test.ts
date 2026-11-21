@@ -12,7 +12,9 @@ import type { LineData } from '@/ChartUtils';
 import type { ActiveClickSeries } from '@/HDXMultiSeriesTimeChart';
 import {
   buildActiveClickSeries,
+  cappedYAxisUpperBound,
   collectMemoChartGradientHexes,
+  compactTickAnchor,
   computeYAxisBounds,
   formatAxisTick,
   getExpandableYAxisTicks,
@@ -24,6 +26,7 @@ import {
   getYAxisTicks,
   HARD_LINES_LIMIT,
   sameActiveClickSeries,
+  scanStackedYAxisValueRange,
   scanYAxisValueRange,
 } from '@/HDXMultiSeriesTimeChart';
 import { COLORS } from '@/utils';
@@ -421,6 +424,39 @@ describe('scanYAxisValueRange', () => {
   });
 });
 
+describe('scanStackedYAxisValueRange', () => {
+  const series = (dataKey: string): LineData => ({
+    dataKey,
+    currentPeriodKey: dataKey,
+    previousPeriodKey: `${dataKey}.prev`,
+    displayName: dataKey,
+    valueColumnName: dataKey,
+    groupValues: [],
+    color: '#a',
+  });
+
+  it('spans every running sum of the stack, as Recharts draws it', () => {
+    // Recharts stacks each series on the previous one's top (stackOffset
+    // "none"), so a negative series can dip a segment below its baseline.
+    const lineData = [series('a'), series('b'), series('c')];
+    const graphResults = [
+      { a: 10, b: 30, c: -50 },
+      { a: 5, c: 20 },
+    ];
+    expect(scanStackedYAxisValueRange(graphResults, lineData)).toEqual({
+      min: -10,
+      max: 40,
+    });
+  });
+
+  it('returns an empty range when no series has a numeric value', () => {
+    expect(scanStackedYAxisValueRange([{ a: null }], [series('a')])).toEqual({
+      min: Infinity,
+      max: -Infinity,
+    });
+  });
+});
+
 describe('computeYAxisBounds', () => {
   const series = (dataKey: string): LineData => ({
     dataKey,
@@ -536,40 +572,77 @@ describe('computeYAxisBounds', () => {
     expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
-  it('leaves a stacked bar`s max to Recharts, selection or not', () => {
-    // Regression: 60 and 40 individually reach a stack height of 100, not
-    // 63 - the guard must apply regardless of hasSelection.
-    const lineData = [series('a'), series('b')];
-    const graphResults = [{ a: 60, b: 40 }];
-    for (const hasSelection of [false, true]) {
-      expect(
-        computeYAxisBounds(
-          graphResults,
-          lineData,
-          hasSelection,
-          false,
-          DisplayType.StackedBar,
-          [],
-        ),
-      ).toEqual({ domain: [0, 'auto'], ticks: undefined });
-    }
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'sizes a %s axis to the stack height, not the tallest series',
+    displayType => {
+      // 60 and 40 individually reach a stack height of 100, not 63.
+      const lineData = [series('a'), series('b')];
+      const graphResults = [{ a: 60, b: 40 }];
+      for (const hasSelection of [false, true]) {
+        expect(
+          computeYAxisBounds(
+            graphResults,
+            lineData,
+            hasSelection,
+            false,
+            displayType,
+            [],
+          ),
+        ).toEqual({
+          domain: [0, 105],
+          ticks: [0, 25, 50, 75, 100],
+          tickFormatter: expect.any(Function),
+        });
+      }
+    },
+  );
+
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'never shows duplicate %s tick labels when 1.5k rounds to 2k',
+    displayType => {
+      // Regression: stacked charts deferred to Recharts' ticks, which
+      // rendered 0/500/1k/2k/2k for a 2000-high stack at 0 decimals.
+      const bounds = computeYAxisBounds(
+        [
+          { a: 1200, b: 800 },
+          { a: 600, b: 300 },
+        ],
+        [series('a'), series('b')],
+        false,
+        false,
+        displayType,
+        [],
+        { output: 'number', mantissa: 0 },
+      );
+      const labels = bounds.ticks!.map(t => bounds.tickFormatter!(t));
+      expect(labels).toEqual(['0', '500', '1k', '1.5k', '2k']);
+    },
+  );
+
+  it('keeps a stacked axis pinned at zero even when fit-to-data is on', () => {
+    // Fit-to-data only applies to line charts; a stacked bar cut off above
+    // zero would misrepresent each segment's height.
+    const bounds = computeYAxisBounds(
+      [{ a: 900, b: 100 }],
+      [series('a'), series('b')],
+      false,
+      true,
+      DisplayType.StackedBar,
+      [],
+    );
+    expect(bounds.domain).toEqual([0, 1050]);
   });
 
-  it('leaves a stacked line`s max to Recharts, selection or not', () => {
-    const lineData = [series('a'), series('b')];
-    const graphResults = [{ a: 60, b: 40 }];
-    for (const hasSelection of [false, true]) {
-      expect(
-        computeYAxisBounds(
-          graphResults,
-          lineData,
-          hasSelection,
-          false,
-          DisplayType.StackedLine,
-          [],
-        ),
-      ).toEqual({ domain: [0, 'auto'], ticks: undefined });
-    }
+  it('leaves a stacked axis with a reference line to Recharts', () => {
+    const bounds = computeYAxisBounds(
+      [{ a: 60, b: 40 }],
+      [series('a'), series('b')],
+      false,
+      false,
+      DisplayType.StackedBar,
+      [150],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
   });
 
   it('falls back to auto when there is no numeric data', () => {
@@ -595,6 +668,114 @@ describe('computeYAxisBounds', () => {
       [],
     );
     expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+  });
+
+  describe('with yAxisMaxDomain (capped axis, e.g. a 0-100% rate tile)', () => {
+    it('pins a flat/zero series to [0, cap] with clean ticks instead of auto', () => {
+      // The flat-data case above falls back to [0, 'auto']; with a cap it must
+      // show the full [0, cap] range so a 0% rate reads as 0%, not a nonsense
+      // auto-scaled range.
+      const bounds = computeYAxisBounds(
+        [{ a: 0 }, { a: 0 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      expect(bounds).toEqual({
+        domain: [0, 1],
+        ticks: [0, 0.5, 1],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('scales the upper bound to the data peak but never above the cap', () => {
+      const bounds = computeYAxisBounds(
+        [{ a: 0.5 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      // Peak 0.5 -> 0.55 with headroom, nice-stepped to 0.6, still under the cap.
+      expect(bounds).toEqual({
+        domain: [0, 0.6],
+        ticks: [0, 0.2, 0.4, 0.6],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('keeps the cap under a selection so selecting the sole series cannot collapse the axis', () => {
+      // Regression: on the selection path a flat 0% rate used to fall through
+      // to min/max fitting and collapse the capped axis to [0, 0].
+      const bounds = computeYAxisBounds(
+        [{ a: 0 }],
+        [series('a')],
+        true,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      expect(bounds.domain).toEqual([0, 1]);
+      expect((bounds.ticks ?? []).length).toBeGreaterThan(1);
+    });
+
+    it('wins over reference lines rather than deferring to Recharts', () => {
+      const bounds = computeYAxisBounds(
+        [{ a: 0.5 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [0.8],
+        undefined,
+        1,
+      );
+      // Identical to the no-reference-line case: the cap is applied before the
+      // reference-line handling, so the line at 0.8 neither widens the domain
+      // nor defers to Recharts' auto domain.
+      expect(bounds).toEqual({
+        domain: [0, 0.6],
+        ticks: [0, 0.2, 0.4, 0.6],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('does not apply to a stacked chart, which follows its stack height', () => {
+      // 0.5 + 0.7 stacks to 1.2, above the cap of 1: the axis still fits the
+      // stack, exactly as it does without a cap.
+      const graphResults = [{ a: 0.5, b: 0.7 }];
+      const lineData = [series('a'), series('b')];
+      const capped = computeYAxisBounds(
+        graphResults,
+        lineData,
+        false,
+        false,
+        DisplayType.StackedBar,
+        [],
+        undefined,
+        1,
+      );
+      const uncapped = computeYAxisBounds(
+        graphResults,
+        lineData,
+        false,
+        false,
+        DisplayType.StackedBar,
+        [],
+      );
+      expect(capped.domain).toEqual(uncapped.domain);
+      expect(capped.ticks).toEqual(uncapped.ticks);
+      expect(capped.domain).not.toEqual([0, 1]);
+    });
   });
 
   it('falls back to auto for flat negative data on a fitted axis', () => {
@@ -1140,5 +1321,49 @@ describe('getVisibleTooltipRows', () => {
     const keys = result.rows.map(r => r.dataKey);
     expect(keys.filter(k => k === 's3')).toHaveLength(1);
     expect(result.rows).toHaveLength(20);
+  });
+});
+
+describe('cappedYAxisUpperBound', () => {
+  it('auto-scales to the data max plus 10% headroom when below the cap', () => {
+    expect(cappedYAxisUpperBound(0.5, 1)).toBeCloseTo(0.55);
+  });
+
+  it('never exceeds the cap, even when the data max plus headroom would', () => {
+    // 0.95 * 1.1 = 1.045, clamped to the cap.
+    expect(cappedYAxisUpperBound(0.95, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(5, 1)).toBe(1);
+  });
+
+  it('uses the cap for a flat/zero series instead of a degenerate domain', () => {
+    expect(cappedYAxisUpperBound(0, 1)).toBe(1);
+  });
+
+  it('uses the cap for a negative or non-finite data max', () => {
+    expect(cappedYAxisUpperBound(-1, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(NaN, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(Infinity, 1)).toBe(1);
+  });
+});
+
+describe('compactTickAnchor', () => {
+  it('anchors the first tick to the start edge', () => {
+    expect(compactTickAnchor(0, 5)).toBe('start');
+  });
+
+  it('anchors the last tick to the end edge', () => {
+    expect(compactTickAnchor(4, 5)).toBe('end');
+  });
+
+  it('centers interior ticks', () => {
+    expect(compactTickAnchor(2, 5)).toBe('middle');
+  });
+
+  it('treats a negative index as the start edge', () => {
+    expect(compactTickAnchor(-1, 5)).toBe('start');
+  });
+
+  it('resolves the single-tick case to start (the first-edge check wins)', () => {
+    expect(compactTickAnchor(0, 1)).toBe('start');
   });
 });

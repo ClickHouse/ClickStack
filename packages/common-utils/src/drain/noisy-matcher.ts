@@ -1,4 +1,8 @@
-import { DENOISE_NOISE_THRESHOLD, flattenBody } from './mine-patterns';
+import {
+  createPatternMasker,
+  DENOISE_NOISE_THRESHOLD,
+  flattenBody,
+} from './mine-patterns';
 
 const PATTERN_WILDCARD = '<*>';
 
@@ -26,12 +30,14 @@ export function selectNoisyPatterns<T>(
  * member on a different same-length cluster than the one it was counted in.
  *
  * `extraDelimiters` must be the ones the miner was configured with, so the
- * body splits into the same tokens the templates were built from.
+ * body splits into the same tokens the templates were built from. Likewise set
+ * `masked` when the templates come from `minePatterns` (default masks), so the
+ * body is masked the same way; drain3's default config has no masks.
  */
 export function buildNoisyBodyMatcher(
   templates: string[],
   noisyTemplates: Set<string>,
-  options?: { extraDelimiters?: string[] },
+  options?: { extraDelimiters?: string[]; masked?: boolean },
 ): (body: string) => boolean {
   const extraDelimiters = options?.extraDelimiters ?? [];
   const candidates = templates.map(template => {
@@ -42,8 +48,10 @@ export function buildNoisyBodyMatcher(
       noisy: noisyTemplates.has(template),
     };
   });
+  const masker = options?.masked ? createPatternMasker() : undefined;
   return body => {
-    const tokens = tokenize(flattenBody(body), extraDelimiters);
+    const flat = flattenBody(body);
+    const tokens = tokenize(masker ? masker.mask(flat) : flat, extraDelimiters);
     let best: (typeof candidates)[number] | undefined;
     for (const c of candidates) {
       const fits =

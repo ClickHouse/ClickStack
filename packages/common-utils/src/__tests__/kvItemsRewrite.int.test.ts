@@ -70,7 +70,7 @@ describe('KV items rewrite integration', () => {
         LogAttributeItems Array(String) MATERIALIZED
           arrayMap((x) -> concat(x.1, '=', x.2), LogAttributes::Array(Tuple(String, String)))
           CODEC(ZSTD(1)),
-        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array') GRANULARITY 1
+        INDEX idx_log_attr_items LogAttributeItems TYPE text(tokenizer = 'array', dictionary_block_size = 8192) GRANULARITY 1
       )
       ENGINE = MergeTree
       ORDER BY (Timestamp)`,

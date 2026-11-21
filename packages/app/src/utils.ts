@@ -6,6 +6,7 @@ import type { SetStateAction } from 'react';
 import TimestampNano from 'timestamp-nano';
 import {
   TableConnection,
+  tcFromSource,
   unquoteIdentifier,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
@@ -13,12 +14,14 @@ import {
   CATEGORICAL_PALETTE_TOKENS,
   ChartPaletteToken,
   ColorCondition,
+  isLogSource,
+  isMetricSource,
+  isTraceSource,
   NumericUnit,
   SourceKind,
   TMetricSource,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { SortingState } from '@tanstack/react-table';
 
 import { MetricsDataType, NumberFormat } from './types';
 
@@ -1170,24 +1173,32 @@ export const formatUptime = (seconds: number) => {
 const escapeSqlSingleQuoted = (v: string): string =>
   v.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
+// `arrayIndexes` (optional) holds the positions in `path` that index into an
+// array. It only affects JSON columns: a numeric segment at one of those
+// positions is a 1-based subscript (`Col.\`events\`[1]`), not a quoted key
+// (`Col.\`events\`.\`0\``), which matches nothing. Callers that cannot tell
+// arrays from objects omit it and keep numeric segments as keys.
 export const mergePath = (
   path: string[],
   jsonColumns: string[] = [],
   mapColumns: string[] = [],
+  arrayIndexes?: ReadonlySet<number>,
 ) => {
   const [key, ...rest] = path;
   if (rest.length === 0) {
     return key;
   }
   if (jsonColumns.includes(key)) {
-    return `${key}.${rest
-      .map(v =>
-        v
-          .split('.')
-          .map(v => (v.startsWith('`') && v.endsWith('`') ? v : `\`${v}\``))
-          .join('.'),
-      )
-      .join('.')}`;
+    return rest.reduce((expr, v, i) => {
+      if (arrayIndexes?.has(i + 1) && /^\d+$/.test(v)) {
+        return `${expr}[${Number(v) + 1}]`;
+      }
+      const quoted = v
+        .split('.')
+        .map(v => (v.startsWith('`') && v.endsWith('`') ? v : `\`${v}\``))
+        .join('.');
+      return `${expr}.${quoted}`;
+    }, key);
   }
   if (mapColumns.includes(key)) {
     // Map columns always take string-key subscripts; ClickHouse's Map index
@@ -1398,6 +1409,41 @@ export function getAllMetricTables(source: TSource): TableConnection[] {
 }
 
 /**
+ * Tables of the enabled sources on a connection, including metric tables and
+ * materialized views, for SQL editor autocomplete.
+ */
+export function getTableConnectionsForConnection(
+  sources: TSource[] | undefined,
+  connectionId: string | undefined,
+): TableConnection[] {
+  if (!sources || !connectionId) return [];
+  return sources
+    .filter(s => s.connection === connectionId && !s.disabled)
+    .flatMap(source => {
+      const tables: TableConnection[] = getAllMetricTables(source);
+
+      if (!isMetricSource(source)) {
+        tables.push(tcFromSource(source));
+      }
+
+      if (
+        (isLogSource(source) || isTraceSource(source)) &&
+        source.materializedViews
+      ) {
+        tables.push(
+          ...source.materializedViews.map(mv => ({
+            databaseName: mv.databaseName,
+            tableName: mv.tableName,
+            connectionId: source.connection,
+          })),
+        );
+      }
+
+      return tables;
+    });
+}
+
+/**
  * Converts (T | T[]) to T[]. If undefined, empty array
  */
 export function toArray<T>(obj?: T | T[]): T[] {
@@ -1410,50 +1456,6 @@ export const stripTrailingSlash = (url: string | undefined | null): string => {
     throw new Error('URL must be a non-empty string');
   }
   return url.endsWith('/') ? url.slice(0, -1) : url;
-};
-
-/**
- * Converts the given SortingState into a SQL Order By string
- * Note, only the first element of the SortingState is used. Returns
- * undefined if the input is null or empty.
- *
- * Output format: "<column> <ASC|DESC>"
- * */
-export const sortingStateToOrderByString = (
-  sort: SortingState | null,
-): string | undefined => {
-  const firstSort = sort?.at(0);
-  return firstSort
-    ? `${firstSort.id} ${firstSort.desc ? 'DESC' : 'ASC'}`
-    : undefined;
-};
-
-/**
- * Converts the given SQL Order By string into a SortingState.
- *
- * Expects format matching the output of sortingStateToOrderByString
- * ("<column> <ASC|DESC>"). Returns undefined if the input is invalid.
- */
-export const orderByStringToSortingState = (
-  orderBy: string | undefined,
-): SortingState | undefined => {
-  if (!orderBy) {
-    return undefined;
-  }
-
-  const orderByParts = orderBy.split(' ');
-  const endsWithDirection = orderBy.toLowerCase().match(/ (asc|desc)$/i);
-
-  if (orderByParts.length !== 2 || !endsWithDirection) {
-    return undefined;
-  }
-
-  return [
-    {
-      id: orderByParts[0].trim(),
-      desc: orderByParts[1].trim().toUpperCase() === 'DESC',
-    },
-  ];
 };
 
 export const mapKeyBy = <T>(array: T[], key: keyof T) => {

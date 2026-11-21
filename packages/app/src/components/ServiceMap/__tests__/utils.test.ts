@@ -12,6 +12,8 @@ import {
   getNodeSize,
   getRequestsPerSecond,
   getServiceMetricValue,
+  isServiceMapTooLarge,
+  MAX_SERVICE_MAP_NODES,
   navigateToTraceSearch,
   rawDurationToMs,
   SERVICE_MAP_METRIC_HUE,
@@ -495,7 +497,9 @@ describe('getServiceMetricValue', () => {
     overrides: Partial<ServiceAggregation['incomingRequests']> = {},
     outgoingRequests = 0,
   ): ServiceAggregation => ({
+    key: 'svc',
     serviceName: 'svc',
+    dimensions: [],
     incomingRequests: {
       totalRequests: 100,
       errorCount: 5,
@@ -691,5 +695,16 @@ describe('deriveDisplayMetrics', () => {
     );
     expect(m.requestsPerSecond).toBeUndefined();
     expect(m.latencyMs).toBeDefined();
+  });
+});
+
+describe('isServiceMapTooLarge', () => {
+  it('gates only maps above the node limit', () => {
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES, false)).toBe(false);
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES + 1, false)).toBe(true);
+  });
+
+  it('is lifted by "Show anyway"', () => {
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES + 1, true)).toBe(false);
   });
 });

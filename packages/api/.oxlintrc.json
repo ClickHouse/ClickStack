@@ -1,0 +1,98 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "extends": ["../../oxlint/base.jsonc"],
+  "jsPlugins": [
+    "eslint-plugin-n",
+    "eslint-plugin-security",
+    "eslint-plugin-simple-import-sort"
+  ],
+  "globals": {
+    "console": "readonly",
+    "process": "readonly",
+    "module": "readonly",
+    "require": "readonly",
+    "__dirname": "readonly",
+    "__filename": "readonly",
+    "exports": "readonly",
+    "Buffer": "readonly",
+    "setTimeout": "readonly",
+    "clearTimeout": "readonly",
+    "setInterval": "readonly",
+    "clearInterval": "readonly",
+    "setImmediate": "readonly",
+    "clearImmediate": "readonly",
+    "global": "readonly"
+  },
+  "ignorePatterns": [
+    "node_modules/**",
+    "build/**",
+    "dist/**",
+    "coverage/**",
+    "src/coverage/**",
+    "migrations/**",
+    "migrate-mongo-config.ts",
+    "**/*.config.js",
+    "**/*.config.mjs",
+    "jest.config.js",
+    "jest.setup.ts"
+  ],
+  "rules": {
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-unsafe-type-assertion": "warn",
+    "typescript/no-namespace": "error",
+    "n/no-deprecated-api": "error",
+    "n/no-exports-assign": "error",
+    "n/no-extraneous-import": "error",
+    "n/no-extraneous-require": "error",
+    "n/no-missing-require": [
+      "error",
+      {
+        "tryExtensions": [".js", ".ts", ".json"]
+      }
+    ],
+    "n/no-process-exit": "error",
+    "n/no-unpublished-bin": "error",
+    "n/no-unpublished-import": [
+      "error",
+      {
+        "allowModules": ["mongodb", "supertest"]
+      }
+    ],
+    "n/no-unpublished-require": "error",
+    "n/no-unsupported-features/es-builtins": "error",
+    "n/no-unsupported-features/es-syntax": [
+      "error",
+      {
+        "ignores": ["modules"]
+      }
+    ],
+    "n/no-unsupported-features/node-builtins": "error",
+    "n/process-exit-as-throw": "error",
+    "n/shebang": "error",
+    "security/detect-bidi-characters": "warn",
+    "security/detect-buffer-noassert": "warn",
+    "security/detect-child-process": "warn",
+    "security/detect-disable-mustache-escape": "warn",
+    "security/detect-eval-with-expression": "warn",
+    "security/detect-new-buffer": "warn",
+    "security/detect-no-csrf-before-method-override": "warn",
+    "security/detect-non-literal-fs-filename": "warn",
+    "security/detect-non-literal-regexp": "warn",
+    "security/detect-non-literal-require": "warn",
+    "security/detect-object-injection": "warn",
+    "security/detect-possible-timing-attacks": "warn",
+    "security/detect-pseudoRandomBytes": "warn",
+    "security/detect-unsafe-regex": "warn",
+    "simple-import-sort/imports": "error",
+    "simple-import-sort/exports": "error"
+  },
+  "overrides": [
+    {
+      "files": ["src/index.ts", "src/tasks/index.ts"],
+      "rules": {
+        "n/no-process-exit": "off"
+      }
+    }
+  ]
+}

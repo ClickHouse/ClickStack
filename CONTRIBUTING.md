@@ -178,7 +178,8 @@ Service Descriptions:
   instrumented applications and forwards it to ClickHouse for storage. Includes
   OpAMP supervisor that dynamically pulls configuration from ClickStack API.
 - ClickHouse (ch-server): ClickHouse database, stores all telemetry.
-- MongoDB (db): Stores user/saved search/alert/dashboard data.
+- MongoDB (db): Stores user/saved search/alert/dashboard data. Local dev runs
+  DocumentDB instead, which the API reaches over the Mongo wire protocol.
 - ClickStack API (api): Node.js API, executes ClickHouse queries on behalf of the
   frontend and serves the frontend. serves the frontend. Can also run alert
   checker.
@@ -199,7 +200,8 @@ yarn dev
 ```
 
 This will start the Node.js API, Next.js frontend locally and the OpenTelemetry
-collector and ClickHouse server in Docker.
+collector, ClickHouse server and DocumentDB in Docker. To browse DocumentDB, see
+the connection string in `agent_docs/development.md`.
 
 Each worktree automatically gets unique ports so multiple developers (or agents)
 can run `yarn dev` simultaneously without conflicts. A dev portal at
@@ -236,8 +238,8 @@ see them reflected in real-time.
 
 The development stack mounts volumes locally for persisting storage under
 `.volumes`. Each worktree gets its own volume directory (e.g.
-`.volumes/ch_data_dev_89`). Clear the `.volumes` directory to reset ClickHouse
-and MongoDB storage.
+`.volumes/ch_data_dev_89`, `.volumes/docdb_dev_89`). Clear the `.volumes`
+directory to reset ClickHouse and DocumentDB storage.
 
 ### Windows
 
@@ -257,7 +259,7 @@ simultaneously with the dev stack and across multiple worktrees.
 
 ### E2E Tests
 
-E2E tests run against a full local stack (MongoDB + ClickHouse + API). Docker
+E2E tests run against a full local stack (DocumentDB + ClickHouse + API). Docker
 must be running.
 
 ```bash

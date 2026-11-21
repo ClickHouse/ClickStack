@@ -45,6 +45,8 @@ export type UserPreferences = {
    * fall back to `DEFAULT_ROW_CLICK_ACTION`.
    */
   rowClickAction?: RowClickAction;
+  /** CRT screen effect. The toggle stays hidden until the Konami code is typed. */
+  crtMode?: boolean;
 };
 
 // Legacy type for migration

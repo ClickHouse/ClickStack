@@ -56,7 +56,7 @@ const runAddToFilter = (
     },
   };
   // Mirror updateFilterQuery: escape keys, then serialize to the query.
-  return filtersToQuery(escapeFilterStateKeys(state, knownColumns));
+  return filtersToQuery(escapeFilterStateKeys(state, knownColumns, new Set()));
 };
 
 describe('parsed-JSON "Add to Filters" -> valid SQL pipeline (HDX-4427)', () => {
