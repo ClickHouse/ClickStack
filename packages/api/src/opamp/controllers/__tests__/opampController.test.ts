@@ -199,6 +199,23 @@ describe('opampController', () => {
       expect(tokens).toEqual(bearerTokenVariants(['k1', 'ingest-key']));
     });
 
+    it('enforces INGESTION_API_KEY before any team exists when ENABLE_INGESTION_API_KEY is set', () => {
+      configState.ENABLE_INGESTION_API_KEY = true;
+      configState.INGESTION_API_KEY = 'ingest-key';
+
+      const cfg = buildOtelCollectorConfig([]);
+
+      expect(cfg.extensions['bearertokenauth/hyperdx'].tokens).toEqual(
+        bearerTokenVariants(['ingest-key']),
+      );
+      expect(cfg.receivers['otlp/hyperdx']?.protocols.grpc.auth).toEqual({
+        authenticator: 'bearertokenauth/hyperdx',
+      });
+      expect(cfg.receivers['otlp/hyperdx']?.protocols.http.auth).toEqual({
+        authenticator: 'bearertokenauth/hyperdx',
+      });
+    });
+
     it('adds nothing when ENABLE_INGESTION_API_KEY is set but INGESTION_API_KEY is empty', () => {
       configState.ENABLE_INGESTION_API_KEY = true;
 
