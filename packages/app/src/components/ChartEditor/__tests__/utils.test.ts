@@ -2079,7 +2079,7 @@ describe('color round-trip (sql/promql Number tile)', () => {
     };
     const result = convertFormStateToChartConfig(form, dateRange, undefined);
     expect(result).toBeDefined();
-    expect((result as any).color).toBe('chart-orange');
+    expect(result).toMatchObject({ color: 'chart-orange' });
   });
 
   it('preserves color through convertFormStateToSavedChartConfig for promql Number tile', () => {
@@ -2093,7 +2093,7 @@ describe('color round-trip (sql/promql Number tile)', () => {
     };
     const result = convertFormStateToSavedChartConfig(form, undefined);
     expect(result).toBeDefined();
-    expect((result as any).color).toBe('chart-warning');
+    expect(result).toMatchObject({ color: 'chart-warning' });
   });
 
   it('preserves color through convertFormStateToChartConfig for promql Number tile', () => {
@@ -2107,7 +2107,7 @@ describe('color round-trip (sql/promql Number tile)', () => {
     };
     const result = convertFormStateToChartConfig(form, dateRange, undefined);
     expect(result).toBeDefined();
-    expect((result as any).color).toBe('chart-error');
+    expect(result).toMatchObject({ color: 'chart-error' });
   });
 
   it('preserves colorRules through both conversions for sql Number tile', () => {

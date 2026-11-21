@@ -6,7 +6,7 @@
     "@source": 0
   },
   "app": {
-    "as-any": 105,
+    "as-any": 99,
     "ts-ignore": 0,
     "eslint-disable": 119,
     "@source": 0
