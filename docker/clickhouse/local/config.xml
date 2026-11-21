@@ -90,6 +90,7 @@
     <query_log>
         <database>system</database>
         <table>query_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
         <flush_interval_milliseconds>7500</flush_interval_milliseconds>
     </query_log>
 
@@ -98,6 +99,7 @@
     <metric_log>
         <database>system</database>
         <table>metric_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
         <flush_interval_milliseconds>7500</flush_interval_milliseconds>
         <collect_interval_milliseconds>1000</collect_interval_milliseconds>
     </metric_log>
@@ -109,6 +111,7 @@
     <asynchronous_metric_log>
         <database>system</database>
         <table>asynchronous_metric_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
         <!--
             Asynchronous metrics are updated once a minute, so there is
             no need to flush more often.
@@ -134,6 +137,7 @@
             engine MergeTree
             partition by toYYYYMM(finish_date)
             order by (finish_date, finish_time_us, trace_id)
+            ttl finish_date + INTERVAL 3 DAY DELETE
         </engine>
         <database>system</database>
         <table>opentelemetry_span_log</table>
@@ -155,6 +159,7 @@
     <processors_profile_log>
         <database>system</database>
         <table>processors_profile_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
 
         <partition_by>toYYYYMM(event_date)</partition_by>
         <flush_interval_milliseconds>7500</flush_interval_milliseconds>
@@ -166,6 +171,7 @@
     <part_log>
         <database>system</database>
         <table>part_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
         <partition_by>toYYYYMM(event_date)</partition_by>
         <flush_interval_milliseconds>7500</flush_interval_milliseconds>
     </part_log>
@@ -175,6 +181,7 @@
     <trace_log>
         <database>system</database>
         <table>trace_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
 
         <partition_by>toYYYYMM(event_date)</partition_by>
         <flush_interval_milliseconds>7500</flush_interval_milliseconds>
@@ -185,6 +192,7 @@
     <query_thread_log>
         <database>system</database>
         <table>query_thread_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
         <partition_by>toYYYYMM(event_date)</partition_by>
         <flush_interval_milliseconds>7500</flush_interval_milliseconds>
     </query_thread_log>
@@ -194,6 +202,7 @@
     <query_views_log>
         <database>system</database>
         <table>query_views_log</table>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
         <partition_by>toYYYYMM(event_date)</partition_by>
         <flush_interval_milliseconds>7500</flush_interval_milliseconds>
     </query_views_log>

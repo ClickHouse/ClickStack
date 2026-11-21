@@ -1,30 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
-import {
-  ActionIcon,
-  Autocomplete,
-  Flex,
-  FlexProps,
-  Popover,
-  Text,
-  Tooltip,
-} from '@mantine/core';
-import { notifications } from '@mantine/notifications';
-import {
-  IconCheck,
-  IconCopy,
-  IconFilter,
-  IconFilterX,
-  IconX,
-} from '@tabler/icons-react';
+import { Flex, FlexProps, Text } from '@mantine/core';
 
+import { FilterPill, FilterValueEditor } from '@/components/FilterPill';
+import type { PatternFilter } from '@/components/Patterns/patternFilter';
+import { simplifyPattern } from '@/components/Patterns/simplifyPattern';
 import { useGetKeyValues } from '@/hooks/useMetadata';
 import type { FilterStateHook } from '@/searchFilters';
 import { useFormatTime } from '@/useFormatTime';
-import {
-  CLIPBOARD_ERROR_MESSAGE,
-  copyTextToClipboard,
-} from '@/utils/clipboard';
 
 const MAX_VISIBLE_PILLS = 8;
 // Cap the value list fetched for the in-pill value picker.
@@ -33,6 +16,7 @@ const VALUE_EDIT_LIMIT = 50;
 // Stable identity so a caller that omits the prop doesn't invalidate the
 // flattenFilters useMemo on every render.
 const EMPTY_DATE_TIME_COLUMNS: ReadonlyMap<string, string> = new Map();
+const NO_PATTERN_FILTERS: PatternFilter[] = [];
 
 type FormatTime = ReturnType<typeof useFormatTime>;
 
@@ -91,21 +75,7 @@ function flattenFilters(
   return pills;
 }
 
-const pillStyle = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '1px 6px',
-  borderRadius: 3,
-  fontSize: 11,
-  lineHeight: '18px',
-  cursor: 'default',
-  whiteSpace: 'nowrap' as const,
-  maxWidth: 260,
-  overflow: 'hidden',
-};
-
-function FilterPill({
+function SearchFilterPill({
   pill,
   isInvalid,
   invalidReason,
@@ -123,33 +93,10 @@ function FilterPill({
   onReplaceValue: (value: string) => void;
 }) {
   const isExcluded = pill.type === 'excluded';
-  const operator = isExcluded ? ' != ' : pill.type === 'range' ? ': ' : ' = ';
-
   // A range pill has no single value to copy or flip, and an unapplied filter
-  // (column missing on the active source) can only be removed. Both keep the
-  // plain remove-only pill; only included/excluded pills open the action menu.
+  // (column missing on the active source) can only be removed.
   const isEditable = pill.type !== 'range' && !isInvalid;
-  const polarityLabel = isExcluded ? 'Include' : 'Exclude';
-
   const [opened, setOpened] = useState(false);
-  const [copied, setCopied] = useState(false);
-  // Draft of the value being typed in the picker. Free text is allowed (the
-  // field may not have this value in the sampled data yet), so we track what
-  // the user types and only commit it on submit/blur. It starts empty (the
-  // current value shows as a placeholder) so the full suggestion list is
-  // visible on open instead of being filtered down to just the current value.
-  const [draftValue, setDraftValue] = useState('');
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  useEffect(() => {
-    return () => clearTimeout(copyTimerRef.current);
-  }, []);
-
-  // Reset the draft each time the menu opens so reopening on a different
-  // pill (or after a replace) starts from a clean, unfiltered list.
-  useEffect(() => {
-    setDraftValue('');
-  }, [pill.value, opened]);
 
   // The picker lists values to switch this pill to, so it must not be scoped
   // by the active query or by the pill's own filter. Reusing chartConfig
@@ -162,8 +109,6 @@ function FilterPill({
     [chartConfig],
   );
 
-  // Fetch the field's values for the in-pill value picker, only while the
-  // menu is open (and never for range / not-applied pills).
   const { data: keyValues, isFetching: isFetchingValues } = useGetKeyValues(
     {
       chartConfig: valueChartConfig,
@@ -172,209 +117,36 @@ function FilterPill({
     },
     { enabled: opened && isEditable },
   );
-  const valueOptions = useMemo(
-    () => Array.from(new Set([pill.value, ...(keyValues?.[0]?.value ?? [])])),
-    [keyValues, pill.value],
-  );
-
-  const label = pill.displayValue ?? pill.value;
-  const tooltipLabel = isInvalid
-    ? (invalidReason ??
-      `Filter not applied: "${pill.field}" isn't a column on the current source. It will reapply if you switch back.`)
-    : `${pill.field}${operator}${label}`;
-
-  const showDangerAccent = isExcluded && !isInvalid;
-
-  // Commit the typed/picked value, but only when it actually differs from the
-  // current one (avoids a redundant query on blur with no change).
-  const commitValue = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed && trimmed !== pill.value) {
-      onReplaceValue(trimmed);
-    }
-    setOpened(false);
-  };
-
-  const handleCopy = async () => {
-    const ok = await copyTextToClipboard(pill.value);
-    if (!ok) {
-      notifications.show({ color: 'red', message: CLIPBOARD_ERROR_MESSAGE });
-      return;
-    }
-    setCopied(true);
-    clearTimeout(copyTimerRef.current);
-    copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
-  };
-
-  const pillWithTooltip = (
-    <Tooltip
-      label={tooltipLabel}
-      openDelay={300}
-      multiline
-      maw={280}
-      disabled={isEditable && opened}
-    >
-      <span
-        data-testid={`active-filter-pill-${pill.field}`}
-        data-invalid={isInvalid ? 'true' : undefined}
-        onClick={isEditable ? () => setOpened(o => !o) : undefined}
-        style={{
-          ...pillStyle,
-          cursor: isEditable ? 'pointer' : 'default',
-          backgroundColor: isInvalid
-            ? 'transparent'
-            : isExcluded
-              ? 'var(--mantine-color-red-light)'
-              : 'var(--color-bg-hover)',
-          border: isInvalid
-            ? '1px dashed var(--color-border-emphasis)'
-            : '1px solid transparent',
-          opacity: isInvalid ? 0.75 : 1,
-        }}
-      >
-        <Text
-          span
-          size="xxs"
-          c="dimmed"
-          fw={500}
-          style={{
-            flexShrink: 0,
-            maxWidth: 100,
-            textDecoration: isInvalid ? 'line-through' : undefined,
-          }}
-          truncate="start"
-        >
-          {pill.field}
-        </Text>
-        <Text
-          span
-          size="xxs"
-          c="dimmed"
-          style={{
-            color: showDangerAccent
-              ? 'var(--mantine-color-red-light-color)'
-              : undefined,
-            textDecoration: isInvalid ? 'line-through' : undefined,
-          }}
-        >
-          {operator}
-        </Text>
-        <Text
-          span
-          size="xxs"
-          fw={500}
-          truncate
-          style={{ textDecoration: isInvalid ? 'line-through' : undefined }}
-        >
-          {label}
-        </Text>
-        <ActionIcon
-          size={14}
-          variant="transparent"
-          color="gray"
-          onClick={e => {
-            // Keep the one-click remove without also toggling the action menu.
-            e.stopPropagation();
-            onRemove();
-          }}
-          style={{
-            flexShrink: 0,
-            marginLeft: 2,
-            color: showDangerAccent
-              ? 'var(--mantine-color-red-light-color)'
-              : undefined,
-          }}
-          aria-label="Remove filter"
-        >
-          <IconX size={9} />
-        </ActionIcon>
-      </span>
-    </Tooltip>
-  );
-
-  if (!isEditable) {
-    return pillWithTooltip;
-  }
+  const valueOptions = useMemo(() => keyValues?.[0]?.value ?? [], [keyValues]);
 
   return (
-    <Popover
-      position="bottom-start"
-      withArrow
-      shadow="md"
-      radius="sm"
-      opened={opened}
-      onChange={setOpened}
-    >
-      <Popover.Target>{pillWithTooltip}</Popover.Target>
-      <Popover.Dropdown p={6}>
-        <Autocomplete
-          size="xs"
-          w={220}
-          mb={6}
-          data={valueOptions}
-          value={draftValue}
-          onChange={setDraftValue}
-          // Picking a suggestion commits immediately.
-          onOptionSubmit={commitValue}
-          onKeyDown={e => {
-            if (e.key !== 'Enter') {
-              return;
-            }
-            // If the user is keyboard-navigating the dropdown, an option is
-            // highlighted (Mantine marks it with [data-combobox-selected]).
-            // Let the combobox handle Enter natively so it submits that option
-            // via onOptionSubmit. Only commit free text when no option is
-            // highlighted, so a typed value not in the list still applies.
-            // Scope the lookup to this input's own listbox (via aria-controls)
-            // rather than the whole document, so another open combobox on the
-            // page can't make us swallow Enter here.
-            const listId = e.currentTarget.getAttribute('aria-controls');
-            const list = listId ? document.getElementById(listId) : null;
-            const hasHighlightedOption = !!list?.querySelector(
-              '[data-combobox-selected]',
-            );
-            if (!hasHighlightedOption) {
-              e.preventDefault();
-              commitValue(draftValue);
-            }
-          }}
-          comboboxProps={{ withinPortal: false }}
-          placeholder={isFetchingValues ? 'Loading values...' : pill.value}
-          aria-label="Change filter value"
-        />
-        <Flex gap={4} align="center">
-          <Tooltip label={copied ? 'Copied' : 'Copy value'}>
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              color="gray"
-              onClick={handleCopy}
-              aria-label="Copy value"
-            >
-              {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label={polarityLabel}>
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              color="gray"
-              onClick={() => {
-                onTogglePolarity();
-                setOpened(false);
-              }}
-              aria-label={polarityLabel}
-            >
-              {isExcluded ? (
-                <IconFilter size={14} />
-              ) : (
-                <IconFilterX size={14} />
-              )}
-            </ActionIcon>
-          </Tooltip>
-        </Flex>
-      </Popover.Dropdown>
-    </Popover>
+    <FilterPill
+      field={pill.field}
+      operator={isExcluded ? '!=' : pill.type === 'range' ? ':' : '='}
+      value={pill.value}
+      displayValue={pill.displayValue}
+      isExcluded={isExcluded}
+      isInvalid={isInvalid}
+      invalidReason={invalidReason}
+      onRemove={onRemove}
+      onOpenedChange={setOpened}
+      renderPopover={
+        isEditable
+          ? close => (
+              <FilterValueEditor
+                value={pill.value}
+                valueOptions={valueOptions}
+                isLoadingValues={isFetchingValues}
+                isExcluded={isExcluded}
+                onReplaceValue={onReplaceValue}
+                onTogglePolarity={onTogglePolarity}
+                onDone={close}
+              />
+            )
+          : undefined
+      }
+      data-testid={`active-filter-pill-${pill.field}`}
+    />
   );
 }
 
@@ -384,9 +156,14 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
   invalidFieldReason,
   chartConfig,
   dateTimeColumns = EMPTY_DATE_TIME_COLUMNS,
+  patternFilters = NO_PATTERN_FILTERS,
+  onRemovePatternFilter,
   ...flexProps
 }: {
   searchFilters: FilterStateHook;
+  /** Filters added from the Event Patterns view, shown after the others. */
+  patternFilters?: PatternFilter[];
+  onRemovePatternFilter?: (filter: PatternFilter) => void;
   /**
    * Map of DateTime/Date column name → ClickHouse type. Their pill values are
    * formatted to the user's locale/timezone for display, matching the results
@@ -493,19 +270,26 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
     clearTimeout(confirmTimerRef.current);
   }, [confirmClear, clearAllFilters]);
 
-  if (pills.length === 0) {
+  const totalCount = pills.length + patternFilters.length;
+  if (totalCount === 0) {
     return null;
   }
 
-  const visiblePills = expanded ? pills : pills.slice(0, MAX_VISIBLE_PILLS);
-  const hiddenCount = pills.length - MAX_VISIBLE_PILLS;
+  // The cap covers facet and pattern pills together, facet pills first.
+  const visibleCount = expanded ? totalCount : MAX_VISIBLE_PILLS;
+  const visiblePills = pills.slice(0, visibleCount);
+  const visiblePatternFilters = patternFilters.slice(
+    0,
+    Math.max(visibleCount - pills.length, 0),
+  );
+  const hiddenCount = totalCount - MAX_VISIBLE_PILLS;
 
   return (
     <Flex gap={4} px="sm" wrap="wrap" align="center" {...flexProps}>
       {visiblePills.map((pill, i) => {
         const isInvalid = invalidFields?.has(pill.field) ?? false;
         return (
-          <FilterPill
+          <SearchFilterPill
             key={`${pill.field}-${pill.type}-${pill.value}-${i}`}
             pill={pill}
             isInvalid={isInvalid}
@@ -519,6 +303,17 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
           />
         );
       })}
+      {visiblePatternFilters.map(filter => (
+        <FilterPill
+          key={filter.condition}
+          field="Pattern"
+          operator={filter.action === 'exclude' ? '!=' : '='}
+          value={simplifyPattern(filter.template)}
+          isExcluded={filter.action === 'exclude'}
+          onRemove={() => onRemovePatternFilter?.(filter)}
+          data-testid="active-filter-pill-pattern"
+        />
+      ))}
       {!expanded && hiddenCount > 0 && (
         <Text
           size="xxs"
@@ -541,7 +336,7 @@ export const ActiveFilterPills = memo(function ActiveFilterPills({
           Show less
         </Text>
       )}
-      {pills.length >= 2 && (
+      {totalCount >= 2 && (
         <Text
           size="xxs"
           c={confirmClear ? 'red.4' : 'dimmed'}

@@ -98,6 +98,8 @@ router.get('/members', async (req, res, next) => {
  *         description: Successfully created the invitation
  *       '400':
  *         description: User already exists
+ *       '403':
+ *         description: Org API keys can't invite people
  */
 router.post(
   '/invitation',
@@ -112,6 +114,12 @@ router.post(
       const teamId = req.user?.team;
       if (!teamId) {
         return res.sendStatus(403);
+      }
+      // An invite link lets a key holder join as a person and manage keys.
+      if (req.user?.isVirtual) {
+        return res
+          .status(403)
+          .json({ message: "Org API keys can't invite people" });
       }
 
       const { email, name } = req.body;
@@ -177,7 +185,7 @@ router.post(
  *     tags: [Team]
  *     responses:
  *       '200':
- *         description: Successfully retrieved invitations
+ *         description: Successfully retrieved invitations. Invite links are left out for org API keys.
  */
 router.get('/invitations', async (req, res, next) => {
   try {
@@ -197,7 +205,7 @@ router.get('/invitations', async (req, res, next) => {
         createdAt: ti.createdAt,
         email: ti.email,
         name: ti.name,
-        url: getTeamInviteUrl(ti.token),
+        ...(req.user?.isVirtual ? {} : { url: getTeamInviteUrl(ti.token) }),
       })),
     });
   } catch (e) {
@@ -269,7 +277,7 @@ router.delete(
  *       '200':
  *         description: Successfully removed the member
  *       '400':
- *         description: Cannot remove yourself from the team
+ *         description: Cannot remove yourself or the last team member
  *       '404':
  *         description: Member not found
  */
@@ -290,16 +298,19 @@ router.delete(
         });
       }
 
-      const deletedUser = await deleteTeamMember(
+      const result = await deleteTeamMember(
         teamId.toString(),
         req.params.id,
         requestingUserId,
       );
-
-      if (!deletedUser) {
+      if (result === 'not_found') {
         return res.sendStatus(404);
       }
-
+      if (result === 'last_member') {
+        return res
+          .status(400)
+          .json({ message: 'Cannot remove the last team member' });
+      }
       return res.json({ data: { success: true } });
     } catch (e) {
       next(e);

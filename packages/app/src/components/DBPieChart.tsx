@@ -10,6 +10,7 @@ import {
   useCategoricalChart,
 } from './charts/CategoricalChart';
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState from './charts/ChartErrorState';
 import { ChartTooltipContainer, ChartTooltipItem } from './charts/ChartTooltip';
 
@@ -94,6 +95,7 @@ export const DBPieChart = (props: CategoricalChartProps) => {
     toolbarItems,
     data,
     isLoading,
+    isPlaceholderData,
     isError,
     error,
     chartData,
@@ -103,17 +105,13 @@ export const DBPieChart = (props: CategoricalChartProps) => {
   return (
     <ChartContainer title={title} toolbarItems={toolbarItems}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : responseFormatError ? (
         <ChartErrorState error={responseFormatError} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Flex
           data-testid="pie-chart-container"
@@ -121,12 +119,10 @@ export const DBPieChart = (props: CategoricalChartProps) => {
           justify="center"
           h="100%"
           style={{ flexGrow: 1, overflow: 'hidden' }}
+          // Pulse the pie and its legend together: the legend shows values too
+          className={isLoading || isPlaceholderData ? 'effect-pulse' : ''}
         >
-          <ResponsiveContainer
-            height="100%"
-            width="100%"
-            className={isLoading ? 'effect-pulse' : ''}
-          >
+          <ResponsiveContainer height="100%" width="100%">
             <PieChart>
               <Pie
                 cx="50%"

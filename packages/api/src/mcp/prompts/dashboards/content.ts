@@ -3,15 +3,28 @@
 // no AI hallmarks) so the prose-lint hook treats it like any other
 // reviewer-facing artifact.
 
+import {
+  PROMQL_DASHBOARD_SECTION,
+  PROMQL_QUERY_GUIDE_SECTION,
+} from './promqlContent';
+
+/** Which optional sections a prompt includes. */
+export type PromptOptions = {
+  /** Whether PromQL is enabled for this deployment. */
+  promql?: boolean;
+};
+
 export function buildCreateDashboardPrompt(
   sourceSummary: string,
   traceSourceId: string,
   logSourceId: string,
   description?: string,
+  options: PromptOptions = {},
 ): string {
   const userContext = description
     ? `\nThe user wants to create a dashboard for: ${description}\nTailor the dashboard tiles to match this goal.\n`
     : '';
+  const promqlSection = options.promql ? `\n\n${PROMQL_DASHBOARD_SECTION}` : '';
 
   return `You are an expert at creating HyperDX observability dashboards.
 ${userContext}
@@ -57,20 +70,22 @@ Recommended pattern:
 Use BUILDER tiles (with sourceId) for most cases:
   line         Time-series trends (error rate, request volume, latency over time).
   stacked_bar  Compare categories over time (requests by service, errors by status code).
+  stacked_line Same as stacked_bar but as filled area bands (smooth cumulative totals).
   number       Single KPI metric (total requests, current error rate, p99 latency).
   table        Ranked lists (top endpoints by latency, error counts by service). Tables can wire row-click navigation via config.onClick to the /search page or another dashboard. See "TABLE TILE LINKING" below.
   pie          Proportional breakdowns (traffic share by service, errors by type). Keep slice count under 8.
   bar          Categorical comparisons (request counts by service, errors by endpoint). One bar per group value; not a time series (use stacked_bar for that).
   heatmap      Distribution of a numeric value over time (latency buckets, payload size). Trace sources only. Requires non-empty valueExpression.
+               With heatmapMode: "series": one row per groupBy value, colored by a normal select item. Trace, Log, or Metric sources.
   search       Browse raw log/event rows (error logs, recent traces).
   markdown     Use sparingly. The dashboard already shows its name in the title bar at the top; do NOT add a "About this dashboard" tile that repeats it. Markdown bodies render h1/h2/h3 headings at title-bar scale, so a single \`## Service Catalog\` line eats most of the tile and pushes real KPIs below the fold. Skip markdown tiles for starter dashboards. If you must add one, size it to fit the text (h: 2-3 for a line or two; h: 1 clips it), use plain prose, no \`#\`/\`##\`/\`###\` headings. Use containers/tabs for section grouping instead.
 
 Use RAW SQL tiles (with connectionId) only for queries the builder cannot express:
-  Requires configType: "sql" plus a displayType (line, stacked_bar, table, number, pie, bar).
+  Requires configType: "sql" plus a displayType (line, stacked_bar, stacked_line, table, number, pie, bar).
   Use when you need JOINs, sub-queries, CTEs, or expressions the builder does not generate.
   ALWAYS set sourceId on a raw SQL tile (in addition to connectionId) UNLESS the query reads
   from multiple tables (e.g. JOINs across sources). sourceId enables the $__filters and 
-  $__sourceTable macros. When you can set sourceId, include "AND $__filters" in the WHERE clause.
+  $__sourceTable macros. When you can set sourceId, include "AND $__filters" in the WHERE clause.${promqlSection}
 
 == COLUMN NAMING ==
 
@@ -88,7 +103,7 @@ Apply these before calling clickstack_save_dashboard. Each rule is enforced by t
 
 1. ONE QUESTION PER DASHBOARD. A dashboard answers a single observability question well. Split if the request mixes traces, logs, and metrics into unrelated views.
 
-2. ALIAS EVERY SELECT ITEM. Every entry in select MUST carry an alias. Tables, lines, stacked_bars, pies, AND number tiles. The number-tile case is the one most often missed because the rendered UI uses the tile's name (not the column alias), so the absence looks invisible; the underlying query still emits a raw-expression column name (count(), quantile(0.95)(Duration)), which breaks orderBy references, CSV export, and any downstream onClick template that references the column by name. Treat "no alias" as a save-time bug, not a style nit. Heatmap is the only exception: heatmap select items take a valueExpression and no alias.
+2. ALIAS EVERY SELECT ITEM. Every entry in select MUST carry an alias. Tables, lines, stacked_bars, pies, AND number tiles. The number-tile case is the one most often missed because the rendered UI uses the tile's name (not the column alias), so the absence looks invisible; the underlying query still emits a raw-expression column name (count(), quantile(0.95)(Duration)), which breaks orderBy references, CSV export, and any downstream onClick template that references the column by name. Treat "no alias" as a save-time bug, not a style nit. Distribution heatmaps are the only exception: their select items take a valueExpression and no alias.
 
    Number tile, correct:    select: [{ aggFn: "count", alias: "Server Requests" }]
    Number tile, wrong:      select: [{ aggFn: "count" }]
@@ -116,6 +131,14 @@ Apply these before calling clickstack_save_dashboard. Each rule is enforced by t
 
 9e. MAKE A FILTER REQUIRED ONLY WHEN AN UNSCOPED VIEW IS MEANINGLESS. minSelections: 1 blocks the tiles that read the filter - the ones referencing its $variableName, and the ones its broadcast applies to - until the user picks a value. isGlobalRequirement: true widens that to every tile on the dashboard. Consider pairing either form with savedFilterValues so the dashboard opens on a sensible default rather than blocked.
 
+9f. MAKE A FILTER SINGLE-SELECT WHEN A TILE ONLY MAKES SENSE FOR ONE VALUE. maxSelections: 1 limits the dropdown to one value at a time, for example a host picker feeding a per-host detail view.
+
+9g. SET savedFilterValues TO GIVE THE DASHBOARD A DEFAULT SELECTION. Pass savedFilterValues on clickstack_save_dashboard or clickstack_patch_dashboard to pre-select filter values whenever the dashboard opens. Pair this with a required filter (9e) so the dashboard opens scoped rather than blocked.
+
+9h. USE AN ADHOC FILTER TO LET THE USER BUILD FREE-FORM CONDITIONS. filters: [{ type: "ADHOC", name, sourceType: "sql", sources: ["<log, trace, or session source id>"], variableName? }] adds an input where the user picks any column or map key, an operator, and a value; clicking a value in a tile adds a condition too. Every condition is ANDed onto the tiles of its sources (or of appliesToSourceIds) with no per-tile wiring. It is never a variable: its variableName only names the entry its conditions are saved under. Seed conditions with savedFilterValues: [{ type: "adhoc", name: "<variableName>", conditions: [{ key: "ServiceName", operator: "IN", value: "api" }] }]; IN conditions on the same key are ORed. Declare at most one ad hoc filter per source, since a click updates every ad hoc filter on the clicked tile's source.
+
+9i. TO LET VIEWERS SWITCH THE SOURCE OR CONNECTION, USE A DATA_SOURCE OR CONNECTION FILTER. filters: [{ type: "DATA_SOURCE", name: "Logs source", variableName: "logs", allowedSourceKinds: ["log"] }] adds a required source picker; tiles then set sourceId: "$logs" (filters may use it in sourceId or appliesToSourceIds). A CONNECTION filter does the same for raw SQL tiles' and SQL_QUERY filters' connectionId, and a DATA_SOURCE filter's optional connectionId limits its sources to one connection. Keep allowedSourceKinds to kinds charts treat alike (log + trace, or one kind). Tiles that use either cannot have alerts, and clickstack_query_tile needs a selection for the variable (variableValues or the dashboard's saved value).
+
 10. UPDATE IS REPLACE, NOT MERGE. clickstack_save_dashboard with an id overwrites tiles, containers, and filters in their entirety. Call clickstack_get_dashboard first when you only want to add or rename one entry; do not send a partial set or you will silently drop everything you omitted.
 
 11. GROUP RELATED TILES INTO CONTAINERS. REQUIRED at five or more tiles, no exceptions. An ungrouped wall of nine or ten tiles is a readability failure even when each tile is correct in isolation. Containers are the right way to introduce structure; markdown tiles for section labels are not.
@@ -139,7 +162,7 @@ Apply these before calling clickstack_save_dashboard. Each rule is enforced by t
 
 14. SIZE TILES TO FIT THEIR CONTENT. The layout w/h are not one-size-fits-all; a tile that is too short clips its content (a table loses rows below the fold, a number tile crops its label) and one that is too wide wastes the row. Match the size to the displayType: number tiles stay small (w 6-8, h 3-4) so three or four KPIs share a row; line / stacked_bar / pie / bar want w 8-12 and h 4-6; tables and search lists want the full row (w 24) and h 6-10 so rows are not cut off; heatmaps want w 12 and h 5-6; a markdown note wants h 2-3 (never h 1, which clips the text). The per-field w/h descriptions on the tile schema carry the same per-displayType ranges; reach for them instead of leaving every tile at the 12x4 default.
 
-15. FILTER A BUILDER TILE ON THE SELECT ITEM, NOT THE TILE. To scope a table / line / stacked_bar / number / pie / bar tile to a subset of rows (a service, an error status), put the filter on EACH select item's where: select: [{ aggFn: "count", where: "ServiceName:payment", whereLanguage: "lucene", alias: "..." }]. The chart editor renders that per-series where as the tile's visible "Where" box, so the user can see and edit it. Do NOT put a filter at the tile config's top level for these types: the editor does not show it, so it is ignored. For a whole-dashboard scope use a dashboard-level filter (gotcha 9). The only display types with a tile-level where are search, heatmap, and event_patterns, where the editor does render it.
+15. FILTER A BUILDER TILE ON THE SELECT ITEM, NOT THE TILE. To scope a table / line / stacked_bar / number / pie / bar tile to a subset of rows (a service, an error status), put the filter on EACH select item's where: select: [{ aggFn: "count", where: "ServiceName:payment", whereLanguage: "lucene", alias: "..." }]. The chart editor renders that per-series where as the tile's visible "Where" box, so the user can see and edit it. Do NOT put a filter at the tile config's top level for these types: the editor does not show it, so it is ignored. For a whole-dashboard scope use a dashboard-level filter (gotcha 9). The only display types with a tile-level where are search, distribution heatmap, and event_patterns, where the editor does render it. Series heatmaps filter on the select item like the other builder types.
 
 == ADAPT, DO NOT COPY ==
 
@@ -165,7 +188,7 @@ Dashboards open with a 15-minute default window. There is no dashboard-level fie
 - Multiple select items on number / pie / bar / heatmap tiles (each takes exactly one).
 - Missing level on aggFn "quantile" (must specify 0.5, 0.9, 0.95, or 0.99).
 - Assuming StatusCode or SeverityText values (always inspect lowCardinalityValues from clickstack_describe_source).
-- Heatmap on a non-Trace source (heatmap is Trace-only today).
+- Distribution heatmap on a non-Trace source, or series heatmap on a source that is not Trace, Log, or Metric.
 - Hardcoding a focus dimension into every tile's where clause (use a dashboard-level filter instead).
 - Putting a filter at the tile-config top level on a table / line / stacked_bar / number / pie / bar tile (ignored for these types; put the where on each select item instead, see gotcha 15).
 - Enabling both isBroadcastEnabled and isVariableEnabled on one filter (the picked value is then applied twice; set isBroadcastEnabled: false when you add a variable). The exception is rule 9c: a variable read only by another filter's where never reaches a tile, so that filter can keep broadcasting.
@@ -177,7 +200,8 @@ Dashboards open with a 15-minute default window. There is no dashboard-level fie
 - Using $__filter or $__conditionalAll in a Lucene where (they are matched as literal text; switch to whereLanguage: "sql", or write ServiceName:$var).
 - Chaining a filter's where off a filter that is not variable-enabled. Only isVariableEnabled: true publishes the $variableName token; without it the reference resolves to nothing and the downstream dropdown is unscoped or empty.
 - Referencing a filter's OWN variable in its where. That narrows its dropdown to the values already picked, so the rest of the options vanish from a multi-select. Reference a sibling filter's variable instead.
-- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters.
+- Mixing filter-type fields: expression/sourceId/where belong to QUERY_EXPRESSION filters, options to STATIC_LIST filters, connectionId/sqlTemplate (and an optional sourceId) to SQL_QUERY filters, sourceType/sources to ADHOC filters.
+- Referencing an ADHOC filter's variableName in a tile. Ad hoc conditions reach tiles only by broadcast; the name is not a variable.
 - Expecting a STATIC_LIST filter to broadcast. It cannot; a tile must reference its $variableName (via $__filter with the column passed explicitly) or nothing changes when the user picks a value.`;
 }
 
@@ -798,8 +822,12 @@ SQL TEMPLATE REFERENCE:
   );
 }
 
-export function buildQueryGuidePrompt(): string {
-  return `Reference guide for writing queries with ClickStack MCP tools (clickstack_timeseries, clickstack_table, clickstack_search, clickstack_event_patterns, clickstack_sql, and clickstack_save_dashboard).
+export function buildQueryGuidePrompt(options: PromptOptions = {}): string {
+  const promqlTool = options.promql ? 'clickstack_promql, ' : '';
+  const promqlSection = options.promql
+    ? `${PROMQL_QUERY_GUIDE_SECTION}\n\n`
+    : '';
+  return `Reference guide for writing queries with ClickStack MCP tools (clickstack_timeseries, clickstack_table, clickstack_search, clickstack_event_patterns, ${promqlTool}clickstack_sql, and clickstack_save_dashboard).
 
 == AGGREGATION FUNCTIONS (aggFn) ==
 
@@ -856,7 +884,7 @@ Used in the "where" field of select items and search tiles.
   OR:                 level:error OR level:fatal
   NOT:                NOT level:debug
   Wildcard:           ServiceName:front*
-  Phrase:             Body:"connection refused"
+  Phrase:             "connection refused"   (default search column, e.g. the log body)
   Exists:             _exists_:http.route
   Range (numeric):    Duration:>1000000000
   Range (inclusive):  http.status_code:[400 TO 499]
@@ -877,13 +905,22 @@ Lucene field:value does NOT mean exact equality. It translates to ilike(field, '
      ServiceName:api*    does NOT mean "starts with api". It means "contains a substring starting with api".
                          In practice this often works for prefix matching, but it is NOT equivalent to SQL LIKE 'api%'.
 
-  For exact matching or true prefix/suffix/contains patterns, use SQL instead:
+  For exact matching in Lucene, quote the value: SpanKind:"Server" compiles to SpanKind = 'Server'
+  (case-sensitive, unlike the unquoted form).
+
+  For true prefix/suffix/contains patterns, use SQL instead:
      Exact:    whereLanguage: "sql", where: "SpanKind = 'Server'"
      Prefix:   whereLanguage: "sql", where: "ServiceName LIKE 'api%'"
-     Contains: whereLanguage: "sql", where: "Body LIKE '%timeout%'"
+     Contains: whereLanguage: "sql", where: "StatusMessage LIKE '%timeout%'"
      Regex:    whereLanguage: "sql", where: "match(ServiceName, '^api-v[0-9]+')"
 
-  When Lucene substring matching is FINE: free-text columns like Body, StatusMessage where substring is the intent.
+  For text in the log body, write a bare Lucene term or phrase (timeout, "connection refused"). It searches the
+  source's default search column (the body for logs) and uses its text index when the source has one. With an
+  index it matches whole tokens (timeout does not match ConnectionTimeoutException); for a substring inside a word, use
+  SQL ILIKE. Body:timeout, Body LIKE and Body ILIKE read the whole column, and Body:"..." is exact equality on
+  the whole body.
+
+  When Lucene substring matching is FINE: free-text columns like StatusMessage where substring is the intent.
   When Lucene substring matching is WRONG: enum-like columns (SpanKind, SeverityText, StatusCode, ServiceName) where you want exact or true prefix match.
 
 *** MAP-ATTRIBUTE GOTCHA ***
@@ -917,7 +954,7 @@ Alternative to Lucene. Set whereLanguage: "sql" when using SQL syntax.
   Basic:              SeverityText = 'error'
   AND/OR:             ServiceName = 'api' AND StatusCode = 'STATUS_CODE_ERROR'
   IN:                 ServiceName IN ('api', 'web', 'worker')
-  LIKE:               Body LIKE '%timeout%'
+  LIKE:               StatusMessage LIKE '%timeout%'
   Comparison:         Duration > 1000000000
   Map access:         SpanAttributes['http.status_code'] = '500'
 
@@ -981,6 +1018,11 @@ For configType: "sql" tiles, write ClickHouse SQL with template macros:
 
   IMPORTANT: Always include a LIMIT clause in table / number / pie / bar SQL queries.
 
+  BATCHING WITH clickstack_sql: to run several independent queries at once, pass
+  queries: [{ id, sql, sourceId?, connectionId? }, ...] (max 10) instead of sql. They run
+  in parallel over one shared time range, and each result reports status ok, error, or
+  timeout. Re-run a timed-out query on its own.
+
 == PER-TILE TYPE CONSTRAINTS ==
 
   number       Exactly 1 select item. No groupBy.
@@ -991,7 +1033,7 @@ For configType: "sql" tiles, write ClickHouse SQL with template macros:
   table        1 to 20 select items. Optional groupBy defines row groups. Per-series numberFormat lets one column render as a duration while a sibling count column stays a plain number.
   heatmap      Exactly 1 select item with a non-empty valueExpression. No aggFn or alias on the select item (the chart-level displayType: "heatmap" is the discriminator). Trace sources only (no Log/Metric/Session). No groupBy. Optional where filter applied before bucketing.
   search       No select items (select is a column list string). where is the filter.
-  markdown     No select items. Set markdown field with content.
+  markdown     No select items. Set markdown field with content, which may reference dashboard variables (see DASHBOARD VARIABLES).
 
 == METRIC SOURCES ==
 
@@ -1020,7 +1062,7 @@ Examples:
   Exponential histogram p95 latency:
     { aggFn: "quantile", level: 0.95, metricType: "exponential histogram", metricName: "http.server.request.duration", alias: "P95 Latency" }, groupBy: "ServiceName"
 
-== NUMBER FORMAT ==
+${promqlSection}== NUMBER FORMAT ==
 
 numberFormat controls how a value renders. Two places to set it:
 
@@ -1131,7 +1173,7 @@ Rules:
 
 Optional dashboard-level filter declarations. Each entry adds a dropdown to the dashboard header. Use this for focused per-dimension dashboards (per-service, per-tenant, per-endpoint) instead of hardcoding the dimension into every tile's where clause.
 
-Two filter types: QUERY_EXPRESSION queries its dropdown values from a source column, while STATIC_LIST declares them inline as a hand-authored options list and is always variable-only (see the static filter shape below).
+Filter types: QUERY_EXPRESSION queries its dropdown values from a source column. STATIC_LIST declares them inline as a hand-authored options list, and SQL_QUERY reads them from a ClickHouse query; both are always variable-only (see their shapes below). ADHOC holds free-form conditions the user builds, and always broadcasts them (see the ad hoc filter shape below).
 
 A QUERY_EXPRESSION filter does one of two things with the value the user picks, or both:
 
@@ -1169,6 +1211,38 @@ Example (static list):
   filters: [
     { type: "STATIC_LIST", name: "Environment", options: ["prod", "staging", "dev"], variableName: "env" }
   ]
+
+SQL query filter shape:
+  { type: "SQL_QUERY", name, connectionId, sourceId?, sqlTemplate, variableName? }
+
+  connectionId         ClickHouse connection the query runs on (from clickstack_list_sources), or a CONNECTION filter's "$variableName".
+  sourceId             Optional log, trace, session, or metric source on that connection, or a DATA_SOURCE filter's "$variableName". Needed for $__sourceTable and $__filters; $__filters expands to the dashboard's broadcast filter selections for that source.
+  sqlTemplate          SELECT whose FIRST column becomes the dropdown values, cast to string with nulls and duplicates dropped, in row order (add ORDER BY). May use the time macros and other filters' variables, plus $__sourceTable and $__filters when sourceId is set.
+
+  Use it when the values live in a lookup table, dictionary, or join that no single source column covers; otherwise prefer QUERY_EXPRESSION. Like a static filter it is variable-only, so tiles pass the column explicitly: $__filter(<expression>, $<variableName>).
+
+Example (SQL query, narrowed by another filter's variable):
+  filters: [
+    { type: "SQL_QUERY", name: "Environment", connectionId: "<connection-id>", sqlTemplate: "SELECT DISTINCT env FROM default.envs WHERE $__filter(cloud, $cloud) ORDER BY env", variableName: "env" }
+  ]
+
+Example (SQL query on a source, narrowed by the dashboard's broadcast filters):
+  filters: [
+    { type: "SQL_QUERY", name: "Host", connectionId: "<connection-id>", sourceId: "<log-source-id>", sqlTemplate: "SELECT DISTINCT ResourceAttributes['host.name'] FROM $__sourceTable WHERE $__timeFilter(TimestampTime) AND $__filters ORDER BY 1", variableName: "host" }
+  ]
+
+Ad hoc filter shape:
+  { type: "ADHOC", name, sourceType, sources, where?, whereLanguage?, appliesToSourceIds?, variableName? }
+
+  sourceType           "sql": keys are the columns and map keys of Log, Trace, or Session sources.
+  sources              IDs of the sources whose keys and values the input suggests, all of sourceType.
+  where                Optional condition narrowing the rows keys and values are suggested from. sql only, never applied to a tile.
+  appliesToSourceIds   Optional IDs of the sources whose tiles the conditions apply to. Omit to use the filter's sources.
+  variableName         The name its conditions are saved under in savedFilterValues. NOT a variable: tiles cannot reference it.
+
+  No mode flags or selection limits: an ad hoc filter always broadcasts and is never a variable. The user adds conditions in the filter bar or by clicking values in tiles; seed them with an "adhoc" savedFilterValues entry:
+    savedFilterValues: [{ type: "adhoc", name: "conditions", conditions: [{ key: "SeverityText", operator: "=", value: "error" }] }]
+  Operators: =, !=, =~ (regex), !~, LIKE, NOT LIKE, and IN. Conditions are ANDed, except that IN conditions on the same key are ORed into one IN (...).
 
 Example (broadcast to every tile, the common case):
   filters: [
@@ -1220,7 +1294,9 @@ Only add one when the default is wrong. \${service:sqlstring} is redundant in a 
   sqlstring  'a', 'b'             NULL        the default in SQL inputs
   lucene     ("a" OR "b")         ("")        the default in Lucene inputs; ("") is a match-all, so no guard is needed
   regex      (a|b)                .*          use with match()
+  promql     a  or  (a|b)         ""  or  .*  the default in PromQL; a single-select variable (maxSelections: 1) renders its raw value for {label="$var"}, a multi-select one an escaped regex for {label=~"$var"}
   csv        a,b                  <empty>     use INSIDE a string literal
+  markdown   a, b                 <empty>     the default in markdown tiles; markdown syntax in values is escaped
 
 BUILDER TILES
 
@@ -1233,6 +1309,11 @@ Every expression on a builder tile accepts variable references, in either langua
 In a LUCENE input the macros have no meaning and are matched as literal text. Reference the variable directly instead, which renders in the lucene format and needs no guard: with nothing selected it becomes ServiceName:("") and the translator drops that to a match-all, so the tile returns everything rather than going empty.
   select: [{ aggFn: "count", whereLanguage: "lucene", where: "ServiceName:$service" }]
 When in doubt on a variable-driven tile, set whereLanguage: "sql" and use $__filter.
+
+MARKDOWN TILES
+
+The markdown field substitutes $variableName / \${variableName} / \${variableName:format} with the selected values as plain text, so a note can name what the dashboard is scoped to. Nothing is selected on a freshly-opened dashboard, so the reference renders as nothing until the user picks a value; write the surrounding text so it still reads. The macros have no meaning here and are left as written.
+  markdown: "Latency for the selected services: $service"
 
 RAW SQL TILES (for advanced use-cases only)
 
@@ -1440,33 +1521,10 @@ containers[i].tabs[j].id). Read the path to know which input to fix.
 
 == EVENT PATTERN MINING ==
 
-Use clickstack_event_patterns when asked to find common log messages, recurring
-patterns, noisy services, or top event types. This is the right choice whenever
-the question is about "most common logs", "top patterns", "what is generating
-the most log volume", or similar pattern-discovery questions.
-
-It samples random events and clusters them with the Drain algorithm, returning:
-  - pattern templates (with <*> wildcards for variable parts)
-  - estimated counts (scaled from the sample to the full time range)
-  - time-bucketed trends
-  - a whereSnippet for each pattern to drill into matching raw events
-
-Required parameters:
-  - sourceId (call clickstack_list_sources first)
-  - startTime / endTime for the time window
-
-Optional parameters:
-  - where: filter to specific services or severity levels before mining
-  - sampleSize: increase for more accurate patterns (default 10000, max 25000)
-  - bodyExpression: column to mine (auto-detected: Body for logs, SpanName for traces)
-
-Example: find top patterns for production services over the last 4 hours:
-  clickstack_event_patterns({
-    sourceId: "<log-source-id>",
-    startTime: "<4 hours ago ISO>",
-    endTime: "<now ISO>",
-    where: "service.name:prod-*"
-  })
+Use clickstack_event_patterns for pattern-discovery questions: most common
+logs, top patterns, noisy services, what generates the most log volume. Its
+tool description covers parameters, examples, sampling limits, and how to
+drill into a pattern with clickstack_search.
 
 == COMMON MISTAKES ==
 
@@ -1544,8 +1602,9 @@ Example: find top patterns for production services over the last 4 hours:
     Wrong:   where: "SpanKind:Server"             (whereLanguage: "lucene"; translates to ilike(SpanKind, '%Server%') and matches "ServerStreaming", "InternalServer", etc.)
     Wrong:   where: "ServiceName:api*"            (whereLanguage: "lucene"; NOT a true prefix match -- it is prefix-within-substring)
     Correct: where: "SpanKind = 'Server'"          (whereLanguage: "sql"; exact match)
+    Correct: where: 'SpanKind:"Server"'            (whereLanguage: "lucene"; a quoted value is an exact match)
     Correct: where: "ServiceName LIKE 'api%'"      (whereLanguage: "sql"; true prefix match)
-    Lucene field:value is a substring match (ilike with surrounding wildcards), not exact equality. Lucene field:value* is prefix-within-substring, not SQL LIKE 'value%'. Fine for free-text columns (Body, StatusMessage); wrong for enum-like columns where exact match matters (SpanKind, SeverityText, StatusCode) and wrong when true prefix matching is needed. Use SQL for exact match (=), prefix (LIKE 'x%'), contains (LIKE '%x%'), or regex (match(col, 'pattern')).
+    Lucene field:value is a substring match (ilike with surrounding wildcards), not exact equality. Lucene field:value* is prefix-within-substring, not SQL LIKE 'value%'. Fine for free-text columns (StatusMessage; for Body use a bare term or phrase, which uses the index); wrong for enum-like columns where exact match matters (SpanKind, SeverityText, StatusCode) and wrong when true prefix matching is needed. Use SQL for exact match (=), prefix (LIKE 'x%'), contains (LIKE '%x%'), or regex (match(col, 'pattern')).
 
 16. Forgetting that map-attribute values are often empty strings
     Wrong:   groupBy on SpanAttributes['db.collection.name'] without filtering empty values; the result has an empty-string bucket alongside the real ones, which renders as a blank row in tables and an unlabelled slice in pies.

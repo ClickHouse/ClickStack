@@ -76,6 +76,31 @@ describe('HyperJson key ordering', () => {
     ]);
   });
 
+  it('reverses the order with keyOrder="desc"', () => {
+    const { container } = renderWithMantine(
+      <HyperJson data={{ zebra: 1, alpha: 2, Mango: 3 }} keyOrder="desc" />,
+    );
+
+    expect(renderedKeys(container)).toEqual(['zebra', 'Mango', 'alpha']);
+  });
+
+  it('keeps the incoming order with keyOrder="original"', () => {
+    const { container } = renderWithMantine(
+      <HyperJson
+        data={{ ProfileEvents: { Seek: 59, FileOpen: 2, Query: 1 } }}
+        keyOrder="original"
+        normallyExpanded
+      />,
+    );
+
+    expect(renderedKeys(container)).toEqual([
+      'ProfileEvents',
+      'Seek',
+      'FileOpen',
+      'Query',
+    ]);
+  });
+
   it('orders numeric suffixes naturally rather than lexicographically', () => {
     const { container } = renderWithMantine(
       <HyperJson data={{ key10: 1, key2: 2, key1: 3 }} />,
@@ -99,5 +124,24 @@ describe('HyperJson key ordering', () => {
     ]);
     // First value cell belongs to `list` itself ("[] 12 items").
     expect(renderedValues(container).slice(1)).toEqual(list);
+  });
+});
+
+// Hiding blank values leaves holes in arrays so each element keeps its real
+// index; counts and expandability must ignore the holes.
+describe('HyperJson sparse arrays', () => {
+  it('shows real indexes and counts only present elements', () => {
+    const list: string[] = [];
+    list[2] = 'kept';
+    const { container } = renderWithMantine(
+      <HyperJson data={{ list }} normallyExpanded />,
+    );
+
+    expect(
+      Array.from(container.querySelectorAll('.keyContainer > .key')).map(el =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(['list', '2']);
+    expect(container).toHaveTextContent('[] 1 items');
   });
 });

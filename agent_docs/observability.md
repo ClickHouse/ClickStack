@@ -1,8 +1,8 @@
 # Observability & Instrumentation
 
-HyperDX is an observability product, so our own code should be a shining example
-of well-instrumented software. When you add or change a feature, instrument it
-as part of the change - not as an afterthought.
+ClickStack is an observability product, so our own code should be a shining
+example of well-instrumented software. When you add or change a feature,
+instrument it as part of the change - not as an afterthought.
 
 This guide covers the conventions and the shared helpers. The principles are
 aligned with the
@@ -11,9 +11,9 @@ aligned with the
 ## TL;DR (the non-negotiables)
 
 1. **Every team-scoped operation carries team + user context.** Use
-   `setBusinessContext(...)` so `hyperdx.team.id` / `user.id` end up on
-   the trace. Auth middleware already does this for HTTP requests; background
-   jobs and other entry points must do it themselves.
+   `setBusinessContext(...)` so `hyperdx.team.id` / `user.id` end up on the
+   trace. Auth middleware already does this for HTTP requests; background jobs
+   and other entry points must do it themselves.
 2. **If something is worth a log, put it on the span first.** The active span is
    the wide event for the current unit of work — attach the fact there as an
    attribute. If it also marks a countable event worth aggregating (an error, a
@@ -30,11 +30,15 @@ aligned with the
    already in flight, and put point-in-time / gauge-style values (sizes, counts,
    depths, current state) there rather than in a gauge. This is an internal
    engineering preference, not a rule against metrics — counters and histograms
-   remain first-class, feed alerts and SLOs, and many HyperDX deployments depend
-   heavily on them. See [Wide events over gauges](#wide-events-over-gauges).
+   remain first-class, feed alerts and SLOs, and many ClickStack deployments
+   depend heavily on them. See
+   [Wide events over gauges](#wide-events-over-gauges).
 5. **Use the shared helpers** in
    [`packages/api/src/utils/instrumentation.ts`](../packages/api/src/utils/instrumentation.ts).
    Don't hand-roll tracer/meter lifecycle.
+6. **A new surface that queries ClickHouse declares its query attribution.** One
+   provider or one `withQueryAttribution` scope at the entry point, not a change
+   at each query. See [Query attribution](#query-attribution).
 
 ## The shared helper library
 
@@ -44,7 +48,7 @@ All manual instrumentation in `packages/api` goes through
 | Helper                                                    | Purpose                                                                                                      |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `withSpan(name, fn, opts?)`                               | Run an async unit of work in an active span. Records exceptions, sets OK/ERROR status, always ends the span. |
-| `setBusinessContext({ teamId, userId, email, ...extra })` | Attach standardized incident-remediation context to the trace + active span.                                 |
+| `setBusinessContext({ teamId, userId, email, ...extra })` | Attach standardized incident-remediation context to the active span and the request's HTTP server span.      |
 | `getStaticFeatureFlags()`                                 | Returns the static (env/compile-time) feature-flag states as `feature_flag.*` attributes.                    |
 | `getCounter(name, opts?)` / `getHistogram(name, opts?)`   | Memoized OTel instrument accessors. Always use these instead of `meter.create*`.                             |
 | `recordDuration(histogram, fn, attrs?)`                   | Run `fn`, recording its wall-clock duration on a histogram (even on throw).                                  |
@@ -54,10 +58,10 @@ types, so a single import is usually enough.
 
 ### Tracing
 
-Rely on the HyperDX SDK auto-instrumentation (HTTP, Express, Mongo, etc.) for
-the common path. Add a **manual span only for a meaningful unit of work** that
-auto-instrumentation can't see - a background job step, a fan-out, an expensive
-computation, an external tool invocation.
+Rely on the ClickStack SDK (`@clickhouse/clickstack-node`) auto-instrumentation
+(HTTP, Express, Mongo, etc.) for the common path. Add a **manual span only for a
+meaningful unit of work** that auto-instrumentation can't see - a background job
+step, a fan-out, an expensive computation, an external tool invocation.
 
 ```ts
 import { withSpan } from '@/utils/instrumentation';
@@ -88,8 +92,10 @@ Span rules to follow (from the Instrumentation Score spec):
 ### Business context
 
 Attach team/user context as early as possible (at the auth boundary or the top
-of a job). `setBusinessContext` writes both to the whole trace (via the HyperDX
-SDK, requires `HDX_NODE_BETA_MODE=1`) and to the active span.
+of a job). `setBusinessContext` writes to the active span and, inside an HTTP
+request, to the request's HTTP server span, so the context stays on the request
+even when the active span is a short Express middleware span. Other spans in the
+trace do not get it.
 
 ```ts
 import {
@@ -111,16 +117,16 @@ Standard attribute keys:
 | -------------------------- | ---------------------------------------------------------- |
 | `hyperdx.team.id`          | Owning team (multi-tenancy boundary). Set this everywhere. |
 | `user.id`                  | Acting user (OTel `user.*` semconv).                       |
-| `user.email`              | Acting user's email (OTel `user.*` semconv).               |
+| `user.email`               | Acting user's email (OTel `user.*` semconv).               |
 | `hyperdx.<domain>.<field>` | Domain IDs, e.g. `hyperdx.alert.id`, `hyperdx.source.id`.  |
 | `feature_flag.<name>`      | Evaluated feature/config flag state.                       |
 
 ### Wide events over gauges
 
-> **Scope:** this is HyperDX's _internal_ instrumentation philosophy for the
+> **Scope:** this is ClickStack's _internal_ instrumentation philosophy for the
 > code in this repo — not a recommendation that users pick wide events over
-> metrics. Metrics are a first-class HyperDX signal that many operators rely on;
-> nothing here discourages them. What follows is simply how _we_ prefer to
+> metrics. Metrics are a first-class ClickStack signal that many operators rely
+> on; nothing here discourages them. What follows is simply how _we_ prefer to
 > instrument our own services.
 
 We instrument in the spirit of
@@ -209,10 +215,10 @@ To make a piece of functionality SLO-able, wrap it with `withOperationMetrics`
 a streaming proxy). Both emit a standard pair of SLI signals tagged with a
 stable, low-cardinality `operation` name and `outcome` (`success` | `error`):
 
-| Metric                          | Type      | Use as          |
-| ------------------------------- | --------- | --------------- |
+| Metric                          | Type      | Use as           |
+| ------------------------------- | --------- | ---------------- |
 | `hyperdx.operation.requests`    | counter   | availability SLI |
-| `hyperdx.operation.duration_ms` | histogram | latency SLI     |
+| `hyperdx.operation.duration_ms` | histogram | latency SLI      |
 
 ```ts
 import { withOperationMetrics } from '@/utils/instrumentation';
@@ -225,12 +231,106 @@ const chartConfig = await withOperationMetrics(
 ```
 
 Because every operation reports through the same two metrics, an SLO is just a
-filter on `operation` — availability = `outcome:success` / total, latency =
-the duration histogram. Keep `operation` a constant (e.g. `ai.assistant`,
+filter on `operation` — availability = `outcome:success` / total, latency = the
+duration histogram. Keep `operation` a constant (e.g. `ai.assistant`,
 `clickhouse_proxy.query`); never interpolate IDs or user input into it. Reach
 for this on functionality with real failure modes worth a target (external
 dependencies, query proxies, AI calls) — not on thin CRUD that the HTTP
 auto-instrumentation and error middleware already cover.
+
+## Query attribution
+
+Every ClickHouse query ClickStack runs is tagged with what asked for it, so a
+row in the customer's `system.query_log` points back to a dashboard tile, a
+saved search, an alert, or an MCP tool. This is the one piece of our
+instrumentation that lands in _their_ data rather than ours, so it stays small,
+carries no identity, and must never be able to fail a query.
+
+Two channels carry it, set by `BaseClickhouseClient.query`:
+
+| Where         | Shape                                                                         | What it answers                                                                           |
+| ------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `log_comment` | JSON payload, e.g. `{"v":1,"surface":"dashboard","dashboard":"…","tile":"…"}` | After the fact: `GROUP BY JSONExtractString(log_comment, 'tile')` over `system.query_log` |
+| `query_id`    | `hdx-<surface>-<uuid>`                                                        | Right now: reading `system.processes` while a query is still running                      |
+
+The vocabulary lives in
+[`packages/common-utils/src/clickhouse/attribution.ts`](../packages/common-utils/src/clickhouse/attribution.ts).
+`QUERY_SURFACES` is a fixed, short list, because it goes in the `query_id` and
+people group by it. Anything naming one specific dashboard, tile or search goes
+in the id fields instead.
+
+### Declaring it
+
+Not at the call site that runs the query: there are roughly sixty of those, and
+`Metadata` accounts for two dozen on its own. Set it once where the reason for
+the query is known, and everything underneath picks it up.
+
+**Browser** — React context, read by `useClickhouseClient`:
+
+```tsx
+<QueryAttributionProvider
+  attribution={{ surface: 'dashboard', dashboard: dashboardId, tile: chart.id }}
+>
+  {children}
+</QueryAttributionProvider>
+```
+
+Providers nest, and the innermost value wins, so a dashboard sets its id once
+and each tile adds only its own. A page that needs nothing finer than "which
+page" can use `withAppNavForSurface('…')` as its `getLayout` instead.
+
+Do **not** put attribution on the chart config: the config is the React Query
+cache key, so two surfaces asking the identical question would stop sharing a
+cache entry and query volume would double.
+
+**Server** — a scope around the request or job (`AsyncLocalStorage`, node only):
+
+```ts
+await withQueryAttribution({ surface: 'alert', alert: alert.id }, async () =>
+  processAlert(...),
+);
+```
+
+Wrap the whole request or job, not the query. One call at the top covers
+everything below it, including the materialized-view `EXPLAIN` probes.
+
+Order of precedence: the client's default, then the scope around the current
+request or job, then anything passed with an individual query.
+
+**Browser to API route** — for requests that reach ClickHouse through an API
+route instead of a ClickHouse client. PromQL is the case today: the browser
+calls `/api/v1/prometheus/query{,_range}`, and `/labels` and
+`/label/:name/values` for autocomplete and dashboard filters (tagged with
+`useMetadataQueryAttribution()`), over fetch. The caller sends
+`buildLogComment(attribution)` in the `x-hyperdx-query-attribution` header
+(`QUERY_ATTRIBUTION_HEADER`), and the router parses it with `parseLogComment`
+into a `withQueryAttribution` scope layered over the auth middleware's `api`
+scope. The browser's surface and ids win; `trace` and `label` stay the server's.
+Queries the route runs through a ClickHouse client (label lookups before 26.9,
+and the `prometheusQuery()`/`prometheusQueryRange()` fallback) pick the scope up
+as usual. Requests proxied to ClickHouse's Prometheus HTTP API (queries on
+26.6+, label lookups on 26.9+) are tagged by `clickhousePrometheusRequest`:
+`log_comment` as a URL setting, `query_id` as the `X-ClickHouse-Query-Id`
+header, because the handler rejects `query_id` as an unknown setting in the URL.
+
+### Rules
+
+- **Values from the browser are hints, not proof.** The client controls them.
+  `sanitizeField` drops control characters and caps the length, and the payload
+  only ever becomes JSON strings, never SQL.
+- **It must never throw.** A tag describes the work; it does not gate it. Read
+  fields with `?.` even where the type says they are required, and keep helpers
+  like `getActiveTraceId` from throwing. A half-populated object must not be
+  able to stop an alert from running.
+- **Set it where the reason is known, not just on the page.** A page-level
+  surface is a fallback. A modal or panel rendered outside a tile only gets the
+  page's surface, so give it its own (`chart-preview`) when it has ids to
+  report.
+- **Keep the payload small.** It rides in the URL query string on every browser
+  query. The cap is 1 KB; real payloads are 100 to 200 bytes. Today's fields
+  cannot fill the budget even at full length, so nothing is ever shed. If you
+  add a field, check that still holds: over budget, fields are dropped whole
+  from the end rather than truncated, so the value stays parseable JSON.
 
 ## Where to look for examples
 
@@ -256,7 +356,13 @@ auto-instrumentation and error middleware already cover.
 - SLO operation metrics (`withOperationMetrics`) on an external dependency:
   `packages/api/src/routers/api/ai.ts`
 - SLO operation metrics (`recordOperationOutcome`) on a streaming proxy:
-  `packages/api/src/routers/api/clickhouseProxy.ts`
+  `packages/api/src/utils/proxyOutcome.ts`
 - End-to-end + sub-operation SLO metrics on a background job (alert evaluation
   and its data fetch): `packages/api/src/tasks/checkAlerts/index.ts`
   (`alerts.evaluate`, `alerts.query`)
+- Query attribution scope at the auth boundary:
+  `packages/api/src/middleware/auth.ts` (`nextWithQueryAttribution`)
+- Query attribution around one alert evaluation:
+  `packages/api/src/tasks/checkAlerts/index.ts` (`alertQueryAttribution`)
+- Query attribution per React subtree: `packages/app/src/queryAttribution.tsx`,
+  mounted per tile in `packages/app/src/DBDashboardPage.tsx`

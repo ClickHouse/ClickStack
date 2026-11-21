@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import { HTTPError } from 'ky';
 import CopyToClipboard from 'react-copy-to-clipboard';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import {
-  Badge,
   Box,
   Button,
   Card,
-  Divider,
   Group,
   Modal,
   Stack,
@@ -18,7 +17,7 @@ import { notifications } from '@mantine/notifications';
 import { IconLock, IconUserPlus } from '@tabler/icons-react';
 
 import api from '@/api';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
+import { useBrandDisplayName } from '@/brand';
 
 export default function TeamMembersSection() {
   const brandName = useBrandDisplayName();
@@ -218,7 +217,7 @@ export default function TeamMembersSection() {
   return (
     <Box id="team_members" data-testid="team-members-section">
       <Text size="md">Team Members</Text>
-      <Divider my="md" />
+      <Separator size="lg" />
       <Card>
         <Card.Section withBorder py="sm" px="lg">
           <Group align="center" justify="space-between">
@@ -243,9 +242,14 @@ export default function TeamMembersSection() {
                     <Table.Td>
                       <div>
                         {member.isCurrentUser && (
-                          <Badge variant="light" mr="xs" tt="none">
-                            You
-                          </Badge>
+                          <Badge
+                            size="sm"
+                            text="You"
+                            state="info"
+                            style={{
+                              marginRight: 'var(--mantine-spacing-xs)',
+                            }}
+                          />
                         )}
                         <span className="text-white fw-bold fs-7">
                           {member.name}
@@ -263,13 +267,10 @@ export default function TeamMembersSection() {
                     <Table.Td>
                       {member.groupName && (
                         <Badge
-                          variant="light"
-                          color="green"
-                          fw="normal"
-                          tt="none"
-                        >
-                          {member.groupName}
-                        </Badge>
+                          size="sm"
+                          text={member.groupName}
+                          state="success"
+                        />
                       )}
                     </Table.Td>
                     <Table.Td style={{ textAlign: 'right' }}>
@@ -303,9 +304,13 @@ export default function TeamMembersSection() {
                       </span>
                     </Table.Td>
                     <Table.Td>
-                      <Badge variant="dot" color="gray" fw="normal" tt="none">
-                        Pending Invite
-                      </Badge>
+                      <Badge
+                        size="sm"
+                        text="Pending invite"
+                        state="neutral"
+                        icon="dot"
+                        iconDir="start"
+                      />
                       <CopyToClipboard text={invitation.url}>
                         <Button size="compact-xs" variant="secondary" ml="xs">
                           📋 Copy URL

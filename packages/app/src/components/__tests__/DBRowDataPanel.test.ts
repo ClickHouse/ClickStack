@@ -1,3 +1,4 @@
+import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import { SourceKind, TLogSource } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
 
@@ -12,7 +13,22 @@ jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
 }));
 
+type ColumnsResult = {
+  data?: { name: string; default_type: string }[];
+  isLoading: boolean;
+};
+let mockColumns: ColumnsResult;
+const mockUseColumns = jest.fn(
+  (_table: unknown, _options: { enabled?: boolean }) => mockColumns,
+);
+jest.mock('@/hooks/useMetadata', () => ({
+  useColumns: (table: unknown, options: { enabled?: boolean }) =>
+    mockUseColumns(table, options),
+}));
+
 const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
+const showMaterializedAliasColumns = () =>
+  localStorage.setItem('hdx-row-show-materialized-alias-columns', 'true');
 
 describe('DBRowDataPanel', () => {
   const source: TLogSource = {
@@ -28,6 +44,8 @@ describe('DBRowDataPanel', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    localStorage.clear();
+    mockColumns = { data: undefined, isLoading: false };
     mockUseQueriedChartConfig.mockReturnValue({
       data: {
         data: [],
@@ -53,11 +71,56 @@ describe('DBRowDataPanel', () => {
     });
   });
 
+  // useQueriedChartConfig resolves the source's querySettings from config.source
+  it('passes the source id on both the bounded and fallback lookups', () => {
+    renderHook(() =>
+      useRowData({
+        source,
+        rowId: "id='abc123'",
+        dateRange: [new Date(0), new Date(1000)],
+      }),
+    );
+
+    expect(mockUseQueriedChartConfig).toHaveBeenCalledTimes(2);
+    for (const [config] of mockUseQueriedChartConfig.mock.calls) {
+      expect(config.source).toBe('source-id');
+    }
+  });
+
   it('selects `*` when the source has no Known Columns List', () => {
     renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
 
     const [config] = mockUseQueriedChartConfig.mock.calls[0];
     expect(config.select[0]).toEqual({ valueExpression: '*' });
+  });
+
+  // JSON-typed Events.Attributes come back nested.
+  it('flattens span-event exception attributes', () => {
+    mockUseQueriedChartConfig.mockReturnValue({
+      data: {
+        data: [
+          {
+            __hdx_events_exception_attributes: {
+              exception: { type: 'TypeError' },
+            },
+          },
+        ],
+        meta: [],
+        rows: 1,
+        isComplete: true,
+      },
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    });
+
+    const { result } = renderHook(() =>
+      useRowData({ source, rowId: "id='abc123'" }),
+    );
+
+    expect(
+      result.current.data?.data[0].__hdx_events_exception_attributes,
+    ).toEqual({ 'exception.type': 'TypeError' });
   });
 
   it('selects the Known Columns List instead of `*` when set', () => {
@@ -75,6 +138,262 @@ describe('DBRowDataPanel', () => {
       valueExpression: 'Timestamp, Body, ServiceName',
     });
     expect(config.select).not.toContainEqual({ valueExpression: '*' });
+  });
+
+  describe('event name', () => {
+    const eventNameAlias = expect.objectContaining({
+      alias: '__hdx_event_name',
+    });
+    const eventNameColumn = (default_type: string) => [
+      { name: 'Body', default_type: '' },
+      { name: 'EventName', default_type },
+    ];
+    const lookUp = (
+      overrides: Partial<TLogSource>,
+      row: Record<string, unknown> = {},
+    ) => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        data: { data: [row], meta: [], rows: 1, isComplete: true },
+        isLoading: false,
+        isError: false,
+        isSuccess: true,
+      });
+      const { result } = renderHook(() =>
+        useRowData({ source: { ...source, ...overrides }, rowId: "id='a'" }),
+      );
+      const [[{ select }, { queryKey }]] = mockUseQueriedChartConfig.mock.calls;
+      return {
+        select,
+        queryKey,
+        row: result.current.data?.data[0],
+        checksColumns: mockUseColumns.mock.calls[0][1].enabled,
+      };
+    };
+
+    it('reads a plain column from the row instead of selecting it', () => {
+      mockColumns = { data: eventNameColumn(''), isLoading: false };
+      const { select, row, checksColumns } = lookUp(
+        { eventNameExpression: 'EventName' },
+        { EventName: 'browser.navigation' },
+      );
+      expect(checksColumns).toBe(true);
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBe('browser.navigation');
+    });
+
+    it.each(['ALIAS', 'MATERIALIZED'])(
+      'selects a %s column, which `*` leaves out',
+      kind => {
+        mockColumns = { data: eventNameColumn(kind), isLoading: false };
+        const { select, row } = lookUp(
+          { eventNameExpression: 'EventName' },
+          { __hdx_event_name: 'browser.resource_timing' },
+        );
+        expect(select).toContainEqual({
+          valueExpression: 'EventName',
+          alias: '__hdx_event_name',
+        });
+        expect(row?.__hdx_event_name).toBe('browser.resource_timing');
+      },
+    );
+
+    it('keys the lookup by whether it selects the column', () => {
+      mockColumns = { data: eventNameColumn(''), isLoading: false };
+      const plain = lookUp({ eventNameExpression: 'EventName' }).queryKey;
+      mockUseQueriedChartConfig.mockClear();
+      mockColumns = { data: eventNameColumn('ALIAS'), isLoading: false };
+      const alias = lookUp({ eventNameExpression: 'EventName' }).queryKey;
+      expect(alias).not.toEqual(plain);
+    });
+
+    it('leaves the event name unset when the table has no such column', () => {
+      mockColumns = {
+        data: [{ name: 'Body', default_type: '' }],
+        isLoading: false,
+      };
+      const { select, row } = lookUp({ eventNameExpression: 'EventName' });
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBeUndefined();
+    });
+
+    it('reads the row when the table columns fail to load', () => {
+      const { select, row } = lookUp(
+        { eventNameExpression: 'EventName' },
+        { EventName: 'browser.navigation' },
+      );
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBe('browser.navigation');
+    });
+
+    it.each<{ lookup: string; dateRange?: [Date, Date] }>([
+      { lookup: 'unbounded' },
+      { lookup: 'bounded', dateRange: [new Date(0), new Date(1000)] },
+    ])(
+      'waits for the table columns before the $lookup lookup',
+      ({ dateRange }) => {
+        mockColumns = { data: undefined, isLoading: true };
+        const { result } = renderHook(() =>
+          useRowData({
+            source: { ...source, eventNameExpression: 'EventName' },
+            rowId: "id='a'",
+            dateRange,
+          }),
+        );
+        for (const [, options] of mockUseQueriedChartConfig.mock.calls) {
+          expect(options.enabled).toBe(false);
+        }
+        expect(result.current.isLoading).toBe(true);
+      },
+    );
+
+    // Columns another page cached must not add a select that the Known
+    // Columns List leaves out.
+    it('selects nothing that a Known Columns List leaves out', () => {
+      mockColumns = { data: eventNameColumn('ALIAS'), isLoading: false };
+      const { select, row, checksColumns } = lookUp({
+        eventNameExpression: 'EventName',
+        knownColumnsListExpression: 'Timestamp, Body',
+      });
+      expect(checksColumns).toBe(false);
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBeUndefined();
+    });
+
+    it('reads a column that a Known Columns List names from the row', () => {
+      const { row } = lookUp(
+        {
+          eventNameExpression: 'EventName',
+          knownColumnsListExpression: 'Timestamp, Body, EventName',
+        },
+        { EventName: 'browser.navigation' },
+      );
+      expect(row?.__hdx_event_name).toBe('browser.navigation');
+    });
+
+    it('selects any other expression under the alias', () => {
+      const { select, checksColumns } = lookUp({
+        eventNameExpression: "LogAttributes['event.name']",
+      });
+      expect(checksColumns).toBe(false);
+      expect(select).toContainEqual({
+        valueExpression: "LogAttributes['event.name']",
+        alias: '__hdx_event_name',
+      });
+    });
+
+    it('reads no event name when the expression is unset', () => {
+      const { select, row } = lookUp({}, { EventName: 'browser.navigation' });
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBeUndefined();
+    });
+  });
+
+  it('adds no query settings while the viewer option is off', () => {
+    renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
+
+    const [bounded, fallback] = mockUseQueriedChartConfig.mock.calls;
+    for (const [, options] of [bounded, fallback]) {
+      expect(options.additionalQuerySettings).toBeUndefined();
+      expect(options.retry).toBeUndefined();
+    }
+  });
+
+  it('includes MATERIALIZED and ALIAS columns when the viewer option is on', () => {
+    showMaterializedAliasColumns();
+    renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
+
+    const [bounded, fallback] = mockUseQueriedChartConfig.mock.calls;
+    for (const [, options] of [bounded, fallback]) {
+      expect(options.additionalQuerySettings).toEqual([
+        { setting: 'asterisk_include_materialized_columns', value: '1' },
+        { setting: 'asterisk_include_alias_columns', value: '1' },
+      ]);
+    }
+  });
+
+  it('adds only the settings that the source does not set itself', () => {
+    showMaterializedAliasColumns();
+    const sourceWithSetting: TLogSource = {
+      ...source,
+      querySettings: [
+        { setting: 'asterisk_include_alias_columns', value: '0' },
+      ],
+    };
+
+    renderHook(() =>
+      useRowData({ source: sourceWithSetting, rowId: "id='abc123'" }),
+    );
+
+    const [[, options]] = mockUseQueriedChartConfig.mock.calls;
+    expect(options.additionalQuerySettings).toEqual([
+      { setting: 'asterisk_include_materialized_columns', value: '1' },
+    ]);
+  });
+
+  it('adds no query settings when the source sets both itself', () => {
+    showMaterializedAliasColumns();
+    const sourceWithSettings: TLogSource = {
+      ...source,
+      querySettings: [
+        { setting: 'asterisk_include_materialized_columns', value: '0' },
+        { setting: 'asterisk_include_alias_columns', value: '0' },
+      ],
+    };
+
+    renderHook(() =>
+      useRowData({ source: sourceWithSettings, rowId: "id='abc123'" }),
+    );
+
+    const [[, options]] = mockUseQueriedChartConfig.mock.calls;
+    expect(options.additionalQuerySettings).toBeUndefined();
+  });
+
+  it('adds no query settings when the source has a Known Columns List', () => {
+    showMaterializedAliasColumns();
+    const sourceWithKnownColumns: TLogSource = {
+      ...source,
+      knownColumnsListExpression: 'Timestamp, Body, ServiceName',
+    };
+
+    renderHook(() =>
+      useRowData({ source: sourceWithKnownColumns, rowId: "id='abc123'" }),
+    );
+
+    const [bounded, fallback] = mockUseQueriedChartConfig.mock.calls;
+    for (const [, options] of [bounded, fallback]) {
+      expect(options.additionalQuerySettings).toBeUndefined();
+    }
+  });
+
+  it('reports the error and does not drop the settings when the connection rejects them', () => {
+    showMaterializedAliasColumns();
+    // The client's parsed error, wrapped the way the row query sees it.
+    const message =
+      "Cannot modify 'asterisk_include_materialized_columns' setting in readonly mode. ";
+    const readonlyError = new ClickHouseQueryError(message, 'SELECT * LIMIT 1');
+    readonlyError.cause = Object.assign(new Error(message), {
+      code: '164',
+      type: 'READONLY',
+    });
+    mockUseQueriedChartConfig.mockReturnValue({
+      data: undefined,
+      error: readonlyError,
+      isLoading: false,
+      isPending: false,
+      isError: true,
+      isSuccess: false,
+    });
+
+    const { result } = renderHook(() =>
+      useRowData({ source, rowId: "id='abc123'" }),
+    );
+
+    expect(result.current.isError).toBe(true);
+    expect(result.current.error).toBe(readonlyError);
+    expect(result.current.isLoading).toBe(false);
+    for (const [, options] of mockUseQueriedChartConfig.mock.calls) {
+      expect(options.additionalQuerySettings).toBeDefined();
+    }
   });
 
   describe('time filtering', () => {

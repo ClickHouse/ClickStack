@@ -271,7 +271,7 @@ test.describe('Navigation', { tag: ['@core'] }, () => {
       );
       await expect(drawer.getByTestId('drawer-github-link')).toHaveAttribute(
         'href',
-        /github\.com\/hyperdxio\/hyperdx.*CHANGELOG\.md/,
+        /github\.com\/ClickHouse\/ClickStack.*CHANGELOG\.md/,
       );
 
       // Opening the drawer closes the menu.
@@ -388,7 +388,7 @@ test.describe('Navigation', { tag: ['@core'] }, () => {
     await expect(headlines).toHaveCount(2);
 
     // Both measurements below are font-metric dependent, and the fallback font
-    // is wider than the webfont — "BREAKING" genuinely does overflow the column
+    // is wider than the webfont — "Breaking" genuinely does overflow the column
     // mid-swap. Wait for the swap so this measures the shipped typeface.
     await page.evaluate(() => document.fonts.ready.then(() => undefined));
 
@@ -442,7 +442,7 @@ test.describe('Navigation', { tag: ['@core'] }, () => {
     ).toBeVisible();
     await expect(drawer.getByRole('link')).toHaveAttribute(
       'href',
-      /github\.com\/hyperdxio\/hyperdx.*CHANGELOG\.md/,
+      /github\.com\/ClickHouse\/ClickStack.*CHANGELOG\.md/,
     );
   });
 

@@ -23,10 +23,15 @@ const mockTracer = {
 };
 
 const mockCounter = { add: jest.fn() };
-const mockHistogram = { record: jest.fn() };
+const mockDurationHistogram = { record: jest.fn() };
+const mockResponseSizeHistogram = { record: jest.fn() };
 const mockMeter = {
   createCounter: jest.fn(() => mockCounter),
-  createHistogram: jest.fn(() => mockHistogram),
+  createHistogram: jest.fn((name: string) =>
+    name === 'hyperdx.mcp.tool.response.size_bytes'
+      ? mockResponseSizeHistogram
+      : mockDurationHistogram,
+  ),
 };
 
 jest.mock('@opentelemetry/api', () => ({
@@ -53,9 +58,10 @@ jest.mock('@opentelemetry/api', () => ({
   },
 }));
 
-jest.mock('@hyperdx/node-opentelemetry', () => ({
-  __esModule: true,
-  setTraceAttributes: jest.fn(),
+// The real package would read helpers off the mocked @opentelemetry/api at
+// load time. Only setBusinessContext uses it, and these tests never call it.
+jest.mock('@opentelemetry/core', () => ({
+  getRPCMetadata: jest.fn(),
 }));
 
 jest.mock('@/config', () => ({
@@ -327,10 +333,46 @@ describe('withToolTracing', () => {
     const traced = withToolTracing('my_tool', context, handler);
     await traced({});
 
-    expect(mockHistogram.record).toHaveBeenCalledWith(expect.any(Number), {
-      tool: 'my_tool',
-    });
+    expect(mockDurationHistogram.record).toHaveBeenCalledWith(
+      expect.any(Number),
+      {
+        tool: 'my_tool',
+      },
+    );
     expect(mockCounter.add).not.toHaveBeenCalled();
+  });
+
+  it('should record the response size in UTF-8 bytes on span and histogram', async () => {
+    const handler = jest.fn().mockResolvedValue({
+      content: [
+        { type: 'text', text: 'abc' },
+        { type: 'text', text: 'é' }, // 2 bytes in UTF-8
+      ],
+    });
+
+    const traced = withToolTracing('my_tool', context, handler);
+    await traced({});
+
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith(
+      'mcp.tool.response.size_bytes',
+      5,
+    );
+    expect(mockResponseSizeHistogram.record).toHaveBeenCalledWith(5, {
+      tool: 'my_tool',
+      outcome: 'success',
+    });
+  });
+
+  it('should record the response size of error results', async () => {
+    const handler = jest.fn().mockResolvedValue(mcpUserError('bad input'));
+
+    const traced = withToolTracing('my_tool', context, handler);
+    await traced({});
+
+    expect(mockResponseSizeHistogram.record).toHaveBeenCalledWith(9, {
+      tool: 'my_tool',
+      outcome: 'error',
+    });
   });
 
   it('should increment the error counter for isError results', async () => {
@@ -359,9 +401,12 @@ describe('withToolTracing', () => {
       tool: 'my_tool',
       error_category: 'server',
     });
-    expect(mockHistogram.record).toHaveBeenCalledWith(expect.any(Number), {
-      tool: 'my_tool',
-    });
+    expect(mockDurationHistogram.record).toHaveBeenCalledWith(
+      expect.any(Number),
+      {
+        tool: 'my_tool',
+      },
+    );
   });
 
   // ─── Error category tests ───────────────────────────────────────────────

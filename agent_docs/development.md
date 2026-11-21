@@ -30,7 +30,18 @@ yarn dev        # or equivalently: make dev
 ## Environment Configuration
 
 - `.env.development`: Development environment variables
-- Docker Compose manages ClickHouse, MongoDB, OTel Collector
+- Docker Compose manages ClickHouse, DocumentDB, OTel Collector
+- The metadata store is [DocumentDB](https://github.com/documentdb/documentdb)
+  (Postgres plus a Mongo wire-protocol gateway), built from
+  `docker/documentdb/Dockerfile`. The API still talks to it through Mongoose.
+  To browse it with MongoDB Compass or `mongosh`, connect to
+  `mongodb://hyperdx:hyperdx@localhost:<HDX_DEV_MONGO_PORT>/?tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256`.
+  Everything works except Compass's Performance tab (the gateway doesn't
+  implement `serverStatus` or `top`).
+  For the Postgres underneath (documents are BSON rows in `documentdb_data`),
+  run `docker exec -it -u postgres hdx-dev-<slot>-db-1 psql -h /tmp -U postgres -d postgres`.
+  Dev data lives in `.volumes/docdb_dev_<slot>`; data from the old MongoDB
+  volumes (`.volumes/db_dev_<slot>`) is not migrated, so the dev stack starts empty.
 - Hot reload enabled for all services in development
 
 ## Worktree Isolation (Multi-Agent / Multi-Developer)
@@ -41,8 +52,10 @@ multiple agents or developers working in parallel), use `make dev` instead of
 
 ### How It Works
 
-1. A deterministic slot (0-99) is computed from the worktree directory name (via
-   `cksum`)
+1. `scripts/slots.sh` computes a deterministic slot (0-99) from the worktree
+   directory name (via `cksum`), or from its full path with `HDX_SLOT_FROM=path`
+   (see below). It is the only place slots and ports are computed: `yarn dev`,
+   `make dev-int`, `make dev-e2e`, and tools all use it.
 2. Each service gets a unique port: `base + slot` (see table below)
 3. Docker Compose runs with a unique project name (`hdx-dev-<slot>`)
 4. Volume paths include the slot to prevent data corruption between worktrees
@@ -57,7 +70,7 @@ integration tests (14320-40098) and E2E tests (20320-21399).
 | API server        | 30100     | 30100 - 30199 | `HYPERDX_API_PORT`            |
 | App (Next.js)     | 30200     | 30200 - 30299 | `HYPERDX_APP_PORT`            |
 | OpAMP             | 30300     | 30300 - 30399 | `HYPERDX_OPAMP_PORT`          |
-| MongoDB           | 30400     | 30400 - 30499 | `HDX_DEV_MONGO_PORT`          |
+| DocumentDB        | 30400     | 30400 - 30499 | `HDX_DEV_MONGO_PORT`          |
 | ClickHouse HTTP   | 30500     | 30500 - 30599 | `HDX_DEV_CH_HTTP_PORT`        |
 | ClickHouse Native | 30600     | 30600 - 30699 | `HDX_DEV_CH_NATIVE_PORT`      |
 | OTel health       | 30700     | 30700 - 30799 | `HDX_DEV_OTEL_HEALTH_PORT`    |
@@ -90,6 +103,36 @@ The portal auto-refreshes every 3 seconds and shows each worktree's:
 ```bash
 # Use a specific slot instead of the auto-computed one
 HDX_DEV_SLOT=5 make dev
+```
+
+### Worktrees With the Same Folder Name
+
+If your worktrees share a folder name (`a/hyperdx`, `b/hyperdx`), they get the
+same slot and clash. Set `HDX_SLOT_FROM=path` in your shell profile to hash each
+worktree's full path instead. It applies to the dev stack, integration tests,
+E2E tests, and the dev portal.
+
+```bash
+export HDX_SLOT_FROM=path
+```
+
+Your existing stacks move to new slots once, so their dev data (in
+`.volumes/*_<slot>`) starts empty. The default, `HDX_SLOT_FROM=name`, keeps
+today's slots.
+
+### Tools That Talk to the Dev Stack
+
+Run them through `scripts/with-slots.sh`. It sets this worktree's dev ports
+(`HDX_DEV_CH_HTTP_PORT`, `HYPERDX_API_PORT`, ...) and nothing else. Don't source
+`scripts/dev-env.sh` for this: it also clears `packages/app/.next` and registers
+the stack with the dev portal, which disrupts a running `yarn dev`.
+
+```bash
+# From a package script, e.g. packages/api's "seed:alerts"
+../../scripts/with-slots.sh ts-node scripts/seed-alerts.ts
+
+# Against another slot
+HDX_DEV_SLOT=5 scripts/with-slots.sh <command>
 ```
 
 ## Testing Strategy
@@ -141,7 +184,7 @@ Port mapping (base + slot):
 | Service         | Default port (slot 0) | Variable          |
 | --------------- | --------------------- | ----------------- |
 | ClickHouse HTTP | 18123                 | HDX_CI_CH_PORT    |
-| MongoDB         | 39999                 | HDX_CI_MONGO_PORT |
+| DocumentDB      | 39999                 | HDX_CI_MONGO_PORT |
 | API test server | 19000                 | HDX_CI_API_PORT   |
 | OpAMP           | 14320                 | HDX_CI_OPAMP_PORT |
 
@@ -149,7 +192,7 @@ Port mapping (base + slot):
 
 - Uses separate Docker Compose configuration (`docker-compose.ci.yml`)
 - Isolated test environment with unique `-p int-<slot>` project name
-- Includes all necessary services (ClickHouse, MongoDB, OTel Collector)
+- Includes all necessary services (ClickHouse, DocumentDB, OTel Collector)
 - Tests run against real database instances for accurate integration testing
 
 ### E2E Testing
@@ -166,7 +209,7 @@ E2E port mapping (base + slot):
 | ClickHouse HTTP   | 20500     | 20500 - 20599 | `HDX_E2E_CH_PORT`        |
 | ClickHouse Native | 20600     | 20600 - 20699 | `HDX_E2E_CH_NATIVE_PORT` |
 | API server        | 21000     | 21000 - 21099 | `HDX_E2E_API_PORT`       |
-| MongoDB           | 21100     | 21100 - 21199 | `HDX_E2E_MONGO_PORT`     |
+| DocumentDB        | 21100     | 21100 - 21199 | `HDX_E2E_MONGO_PORT`     |
 | App (local)       | 21200     | 21200 - 21299 | `HDX_E2E_APP_LOCAL_PORT` |
 | App (fullstack)   | 21300     | 21300 - 21399 | `HDX_E2E_APP_PORT`       |
 
@@ -225,8 +268,8 @@ does not overlap with CI integration tests (14320-40098) or the dev stack
 
 The project uses Husky + lint-staged to automatically run:
 
-- Prettier for formatting
-- ESLint for linting
+- oxfmt for formatting (`.oxfmtrc.json`)
+- oxlint for linting (each file with its package's `.oxlintrc.json`)
 - API doc generation (for external API changes)
 
 These run automatically on `git commit` for staged files.
@@ -254,65 +297,64 @@ yarn run lint
 - **Controllers**: `packages/api/src/controllers/`
 - **Pages**: `packages/app/pages/`
 - **Components**: `packages/app/src/`
-- **Shared Utils**: `packages/common-utils/src/` — no root barrel, so imports are
-  deep `@hyperdx/common-utils/dist/...` paths. See
-  [`code_style.md`](code_style.md#where-shared-code-already-lives) for the module
-  map and the grep-first rule before you add a helper.
+- **Shared Utils**: `packages/common-utils/src/` — no root barrel, so imports
+  are deep `@hyperdx/common-utils/dist/...` paths. See
+  [`code_style.md`](code_style.md#where-shared-code-already-lives) for the
+  module map and the grep-first rule before you add a helper.
 
 ## Vercel Preview Deployments (Inline API)
 
-The `hyperdx-private` Vercel project deploys the `@hyperdx/app` Next.js app
-for preview environments. Normally `/api/*` requests proxy to a separately
-deployed API service (`SERVER_URL`). For PR previews we instead **inline the
-entire Express API** into the Next.js serverless function so a single Vercel
-deployment serves both the app and the API.
+The `hyperdx-private` Vercel project deploys the `@hyperdx/app` Next.js app for
+preview environments. Normally `/api/*` requests proxy to a separately deployed
+API service (`SERVER_URL`). For PR previews we instead **inline the entire
+Express API** into the Next.js serverless function so a single Vercel deployment
+serves both the app and the API.
 
 ### How it works
 
-1. `packages/api/src/serverless.ts` exposes the Express app from
-   `api-app.ts` as a stateless `(req, res) => Promise<void>` handler. It
-   lazily connects to MongoDB on the first invocation and caches the
-   connection across warm invocations.
-2. `packages/app/pages/api/[...all].ts` branches on the
-   `HDX_PREVIEW_INLINE_API` env var. When `true`, it `require()`s the
-   compiled serverless handler and dispatches directly. Otherwise it falls
-   back to the existing http-proxy-middleware path used by Docker/standalone
-   builds.
+1. `packages/api/src/serverless.ts` exposes the Express app from `api-app.ts` as
+   a stateless `(req, res) => Promise<void>` handler. It lazily connects to
+   MongoDB on the first invocation and caches the connection across warm
+   invocations.
+2. `packages/app/pages/api/[...all].ts` branches on the `HDX_PREVIEW_INLINE_API`
+   env var. When `true`, it `require()`s the compiled serverless handler and
+   dispatches directly. Otherwise it falls back to the existing
+   http-proxy-middleware path used by Docker/standalone builds.
 3. `packages/app/next.config.mjs` adds a webpack `externals` rule that marks
-   `@hyperdx/api` as a CommonJS external **unless** `HDX_PREVIEW_INLINE_API`
-   is `true`. This keeps production app builds (Docker fullstack image,
-   standalone Next output) byte-for-byte equivalent to before — they never
-   bundle passport-saml, mongoose, AWS SDK, etc.
+   `@hyperdx/api` as a CommonJS external **unless** `HDX_PREVIEW_INLINE_API` is
+   `true`. This keeps production app builds (Docker fullstack image, standalone
+   Next output) byte-for-byte equivalent to before — they never bundle
+   passport-saml, mongoose, AWS SDK, etc.
 4. `vercel.json` declares the repo-root build commands so Vercel builds
    `common-utils` → `api` → `app` in order.
 
 ### Required Vercel project env vars (Preview scope only)
 
-| Key | Notes |
-|---|---|
-| `HDX_PREVIEW_INLINE_API` | `true` — turns on the inline path |
-| `MONGO_URI` | Preview MongoDB connection string |
-| `EXPRESS_SESSION_SECRET` | Random 32+ char string |
-| `DISABLED_AUTH_METHODS` | `google,saml` (avoids per-preview OAuth callback URL config) |
-| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL_NAME` | Optional, only if AI features should work |
-| `FRONTEND_URL` | Optional. Leave unset to use host-only cookies on the preview URL |
+| Key                                          | Notes                                                             |
+| -------------------------------------------- | ----------------------------------------------------------------- |
+| `HDX_PREVIEW_INLINE_API`                     | `true` — turns on the inline path                                 |
+| `MONGO_URI`                                  | Preview MongoDB connection string                                 |
+| `EXPRESS_SESSION_SECRET`                     | Random 32+ char string shared by all instances; unset generates one per process, invalidating sessions on restart and between instances |
+| `DISABLED_AUTH_METHODS`                      | `google,saml` (avoids per-preview OAuth callback URL config)      |
+| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL_NAME` | Optional, only if AI features should work                         |
+| `FRONTEND_URL`                               | Optional. Leave unset to use host-only cookies on the preview URL |
 
 Production env vars on the same project must leave `HDX_PREVIEW_INLINE_API`
 unset (or `false`) so production deployments keep using the proxy path.
 
 ### Limitations
 
-- **No background tasks.** Scheduled jobs (`packages/api/src/tasks/`,
-  including `CheckAlertTask`) are not run in preview deployments.
+- **No background tasks.** Scheduled jobs (`packages/api/src/tasks/`, including
+  `CheckAlertTask`) are not run in preview deployments.
 - **No alerts.** Alert evaluation depends on the cron task runner.
-- **No OPAMP server.** The OPAMP control-plane server (`APP_TYPE=opamp`) is
-  not started in preview. The serverless entrypoint asserts
-  `APP_TYPE=api` and refuses to boot otherwise.
+- **No OPAMP server.** The OPAMP control-plane server (`APP_TYPE=opamp`) is not
+  started in preview. The serverless entrypoint asserts `APP_TYPE=api` and
+  refuses to boot otherwise.
 - **Function size.** The bundled function should stay under Vercel's 50 MB
   unzipped limit. If it grows, mark heavy deps (`@aws-sdk/*`,
   `@node-saml/passport-saml`, AI SDKs) as `serverExternalPackages` in
   `next.config.mjs`.
-- **Cold-start latency.** First request after idle pays ~500–1500 ms for
-  the initial Mongo connection.
-- **Shared preview MongoDB.** Unless you partition by database name, all
-  preview deployments share the same Mongo state.
+- **Cold-start latency.** First request after idle pays ~500–1500 ms for the
+  initial Mongo connection.
+- **Shared preview MongoDB.** Unless you partition by database name, all preview
+  deployments share the same Mongo state.

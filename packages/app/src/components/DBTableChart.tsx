@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { inferNumericColumn } from '@hyperdx/common-utils/dist/clickhouse';
 import { isRatioChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
   isBuilderChartConfig,
@@ -15,23 +16,29 @@ import { SortingState } from '@tanstack/react-table';
 
 import {
   buildMVDateRangeIndicator,
+  convertToPromqlTableChartConfig,
   convertToTableChartConfig,
 } from '@/ChartUtils';
 import { Table, TableVariant } from '@/HDXMultiSeriesTableChart';
+import { getMinGranularitySeconds } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import useOffsetPaginatedQuery from '@/hooks/useOffsetPaginatedQuery';
 import { useOnClickLinkBuilder } from '@/hooks/useOnClickLinkBuilder';
+import { useResultColumnFilterKeys } from '@/hooks/useResultColumnFilterKeys';
 import {
   getBuilderValueColumnCount,
   useChartNumberFormats,
   useSource,
 } from '@/source';
+import type { TileFilterHandler } from '@/types';
 import { useIntersectionObserver } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
+import type { CellFilterHandler } from './DBTable/DBRowTableFieldWithPopover';
 import { getClientSideSortingFn } from './DBTable/sorting';
 import MVOptimizationIndicator from './MaterializedViews/MVOptimizationIndicator';
 
@@ -49,6 +56,7 @@ export default function DBTableChart({
   showMVOptimizationIndicator = true,
   variant,
   errorVariant,
+  onFilter,
 }: {
   config: ChartConfigWithOptTimestamp;
   getRowSearchLink?: (row: any) => string | null;
@@ -63,8 +71,22 @@ export default function DBTableChart({
   showMVOptimizationIndicator?: boolean;
   variant?: TableVariant;
   errorVariant?: ChartErrorStateVariant;
+  /** When set, group-by cells offer filter / exclude actions for their value. */
+  onFilter?: TileFilterHandler;
 }) {
   const [sort, setSort] = useState<SortingState>([]);
+
+  // A header sort only overrides the Order By it was clicked against. Clear it
+  // when the config's own Order By changes (e.g. the tile was edited), so it
+  // can't come back if the Order By is later changed back.
+  const configOrderByKey = JSON.stringify(
+    isBuilderChartConfig(config) ? (config.orderBy ?? null) : null,
+  );
+  const [sortOrderByKey, setSortOrderByKey] = useState(configOrderByKey);
+  if (sortOrderByKey !== configOrderByKey) {
+    setSortOrderByKey(configOrderByKey);
+    setSort([]);
+  }
 
   const { data: source } = useSource({
     id: config.source,
@@ -85,9 +107,16 @@ export default function DBTableChart({
     [onSortingChange],
   );
 
+  const minGranularitySeconds = getMinGranularitySeconds(source);
+
   const queriedConfig = useMemo(() => {
     if (isRawSqlChartConfig(config)) return config;
-    if (isPromqlChartConfig(config)) return config;
+    if (isPromqlChartConfig(config)) {
+      return convertToPromqlTableChartConfig({
+        ...config,
+        minGranularitySeconds,
+      });
+    }
 
     const _config = convertToTableChartConfig(config);
 
@@ -100,17 +129,26 @@ export default function DBTableChart({
       });
     }
     return _config;
-  }, [config, effectiveSort]);
+  }, [config, effectiveSort, minGranularitySeconds]);
 
   const { data: mvOptimizationData } = useMVOptimizationExplanation(
     isBuilderChartConfig(queriedConfig) ? queriedConfig : undefined,
   );
 
-  const { data, fetchNextPage, hasNextPage, isLoading, isError, error } =
-    useOffsetPaginatedQuery(queriedConfig, {
-      enabled,
-      queryKeyPrefix,
-    });
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isLoading,
+    isError,
+    error,
+    isPlaceholderData,
+  } = useOffsetPaginatedQuery(queriedConfig, {
+    enabled,
+    queryKeyPrefix,
+    // Keep the current rows on screen while a refresh loads the new range
+    keepPreviousData: true,
+  });
   const { observerRef: fetchMoreRef } = useIntersectionObserver(fetchNextPage);
 
   // Returns an array of aliases, so we can check if something is using an alias
@@ -174,6 +212,16 @@ export default function DBTableChart({
     return { colorByColumn, rulesByColumn };
   }, [data?.meta, queriedConfig]);
 
+  const filterKeyByColumn = useResultColumnFilterKeys({
+    config: queriedConfig,
+    meta: data?.meta,
+    enabled: !!onFilter,
+  });
+  const onCellFilter = useCallback<CellFilterHandler>(
+    (key, value, action) => onFilter?.([{ key, value }], action),
+    [onFilter],
+  );
+
   const columns = useMemo(() => {
     const rows = data?.data ?? [];
     if (rows.length === 0) {
@@ -196,6 +244,14 @@ export default function DBTableChart({
       const seriesCount = getBuilderValueColumnCount(queriedConfig);
       const groupByCount = allKeys.length - seriesCount;
       groupByKeys = groupByCount > 0 ? allKeys.slice(-groupByCount) : [];
+    } else if (isPromqlChartConfig(queriedConfig)) {
+      // A PromQL table projects the sample value plus a column per Prometheus
+      // label (and a timestamp for range queries). Only the value column is
+      // numeric, so only it takes the tile's number format.
+      const numericKeys = new Set(
+        inferNumericColumn(data?.meta ?? [])?.map(column => column.name),
+      );
+      groupByKeys = allKeys.filter(key => !numericKeys.has(key));
     }
 
     // Builder table configs may opt to render Group By columns
@@ -225,11 +281,13 @@ export default function DBTableChart({
           ? undefined
           : rulesByColumn.get(key),
         sortingFn: getClientSideSortingFn(data?.meta, key),
+        filterKey: filterKeyByColumn.get(key),
       }));
   }, [
     data,
     queriedConfig,
     hiddenColumns,
+    filterKeyByColumn,
     aliasMap,
     formatByColumn,
     colorByColumn,
@@ -289,26 +347,35 @@ export default function DBTableChart({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Table
           data={data?.data ?? []}
           columns={columns}
-          getRowAction={getRowAction ?? undefined}
-          getRowSearchLink={getRowAction ? undefined : getRowSearchLink}
+          // Rows kept from the previous query would link with the new date
+          // range and config, so leave them inert until fresh rows arrive.
+          getRowAction={
+            isPlaceholderData ? undefined : (getRowAction ?? undefined)
+          }
+          getRowSearchLink={
+            isPlaceholderData || getRowAction ? undefined : getRowSearchLink
+          }
           sorting={effectiveSort}
-          enableClientSideSorting={isRawSqlChartConfig(config)}
+          enableClientSideSorting={
+            isRawSqlChartConfig(config) || isPromqlChartConfig(config)
+          }
           onSortingChange={handleSortingChange}
           variant={variant}
+          // Placeholder rows belong to the previous query's columns
+          onCellFilter={
+            onFilter && !isPlaceholderData ? onCellFilter : undefined
+          }
           alternateRowBackground={!!queriedConfig.alternateRowBackground}
+          className={isPlaceholderData ? 'effect-pulse' : undefined}
           tableBottom={
             hasNextPage && (
               <Text ref={fetchMoreRef} ta="center">

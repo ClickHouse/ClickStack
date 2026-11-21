@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Controller, useFieldArray, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
   Box,
   Button,
-  Divider,
   Flex,
   Grid,
   Group,
@@ -18,13 +18,13 @@ import { DateInput } from '@mantine/dates';
 import { notifications } from '@mantine/notifications';
 import { IconCirclePlus, IconHelpCircle, IconTrash } from '@tabler/icons-react';
 
+import { useBrandDisplayName } from '@/brand';
 import { DatabaseSelectControlled } from '@/components/DatabaseSelect';
 import { DBTableSelectControlled } from '@/components/DBTableSelect';
 import { EDITOR_INPUT_HEIGHTS } from '@/components/editorInputHeights';
 import SelectControlled from '@/components/SelectControlled';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { useMetadataWithSettings } from '@/hooks/useMetadata';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 import {
   inferMaterializedViewConfig,
   MV_GRANULARITY_OPTIONS,
@@ -349,7 +349,7 @@ function MaterializedViewFormSection({
         mvIndex={mvIndex}
         setValue={setValue}
       />
-      <Divider />
+      <Separator size="xs" />
     </Stack>
   );
 }

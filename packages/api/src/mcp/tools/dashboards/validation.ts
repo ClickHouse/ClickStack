@@ -1,11 +1,18 @@
+import { getPromqlSeries } from '@hyperdx/common-utils/dist/core/promql';
+import { TIME_SERIES_DISPLAY_TYPE_BY_NAME } from '@hyperdx/common-utils/dist/core/utils';
 import type { FilterForVariableDeclaration } from '@hyperdx/common-utils/dist/filters';
 import {
   getDashboardVariableDeclarations,
   getFilterVariableName,
+  isAdhocConditionSupported,
   isFilterVariableEnabled,
+  isReferenceVariableFilterType,
+  pairWithVariableNames,
+  validateSqlQueryFilterTemplate,
 } from '@hyperdx/common-utils/dist/filters';
 import {
   isBuilderSavedChartConfig,
+  isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
 import {
@@ -15,14 +22,18 @@ import {
   TIME_RANGE_MACROS,
 } from '@hyperdx/common-utils/dist/macros';
 import {
+  AdhocFilterSourceType,
+  AdhocFilterValue,
+  DashboardFilterValue,
   DisplayType,
   QueryExpressionDashboardFilter,
   SavedChartConfig,
-  SearchConditionLanguage,
+  SqlQueryDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import {
   getVariableReferences,
   mapBuilderVariableTemplates,
+  TemplateLanguage,
   validateVariableReferencesInTemplate,
 } from '@hyperdx/common-utils/dist/variables';
 
@@ -89,9 +100,6 @@ export function getRawSqlMissingSourceError(
   );
 }
 
-/** Raw SQL display types that plot a value over time. */
-const TIME_SERIES_DISPLAY_TYPES = ['line', 'stacked_bar'];
-
 /**
  * Returns one advisory string per raw SQL tile that omits a strongly
  * recommended macro:
@@ -121,7 +129,7 @@ export function getRawSqlTileMacroWarnings(
       );
     }
     if (
-      TIME_SERIES_DISPLAY_TYPES.includes(displayType) &&
+      displayType in TIME_SERIES_DISPLAY_TYPE_BY_NAME &&
       !INTERVAL_MACROS.some(macro => hasMacro(sqlTemplate, macro))
     ) {
       missing.push(
@@ -152,11 +160,15 @@ export function getRawSqlTileMacroWarnings(
 }
 
 /**
- * Minimal projection needed to check a filter's dropdown-values query. Static
- * list filters have no dropdown query, so `where` / `whereLanguage` are optional.
+ * Minimal projection needed to check a filter's dropdown-values query: a
+ * queried filter's `where`, or a SQL query filter's `sqlTemplate`. Static list
+ * filters have no dropdown query, so all of these are optional.
  */
 export type FilterForVariableValidation = FilterForVariableDeclaration &
-  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>>;
+  Partial<Pick<QueryExpressionDashboardFilter, 'where' | 'whereLanguage'>> &
+  Partial<Pick<SqlQueryDashboardFilter, 'sqlTemplate'>> & {
+    sourceId?: string;
+  };
 
 /**
  * Non-blocking checks on the dashboard variables references in a filter's `where`.
@@ -200,17 +212,28 @@ export function getFilterVariableWarnings(
 
   const warnings: string[] = [];
   filters.forEach((filter, index) => {
-    const where = filter.where?.trim();
+    const sqlTemplate = filter.sqlTemplate?.trim();
+    const where = sqlTemplate || filter.where?.trim();
     if (!where) return;
 
     const label = filter.name?.trim() || `filter #${index + 1}`;
-    const language = filter.whereLanguage ?? 'sql';
+    const language = sqlTemplate ? 'sql' : (filter.whereLanguage ?? 'sql');
 
     const result = validateVariableReferencesInTemplate(where, variables, {
       subject: 'The dropdown values query',
       language,
     });
     const issues = [...result.errors, ...result.warnings];
+
+    if (sqlTemplate) {
+      // Also reports variable macro errors, which `result` already holds.
+      // Source tables aren't loaded here, so a source only allows its macros.
+      const detail = validateSqlQueryFilterTemplate(sqlTemplate, {
+        variables,
+        sourceTables: filter.sourceId ? 'unknown' : undefined,
+      });
+      if (detail && !issues.includes(detail)) issues.push(detail);
+    }
 
     const referencedNames = new Set(
       getVariableReferences(where).map(reference => reference.name),
@@ -245,6 +268,93 @@ export function getFilterVariableWarnings(
 }
 
 /**
+ * Non-blocking check: a saved filter value of type 'variable' or 'adhoc' whose
+ * `name` matches no filter of its kind, or an ad hoc condition its filter's
+ * source type can't express, is silently ignored when the dashboard loads, so
+ * it looks like a saved default but never applies. Warn so the agent can fix
+ * it. Data source and connection variables count as variable-enabled filters,
+ * though they are not text variables.
+ */
+export function getSavedFilterValueWarnings(
+  savedFilterValues: DashboardFilterValue[] | undefined,
+  filters:
+    | (FilterForVariableDeclaration & { sourceType?: AdhocFilterSourceType })[]
+    | undefined,
+): string[] {
+  if (!savedFilterValues?.length) return [];
+  const declaredNames = new Set([
+    ...getDashboardVariableDeclarations(filters).map(
+      declaration => declaration.name,
+    ),
+    ...pairWithVariableNames(
+      (filters ?? []).filter(filter =>
+        isReferenceVariableFilterType(filter.type),
+      ),
+    ).map(({ name }) => name),
+  ]);
+  const adhocSourceTypeByName = new Map(
+    (filters ?? []).flatMap(filter =>
+      filter.type === 'ADHOC' && filter.sourceType
+        ? [[getFilterVariableName(filter), filter.sourceType] as const]
+        : [],
+    ),
+  );
+  const warnings: string[] = [];
+  for (const value of savedFilterValues) {
+    if (value.type === 'adhoc') {
+      warnings.push(...getAdhocValueWarnings(value, adhocSourceTypeByName));
+      continue;
+    }
+    if (value.type !== 'variable') continue;
+    const name = value.name.trim();
+    if (!name || declaredNames.has(name)) continue;
+    warnings.push(
+      `savedFilterValues references variable $${name}, which no variable-enabled ` +
+        'filter declares. This default is ignored when the dashboard loads: add a ' +
+        `filter with isVariableEnabled: true and variableName: "${name}", or remove ` +
+        'the entry.',
+    );
+  }
+  return warnings;
+}
+
+function getAdhocValueWarnings(
+  value: AdhocFilterValue,
+  sourceTypeByName: ReadonlyMap<string | undefined, AdhocFilterSourceType>,
+): string[] {
+  const sourceType = sourceTypeByName.get(value.name.trim());
+  if (sourceType === undefined) {
+    return [
+      `savedFilterValues has ad hoc conditions for "${value.name}", which no ADHOC ` +
+        "filter's variableName matches. They are ignored when the dashboard loads: " +
+        'fix the name or remove the entry.',
+    ];
+  }
+  const unsupported = value.conditions.filter(
+    condition => !isAdhocConditionSupported(sourceType, condition),
+  );
+  if (unsupported.length === 0) return [];
+  return [
+    `savedFilterValues has ad hoc conditions for "${value.name}" using ` +
+      `${[...new Set(unsupported.map(c => c.operator))].join(', ')}, which a ` +
+      `${sourceType} filter cannot apply. They are not applied to tiles.`,
+  ];
+}
+
+function variableIssueSubject(language: TemplateLanguage): string {
+  switch (language) {
+    case 'sql':
+      return 'SQL';
+    case 'lucene':
+      return 'The Lucene filter';
+    case 'promql':
+      return 'The PromQL expression';
+    case 'markdown':
+      return 'The markdown';
+  }
+}
+
+/**
  * Non-blocking checks on the dashboard variables a tile's expressions
  * reference, run against the variables the dashboard's filters actually
  * declare.
@@ -273,9 +383,9 @@ export function getTileVariableWarnings(
     }
 
     const issues: string[] = [];
-    const validate = (template: string, language: SearchConditionLanguage) => {
+    const validate = (template: string, language: TemplateLanguage) => {
       const result = validateVariableReferencesInTemplate(template, variables, {
-        subject: language === 'lucene' ? 'The Lucene filter' : 'SQL',
+        subject: variableIssueSubject(language),
         language,
       });
       issues.push(...result.errors, ...result.warnings);
@@ -283,10 +393,16 @@ export function getTileVariableWarnings(
 
     if (isRawSqlSavedChartConfig(config)) {
       validate(config.sqlTemplate, 'sql');
+    } else if (isPromqlSavedChartConfig(config)) {
+      for (const { expression } of getPromqlSeries(config)) {
+        validate(expression, 'promql');
+      }
     } else if (
       isBuilderSavedChartConfig(config) &&
-      config.displayType !== DisplayType.Markdown
+      config.displayType === DisplayType.Markdown
     ) {
+      if (config.markdown) validate(config.markdown, 'markdown');
+    } else if (isBuilderSavedChartConfig(config)) {
       mapBuilderVariableTemplates(config, (template, language) => {
         validate(template, language);
         return template;

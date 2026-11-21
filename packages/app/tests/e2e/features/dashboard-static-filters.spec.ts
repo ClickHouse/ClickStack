@@ -197,6 +197,55 @@ test.describe(
       });
     });
 
+    test('substitutes the selected values into a markdown tile', async ({
+      page,
+    }) => {
+      test.setTimeout(90000);
+      const chartName = `E2E Markdown Variables ${Date.now()}`;
+
+      await test.step('Create a static Service filter and select one value', async () => {
+        await dashboardPage.createNewDashboard();
+        await dashboardPage.openEditFiltersModal();
+        await dashboardPage.addStaticListFilterToDashboard(
+          'Service',
+          ['frontend', 'accounting', 'ad'],
+          { variableName: 'svc' },
+        );
+        await dashboardPage.closeFiltersModal();
+        await dashboardPage.toggleFilterValue('Service', 'accounting');
+      });
+
+      await test.step('The editor preview shows the selected value', async () => {
+        await dashboardPage.addTile();
+        await expect(dashboardPage.chartEditor.nameInput).toBeVisible();
+        await dashboardPage.chartEditor.setChartType(DisplayType.Markdown);
+        await dashboardPage.chartEditor.setChartName(chartName);
+        const editor = page.getByTestId('tile-editor-form');
+        const markdownInput = editor.locator('textarea[name="markdown"]');
+        await markdownInput.fill('# Services: $nope');
+        await expect(editor.getByTestId('variable-validation')).toBeVisible();
+
+        await markdownInput.fill('# Services: $svc');
+        await expect(editor.getByTestId('variable-validation')).toBeHidden();
+        await expect(
+          editor.getByRole('heading', { name: 'Services: accounting' }),
+        ).toBeVisible();
+        await dashboardPage.saveTile();
+      });
+
+      await test.step('The tile follows the selection', async () => {
+        const tile = dashboardPage.getTiles().filter({ hasText: chartName });
+        await expect(
+          tile.getByRole('heading', { name: 'Services: accounting' }),
+        ).toBeVisible();
+
+        await dashboardPage.toggleFilterValue('Service', 'frontend');
+        await expect(
+          tile.getByRole('heading', { name: 'Services: accounting, frontend' }),
+        ).toBeVisible();
+      });
+    });
+
     test('round-trips the options and variable name through an edit', async ({
       page,
     }) => {
@@ -258,9 +307,9 @@ test.describe(
         );
       });
 
-      await test.step('Switching to queried values swaps in the queried fields', async () => {
+      await test.step('Switching to SQL expression values swaps in the expression fields', async () => {
         await dashboardPage.openEditFilterForm('Environment');
-        await dashboardPage.selectFilterType('Queried values');
+        await dashboardPage.selectFilterType('SQL expression values');
         await expect(dashboardPage.getFilterOptionsInput()).toHaveCount(0);
 
         await dashboardPage.selectFilterSource(DEFAULT_LOGS_SOURCE_NAME);

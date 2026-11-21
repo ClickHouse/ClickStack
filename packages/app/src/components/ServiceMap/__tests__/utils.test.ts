@@ -2,6 +2,7 @@ import router from 'next/router';
 import { SourceKind, TTraceSource } from '@hyperdx/common-utils/dist/types';
 
 import {
+  buildServiceMapErrorWhere,
   deriveDisplayMetrics,
   ERROR_RATE_HIGH,
   formatApproximateNumber,
@@ -11,6 +12,8 @@ import {
   getNodeSize,
   getRequestsPerSecond,
   getServiceMetricValue,
+  isServiceMapTooLarge,
+  MAX_SERVICE_MAP_NODES,
   navigateToTraceSearch,
   rawDurationToMs,
   SERVICE_MAP_METRIC_HUE,
@@ -24,6 +27,21 @@ jest.mock('next/router', () => ({
     push: jest.fn(),
   },
 }));
+
+describe('buildServiceMapErrorWhere', () => {
+  it('includes legacy STATUS_CODE_ERROR spans in the error drill-down', () => {
+    expect(
+      buildServiceMapErrorWhere({
+        serviceNameExpression: 'ServiceName',
+        serviceName: 'api',
+        spanKindExpression: 'SpanKind',
+        statusCodeExpression: 'StatusCode',
+      }),
+    ).toBe(
+      "ServiceName = 'api' AND SpanKind IN ('Server', 'Consumer') AND lower(StatusCode) IN ('error', 'status_code_error')",
+    );
+  });
+});
 
 describe('navigateToTraceSearch', () => {
   const mockSource: TTraceSource = {
@@ -479,7 +497,9 @@ describe('getServiceMetricValue', () => {
     overrides: Partial<ServiceAggregation['incomingRequests']> = {},
     outgoingRequests = 0,
   ): ServiceAggregation => ({
+    key: 'svc',
     serviceName: 'svc',
+    dimensions: [],
     incomingRequests: {
       totalRequests: 100,
       errorCount: 5,
@@ -675,5 +695,16 @@ describe('deriveDisplayMetrics', () => {
     );
     expect(m.requestsPerSecond).toBeUndefined();
     expect(m.latencyMs).toBeDefined();
+  });
+});
+
+describe('isServiceMapTooLarge', () => {
+  it('gates only maps above the node limit', () => {
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES, false)).toBe(false);
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES + 1, false)).toBe(true);
+  });
+
+  it('is lifted by "Show anyway"', () => {
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES + 1, true)).toBe(false);
   });
 });

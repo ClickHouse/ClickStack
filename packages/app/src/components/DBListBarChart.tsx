@@ -13,6 +13,7 @@ import type { NumberFormat } from '@/types';
 import { formatNumber, semanticKeyedColor } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -202,14 +203,12 @@ export default function DBListBarChart({
   errorVariant?: ChartErrorStateVariant;
 }) {
   const queriedConfig = omit(config, ['granularity']);
-  const { data, isLoading, isError, error } = useQueriedChartConfig(
-    queriedConfig,
-    {
+  const { data, isLoading, isPlaceholderData, isError, error } =
+    useQueriedChartConfig(queriedConfig, {
       placeholderData: (prev: any) => prev,
       queryKey: [queryKeyPrefix, queriedConfig],
       enabled,
-    },
-  );
+    });
 
   const { data: mvOptimizationData } =
     useMVOptimizationExplanation(queriedConfig);
@@ -279,24 +278,22 @@ export default function DBListBarChart({
       disableReactiveContainer
     >
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
-        <ListBar
-          data={data?.data ?? []}
-          columns={columns}
-          getRowSearchLink={getRowSearchLink}
-          hoverCardPosition={hoverCardPosition}
-          groupColumn={groupColumn}
-          valueColumn={valueColumn}
-        />
+        <div className={isPlaceholderData ? 'effect-pulse' : undefined}>
+          <ListBar
+            data={data?.data ?? []}
+            columns={columns}
+            getRowSearchLink={getRowSearchLink}
+            hoverCardPosition={hoverCardPosition}
+            groupColumn={groupColumn}
+            valueColumn={valueColumn}
+          />
+        </div>
       )}
     </ChartContainer>
   );

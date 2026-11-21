@@ -194,7 +194,7 @@ export const getAlertReferenceLines = ({
     return [
       <ReferenceArea
         key="not-between-lower"
-        y2={threshold}
+        y1={threshold}
         ifOverflow="extendDomain"
         fill="red"
         strokeWidth={0}
@@ -202,7 +202,7 @@ export const getAlertReferenceLines = ({
       />,
       <ReferenceArea
         key="not-between-upper"
-        y1={thresholdMax}
+        y2={thresholdMax}
         ifOverflow="extendDomain"
         fill="red"
         strokeWidth={0}
@@ -231,7 +231,7 @@ export const getAlertReferenceLines = ({
   ) {
     return (
       <ReferenceArea
-        y1={threshold}
+        y2={threshold}
         ifOverflow="extendDomain"
         fill="red"
         strokeWidth={0}
@@ -255,4 +255,34 @@ export const getAlertReferenceLines = ({
       strokeDasharray="3 3"
     />
   );
+};
+
+// Mirrors getAlertReferenceLines' own branching, so the values used to size
+// the Y-axis domain can never drift from what's actually drawn as a line.
+export const getAlertReferenceLineValues = ({
+  thresholdType,
+  threshold,
+  thresholdMax,
+}: {
+  thresholdType: AlertThresholdType;
+  threshold: number;
+  thresholdMax?: number;
+}): number[] => {
+  if (threshold == null) {
+    return [];
+  }
+  if (
+    (thresholdType === AlertThresholdType.BETWEEN ||
+      thresholdType === AlertThresholdType.NOT_BETWEEN) &&
+    thresholdMax != null
+  ) {
+    return [threshold, thresholdMax];
+  }
+  if (
+    thresholdType === AlertThresholdType.BELOW ||
+    thresholdType === AlertThresholdType.BELOW_OR_EQUAL
+  ) {
+    return [0, threshold];
+  }
+  return [threshold];
 };

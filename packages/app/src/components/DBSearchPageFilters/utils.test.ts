@@ -4,6 +4,8 @@ import {
   cleanClickHouseExpression,
   getFilterStateEntry,
   groupFacetsByBaseName,
+  listRequestedFacets,
+  sortNestedFacetKeys,
   toClickHouseKeyExpression,
   toQuotedClickHouseKeyExpression,
 } from './utils';
@@ -74,6 +76,118 @@ describe('groupFacetsByBaseName — dot/bracket de-duplication', () => {
     ]);
 
     expect(result.grouped[0].children).toHaveLength(2);
+  });
+
+  it('keeps a merged child loading while either entry is loading', () => {
+    const result = groupFacetsByBaseName([
+      { key: 'LogAttributes.time', value: ['a'] },
+      { key: "LogAttributes['time']", value: [], isLoading: true },
+    ]);
+
+    expect(result.grouped[0].children[0].isLoading).toBe(true);
+  });
+});
+
+describe('listRequestedFacets', () => {
+  const toUiKey = (sqlKey: string) => sqlKey.replace(/`/g, '');
+
+  it('lists keys without values as pending while fetching, in request order', () => {
+    const result = listRequestedFacets({
+      requestedKeys: ['ServiceName', 'SeverityText', "`my-map`['k']"],
+      arrived: [{ key: 'SeverityText', value: ['info'] }],
+      isFetching: true,
+      toUiKey,
+    });
+
+    expect(result.facets).toEqual([
+      { key: 'ServiceName', value: [] },
+      { key: 'SeverityText', value: ['info'] },
+      { key: "my-map['k']", value: [] },
+    ]);
+    expect(result.pendingKeys).toEqual(new Set(['ServiceName', "my-map['k']"]));
+  });
+
+  it('lists every requested key before any values arrive', () => {
+    const result = listRequestedFacets({
+      requestedKeys: ['ServiceName', 'SeverityText'],
+      arrived: undefined,
+      isFetching: true,
+      toUiKey,
+    });
+
+    expect(result.facets).toEqual([
+      { key: 'ServiceName', value: [] },
+      { key: 'SeverityText', value: [] },
+    ]);
+    expect(result.pendingKeys.size).toBe(2);
+  });
+
+  it('drops keys that never got values once fetching ends', () => {
+    const result = listRequestedFacets({
+      requestedKeys: ['ServiceName', 'SeverityText'],
+      arrived: [{ key: 'SeverityText', value: ['info'] }],
+      isFetching: false,
+      toUiKey,
+    });
+
+    expect(result.facets).toEqual([{ key: 'SeverityText', value: ['info'] }]);
+    expect(result.pendingKeys.size).toBe(0);
+  });
+
+  it('appends results the request did not name, after the requested keys', () => {
+    const result = listRequestedFacets({
+      requestedKeys: ['ServiceName'],
+      arrived: [
+        { key: 'StaleKey', value: ['old'] },
+        { key: 'ServiceName', value: ['api'] },
+      ],
+      isFetching: false,
+      toUiKey,
+    });
+
+    expect(result.facets).toEqual([
+      { key: 'ServiceName', value: ['api'] },
+      { key: 'StaleKey', value: ['old'] },
+    ]);
+  });
+
+  it('returns no facets when nothing has arrived and nothing is fetching', () => {
+    const result = listRequestedFacets({
+      requestedKeys: ['ServiceName'],
+      arrived: undefined,
+      isFetching: false,
+      toUiKey,
+    });
+
+    expect(result.facets).toBeUndefined();
+  });
+});
+
+describe('sortNestedFacetKeys', () => {
+  it('sorts keys A–Z within each nested group without reordering groups or other facets', () => {
+    const facets = [
+      'SeverityText',
+      "ResourceAttributes['service.name']",
+      "LogAttributes['user.id']",
+      'ServiceName',
+      "ResourceAttributes['host.name']",
+      "LogAttributes['attr10']",
+      'LogAttributes.http.method',
+      "LogAttributes['attr9']",
+    ].map(key => ({ key }));
+
+    sortNestedFacetKeys(facets);
+
+    expect(facets.map(f => f.key)).toEqual([
+      'SeverityText',
+      'ServiceName',
+      "ResourceAttributes['host.name']",
+      "ResourceAttributes['service.name']",
+      "LogAttributes['attr9']",
+      "LogAttributes['attr10']",
+      'LogAttributes.http.method',
+      "LogAttributes['user.id']",
+    ]);
   });
 });
 
@@ -211,6 +325,7 @@ describe('toClickHouseKeyExpression', () => {
 });
 
 describe('toQuotedClickHouseKeyExpression', () => {
+  const NO_JSON_COLUMNS = new Set<string>();
   const knownColumns = new Set([
     'ServiceName',
     'my column',
@@ -220,32 +335,56 @@ describe('toQuotedClickHouseKeyExpression', () => {
   ]);
 
   it('leaves a valid bare column unchanged', () => {
-    expect(toQuotedClickHouseKeyExpression('ServiceName', knownColumns)).toBe(
-      'ServiceName',
-    );
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'ServiceName',
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
+    ).toBe('ServiceName');
   });
 
   it('quotes a column only when it needs it', () => {
-    expect(toQuotedClickHouseKeyExpression('service-name', knownColumns)).toBe(
-      '`service-name`',
-    );
-    expect(toQuotedClickHouseKeyExpression('my column', knownColumns)).toBe(
-      '`my column`',
-    );
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'service-name',
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
+    ).toBe('`service-name`');
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'my column',
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
+    ).toBe('`my column`');
   });
 
   it('converts a dot-form map sub-key to bracket form (valid root unquoted)', () => {
     expect(
-      toQuotedClickHouseKeyExpression('LogAttributes.host', knownColumns),
+      toQuotedClickHouseKeyExpression(
+        'LogAttributes.host',
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
     ).toBe("LogAttributes['host']");
   });
 
   it('quotes only the root of a bracket map access that needs it', () => {
-    expect(toQuotedClickHouseKeyExpression("my-map['k']", knownColumns)).toBe(
-      "`my-map`['k']",
-    );
     expect(
-      toQuotedClickHouseKeyExpression("LogAttributes['k']", knownColumns),
+      toQuotedClickHouseKeyExpression(
+        "my-map['k']",
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
+    ).toBe("`my-map`['k']");
+    expect(
+      toQuotedClickHouseKeyExpression(
+        "LogAttributes['k']",
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
     ).toBe("LogAttributes['k']");
   });
 
@@ -253,18 +392,31 @@ describe('toQuotedClickHouseKeyExpression', () => {
     // Backtick-form JSON paths short-circuit toClickHouseKeyExpression, so they
     // reach the dotted-segment branch: already-quoted segments are preserved.
     expect(
-      toQuotedClickHouseKeyExpression('Body.`json`.`field`', knownColumns),
+      toQuotedClickHouseKeyExpression(
+        'Body.`json`.`field`',
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
     ).toBe('Body.`json`.`field`');
   });
 
   it('is idempotent on an already-quoted key', () => {
     expect(
-      toQuotedClickHouseKeyExpression('`service-name`', knownColumns),
+      toQuotedClickHouseKeyExpression(
+        '`service-name`',
+        knownColumns,
+        NO_JSON_COLUMNS,
+      ),
     ).toBe('`service-name`');
     expect(
       toQuotedClickHouseKeyExpression(
-        toQuotedClickHouseKeyExpression('service-name', knownColumns),
+        toQuotedClickHouseKeyExpression(
+          'service-name',
+          knownColumns,
+          NO_JSON_COLUMNS,
+        ),
         new Set(['service-name']),
+        NO_JSON_COLUMNS,
       ),
     ).toBe('`service-name`');
   });
@@ -277,6 +429,7 @@ describe('toQuotedClickHouseKeyExpression', () => {
       toQuotedClickHouseKeyExpression(
         "JSONExtractString(Body, 'app.user.currency')",
         new Set(['Body']),
+        NO_JSON_COLUMNS,
       ),
     ).toBe("JSONExtractString(Body, 'app.user.currency')");
   });
@@ -288,36 +441,120 @@ describe('toQuotedClickHouseKeyExpression', () => {
         toQuotedClickHouseKeyExpression(
           '__hdx_materialized_k8s.cluster.name',
           cols,
+          NO_JSON_COLUMNS,
         ),
       ).toBe('`__hdx_materialized_k8s.cluster.name`');
     });
 
     it('leaves a valid flat column name unquoted', () => {
       const cols = new Set(['ServiceName']);
-      expect(toQuotedClickHouseKeyExpression('ServiceName', cols)).toBe(
-        'ServiceName',
-      );
+      expect(
+        toQuotedClickHouseKeyExpression('ServiceName', cols, NO_JSON_COLUMNS),
+      ).toBe('ServiceName');
     });
 
     it('still treats a dotted key as Map access when it is NOT a known column', () => {
       const cols = new Set(['LogAttributes']);
-      expect(toQuotedClickHouseKeyExpression('LogAttributes.host', cols)).toBe(
-        "LogAttributes['host']",
-      );
+      expect(
+        toQuotedClickHouseKeyExpression(
+          'LogAttributes.host',
+          cols,
+          NO_JSON_COLUMNS,
+        ),
+      ).toBe("LogAttributes['host']");
     });
 
     it('does not affect bracket-form map access for a known map column', () => {
       const cols = new Set(['LogAttributes']);
       expect(
-        toQuotedClickHouseKeyExpression("LogAttributes['host']", cols),
+        toQuotedClickHouseKeyExpression(
+          "LogAttributes['host']",
+          cols,
+          NO_JSON_COLUMNS,
+        ),
       ).toBe("LogAttributes['host']");
     });
 
     it('does not affect bracket-form map access with a dot in the key', () => {
       const cols = new Set(['LogAttributes']);
       expect(
-        toQuotedClickHouseKeyExpression("LogAttributes['host.name']", cols),
+        toQuotedClickHouseKeyExpression(
+          "LogAttributes['host.name']",
+          cols,
+          NO_JSON_COLUMNS,
+        ),
       ).toBe("LogAttributes['host.name']");
     });
+  });
+});
+
+describe('toQuotedClickHouseKeyExpression with JSON columns', () => {
+  const knownColumns = new Set(['message', 'LogAttributes']);
+  const jsonColumns = new Set(['message']);
+
+  it('keeps a dotted key under a JSON column in JSON dot access, never Map brackets', () => {
+    // `message` is a native JSON column; `message['email']` makes ClickHouse
+    // fail with "First argument for function 'arrayElement' must be array".
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.email',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`email`)');
+  });
+
+  it('splits a nested JSON path into one quoted segment per level', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.owner.profile.contact.email',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`owner`.`profile`.`contact`.`email`)');
+  });
+
+  // The row panel writes a filter on a value inside a JSON array as
+  // ``col.`events`[1].`id` ``. After the state cleans the backticks, the
+  // subscript must survive re-escaping as a subscript, not as part of a name.
+  it('keeps array subscripts in a JSON path as subscripts', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.events[1].detail.parameters[2].value',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`events`[1].`detail`.`parameters`[2].`value`)');
+  });
+
+  it('keeps chained array subscripts', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'message.grid[1][2].x',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe('toString(`message`.`grid`[1][2].`x`)');
+  });
+
+  it('is idempotent on a key already in JSON form', () => {
+    const once = toQuotedClickHouseKeyExpression(
+      'message.email',
+      knownColumns,
+      jsonColumns,
+    );
+    expect(
+      toQuotedClickHouseKeyExpression(once, knownColumns, jsonColumns),
+    ).toBe(once);
+  });
+
+  it('still uses bracket access for a Map column', () => {
+    expect(
+      toQuotedClickHouseKeyExpression(
+        'LogAttributes.host',
+        knownColumns,
+        jsonColumns,
+      ),
+    ).toBe("LogAttributes['host']");
   });
 });

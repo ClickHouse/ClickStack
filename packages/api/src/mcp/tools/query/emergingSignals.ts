@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
+import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
-import { trimToolResponse } from '@/utils/trimToolResponse';
+import { type Reduction, trimToolResponse } from '@/utils/trimToolResponse';
 
 import { parseTimeRange } from './helpers';
 import { mineWindowPatterns, normalizeTemplate } from './runEventPatterns';
@@ -83,7 +84,7 @@ const emergingSignalsSchema = z.object({
   currentEndTime: z
     .string()
     .describe(
-      'End of the CURRENT / report window (ISO 8601). Required — pass the ' +
+      'End of the CURRENT / report window (ISO 8601). Pass the ' +
         'current timestamp for a window ending now.',
     ),
   baselineStartTime: z
@@ -104,7 +105,7 @@ const emergingSignalsSchema = z.object({
     .max(25_000)
     .optional()
     .default(10_000)
-    .describe('Rows sampled per window for pattern mining. Default 10000.'),
+    .describe('Rows sampled from each window for pattern mining.'),
   topN: z
     .number()
     .min(1)
@@ -112,7 +113,7 @@ const emergingSignalsSchema = z.object({
     .optional()
     .default(20)
     .describe(
-      'Max emerging + disappeared patterns to return each. Default 20.',
+      'Maximum patterns returned in each list (emerging and disappeared).',
     ),
   minShareRatio: z
     .number()
@@ -122,12 +123,17 @@ const emergingSignalsSchema = z.object({
     .describe(
       'How many times more frequent (by share of window) a pattern must be in ' +
         'the current window vs baseline to count as EMERGING (and vice-versa ' +
-        'for DISAPPEARED). Default 3× — a pattern must have tripled its share to ' +
-        'qualify as a shift, not just noise.',
+        'for DISAPPEARED). At 3, a pattern must have tripled its share to ' +
+        'qualify as a shift rather than noise.',
     ),
 });
 
 // ─── Tool registration ───────────────────────────────────────────────────────
+
+export const EMERGING_SIGNALS_REDUCTIONS: Reduction[] = [
+  { path: 'emerging[].pattern', maxChars: 2000 },
+  { path: 'disappeared[].pattern', maxChars: 2000 },
+];
 
 export function registerEmergingSignals({
   context,
@@ -139,7 +145,7 @@ export function registerEmergingSignals({
     'clickstack_emerging_signals',
     {
       title: 'Emerging & Disappeared Signals',
-      annotations: { readOnlyHint: true },
+      annotations: READ_ONLY_TOOL,
       description:
         'Detect what is NEW or GONE between an earlier baseline window and a ' +
         'current window — log/event patterns that emerged, ramped up, or ' +
@@ -341,7 +347,13 @@ export function registerEmergingSignals({
           'the threshold — a valid finding.',
       };
 
-      const { data, isTrimmed } = trimToolResponse(output);
+      const {
+        data,
+        isTrimmed,
+        notes: trimNotes,
+      } = trimToolResponse(output, undefined, {
+        reductions: EMERGING_SIGNALS_REDUCTIONS,
+      });
       return {
         content: [
           {
@@ -351,6 +363,7 @@ export function registerEmergingSignals({
                 ? {
                     ...data,
                     note: 'Trimmed for context size — lower topN or narrow windows.',
+                    trimNotes,
                   }
                 : data,
               null,

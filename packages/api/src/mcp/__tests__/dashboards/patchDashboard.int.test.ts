@@ -823,6 +823,77 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
     expect(tile.config.seriesLimit).toBe(3);
   });
 
+  it('should patch a series heatmap tile without losing its mode', async () => {
+    const logSource = await Source.create({
+      kind: SourceKind.Log,
+      team: ctx.team._id,
+      from: { databaseName: DEFAULT_DATABASE, tableName: 'otel_logs' },
+      timestampValueExpression: 'Timestamp',
+      connection: ctx.connection._id,
+      name: 'Logs',
+    });
+    const sourceId = logSource._id.toString();
+    const createResult = await callTool(
+      ctx.client!,
+      'clickstack_save_dashboard',
+      {
+        name: 'Series Heatmap Patch Test',
+        tiles: [
+          {
+            name: 'Original',
+            config: {
+              displayType: 'heatmap',
+              heatmapMode: 'series',
+              sourceId,
+              select: [{ aggFn: 'count' }],
+              groupBy: 'ServiceName',
+            },
+          },
+        ],
+      },
+    );
+    expect(createResult.isError).toBeFalsy();
+    const created = JSON.parse(getFirstText(createResult));
+    const tileId = created.tiles[0].id;
+
+    // A valueExpression also satisfies the distribution schema, so this
+    // guards the patch union order.
+    const patchedConfig = {
+      displayType: 'heatmap',
+      heatmapMode: 'series',
+      sourceId,
+      select: [
+        {
+          aggFn: 'avg',
+          valueExpression: 'Duration',
+          where: 'SeverityText:error',
+          whereLanguage: 'lucene',
+        },
+      ],
+      groupBy: 'SeverityText',
+    };
+    const patchResult = await callTool(
+      ctx.client!,
+      'clickstack_patch_dashboard',
+      {
+        dashboardId: created.id,
+        tileId,
+        tile: { name: 'Patched', config: patchedConfig },
+      },
+    );
+    expect(patchResult.isError).toBeFalsy();
+
+    const getResult = await callTool(
+      ctx.client!,
+      'clickstack_get_dashboard_tile',
+      { dashboardId: created.id, tileId },
+    );
+    expect(getResult.isError).toBeFalsy();
+    const tile = JSON.parse(getFirstText(getResult));
+    expect(tile.name).toBe('Patched');
+    expect(tile.config).toMatchObject(patchedConfig);
+  });
+
   describe('raw SQL macro warnings', () => {
     // Patching a tile to a macro-less raw SQL config succeeds (non-blocking)
     // but surfaces an advisory `warnings` array on the response.
@@ -1327,6 +1398,88 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
       const tile = JSON.parse(getFirstText(getResult));
       expect(tile.config.formulas).toEqual(formulas);
       expect(tile.config.showOperandSeries).toBe(false);
+    });
+  });
+
+  describe('reference variables', () => {
+    const createDashboard = () =>
+      new Dashboard({
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            id: 'tile',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 3,
+            config: {
+              name: 'Tile',
+              source: ctx.traceSource._id.toString(),
+              displayType: 'line',
+              select: [{ aggFn: 'count', valueExpression: '' }],
+              where: '',
+            },
+          },
+        ],
+        filters: [
+          {
+            id: 'ds-filter',
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+            minSelections: 1,
+            maxSelections: 1,
+            isBroadcastEnabled: false,
+            isVariableEnabled: true,
+          },
+        ],
+        team: ctx.team._id,
+      }).save();
+
+    const patchSource = (dashboardId: string, sourceId: string) =>
+      callTool(ctx.client!, 'clickstack_patch_dashboard', {
+        dashboardId,
+        tileId: 'tile',
+        tile: {
+          name: 'Tile',
+          config: {
+            displayType: 'line',
+            sourceId,
+            select: [{ aggFn: 'count' }],
+          },
+        },
+      });
+
+    it('patches a tile to read from a declared data source variable', async () => {
+      const dashboard = await createDashboard();
+
+      const result = await patchSource(dashboard._id.toString(), '$traces');
+
+      expect(result.isError).toBeFalsy();
+      const stored = await Dashboard.findById(dashboard._id).lean();
+      expect(stored?.tiles[0].config).toMatchObject({ source: '$traces' });
+    });
+
+    it('rejects a patch referencing an undeclared variable', async () => {
+      const dashboard = await createDashboard();
+
+      const result = await patchSource(dashboard._id.toString(), '$nope');
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain(
+        'does not name a data source variable',
+      );
+    });
+
+    it('accepts a patch that keeps a reference the dashboard no longer satisfies', async () => {
+      const dashboard = await createDashboard();
+      await patchSource(dashboard._id.toString(), '$traces');
+      await Dashboard.updateOne({ _id: dashboard._id }, { filters: [] });
+
+      const result = await patchSource(dashboard._id.toString(), '$traces');
+
+      expect(result.isError).toBeFalsy();
     });
   });
 });

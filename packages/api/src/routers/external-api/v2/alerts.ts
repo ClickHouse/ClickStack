@@ -8,9 +8,13 @@ import {
   deleteAlert,
   getAlertsWithDisplayRefs,
   getAlertWithDisplayRefs,
+  populateAlertDisplayRefs,
+  silenceAlert,
+  unsilenceAlert,
   updateAlert,
   validateAlertInput,
 } from '@/controllers/alerts';
+import { alertsFilterShape, buildAlertsFilter } from '@/controllers/alertsPage';
 import { AlertSource } from '@/models/alert';
 import {
   convertExternalAlertChartConfigToInternal,
@@ -21,15 +25,12 @@ import {
   validateRequestWithEnhancedErrors as validateRequest,
 } from '@/utils/enhancedErrors';
 import { translateAlertDocumentToExternalAlert } from '@/utils/externalApi';
-import {
-  getPagination,
-  paginationMeta,
-  paginationQuerySchema,
-} from '@/utils/pagination';
+import { paginationMeta, paginationQuerySchema } from '@/utils/pagination';
 import {
   alertSchema,
   ExternalAlertInput,
   InternalAlertInput,
+  mutedUntilSchema,
   objectIdSchema,
 } from '@/utils/zod';
 
@@ -110,6 +111,10 @@ function toInternalAlertInput(body: ExternalAlertInput): InternalAlertInput {
  *       allOf:
  *         - $ref: '#/components/schemas/BarChartConfig'
  *         - $ref: '#/components/schemas/AlertChartConfigOverlay'
+ *     AlertStackedLineChartConfig:
+ *       allOf:
+ *         - $ref: '#/components/schemas/StackedLineChartConfig'
+ *         - $ref: '#/components/schemas/AlertChartConfigOverlay'
  *     AlertNumberChartConfig:
  *       allOf:
  *         - $ref: '#/components/schemas/NumberChartConfig'
@@ -119,14 +124,15 @@ function toInternalAlertInput(body: ExternalAlertInput): InternalAlertInput {
  *         The chart configuration an inline alert evaluates, in the same
  *         dialect as dashboard tile configs plus the alert-only fields in
  *         AlertChartConfigOverlay. Only the display types the alert evaluator
- *         supports are accepted: line, stacked_bar, and number, in both
- *         builder and Raw SQL (configType "sql") variants. Raw SQL templates
- *         must reference the evaluation window via the time-filter and
- *         interval macros (e.g. $__timeFilter and $__timeInterval), and the
+ *         supports are accepted: line, stacked_bar, stacked_line, and number,
+ *         in both builder and Raw SQL (configType "sql") variants. Raw SQL
+ *         templates must reference the evaluation window via the time-filter
+ *         and interval macros (e.g. $__timeFilter and $__timeInterval), and the
  *         referenced source/connection must belong to the team.
  *       oneOf:
  *         - $ref: '#/components/schemas/AlertLineChartConfig'
  *         - $ref: '#/components/schemas/AlertBarChartConfig'
+ *         - $ref: '#/components/schemas/AlertStackedLineChartConfig'
  *         - $ref: '#/components/schemas/AlertNumberChartConfig'
  *     AlertState:
  *       type: string
@@ -545,6 +551,8 @@ router.get(
  *       capped at `limit` (default and maximum 1000). When more records exist
  *       than are returned, `meta.total` exceeds `data.length`; clients with
  *       large collections must page with `limit`/`offset` to retrieve them all.
+ *       Optional filters narrow the result set, and `meta.total` counts only
+ *       the matching alerts.
  *     operationId: listAlerts
  *     tags: [Alerts]
  *     parameters:
@@ -565,6 +573,50 @@ router.get(
  *           minimum: 0
  *           default: 0
  *         description: Number of alerts to skip before returning results.
+ *       - name: tag
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: array
+ *           items:
+ *             type: string
+ *             maxLength: 32
+ *           maxItems: 50
+ *         description: >-
+ *           Only return alerts that have any of the given tags. Repeat the
+ *           parameter to pass several tags. Matches the tags stored on the
+ *           alert, not tags inherited from the linked dashboard or saved
+ *           search.
+ *       - name: search
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: string
+ *           maxLength: 512
+ *         description: >-
+ *           Only return alerts whose display name contains this text
+ *           (case-insensitive). Matches the display name stored on the alert,
+ *           not a name derived from the linked dashboard or saved search.
+ *       - name: source
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/AlertSource'
+ *         description: >-
+ *           Only return alerts of any of the given sources. Repeat the
+ *           parameter to pass several sources.
+ *       - name: state
+ *         in: query
+ *         required: false
+ *         schema:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/AlertState'
+ *         description: >-
+ *           Only return alerts in any of the given states. Repeat the
+ *           parameter to pass several states.
  *     responses:
  *       '200':
  *         description: Successfully retrieved alerts
@@ -597,6 +649,12 @@ router.get(
  *                     total: 1
  *                     limit: 1000
  *                     offset: 0
+ *       '400':
+ *         description: Invalid query parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  *       '401':
  *         description: Unauthorized
  *         content:
@@ -612,9 +670,11 @@ router.get(
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
+const listAlertsQuerySchema = paginationQuerySchema.extend(alertsFilterShape);
+
 router.get(
   '/',
-  processRequest({ query: paginationQuerySchema }),
+  processRequest({ query: listAlertsQuerySchema }),
   async (req, res, next) => {
     try {
       const teamId = req.user?.team;
@@ -622,10 +682,13 @@ router.get(
         return res.status(403).json({ message: 'Forbidden' });
       }
 
-      const { limit, offset } = getPagination(req.query);
+      const { limit, offset, ...filterParams } = listAlertsQuerySchema.parse(
+        req.query ?? {},
+      );
+      const filter = buildAlertsFilter(teamId, filterParams);
       const [alerts, total] = await Promise.all([
-        getAlertsWithDisplayRefs(teamId, { limit, offset }),
-        countAlerts(teamId),
+        getAlertsWithDisplayRefs(teamId, { limit, offset }, filter),
+        countAlerts(teamId, filter),
       ]);
 
       // Surface the full count at the HTTP layer too, so a client that reads
@@ -934,6 +997,183 @@ router.delete(
         return res.status(404).json({ message: 'Alert not found' });
       }
       res.json({});
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v2/alerts/{id}/silenced:
+ *   post:
+ *     summary: Silence Alert
+ *     description: Silences an alert until the given time. Notifications are suppressed while the alert is silenced.
+ *     operationId: silenceAlert
+ *     tags: [Alerts]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Alert ID
+ *         example: "65f5e4a3b9e77c001a123456"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - mutedUntil
+ *             properties:
+ *               mutedUntil:
+ *                 type: string
+ *                 format: date-time
+ *                 description: ISO 8601 timestamp, in the future, until which the alert is silenced.
+ *                 example: "2026-01-01T00:00:00.000Z"
+ *     responses:
+ *       '200':
+ *         description: Successfully silenced alert
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AlertResponseEnvelope'
+ *       '400':
+ *         description: Invalid request, such as a mutedUntil in the past
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '404':
+ *         description: Alert not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.post(
+  '/:id/silenced',
+  processRequest({
+    body: z.object({
+      mutedUntil: mutedUntilSchema,
+    }),
+    params: z.object({
+      id: objectIdSchema,
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      const userId = req.user?._id;
+      if (teamId == null || userId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const updatedAlert = await silenceAlert(
+        req.params.id,
+        teamId,
+        userId,
+        new Date(req.body.mutedUntil),
+      );
+      if (!updatedAlert) {
+        return res.status(404).json({ message: 'Alert not found' });
+      }
+      const alert = await populateAlertDisplayRefs(updatedAlert);
+
+      res.json({
+        data: translateAlertDocumentToExternalAlertWithChartConfig(alert),
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /api/v2/alerts/{id}/silenced:
+ *   delete:
+ *     summary: Unsilence Alert
+ *     description: Clears the silence on an alert so notifications resume
+ *     operationId: unsilenceAlert
+ *     tags: [Alerts]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Alert ID
+ *         example: "65f5e4a3b9e77c001a123456"
+ *     responses:
+ *       '200':
+ *         description: Successfully unsilenced alert
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AlertResponseEnvelope'
+ *       '400':
+ *         description: Invalid request, such as a malformed alert ID
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '401':
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '403':
+ *         description: Forbidden
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       '404':
+ *         description: Alert not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.delete(
+  '/:id/silenced',
+  validateRequest({
+    params: z.object({
+      id: objectIdSchema,
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const teamId = req.user?.team;
+      if (teamId == null) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      const updatedAlert = await unsilenceAlert(req.params.id, teamId);
+      if (!updatedAlert) {
+        return res.status(404).json({ message: 'Alert not found' });
+      }
+      const alert = await populateAlertDisplayRefs(updatedAlert);
+
+      res.json({
+        data: translateAlertDocumentToExternalAlertWithChartConfig(alert),
+      });
     } catch (e) {
       next(e);
     }

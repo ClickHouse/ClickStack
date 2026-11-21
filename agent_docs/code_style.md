@@ -173,18 +173,18 @@ The project uses Mantine UI with **custom variants** defined in `packages/app/sr
 </ActionIcon>
 ```
 
-This pattern cannot be enforced by ESLint and requires manual code review.
+This pattern cannot be enforced by the linter and requires manual code review.
 
 ### Semantic component variants (Alert / Text / danger controls)
 
-We ship **themed semantic variants** for `Alert`, `Text`, `Button`, and `ActionIcon` so callouts and status text are token-driven and consistent across the HyperDX and ClickStack brands (and light/dark). **Prefer these over raw Mantine palette colors** (`color="yellow"`, `color="red"`, `c="green"`, etc.).
+We ship **semantic variants** for `Alert`, `Text`, `Button`, and `ActionIcon` so callouts and status text are token-driven in both light and dark. **Prefer these over raw Mantine palette colors** (`color="yellow"`, `color="red"`, `c="green"`, etc.).
 
-The variant → token mapping is centralized in `packages/app/src/theme/themes/semanticVariants.ts` (the single source of truth, consumed by both brand themes' `mantineTheme.ts`). See the Storybook stories `Components/Alert` (interactive `Playground`) and `Design tokens/Semantic variants` for the full visual matrix.
+The variant → token mapping is centralized in `packages/app/src/theme/semanticVariants.ts` (the single source of truth, consumed by `theme/mantineTheme.ts`). See the Storybook stories `Components/Alert` (interactive `Playground`) and `Design tokens/Semantic variants` for the full visual matrix.
 
 **`Alert`** — `info` | `success` | `warning` | `danger`. Renders a tinted `-subtle` background with the title, icon, **and body text** in the semantic color token:
 
 ```tsx
-// ✅ token-driven, works in both brands + light/dark, meets WCAG AA
+// ✅ token-driven, works in light and dark, meets WCAG AA
 <Alert variant="warning" title="Heads up">This may take a while.</Alert>
 <Alert variant="danger" title="Failed">Could not save the alert.</Alert>
 
@@ -284,6 +284,14 @@ the copy). Exercise the real dialog in E2E instead.
 ```
 
 **Title copy**: Treat `title` as a short headline (like `Title` in the UI). Do **not** end it with a period. Use `description` for full sentences, which should use normal punctuation including a trailing period when appropriate. Match listing pages (e.g. dashboards and saved searches use parallel phrasing such as “No matching … yet” / “No … yet” without dots).
+
+### Object names: use `InlineNameInput` (REQUIRED)
+
+**Name or rename a dashboard, saved search, tile, or any other user-created
+object with `InlineNameInput` (`@/components/InlineNameInput/InlineNameInput`).**
+Do not build a pencil-button edit mode, a bordered name `TextInput` in a
+header, or a "Name" field inside a save modal. See
+[naming_objects.md](naming_objects.md) for which variant to use.
 
 ### Code snippets (REQUIRED)
 
@@ -390,13 +398,39 @@ render those verbatim.
 
 ## Semantic design tokens (prefer over raw Mantine colors)
 
-The UI is built with **Mantine components**, but **colors and surfaces** should follow the **semantic CSS custom properties** in our themes (`--color-*`, etc.), not ad-hoc Mantine palette values. Those tokens are defined in `packages/app/src/theme/themes/**/_tokens.scss`, align with a **Click UI**–style system, and keep HyperDX and ClickStack visually consistent. They are the path toward a shared design system even while Mantine remains the component layer.
+The UI is built with **Mantine components**, but **colors and surfaces** should follow the **semantic CSS custom properties** in our themes (`--color-*`, etc.), not ad-hoc Mantine palette values. Those tokens are defined in `packages/app/src/theme/_tokens.scss`, align with a **Click UI**–style system, and are shared by every deployment. They are the path toward a shared design system even while Mantine remains the component layer.
 
 - **Do**: Use Mantine for layout, components, and spacing; use **semantic tokens** for themed backgrounds, text colors, borders, and states (e.g. `style={{ color: 'var(--color-text-muted)' }}` or `style={{ border: '1px solid var(--color-border)' }}`).
 - **Do not**: Rely on raw Mantine color props for app chrome and content when a semantic token exists — e.g. `c="gray.5"`, `bg="dark.7"`, or arbitrary `color="blue.4"` for surfaces that should match the rest of the product.
-- **Reference**: `packages/app/src/theme/semanticColorsGrouped.ts` (token names), theme SCSS under `packages/app/src/theme/themes/`, and Storybook (`SemanticColors` and related theme stories) for a visual map.
+- **Reference**: `packages/app/src/theme/semanticColorsGrouped.ts` (token names), `packages/app/src/theme/_tokens.scss`, and Storybook (`SemanticColors` and related theme stories) for a visual map.
 
 Mantine theme overrides in `packages/app/src/theme/**` may map Mantine’s scale to our palette; that does not replace using **`var(--color-...)`** in new styling where you need explicit color control.
+
+## Click UI (incremental adoption)
+
+`@clickhouse/click-ui` is a dependency of `packages/app`. `ThemeWrapper` mounts
+`ClickUIProvider` inside `MantineProvider` with `persistTheme={false}`, so it
+follows the app color mode and never writes its own theme to localStorage.
+Storybook and `renderWithMantine` in tests get the provider for free.
+
+- **Do**: Prefer a click-ui component over a new Mantine one when click-ui has
+  an equivalent for a simple primitive (`Link`, `Text`, `Title`, `Container`,
+  `Badge`, `Separator`, `Spacer`, `Icon`). Import from `@clickhouse/click-ui`.
+- **Do not**: Mix both libraries inside one small component, and do not
+  replace working Mantine code outside the change you were asked to make.
+- **`Container` is not a `Box`**: click-ui has no plain-wrapper equivalent of
+  Mantine `Box`. `Container` is a flex layout, closer to `Group` or `Stack`. It
+  defaults to `display="flex"`, `orientation="horizontal"`, and
+  `alignItems="center"`, so a direct swap puts the children in one row. It also
+  has no `m`/`p`/`w`-style props, only `gap` and `padding` tokens. To replace a
+  `Box` that only carries attributes such as `id` or `data-testid`, use a plain
+  HTML element. To replace a `Box` that uses Mantine style props, keep the
+  `Box`, or set `Container` props to match the layout and check it visually.
+- **Styling**: click-ui styles live in the `clickui` CSS cascade layer, so any
+  unlayered app or Mantine rule wins over them. Override `--click-*` variables
+  outside the layer if a token must change.
+- **First use**: `packages/app/src/components/ContactSupportText.tsx` and the
+  `Click UI/Link` story in `packages/app/src/stories/ClickUI.stories.tsx`.
 
 **Chart and visualization colors are a separate, more specific contract** — they have their own categorical, semantic, and heatmap palettes wired through `packages/app/src/utils.ts` helpers. Don't hard-code series colors or reuse `--color-text-*` for charts. See [`data_viz_colors.md`](./data_viz_colors.md) before touching anything that renders data.
 

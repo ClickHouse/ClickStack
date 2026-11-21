@@ -886,7 +886,6 @@ describe('searchFilters', () => {
 
       const query = filtersToQuery(originalFilters, { dateTimeColumns });
       // Sanity: produces the DateTime (non-64) wrapper.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       expect((query[0] as ConditionFilter).condition).toBe(
         "TimestampTime IN (parseDateTimeBestEffort('2026-06-17T11:56:41Z'))",
       );
@@ -930,7 +929,6 @@ describe('searchFilters', () => {
       const query = filtersToQuery(originalFilters, {
         dateTimeColumns: aliasColumns,
       });
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       expect((query[0] as ConditionFilter).condition).toBe(
         "time IN (parseDateTime64BestEffort('2026-06-18T10:33:55Z', 9))",
       );
@@ -957,7 +955,6 @@ describe('searchFilters', () => {
       const query = filtersToQuery(originalFilters, {
         dateTimeColumns: exprColumns,
       });
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       expect((query[0] as ConditionFilter).condition).toBe(
         "toDate(TimestampTime) IN (toDate('2026-06-18'))",
       );
@@ -973,6 +970,7 @@ describe('searchFilters', () => {
           searchQuery: [],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -993,6 +991,142 @@ describe('searchFilters', () => {
       ]);
     });
 
+    it('keeps an existing JSON-column filter in JSON form when another filter is added', () => {
+      onFilterChange.mockClear();
+      const { result } = renderHook(() =>
+        useSearchPageFilterState({
+          // An earlier chip on a key inside the JSON column `message`, as
+          // persisted in the URL.
+          searchQuery: [
+            {
+              type: 'sql',
+              condition: "toString(`message`.`email`) IN ('user@example.test')",
+            },
+          ],
+          onFilterChange,
+          knownColumns: new Set(['message', 'source_name']),
+          jsonColumns: new Set(['message']),
+        }),
+      );
+
+      act(() => {
+        result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
+      });
+
+      const conditions = (
+        onFilterChange.mock.lastCall![0] as ConditionFilter[]
+      ).map(f => f.condition);
+      // Re-persisting must not rewrite the existing key into Map bracket form
+      // (`message['email']`), which ClickHouse rejects for a JSON column.
+      expect(conditions).toContain(
+        "toString(`message`.`email`) IN ('user@example.test')",
+      );
+      expect(conditions.some(c => c.includes("['"))).toBe(false);
+    });
+
+    it('keeps an existing JSON array-path filter intact when another filter is added', () => {
+      onFilterChange.mockClear();
+      const arrayPathCondition =
+        "toString(`message`.`events`[1].`detail`.`parameters`[2].`value`) IN ('EMAIL_SERVICE')";
+      const { result } = renderHook(() =>
+        useSearchPageFilterState({
+          searchQuery: [{ type: 'sql', condition: arrayPathCondition }],
+          onFilterChange,
+          knownColumns: new Set(['message', 'source_name']),
+          jsonColumns: new Set(['message']),
+        }),
+      );
+
+      act(() => {
+        result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
+      });
+
+      const conditions = (
+        onFilterChange.mock.lastCall![0] as ConditionFilter[]
+      ).map(f => f.condition);
+      expect(conditions).toContain(arrayPathCondition);
+    });
+
+    it('keeps preserved filters through updates until clear all', () => {
+      onFilterChange.mockClear();
+      const pattern = { type: 'sql' as const, condition: "match(Body, '^a$')" };
+      const other = { type: 'sql' as const, condition: "match(Body, '^b$')" };
+      const { result } = renderHook(() =>
+        useSearchPageFilterState({
+          searchQuery: [pattern, other],
+          onFilterChange,
+          knownColumns: new Set(),
+          jsonColumns: new Set(),
+          isPreservedFilter: f => f === pattern,
+        }),
+      );
+
+      act(() => {
+        result.current.setFilterValue('service', 'app');
+      });
+      expect(onFilterChange).toHaveBeenLastCalledWith([
+        { type: 'sql', condition: "service IN ('app')" },
+        pattern,
+      ]);
+
+      act(() => {
+        result.current.clearAllFilters();
+      });
+      expect(onFilterChange).toHaveBeenLastCalledWith([]);
+    });
+
+    it('without isPreservedFilter, still drops other SQL filters on update', () => {
+      onFilterChange.mockClear();
+      const service = { type: 'sql' as const, condition: "service IN ('app')" };
+      const raw = { type: 'sql' as const, condition: "match(Body, '^a$')" };
+      const { result } = renderHook(() =>
+        useSearchPageFilterState({
+          searchQuery: [service, raw],
+          onFilterChange,
+          knownColumns: new Set(),
+          jsonColumns: new Set(),
+        }),
+      );
+
+      act(() => {
+        result.current.setFilterValue('level', 'error');
+      });
+      expect(onFilterChange).toHaveBeenLastCalledWith([
+        service,
+        { type: 'sql', condition: "level IN ('error')" },
+      ]);
+
+      let dropped: string[] = [];
+      act(() => {
+        dropped = result.current.retainFiltersByColumns(
+          new Set(['service', 'level']),
+        );
+      });
+      expect(dropped).toEqual([]);
+    });
+
+    it('drops preserved filters when reconciling to another source', () => {
+      onFilterChange.mockClear();
+      const service = { type: 'sql' as const, condition: "service IN ('app')" };
+      const pattern = { type: 'sql' as const, condition: "match(Body, '^a$')" };
+      const { result } = renderHook(() =>
+        useSearchPageFilterState({
+          searchQuery: [service, pattern],
+          onFilterChange,
+          knownColumns: new Set(),
+          jsonColumns: new Set(),
+          isPreservedFilter: f => f === pattern,
+        }),
+      );
+
+      let dropped: string[] = [];
+      act(() => {
+        dropped = result.current.retainFiltersByColumns(new Set(['service']));
+      });
+      expect(dropped).toEqual([pattern.condition]);
+      expect(onFilterChange).toHaveBeenLastCalledWith([service]);
+    });
+
     it('setOnlyFilters applies all filters in a single onFilterChange emit', () => {
       onFilterChange.mockClear();
       const { result } = renderHook(() =>
@@ -1000,6 +1134,7 @@ describe('searchFilters', () => {
           searchQuery: [],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1025,6 +1160,7 @@ describe('searchFilters', () => {
           searchQuery: [{ type: 'sql', condition: `level IN ('info', 'ok')` }],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1047,6 +1183,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1072,6 +1209,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1095,6 +1233,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1120,6 +1259,7 @@ describe('searchFilters', () => {
           ],
           onFilterChange,
           knownColumns: new Set(),
+          jsonColumns: new Set(),
         }),
       );
 
@@ -1141,6 +1281,7 @@ describe('searchFilters', () => {
             searchQuery: [],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1165,6 +1306,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1192,6 +1334,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1216,6 +1359,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 
@@ -1240,6 +1384,7 @@ describe('searchFilters', () => {
             ],
             onFilterChange: onFilterChangeLocal,
             knownColumns: new Set(),
+            jsonColumns: new Set(),
           }),
         );
 

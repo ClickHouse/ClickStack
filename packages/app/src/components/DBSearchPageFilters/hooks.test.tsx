@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 
 import api from '@/api';
+import type { Facet } from '@/hooks/useMetadata';
 import * as useMetadataModule from '@/hooks/useMetadata';
 import * as searchFiltersModule from '@/searchFilters';
 import * as sourceModule from '@/source';
@@ -68,6 +69,7 @@ jest.mock('@/hooks/useMetadata', () => ({
   useMapColumns: jest.fn(),
   useAllFields: jest.fn(),
   useGetKeyValues: jest.fn(),
+  useFilterKeysFetchLimit: jest.fn(),
 }));
 
 const useMe = jest.mocked(api.useMe);
@@ -82,6 +84,9 @@ const useJsonColumns = jest.mocked(useMetadataModule.useJsonColumns);
 const useMapColumns = jest.mocked(useMetadataModule.useMapColumns);
 const useAllFields = jest.mocked(useMetadataModule.useAllFields);
 const useGetKeyValues = jest.mocked(useMetadataModule.useGetKeyValues);
+const useFilterKeysFetchLimit = jest.mocked(
+  useMetadataModule.useFilterKeysFetchLimit,
+);
 
 const CHART_CONFIG: BuilderChartConfigWithDateRange = {
   connection: 'conn1',
@@ -120,6 +125,10 @@ const makeLogSource = (opts: { withMVs: boolean }) => ({
 });
 
 type SourceQueryResult = ReturnType<typeof sourceModule.useSource>;
+type AllFieldsResult = ReturnType<typeof useMetadataModule.useAllFields>;
+type KeyValuesResult = ReturnType<typeof useMetadataModule.useGetKeyValues>;
+type ColumnsResult = ReturnType<typeof useMetadataModule.useColumns>;
+type JsonColumnsResult = ReturnType<typeof useMetadataModule.useJsonColumns>;
 type MetadataWithSettings = ReturnType<
   typeof useMetadataModule.useMetadataWithSettings
 >;
@@ -191,6 +200,8 @@ function setupDefaultMocks({ withMVs }: { withMVs: boolean }) {
     isFetching: false,
     error: null,
   } as any);
+
+  useFilterKeysFetchLimit.mockReturnValue(100);
 }
 
 describe('useFetchFacets', () => {
@@ -452,6 +463,114 @@ describe('useFetchFacets', () => {
     });
   });
 
+  describe('errors', () => {
+    it('surfaces a field lookup error so the filter panel can report it', () => {
+      setupDefaultMocks({ withMVs: false });
+      const fieldsError = new Error('DESCRIBE failed');
+      useAllFields.mockReturnValue({
+        data: [],
+        error: fieldsError,
+        isLoading: false,
+      } as unknown as AllFieldsResult);
+      const { wrapper } = makeWrapper();
+
+      const { result } = renderHook(
+        () =>
+          useFetchFacets({
+            chartConfig: CHART_CONFIG,
+            sourceId: 'source1',
+            dateRange: DATE_RANGE,
+            mode: 'exact',
+          }),
+        { wrapper },
+      );
+
+      expect(result.current.error).toBe(fieldsError);
+    });
+  });
+
+  describe('pending keys', () => {
+    const TWO_FIELDS = [
+      {
+        path: ['ServiceName'],
+        type: 'LowCardinality(String)',
+        jsType: 'string',
+      },
+      {
+        path: ['SeverityText'],
+        type: 'LowCardinality(String)',
+        jsType: 'string',
+      },
+    ];
+
+    const mockKeyValues = (data: Facet[] | undefined, isFetching: boolean) =>
+      useGetKeyValues.mockReturnValue({
+        data,
+        isLoading: false,
+        isFetching,
+        error: null,
+      } as unknown as KeyValuesResult);
+
+    const renderAllMode = () =>
+      renderHook(
+        () =>
+          useFetchFacets({
+            chartConfig: CHART_CONFIG,
+            sourceId: 'source1',
+            dateRange: DATE_RANGE,
+            mode: 'all',
+          }),
+        { wrapper: makeWrapper().wrapper },
+      );
+
+    it('lists keys whose values have not arrived yet as empty, pending facets', () => {
+      setupDefaultMocks({ withMVs: false });
+      useAllFields.mockReturnValue({
+        data: TWO_FIELDS,
+      } as unknown as AllFieldsResult);
+      mockKeyValues([{ key: 'SeverityText', value: ['info'] }], true);
+
+      const { result } = renderAllMode();
+
+      expect(result.current.data.keyValues).toEqual([
+        { key: 'ServiceName', value: [] },
+        { key: 'SeverityText', value: ['info'] },
+      ]);
+      expect(result.current.data.pendingKeys).toEqual(new Set(['ServiceName']));
+    });
+
+    it('drops keys without values once the values query finishes', () => {
+      setupDefaultMocks({ withMVs: false });
+      useAllFields.mockReturnValue({
+        data: TWO_FIELDS,
+      } as unknown as AllFieldsResult);
+      mockKeyValues([{ key: 'SeverityText', value: ['info'] }], false);
+
+      const { result } = renderAllMode();
+
+      expect(result.current.data.keyValues).toEqual([
+        { key: 'SeverityText', value: ['info'] },
+      ]);
+      expect(result.current.data.pendingKeys.size).toBe(0);
+    });
+
+    it('does not list keys past the team key fetch limit', () => {
+      setupDefaultMocks({ withMVs: false });
+      useAllFields.mockReturnValue({
+        data: TWO_FIELDS,
+      } as unknown as AllFieldsResult);
+      useFilterKeysFetchLimit.mockReturnValue(1);
+      mockKeyValues(undefined, true);
+
+      const { result } = renderAllMode();
+
+      expect(result.current.data.keyValues).toEqual([
+        { key: 'ServiceName', value: [] },
+      ]);
+      expect(result.current.data.pendingKeys).toEqual(new Set(['ServiceName']));
+    });
+  });
+
   describe('loadMoreFacetsForKey (raw-tables pipeline)', () => {
     it('reports the key as loading while the fetch is in flight, then clears it', async () => {
       setupDefaultMocks({ withMVs: false });
@@ -659,6 +778,63 @@ describe('useFetchFacets', () => {
 
       consoleErrorSpy.mockRestore();
     });
+
+    it('scopes the load-more query with a JSON-column filter in JSON form, not Map brackets', async () => {
+      setupDefaultMocks({ withMVs: false });
+      useColumns.mockReturnValue({
+        data: [
+          { name: 'Timestamp', type: 'DateTime' },
+          { name: 'ServiceName', type: 'String' },
+          { name: 'message', type: 'JSON' },
+        ],
+        isLoading: false,
+      } as unknown as ColumnsResult);
+      useJsonColumns.mockReturnValue({
+        data: ['message'],
+      } as unknown as JsonColumnsResult);
+      // filtersToQuery reads this as a Map; the default mock is an array.
+      useDateTimeColumns.mockReturnValue(new Map());
+      const { escapeFilterStateKeys } =
+        jest.requireActual<typeof searchFiltersModule>('@/searchFilters');
+      jest
+        .mocked(searchFiltersModule.escapeFilterStateKeys)
+        .mockImplementationOnce(escapeFilterStateKeys);
+      const getKeyValuesWithMVs = jest
+        .fn()
+        .mockResolvedValue([{ key: 'ServiceName', value: ['api'] }]);
+      mockMetadata({ getKeyValuesWithMVs });
+
+      const filterState: FilterState = {
+        'message.email': {
+          included: new Set(['user@example.test']),
+          excluded: new Set(),
+        },
+      };
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useFetchFacets({
+            chartConfig: CHART_CONFIG,
+            sourceId: 'source1',
+            dateRange: DATE_RANGE,
+            mode: 'exact',
+            filterState,
+          }),
+        { wrapper },
+      );
+
+      await act(async () => {
+        await result.current.loadMoreFacetsForKey('ServiceName');
+      });
+
+      expect(getKeyValuesWithMVs).toHaveBeenCalledTimes(1);
+      expect(getKeyValuesWithMVs.mock.calls[0][0].chartConfig.filters).toEqual([
+        {
+          type: 'sql',
+          condition: "toString(`message`.`email`) IN ('user@example.test')",
+        },
+      ]);
+    });
   });
 
   describe('loadMoreFacetsForKey (MV pipeline)', () => {
@@ -690,6 +866,9 @@ describe('useFetchFacets', () => {
       });
 
       expect(getAllKeyValues).toHaveBeenCalledTimes(1);
+      expect(getAllKeyValues).toHaveBeenCalledWith(
+        expect.objectContaining({ mapKeyIndexMaxParts: null }),
+      );
       expect(getKeyValuesWithMVs).not.toHaveBeenCalled();
       expect(result.current.data.keyValues).toEqual([
         { key: 'ServiceName', value: ['api', 'web'] },

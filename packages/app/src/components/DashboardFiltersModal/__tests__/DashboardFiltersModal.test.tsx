@@ -1,4 +1,7 @@
-import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
+import {
+  DashboardFilter,
+  StaticListDashboardFilter,
+} from '@hyperdx/common-utils/dist/types';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -9,6 +12,7 @@ import { FilterFormControl } from '@/components/DashboardFiltersModal/filterForm
 jest.mock('@/useConfirm', () => ({ useConfirm: () => jest.fn() }));
 
 jest.mock('@/source', () => ({ useSources: () => ({ data: [] }) }));
+jest.mock('@/connection', () => ({ useConnections: () => ({ data: [] }) }));
 
 // Mantine's Combobox calls scrollIntoView when its dropdown opens; jsdom lacks it.
 window.HTMLElement.prototype.scrollIntoView = jest.fn();
@@ -40,6 +44,23 @@ jest.mock(
     ),
   }),
 );
+// Stands in for the SQL query editor, which would drag CodeMirror into jsdom.
+// Like the real form, it registers the shared source field with no rules.
+jest.mock('@/components/DashboardFiltersModal/SqlQueryFilterEditForm', () => ({
+  SqlQueryFilterEditForm: ({ control }: { control: FilterFormControl }) => (
+    <div>
+      <input
+        data-testid="connection-input"
+        {...control.register('connection', { required: true })}
+      />
+      <input data-testid="sql-source-input" {...control.register('source')} />
+      <textarea
+        data-testid="sql-input"
+        {...control.register('sqlTemplate', { required: true })}
+      />
+    </div>
+  ),
+}));
 
 const EXISTING_FILTER: DashboardFilter = {
   id: 'other',
@@ -82,7 +103,7 @@ const renderModal = (
 
 const selectFilterType = async (
   user: ReturnType<typeof userEvent.setup>,
-  label: 'Queried values' | 'Static values',
+  label: 'SQL expression values' | 'Static values' | 'SQL query values',
 ) => {
   await user.click(screen.getByTestId('filter-type-picker'));
   // The dropdown's options are matched by text: jsdom has none of Mantine's
@@ -131,7 +152,7 @@ describe('DashboardFiltersModal', () => {
     await user.type(screen.getByTestId('filter-variable-name-input'), 'env');
     await user.type(screen.getByTestId('filter-options-input'), 'prod{Enter}');
 
-    await selectFilterType(user, 'Queried values');
+    await selectFilterType(user, 'SQL expression values');
 
     expect(screen.getByTestId('filter-name-input')).toHaveValue('Environment');
     expect(screen.getByTestId('filter-expression-input')).toHaveValue('Env');
@@ -172,6 +193,40 @@ describe('DashboardFiltersModal', () => {
     await waitFor(() => expect(onSaveFilter).toHaveBeenCalledTimes(1));
     expect(onSaveFilter.mock.calls[0][0]).not.toHaveProperty('expression');
     expect(onSaveFilter.mock.calls[0][0]).not.toHaveProperty('source');
+  });
+
+  it('saves a SQL query filter without a source after the SQL expression editor required one', async () => {
+    const { onSaveFilter, user } = renderModal();
+
+    await user.click(screen.getByTestId('add-filter-button'));
+    await selectFilterType(user, 'SQL query values');
+    await user.type(screen.getByTestId('filter-name-input'), 'Environment');
+    await user.type(screen.getByTestId('connection-input'), 'conn1');
+    await user.type(screen.getByTestId('sql-input'), 'SELECT 1');
+    await user.click(screen.getByTestId('save-filter-button'));
+
+    await waitFor(() => expect(onSaveFilter).toHaveBeenCalledTimes(1));
+    expect(onSaveFilter).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'SQL_QUERY', sqlTemplate: 'SELECT 1' }),
+    );
+    expect(onSaveFilter.mock.calls[0][0].source).toBeUndefined();
+  });
+
+  it('applies the current editor rules again after switching back', async () => {
+    const { onSaveFilter, user } = renderModal();
+
+    await user.click(screen.getByTestId('add-filter-button'));
+    await selectFilterType(user, 'SQL query values');
+    await selectFilterType(user, 'SQL expression values');
+    await user.type(screen.getByTestId('filter-name-input'), 'Environment');
+    await user.type(screen.getByTestId('filter-expression-input'), 'Env');
+    await user.click(screen.getByTestId('save-filter-button'));
+
+    // react-hook-form focuses the first field that fails validation.
+    await waitFor(() =>
+      expect(screen.getByTestId('source-selector')).toHaveFocus(),
+    );
+    expect(onSaveFilter).not.toHaveBeenCalled();
   });
 
   it('refuses to save a static filter without an option', async () => {
@@ -287,7 +342,7 @@ describe('DashboardFiltersModal', () => {
     });
 
     await user.click(screen.getByTestId('edit-filter-button-Environment'));
-    await selectFilterType(user, 'Queried values');
+    await selectFilterType(user, 'SQL expression values');
     await user.type(screen.getByTestId('filter-expression-input'), 'Env');
     await user.type(screen.getByTestId('source-selector'), 'logs');
     await user.click(screen.getByTestId('save-filter-button'));
@@ -323,7 +378,7 @@ describe('DashboardFiltersModal', () => {
     expect(screen.queryByTestId('filter-type-picker')).toBeNull();
   });
 
-  it.each(['Queried values', 'Static values'] as const)(
+  it.each(['SQL expression values', 'Static values'] as const)(
     'offers the required control on a %s filter',
     async label => {
       const { user } = renderModal();
@@ -369,7 +424,7 @@ describe('DashboardFiltersModal', () => {
     await user.click(screen.getByTestId('save-filter-button'));
 
     await waitFor(() => expect(onSaveFilter).toHaveBeenCalledTimes(1));
-    const saved: DashboardFilter = onSaveFilter.mock.calls[0][0];
+    const saved: StaticListDashboardFilter = onSaveFilter.mock.calls[0][0];
     expect(saved.minSelections).toBe(1);
     expect(saved.isGlobalRequirement).toBeUndefined();
 
@@ -379,6 +434,29 @@ describe('DashboardFiltersModal', () => {
     );
 
     expect(screen.getByTestId('filter-required-checkbox')).toBeChecked();
+  });
+
+  it('saves a single-select filter and reopens it checked', async () => {
+    const { onSaveFilter, user } = renderModal();
+
+    await user.click(screen.getByTestId('add-filter-button'));
+    await selectFilterType(user, 'Static values');
+    await user.type(screen.getByTestId('filter-name-input'), 'Environment');
+    await user.type(screen.getByTestId('filter-options-input'), 'prod{Enter}');
+    await user.click(screen.getByTestId('filter-single-select-checkbox'));
+    await user.click(screen.getByTestId('save-filter-button'));
+
+    await waitFor(() => expect(onSaveFilter).toHaveBeenCalledTimes(1));
+    const saved: StaticListDashboardFilter = onSaveFilter.mock.calls[0][0];
+    expect(saved.maxSelections).toBe(1);
+    expect(saved.minSelections).toBeUndefined();
+
+    renderModal({ filters: [saved] });
+    await user.click(
+      screen.getAllByTestId(`edit-filter-button-${saved.name}`)[0],
+    );
+
+    expect(screen.getByTestId('filter-single-select-checkbox')).toBeChecked();
   });
 
   it('offers the requirement scope, unchecked, once the filter is required', async () => {
@@ -410,7 +488,7 @@ describe('DashboardFiltersModal', () => {
     await user.click(screen.getByTestId('save-filter-button'));
 
     await waitFor(() => expect(onSaveFilter).toHaveBeenCalledTimes(1));
-    const saved: DashboardFilter = onSaveFilter.mock.calls[0][0];
+    const saved: StaticListDashboardFilter = onSaveFilter.mock.calls[0][0];
     expect(saved.minSelections).toBe(1);
     expect(saved.isGlobalRequirement).toBe(true);
 

@@ -1,3 +1,4 @@
+import { TIME_SERIES_DISPLAY_TYPE_BY_NAME } from '@hyperdx/common-utils/dist/core/utils';
 import {
   isFilterBroadcastEnabled,
   isFilterRequired,
@@ -50,7 +51,19 @@ const pickIfTruthy = <T, K extends keyof T>(obj: T, keys: K[]): Partial<T> => {
 export function translateExternalChartToTileConfig(
   chart: SeriesTile,
 ): DashboardDocument['tiles'][number] {
-  const { id, name, x, y, w, h, series, asRatio, containerId, tabId } = chart;
+  const {
+    id,
+    name,
+    description,
+    x,
+    y,
+    w,
+    h,
+    series,
+    asRatio,
+    containerId,
+    tabId,
+  } = chart;
 
   if (series.length === 0) {
     throw new Error('Chart must have at least one series');
@@ -74,9 +87,9 @@ export function translateExternalChartToTileConfig(
   switch (firstSeries.type) {
     case 'time': {
       displayType =
-        firstSeries.displayType === 'stacked_bar'
-          ? DisplayType.StackedBar
-          : DisplayType.Line;
+        (firstSeries.displayType &&
+          TIME_SERIES_DISPLAY_TYPE_BY_NAME[firstSeries.displayType]) ??
+        DisplayType.Line;
 
       // Convert time series to select array
       select = series.map(s => {
@@ -205,6 +218,7 @@ export function translateExternalChartToTileConfig(
       ['groupBy', 'orderBy', 'markdown', 'seriesReturnType', 'numberFormat'],
     ),
     name,
+    ...(description ? { description } : {}),
     source: sourceId,
     displayType,
     select,
@@ -237,11 +251,33 @@ export function translateFilterToExternalFilter(
     case 'STATIC_LIST':
       return omit(filter, ...omittedKeys);
 
+    case 'ADHOC':
+      // Only sql filters read `where`; the internal API may have stored one.
+      return filter.sourceType === 'promql'
+        ? omit(filter, 'where', 'whereLanguage')
+        : filter;
+
     case 'PROMETHEUS_LABEL':
       return {
         ...omit(filter, 'source', ...omittedKeys),
         sourceId: filter.source.toString(),
       };
+
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connection', 'source', ...omittedKeys),
+        connectionId: filter.connection.toString(),
+        ...(filter.source ? { sourceId: filter.source.toString() } : {}),
+      };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connection'),
+        ...(filter.connection ? { connectionId: filter.connection } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     case 'QUERY_EXPRESSION': {
       // Ignore variableName and appliesToSourceIds if the filter is not in a mode that uses them
@@ -269,13 +305,30 @@ export function translateExternalFilterToFilter(
 ): DashboardFilter {
   switch (filter.type) {
     case 'STATIC_LIST':
+    case 'ADHOC':
       return filter;
 
     case 'PROMETHEUS_LABEL':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
 
+    case 'SQL_QUERY':
+      return {
+        ...omit(filter, 'connectionId', 'sourceId'),
+        connection: filter.connectionId,
+        ...(filter.sourceId ? { source: filter.sourceId } : {}),
+      };
+
     case 'QUERY_EXPRESSION':
       return { ...omit(filter, 'sourceId'), source: filter.sourceId };
+
+    case 'DATA_SOURCE':
+      return {
+        ...omit(filter, 'connectionId'),
+        ...(filter.connectionId ? { connection: filter.connectionId } : {}),
+      };
+
+    case 'CONNECTION':
+      return filter;
 
     default:
       filter satisfies never;

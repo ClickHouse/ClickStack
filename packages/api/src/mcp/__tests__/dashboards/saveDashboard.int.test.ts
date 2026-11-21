@@ -399,6 +399,7 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
         },
         compareToPreviousPeriod: true,
         fitYAxisToData: true,
+        lineInterpolation: 'step' as const,
       };
       const sqlNumberConfig = {
         configType: 'sql' as const,
@@ -523,6 +524,48 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       expect(output.tiles[0].config.select[0]).toMatchObject({
         valueExpression: 'Duration',
       });
+    });
+
+    it('should save and re-read a series heatmap tile on a Log source', async () => {
+      const logSource = await Source.create({
+        kind: SourceKind.Log,
+        team: ctx.team._id,
+        from: { databaseName: DEFAULT_DATABASE, tableName: 'otel_logs' },
+        timestampValueExpression: 'Timestamp',
+        connection: ctx.connection._id,
+        name: 'Logs',
+      });
+      const config = {
+        displayType: 'heatmap',
+        heatmapMode: 'series',
+        sourceId: logSource._id.toString(),
+        select: [
+          {
+            aggFn: 'avg',
+            valueExpression: 'Duration',
+            where: 'SeverityText:error',
+            whereLanguage: 'lucene',
+            alias: 'Avg duration',
+          },
+        ],
+        groupBy: 'ServiceName',
+      };
+
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Series Heatmap Dashboard',
+        tiles: [{ name: 'Duration by service', config }],
+      });
+      expect(result.isError).toBeFalsy();
+      const saved = JSON.parse(getFirstText(result));
+      expect(saved.tiles[0].config).toMatchObject(config);
+
+      const get = await callTool(ctx.client!, 'clickstack_get_dashboard', {
+        id: saved.id,
+      });
+      expect(get.isError).toBeFalsy();
+      expect(JSON.parse(getFirstText(get)).tiles[0].config).toMatchObject(
+        config,
+      );
     });
 
     it('should round-trip every MCP-specific heatmap field through save, get, update, and re-get', async () => {
@@ -954,6 +997,7 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
         numberFormat,
         compareToPreviousPeriod: true,
         fitYAxisToData: true,
+        lineInterpolation: 'linear' as const,
         seriesLimit: 5,
       };
       const barConfig = {
@@ -963,6 +1007,11 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
         groupBy: 'SpanName',
         numberFormat,
         seriesLimit: 3,
+      };
+      const stackedLineConfig = {
+        ...barConfig,
+        displayType: 'stacked_line' as const,
+        lineInterpolation: 'step' as const,
       };
       const tableConfig = {
         displayType: 'table' as const,
@@ -1011,6 +1060,7 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       const tiles = [
         { name: 'Line', config: lineConfig },
         { name: 'Bar', config: barConfig },
+        { name: 'Stacked Line', config: stackedLineConfig },
         { name: 'Table', config: tableConfig },
         { name: 'Pie', config: pieConfig },
         { name: 'Categorical Bar', config: categoricalBarConfig },
@@ -1019,6 +1069,7 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       const configByName: Record<string, object> = {
         Line: lineConfig,
         Bar: barConfig,
+        'Stacked Line': stackedLineConfig,
         Table: tableConfig,
         Pie: pieConfig,
         'Categorical Bar': categoricalBarConfig,
@@ -2661,6 +2712,47 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
         }
       });
 
+      it('round-trips a single-select filter through create and get', async () => {
+        const sourceId = ctx.traceSource._id.toString();
+        const createResult = await callTool(
+          ctx.client!,
+          'clickstack_save_dashboard',
+          {
+            name: 'Single-select filter',
+            tiles: [traceTile(sourceId)],
+            filters: [queryFilter({ maxSelections: 1 })],
+          },
+        );
+        expect(createResult.isError).toBeFalsy();
+        const created = JSON.parse(getFirstText(createResult));
+        expect(created.filters[0].maxSelections).toBe(1);
+
+        const getResult = await callTool(
+          ctx.client!,
+          'clickstack_get_dashboard',
+          { id: created.id },
+        );
+        expect(
+          JSON.parse(getFirstText(getResult)).filters[0].maxSelections,
+        ).toBe(1);
+      });
+
+      it.each([0, 2])('rejects maxSelections %s', async value => {
+        const sourceId = ctx.traceSource._id.toString();
+        const result = await callTool(
+          ctx.client!,
+          'clickstack_save_dashboard',
+          {
+            name: 'Bad maxSelections',
+            tiles: [traceTile(sourceId)],
+            filters: [queryFilter({ maxSelections: value })],
+          },
+        );
+
+        expect(result.isError).toBe(true);
+        expect(getFirstText(result)).toContain('maxSelections');
+      });
+
       it.each([2, -1, 1.5])('rejects minSelections %s', async value => {
         const sourceId = ctx.traceSource._id.toString();
         const result = await callTool(
@@ -3590,6 +3682,577 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
 
       expect(result.isError).toBe(true);
       expect(getFirstText(result)).toContain('only valid for gauge metrics');
+    });
+  });
+
+  describe('savedFilterValues', () => {
+    const tile = (sourceId: string) => ({
+      name: 'Volume',
+      config: {
+        displayType: 'line' as const,
+        sourceId,
+        select: [{ aggFn: 'count' as const, where: '' }],
+      },
+    });
+
+    it('persists savedFilterValues on create and echoes them back', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Defaults on create',
+        tiles: [tile(sourceId)],
+        filters: [
+          {
+            type: 'QUERY_EXPRESSION',
+            name: 'Service',
+            expression: 'ServiceName',
+            sourceId,
+            whereLanguage: 'sql',
+            isVariableEnabled: true,
+            variableName: 'service',
+          },
+        ],
+        savedFilterValues: [
+          { type: 'sql', condition: "ServiceName IN ('api')" },
+          { type: 'variable', name: 'service', values: ['api', 'web'] },
+        ],
+      });
+
+      expect(result.isError).toBeFalsy();
+      const created = JSON.parse(getFirstText(result));
+      expect(created.savedFilterValues).toEqual([
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+        { type: 'variable', name: 'service', values: ['api', 'web'] },
+      ]);
+
+      const stored = await Dashboard.findById(created.id);
+      expect(stored?.savedFilterValues).toEqual([
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+        { type: 'variable', name: 'service', values: ['api', 'web'] },
+      ]);
+    });
+
+    it('defaults an omitted type to sql on a condition entry', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Implicit sql type',
+        tiles: [tile(sourceId)],
+        savedFilterValues: [{ condition: "ServiceName IN ('api')" }],
+      });
+
+      expect(result.isError).toBeFalsy();
+      const created = JSON.parse(getFirstText(result));
+      expect(created.savedFilterValues).toEqual([
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+      ]);
+    });
+
+    it('returns savedFilterValues from clickstack_get_dashboard', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Defaults readable on get',
+          tiles: [tile(sourceId)],
+          savedFilterValues: [{ type: 'sql', condition: 'StatusCode = 200' }],
+        },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+
+      const getResult = await callTool(
+        ctx.client!,
+        'clickstack_get_dashboard',
+        { id: created.id },
+      );
+      const fetched = JSON.parse(getFirstText(getResult));
+      expect(fetched.savedFilterValues).toEqual([
+        { type: 'sql', condition: 'StatusCode = 200' },
+      ]);
+    });
+
+    it('leaves saved defaults untouched when the update omits the field', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Keep defaults on update',
+          tiles: [tile(sourceId)],
+          savedFilterValues: [{ type: 'sql', condition: 'StatusCode = 200' }],
+        },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+
+      const updateResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          id: created.id,
+          name: 'Keep defaults on update (renamed)',
+          tiles: [tile(sourceId)],
+        },
+      );
+      expect(updateResult.isError).toBeFalsy();
+      const updated = JSON.parse(getFirstText(updateResult));
+      expect(updated.savedFilterValues).toEqual([
+        { type: 'sql', condition: 'StatusCode = 200' },
+      ]);
+    });
+
+    it('clears saved defaults when the update passes an empty array', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Clear defaults on update',
+          tiles: [tile(sourceId)],
+          savedFilterValues: [{ type: 'sql', condition: 'StatusCode = 200' }],
+        },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+
+      const updateResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          id: created.id,
+          name: 'Clear defaults on update',
+          tiles: [tile(sourceId)],
+          savedFilterValues: [],
+        },
+      );
+      expect(updateResult.isError).toBeFalsy();
+      const updated = JSON.parse(getFirstText(updateResult));
+      expect(updated.savedFilterValues).toEqual([]);
+
+      const stored = await Dashboard.findById(created.id);
+      expect(stored?.savedFilterValues).toEqual([]);
+    });
+
+    it('sets savedFilterValues via clickstack_patch_dashboard', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Patch defaults',
+          tiles: [tile(sourceId)],
+        },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          savedFilterValues: [
+            { type: 'sql', condition: "ServiceName IN ('api')" },
+          ],
+        },
+      );
+      expect(patchResult.isError).toBeFalsy();
+      const patched = JSON.parse(getFirstText(patchResult));
+      expect(patched.savedFilterValues).toEqual([
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+      ]);
+
+      const stored = await Dashboard.findById(created.id);
+      expect(stored?.savedFilterValues).toEqual([
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+      ]);
+
+      // Tiles are preserved by the targeted patch.
+      expect(stored?.tiles).toHaveLength(1);
+    });
+
+    it('patches a tile and savedFilterValues in the same call', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        { name: 'Combined patch', tiles: [tile(sourceId)] },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+      const tileId = created.tiles[0].id;
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          savedFilterValues: [
+            { type: 'sql', condition: "ServiceName IN ('api')" },
+          ],
+          tileId,
+          tile: {
+            config: {
+              displayType: 'table',
+              sourceId,
+              select: [{ aggFn: 'count', where: '' }],
+            },
+          },
+        },
+      );
+      expect(patchResult.isError).toBeFalsy();
+      const patched = JSON.parse(getFirstText(patchResult));
+      expect(patched.savedFilterValues).toEqual([
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+      ]);
+      expect(patched.patchedTile.config.displayType).toBe('table');
+
+      // Both the tile and the saved values changed in the database.
+      const stored = await Dashboard.findById(created.id);
+      expect(stored?.tiles).toHaveLength(1);
+      expect(stored?.tiles[0].id).toBe(tileId);
+      expect(stored?.tiles[0].config.displayType).toBe('table');
+      expect(stored?.savedFilterValues).toEqual([
+        { type: 'sql', condition: "ServiceName IN ('api')" },
+      ]);
+    });
+
+    it('warns when a variable saved value names no declared filter', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable default typo',
+        tiles: [tile(sourceId)],
+        filters: [
+          {
+            type: 'QUERY_EXPRESSION',
+            name: 'Service',
+            expression: 'ServiceName',
+            sourceId,
+            whereLanguage: 'sql',
+            isVariableEnabled: true,
+            variableName: 'service',
+          },
+        ],
+        savedFilterValues: [
+          { type: 'variable', name: 'srvice', values: ['api'] },
+        ],
+      });
+
+      expect(result.isError).toBeFalsy();
+      const created = JSON.parse(getFirstText(result));
+      expect(created.warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining('$srvice')]),
+      );
+    });
+
+    it('does not warn when a variable saved value matches a declared filter', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable default match',
+        tiles: [tile(sourceId)],
+        filters: [
+          {
+            type: 'QUERY_EXPRESSION',
+            name: 'Service',
+            expression: 'ServiceName',
+            sourceId,
+            whereLanguage: 'sql',
+            isVariableEnabled: true,
+            variableName: 'service',
+          },
+        ],
+        savedFilterValues: [
+          { type: 'variable', name: 'service', values: ['api'] },
+        ],
+      });
+
+      expect(result.isError).toBeFalsy();
+      const created = JSON.parse(getFirstText(result));
+      const savedValueWarnings = (created.warnings ?? []).filter((w: string) =>
+        w.includes('savedFilterValues'),
+      );
+      expect(savedValueWarnings).toEqual([]);
+    });
+
+    it('warns on a patch whose variable saved value names no declared filter', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        { name: 'Patch variable typo', tiles: [tile(sourceId)] },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        {
+          dashboardId: created.id,
+          savedFilterValues: [
+            { type: 'variable', name: 'ghost', values: ['api'] },
+          ],
+        },
+      );
+      expect(patchResult.isError).toBeFalsy();
+      const patched = JSON.parse(getFirstText(patchResult));
+      expect(patched.warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining('$ghost')]),
+      );
+    });
+
+    it('rejects a patch with no updatable fields', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'Empty patch',
+          tiles: [tile(sourceId)],
+        },
+      );
+      const created = JSON.parse(getFirstText(createResult));
+
+      const patchResult = await callTool(
+        ctx.client!,
+        'clickstack_patch_dashboard',
+        { dashboardId: created.id },
+      );
+      expect(patchResult.isError).toBe(true);
+      expect(getFirstText(patchResult)).toContain('savedFilterValues');
+    });
+  });
+
+  describe('ad hoc filters', () => {
+    const adhocFilter = () => ({
+      type: 'ADHOC' as const,
+      name: 'Conditions',
+      sourceType: 'sql' as const,
+      sources: [ctx.traceSource._id.toString()],
+      variableName: 'conditions',
+    });
+    const adhocValue = {
+      type: 'adhoc' as const,
+      name: 'conditions',
+      conditions: [
+        { key: 'ServiceName', operator: 'IN' as const, value: 'api' },
+        { key: 'ServiceName', operator: 'IN' as const, value: 'web' },
+      ],
+    };
+    const parse = (result: Awaited<ReturnType<typeof callTool>>) =>
+      JSON.parse(getFirstText(result));
+
+    it('round-trips an ad hoc filter and its saved conditions through save, get and save', async () => {
+      const created = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Ad hoc',
+        tiles: [],
+        filters: [adhocFilter()],
+        savedFilterValues: [adhocValue],
+      });
+      expect(created.isError).toBeFalsy();
+      const { id, warnings } = parse(created);
+      expect(warnings ?? []).toEqual([]);
+
+      const read = parse(
+        await callTool(ctx.client!, 'clickstack_get_dashboard', { id }),
+      );
+      expect(read.filters).toEqual([
+        {
+          ...adhocFilter(),
+          id: expect.any(String),
+          isBroadcastEnabled: true,
+          isVariableEnabled: true,
+        },
+      ]);
+      expect(read.savedFilterValues).toEqual([adhocValue]);
+
+      const storedBefore = await Dashboard.findById(id).lean();
+      const saved = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id,
+        name: 'Ad hoc',
+        tiles: [],
+        filters: read.filters,
+        savedFilterValues: read.savedFilterValues,
+      });
+      expect(saved.isError).toBeFalsy();
+      const storedAfter = await Dashboard.findById(id).lean();
+      expect(storedAfter?.filters).toEqual(storedBefore?.filters);
+      expect(storedAfter?.savedFilterValues).toEqual([adhocValue]);
+    });
+
+    it('saves back a filter whose source was deleted since it was stored', async () => {
+      const dashboard = await new Dashboard({
+        name: 'Deleted source',
+        tiles: [],
+        team: ctx.team._id,
+        filters: [
+          {
+            ...adhocFilter(),
+            id: 'adhoc-1',
+            sources: [
+              ctx.traceSource._id.toString(),
+              '65f5e4a3b9e77c001a999999',
+            ],
+            isBroadcastEnabled: true,
+            isVariableEnabled: true,
+          },
+        ],
+      }).save();
+      const id = dashboard._id.toString();
+      const read = parse(
+        await callTool(ctx.client!, 'clickstack_get_dashboard', { id }),
+      );
+
+      const saved = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id,
+        name: 'Renamed',
+        tiles: [],
+        filters: read.filters,
+      });
+
+      expect(saved.isError).toBeFalsy();
+    });
+
+    it('warns about saved conditions that no ad hoc filter matches', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Bad defaults',
+        tiles: [],
+        filters: [adhocFilter()],
+        savedFilterValues: [{ ...adhocValue, name: 'conditons' }],
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(parse(result).warnings).toEqual([
+        expect.stringContaining('"conditons"'),
+      ]);
+    });
+  });
+
+  describe('reference variables', () => {
+    const filters = [
+      {
+        type: 'CONNECTION',
+        name: 'Connection',
+        variableName: 'conn',
+        isGlobalRequirement: true,
+      },
+      {
+        type: 'DATA_SOURCE',
+        name: 'Traces source',
+        variableName: 'traces',
+        allowedSourceKinds: [SourceKind.Trace],
+        connectionId: '$conn',
+      },
+    ];
+
+    it('saves and returns variables and tiles that reference them', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            name: 'Builder',
+            config: {
+              displayType: 'line',
+              sourceId: '$traces',
+              select: [{ aggFn: 'count' }],
+            },
+          },
+          {
+            name: 'Raw SQL',
+            config: {
+              configType: 'sql',
+              displayType: 'table',
+              connectionId: '$conn',
+              sqlTemplate: 'SELECT 1',
+            },
+          },
+        ],
+        filters,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(result));
+      expect(output.filters).toEqual([
+        expect.objectContaining(filters[0]),
+        expect.objectContaining(filters[1]),
+      ]);
+      expect(
+        output.tiles.map((t: ExternalDashboardTileWithId) => t.config),
+      ).toEqual([
+        expect.objectContaining({ sourceId: '$traces' }),
+        expect.objectContaining({ connectionId: '$conn' }),
+      ]);
+    });
+
+    it('saves a SQL query filter that runs on a connection variable', async () => {
+      const sqlFilter = {
+        type: 'SQL_QUERY',
+        name: 'Environment',
+        variableName: 'env',
+        connectionId: '$conn',
+        sqlTemplate: 'SELECT DISTINCT env FROM envs',
+      };
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [],
+        filters: [filters[0], sqlFilter],
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(getFirstText(result)).filters[1]).toMatchObject(
+        sqlFilter,
+      );
+    });
+
+    it('rejects a tile referencing an undeclared variable', async () => {
+      const result = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            name: 'Builder',
+            config: {
+              displayType: 'line',
+              sourceId: '$traces',
+              select: [{ aggFn: 'count' }],
+            },
+          },
+        ],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain(
+        'does not name a data source variable',
+      );
+    });
+
+    it('checks an update without filters against the stored variables', async () => {
+      const builderTile = (sourceId: string) => ({
+        name: 'Builder',
+        config: {
+          displayType: 'line',
+          sourceId,
+          select: [{ aggFn: 'count' }],
+        },
+      });
+      const created = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        name: 'Variable dashboard',
+        tiles: [builderTile(ctx.traceSource._id.toString())],
+        filters,
+      });
+      expect(created.isError).toBeFalsy();
+
+      const updated = await callTool(ctx.client!, 'clickstack_save_dashboard', {
+        id: JSON.parse(getFirstText(created)).id,
+        name: 'Variable dashboard',
+        tiles: [builderTile('$traces')],
+      });
+
+      expect(updated.isError).toBeFalsy();
     });
   });
 });

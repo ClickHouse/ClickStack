@@ -1,8 +1,8 @@
 import { useState } from 'react';
+import { Separator } from '@clickhouse/click-ui';
 import {
   ActionIcon,
   Checkbox,
-  Divider,
   Flex,
   Popover,
   Text,
@@ -41,6 +41,9 @@ export function FilterSettingsPanel({
   onResetSharedFilters,
   showAllValues,
   onShowAllValuesChange,
+  teamShowAllValues,
+  isShowAllValuesOverridden,
+  onResetShowAllValues,
 }: {
   isSharedFiltersVisible: boolean;
   onSharedFiltersVisibilityChange: (visible: boolean) => void;
@@ -52,6 +55,9 @@ export function FilterSettingsPanel({
   onResetSharedFilters: VoidFunction;
   showAllValues: boolean;
   onShowAllValuesChange: (show: boolean) => void;
+  teamShowAllValues: boolean;
+  isShowAllValuesOverridden: boolean;
+  onResetShowAllValues: VoidFunction;
 }) {
   const showResetSection = hasPersonalPins || hasSharedPins;
 
@@ -80,7 +86,7 @@ export function FilterSettingsPanel({
         <Text size="sm" fw={500}>
           Filter Settings
         </Text>
-        <Divider />
+        <Separator size="xs" />
         <Checkbox
           label="Show Shared Filters"
           labelPosition="left"
@@ -117,9 +123,21 @@ export function FilterSettingsPanel({
             onChange={e => onShowAllValuesChange(e.currentTarget.checked)}
           />
         </Tooltip>
+        <Flex justify="space-between" mt={-6} pl="sm">
+          <Text size="xxs" c="dimmed">
+            Team default: {teamShowAllValues ? 'All' : 'Exact'}
+          </Text>
+          {isShowAllValuesOverridden && (
+            <UnstyledButton onClick={onResetShowAllValues}>
+              <Text size="xxs" c="dimmed" td="underline">
+                Use team default
+              </Text>
+            </UnstyledButton>
+          )}
+        </Flex>
         {showResetSection && (
           <>
-            <Divider />
+            <Separator size="xs" />
             {hasPersonalPins && (
               <ResetAction
                 label="Reset My Pins"

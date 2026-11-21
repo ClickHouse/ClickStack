@@ -6,20 +6,28 @@
 // #2362 where a semantic-hex `lineData[].color` (e.g. the output of
 // `getChartColorInfo()` on HyperDX) would not have a matching gradient
 // def after the `COLORS` palette was unified to Observable 10.
-import { NumericUnit } from '@hyperdx/common-utils/dist/types';
+import { DisplayType, NumericUnit } from '@hyperdx/common-utils/dist/types';
 
 import type { LineData } from '@/ChartUtils';
 import type { ActiveClickSeries } from '@/HDXMultiSeriesTimeChart';
 import {
   buildActiveClickSeries,
+  cappedYAxisUpperBound,
   collectMemoChartGradientHexes,
+  compactTickAnchor,
+  computeYAxisBounds,
   formatAxisTick,
+  getExpandableYAxisTicks,
+  getLineCurveType,
+  getNiceYAxisTicks,
   getSelectedLineData,
   getVisibleLineData,
   getVisibleTooltipRows,
   getYAxisTicks,
   HARD_LINES_LIMIT,
   sameActiveClickSeries,
+  scanStackedYAxisValueRange,
+  scanYAxisValueRange,
 } from '@/HDXMultiSeriesTimeChart';
 import { COLORS } from '@/utils';
 
@@ -79,6 +87,16 @@ describe('formatAxisTick', () => {
     expect(formatAxisTick(-1.5, { output: 'number', mantissa: 2 })).toBe(
       '-1.5',
     );
+  });
+
+  it('does not abbreviate values between 500 and 999', () => {
+    // Regression: numbro's default lowPrecision rendered 750 as "0.8k" next
+    // to an unabbreviated "250" on the same axis.
+    const format = { output: 'number' as const, mantissa: 1 };
+    expect(
+      [0, 250, 500, 750, 1000].map(v => formatAxisTick(v, format)),
+    ).toEqual(['0', '250', '500', '750', '1k']);
+    expect(formatAxisTick(800, { output: 'number' })).toBe('800');
   });
 
   it('always renders exactly 0 as a bare integer', () => {
@@ -238,6 +256,696 @@ describe('formatAxisTick', () => {
   });
 });
 
+describe('getNiceYAxisTicks', () => {
+  it('rounds to a clean step instead of dividing the raw range', () => {
+    // Regression: evenly dividing an unrounded range into quarters gave
+    // fractional labels (341/683/1k) or, worse, duplicate rounded ones.
+    expect(getNiceYAxisTicks(0, 1000).ticks).toEqual([0, 250, 500, 750, 1000]);
+  });
+
+  it('works for a non-zero lower bound', () => {
+    expect(getNiceYAxisTicks(10, 30).ticks).toEqual([10, 15, 20, 25, 30]);
+  });
+
+  it('never expands past the given range, even if it clips ticks short', () => {
+    // A tight/fitted range shouldn't gain extra ticks beyond its own bounds.
+    expect(getNiceYAxisTicks(95, 205).ticks).toEqual([100, 125, 150, 175, 200]);
+  });
+
+  it('returns no ticks for a degenerate (flat) range', () => {
+    expect(getNiceYAxisTicks(5, 5).ticks).toEqual([]);
+  });
+
+  it('cleans up float dust from a fractional step', () => {
+    // Regression: without rounding, a 0.1 step gave 0.30000000000000004.
+    expect(getNiceYAxisTicks(0, 0.42).ticks).toEqual([0, 0.1, 0.2, 0.3, 0.4]);
+  });
+
+  it('never returns more than maxTicks ticks', () => {
+    // Regression: rounding to the nearest step could pick one below the
+    // raw target, overflowing to 6 ticks here instead of capping at 5.
+    expect(getNiceYAxisTicks(0, 1480).ticks.length).toBeLessThanOrEqual(5);
+  });
+
+  it('rejects a step whose only distinct formatting overflows the label budget', () => {
+    // This domain needs 17-char labels to distinguish at all - no step
+    // fits the budget and stays distinct, so this returns no ticks.
+    expect(getNiceYAxisTicks(999999999999, 1000000000030).ticks).toEqual([]);
+  });
+
+  it('avoids a step that formatAxisTick would round unevenly (12.5 -> "13")', () => {
+    // At this magnitude (exp === 0), a 2.5 step yields non-integer ticks
+    // that straddle formatAxisTick's forced-integer threshold of 10.
+    expect(getNiceYAxisTicks(0, 12.6).ticks).toEqual([0, 5, 10]);
+  });
+
+  it('never accepts a single tick, even though it is trivially "distinct"', () => {
+    // Regression: a lone survivor's label can't collide with anything,
+    // so a naive distinctness check accepted a one-tick, no-scale axis.
+    const result = getNiceYAxisTicks(999999999999, 1000000000000.001);
+    expect(result.ticks.length === 0 || result.ticks.length >= 2).toBe(true);
+  });
+
+  it('escalates precision past the configured mantissa to keep labels distinct', () => {
+    // Regression: two ticks must never show the same label - 0 decimals
+    // collapses a narrow byte range entirely to "3 GB".
+    const GB = 1024 ** 3;
+    const result = getNiceYAxisTicks(2.825 * GB, 3.45 * GB, 5, {
+      output: 'byte',
+      mantissa: 0,
+    });
+    const labels = result.ticks.map(t => result.tickFormatter!(t));
+    expect(result.ticks.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('falls back to full, non-compact precision when no format is configured', () => {
+    // Regression: with no mantissa to escalate, close-together magnitudes
+    // collapsed under Intl's compact notation (e.g. "1T") instead.
+    const result = getNiceYAxisTicks(999999999999, 1000000000030);
+    const labels = result.ticks.map(t => result.tickFormatter!(t));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('escalates from the minimal precision, not past what distinctness needs', () => {
+    // Regression: starting escalation above 1 (e.g. at "configured+1")
+    // skipped a sufficient mantissa, producing needlessly wide labels.
+    const result = getExpandableYAxisTicks(0, 2100, 5, { output: 'number' });
+    expect(result.ticks.map(t => result.tickFormatter!(t))).toEqual([
+      '0',
+      '500',
+      '1k',
+      '1.5k',
+      '2k',
+    ]);
+  });
+
+  it('escalates a duration format past its fixed significant-digit count', () => {
+    // Regression: duration collisions returned null unconditionally,
+    // discarding the tick list instead of trying more precision.
+    const result = getNiceYAxisTicks(3600, 3700, 5, { output: 'duration' });
+    expect(result.tickFormatter).toBeDefined();
+    const labels = result.ticks.map(t => result.tickFormatter!(t));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('rejects a plain-number escalation that would overflow the axis label budget', () => {
+    // Regression: mantissa 3 was needed for distinctness but rendered
+    // "1.0500k" (7 chars) - must be rejected in favor of a coarser step.
+    const result = getExpandableYAxisTicks(1050, 1050.315, 5, {
+      output: 'number',
+      mantissa: 3,
+    });
+    const labels = result.ticks.map(t => result.tickFormatter!(t));
+    expect(labels.every(l => l.length <= 5)).toBe(true);
+  });
+
+  it('escalates a fixed-unit axis without reintroducing the suffix it drops', () => {
+    // Regression: escalation called formatNumber directly, restoring the
+    // "cps" suffix formatAxisTick strips - overflowing the label budget.
+    const result = getExpandableYAxisTicks(1.15, 1.150115, 5, {
+      output: 'throughput',
+      numericUnit: NumericUnit.Cps,
+      mantissa: 2,
+    });
+    expect(result.ticks.map(t => result.tickFormatter!(t))).toEqual([
+      '1.1',
+      '1.2',
+    ]);
+  });
+
+  it('rejects a full-precision fallback that overflows the label budget', () => {
+    // Regression: no-format fallback had no budget check, rendering
+    // 9-char grouped numbers instead of falling through to a coarser step.
+    const result = getNiceYAxisTicks(1200000, 1250000);
+    const labels = result.ticks.map(t => result.tickFormatter!(t));
+    expect(labels.every(l => l.length <= 5)).toBe(true);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('excludes a 2.5-scaled step below 1 only when the format forces integers', () => {
+    // Regression: step 0.25 (2.5x10^-1) survived the bare-2.5 filter,
+    // rounding to an uneven 0.3/0.2/0.3/0.2 progression at mantissa 0.
+    const forcedInteger = getNiceYAxisTicks(0, 1.1, 5, {
+      output: 'number',
+      mantissa: 0,
+    });
+    expect(forcedInteger.ticks).toEqual([0, 0.5, 1]);
+
+    // With decimals to spend, 0.25 renders exactly - keep the denser step.
+    const withDecimals = getNiceYAxisTicks(0, 1.1, 5, {
+      output: 'number',
+      mantissa: 2,
+    });
+    expect(withDecimals.ticks).toEqual([0, 0.25, 0.5, 0.75, 1]);
+  });
+});
+
+describe('scanYAxisValueRange', () => {
+  const series = (dataKey: string): LineData => ({
+    dataKey,
+    currentPeriodKey: dataKey,
+    previousPeriodKey: `${dataKey}.prev`,
+    displayName: dataKey,
+    valueColumnName: dataKey,
+    groupValues: [],
+    color: '#a',
+  });
+
+  it('finds the min/max across every series it is given', () => {
+    // Callers pass only the drawn series (already selection- and
+    // HARD_LINES_LIMIT-filtered), so no visibility filtering happens here.
+    const lineData = [series('a'), series('b')];
+    const graphResults = [{ a: 10, b: 40 }, { a: -5 }];
+    expect(scanYAxisValueRange(graphResults, lineData)).toEqual({
+      min: -5,
+      max: 40,
+    });
+  });
+});
+
+describe('scanStackedYAxisValueRange', () => {
+  const series = (dataKey: string): LineData => ({
+    dataKey,
+    currentPeriodKey: dataKey,
+    previousPeriodKey: `${dataKey}.prev`,
+    displayName: dataKey,
+    valueColumnName: dataKey,
+    groupValues: [],
+    color: '#a',
+  });
+
+  it('spans every running sum of the stack, as Recharts draws it', () => {
+    // Recharts stacks each series on the previous one's top (stackOffset
+    // "none"), so a negative series can dip a segment below its baseline.
+    const lineData = [series('a'), series('b'), series('c')];
+    const graphResults = [
+      { a: 10, b: 30, c: -50 },
+      { a: 5, c: 20 },
+    ];
+    expect(scanStackedYAxisValueRange(graphResults, lineData)).toEqual({
+      min: -10,
+      max: 40,
+    });
+  });
+
+  it('returns an empty range when no series has a numeric value', () => {
+    expect(scanStackedYAxisValueRange([{ a: null }], [series('a')])).toEqual({
+      min: Infinity,
+      max: -Infinity,
+    });
+  });
+});
+
+describe('computeYAxisBounds', () => {
+  const series = (dataKey: string): LineData => ({
+    dataKey,
+    currentPeriodKey: dataKey,
+    previousPeriodKey: `${dataKey}.prev`,
+    displayName: dataKey,
+    valueColumnName: dataKey,
+    groupValues: [],
+    color: '#a',
+  });
+
+  it('rounds ticks to clean, non-duplicating values', () => {
+    // A peak of 3 divided into raw quarters rounds (mantissa 0) to
+    // 0/1/2/2/3 - two ticks reading "2" at different heights.
+    const bounds = computeYAxisBounds(
+      [{ a: 3 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({
+      domain: [0, 3.15],
+      ticks: [0, 1, 2, 3],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('never picks a step that formatAxisTick would round unevenly', () => {
+    // Regression: a 2.5 step at this magnitude gives "12.5", which
+    // formatAxisTick rounds to "13" - an uneven-looking progression.
+    const bounds = computeYAxisBounds(
+      [{ a: 12 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({
+      domain: [0, 15],
+      ticks: [0, 5, 10, 15],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('expands past padding to avoid a sparse, dead-space-heavy axis', () => {
+    // Regression: a step landing between two step levels left only 3
+    // ticks (0/500/1000) over domain [0,1260], 20% dead space at the top.
+    const bounds = computeYAxisBounds(
+      [{ a: 1200 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({
+      domain: [0, 1500],
+      ticks: [0, 500, 1000, 1500],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('extends the zero-pinned domain to cover negative data too', () => {
+    // Regression: Recharts widens a [0, upperBound] domain to fit negative
+    // data, stranding a domain-only tick list in a sliver at the top.
+    const bounds = computeYAxisBounds(
+      [{ a: -100 }, { a: 1 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({
+      domain: [-100, 1.05],
+      ticks: [-100, -75, -50, -25, 0],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('pads an all-negative series away from zero, not toward it', () => {
+    // Regression: max * 1.05 made the upper bound *more* negative than max
+    // itself (-900 * 1.05 = -945), excluding the data's own maximum.
+    const bounds = computeYAxisBounds(
+      [{ a: -1000 }, { a: -900 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({
+      domain: [-1000, -850],
+      ticks: [-1000, -950, -900, -850],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('defers entirely to Recharts when a reference line is present', () => {
+    // A fully numeric domain reproduces the exact uneven spacing this PR
+    // fixes, and a reference line can extend it further - fall back to auto.
+    const bounds = computeYAxisBounds(
+      [{ a: 1000 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [1500],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+  });
+
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'sizes a %s axis to the stack height, not the tallest series',
+    displayType => {
+      // 60 and 40 individually reach a stack height of 100, not 63.
+      const lineData = [series('a'), series('b')];
+      const graphResults = [{ a: 60, b: 40 }];
+      for (const hasSelection of [false, true]) {
+        expect(
+          computeYAxisBounds(
+            graphResults,
+            lineData,
+            hasSelection,
+            false,
+            displayType,
+            [],
+          ),
+        ).toEqual({
+          domain: [0, 105],
+          ticks: [0, 25, 50, 75, 100],
+          tickFormatter: expect.any(Function),
+        });
+      }
+    },
+  );
+
+  it.each([DisplayType.StackedBar, DisplayType.StackedLine])(
+    'never shows duplicate %s tick labels when 1.5k rounds to 2k',
+    displayType => {
+      // Regression: stacked charts deferred to Recharts' ticks, which
+      // rendered 0/500/1k/2k/2k for a 2000-high stack at 0 decimals.
+      const bounds = computeYAxisBounds(
+        [
+          { a: 1200, b: 800 },
+          { a: 600, b: 300 },
+        ],
+        [series('a'), series('b')],
+        false,
+        false,
+        displayType,
+        [],
+        { output: 'number', mantissa: 0 },
+      );
+      const labels = bounds.ticks!.map(t => bounds.tickFormatter!(t));
+      expect(labels).toEqual(['0', '500', '1k', '1.5k', '2k']);
+    },
+  );
+
+  it('keeps a stacked axis pinned at zero even when fit-to-data is on', () => {
+    // Fit-to-data only applies to line charts; a stacked bar cut off above
+    // zero would misrepresent each segment's height.
+    const bounds = computeYAxisBounds(
+      [{ a: 900, b: 100 }],
+      [series('a'), series('b')],
+      false,
+      true,
+      DisplayType.StackedBar,
+      [],
+    );
+    expect(bounds.domain).toEqual([0, 1050]);
+  });
+
+  it('leaves a stacked axis with a reference line to Recharts', () => {
+    const bounds = computeYAxisBounds(
+      [{ a: 60, b: 40 }],
+      [series('a'), series('b')],
+      false,
+      false,
+      DisplayType.StackedBar,
+      [150],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+  });
+
+  it('falls back to auto when there is no numeric data', () => {
+    const bounds = computeYAxisBounds(
+      [],
+      [],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+  });
+
+  it('falls back to auto for flat data instead of a degenerate domain', () => {
+    // Regression: an all-zero domain ([0, 0]) collapsed the axis to one point.
+    const bounds = computeYAxisBounds(
+      [{ a: 0 }, { a: 0 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+  });
+
+  describe('with yAxisMaxDomain (capped axis, e.g. a 0-100% rate tile)', () => {
+    it('pins a flat/zero series to [0, cap] with clean ticks instead of auto', () => {
+      // The flat-data case above falls back to [0, 'auto']; with a cap it must
+      // show the full [0, cap] range so a 0% rate reads as 0%, not a nonsense
+      // auto-scaled range.
+      const bounds = computeYAxisBounds(
+        [{ a: 0 }, { a: 0 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      expect(bounds).toEqual({
+        domain: [0, 1],
+        ticks: [0, 0.5, 1],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('scales the upper bound to the data peak but never above the cap', () => {
+      const bounds = computeYAxisBounds(
+        [{ a: 0.5 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      // Peak 0.5 -> 0.55 with headroom, nice-stepped to 0.6, still under the cap.
+      expect(bounds).toEqual({
+        domain: [0, 0.6],
+        ticks: [0, 0.2, 0.4, 0.6],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('keeps the cap under a selection so selecting the sole series cannot collapse the axis', () => {
+      // Regression: on the selection path a flat 0% rate used to fall through
+      // to min/max fitting and collapse the capped axis to [0, 0].
+      const bounds = computeYAxisBounds(
+        [{ a: 0 }],
+        [series('a')],
+        true,
+        false,
+        DisplayType.Line,
+        [],
+        undefined,
+        1,
+      );
+      expect(bounds.domain).toEqual([0, 1]);
+      expect((bounds.ticks ?? []).length).toBeGreaterThan(1);
+    });
+
+    it('wins over reference lines rather than deferring to Recharts', () => {
+      const bounds = computeYAxisBounds(
+        [{ a: 0.5 }],
+        [series('a')],
+        false,
+        false,
+        DisplayType.Line,
+        [0.8],
+        undefined,
+        1,
+      );
+      // Identical to the no-reference-line case: the cap is applied before the
+      // reference-line handling, so the line at 0.8 neither widens the domain
+      // nor defers to Recharts' auto domain.
+      expect(bounds).toEqual({
+        domain: [0, 0.6],
+        ticks: [0, 0.2, 0.4, 0.6],
+        tickFormatter: expect.any(Function),
+      });
+    });
+
+    it('does not apply to a stacked chart, which follows its stack height', () => {
+      // 0.5 + 0.7 stacks to 1.2, above the cap of 1: the axis still fits the
+      // stack, exactly as it does without a cap.
+      const graphResults = [{ a: 0.5, b: 0.7 }];
+      const lineData = [series('a'), series('b')];
+      const capped = computeYAxisBounds(
+        graphResults,
+        lineData,
+        false,
+        false,
+        DisplayType.StackedBar,
+        [],
+        undefined,
+        1,
+      );
+      const uncapped = computeYAxisBounds(
+        graphResults,
+        lineData,
+        false,
+        false,
+        DisplayType.StackedBar,
+        [],
+      );
+      expect(capped.domain).toEqual(uncapped.domain);
+      expect(capped.ticks).toEqual(uncapped.ticks);
+      expect(capped.domain).not.toEqual([0, 1]);
+    });
+  });
+
+  it('falls back to auto for flat negative data on a fitted axis', () => {
+    // Regression: the same guard could also invert the domain (e.g.
+    // [0, -5]) for all-negative data padded past zero.
+    const bounds = computeYAxisBounds(
+      [{ a: -50 }, { a: -50 }],
+      [series('a')],
+      false,
+      true,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({ domain: ['auto', 'auto'], ticks: undefined });
+  });
+
+  it('keeps the zero-pinned fallback for flat selected data when not fitting', () => {
+    // Regression: this case used the fit fallback (`['auto','auto']`)
+    // even though only fit-to-data, not selection, should opt out of it.
+    const bounds = computeYAxisBounds(
+      [{ a: 100 }, { a: 100 }],
+      [series('a')],
+      true,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({ domain: [0, 'auto'], ticks: undefined });
+  });
+
+  it('lets a fitted axis follow a negative minimum without expanding the domain', () => {
+    const bounds = computeYAxisBounds(
+      [{ a: -50 }, { a: 200 }],
+      [series('a')],
+      false,
+      true,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({
+      domain: [-62.5, 212.5],
+      ticks: [0, 100, 200],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('extends a selection`s lower bound to negative data even without fitting', () => {
+    // Regression: `Math.max(0, ...)` pinned this at 0 even though min < 0,
+    // but Recharts widens the domain to the real minimum regardless.
+    const bounds = computeYAxisBounds(
+      [{ a: -100 }, { a: 100 }],
+      [series('a')],
+      true,
+      false,
+      DisplayType.Line,
+      [],
+    );
+    expect(bounds).toEqual({
+      domain: [-110, 110],
+      ticks: [-100, -50, 0, 50, 100],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('nice-steps normally when a reference line already sits inside the range', () => {
+    // Regression: bailing to ticks: undefined dropped the duplicate-label
+    // dedup an alert chart (always has a reference line) used to get.
+    const bounds = computeYAxisBounds(
+      [{ a: 100 }, { a: 200 }],
+      [series('a')],
+      false,
+      true,
+      DisplayType.Line,
+      [150],
+    );
+    expect(bounds).toEqual({
+      domain: [95, 205],
+      ticks: [100, 125, 150, 175, 200],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('extends the domain to include an out-of-range reference line, then nice-steps it', () => {
+    // A threshold beyond the data (e.g. Alerts.tsx's ifOverflow="extendDomain")
+    // widens the rendered domain - ticking it up front avoids stale ticks.
+    const bounds = computeYAxisBounds(
+      [{ a: 100 }, { a: 200 }],
+      [series('a')],
+      false,
+      true,
+      DisplayType.Line,
+      [300],
+    );
+    expect(bounds).toEqual({
+      domain: [95, 300],
+      ticks: [100, 150, 200, 250, 300],
+      tickFormatter: expect.any(Function),
+    });
+  });
+
+  it('escalates precision instead of dropping a step whose labels collide', () => {
+    // Regression: step 500's "0,500,1k,2k,2k" labels collide - escalating
+    // precision keeps the denser step instead of falling back to a coarser one.
+    const bounds = computeYAxisBounds(
+      [{ a: 2000 }],
+      [series('a')],
+      false,
+      false,
+      DisplayType.Line,
+      [],
+      { output: 'number' },
+    );
+    expect(bounds.domain).toEqual([0, 2100]);
+    expect(bounds.ticks).toEqual([0, 500, 1000, 1500, 2000]);
+    const labels = bounds.ticks!.map(t => bounds.tickFormatter!(t));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('never collapses to a single tick, escalating precision or a wider step instead', () => {
+    // Regression: a narrow byte range at 0 decimals (2.9-3.4GB) all rounds
+    // to "3 GB" - never show duplicate ticks or a no-scale single tick.
+    const GB = 1024 ** 3;
+    const bounds = computeYAxisBounds(
+      [{ a: 2.9 * GB }, { a: 3.4 * GB }],
+      [series('a')],
+      false,
+      true,
+      DisplayType.Line,
+      [],
+      { output: 'byte', mantissa: 0 },
+    );
+    expect(bounds.ticks).toBeDefined();
+    expect(bounds.ticks!.length).toBeGreaterThanOrEqual(2);
+    const labels = bounds.ticks!.map(t => bounds.tickFormatter!(t));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('falls back to getYAxisTicks when no nice step fits, instead of a raw duplicate-prone domain', () => {
+    // Regression: no nice step fit this range, leaving ticks undefined for
+    // Recharts' raw domain-division default - which collides.
+    const GB = 1024 ** 3;
+    const bounds = computeYAxisBounds(
+      [{ a: 3.269 * GB }, { a: 3.511 * GB }],
+      [series('a')],
+      false,
+      true,
+      DisplayType.Line,
+      [],
+      { output: 'byte', mantissa: 1 },
+    );
+    expect(bounds.ticks).toBeDefined();
+    expect(bounds.ticks!.length).toBeGreaterThanOrEqual(2);
+    const labels = bounds.ticks!.map(t => bounds.tickFormatter!(t));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe('getLineCurveType', () => {
+  it.each([
+    [DisplayType.Line, undefined, 'monotone'],
+    [DisplayType.StackedLine, undefined, 'linear'],
+    [DisplayType.Line, 'linear', 'linear'],
+    [DisplayType.StackedLine, 'smooth', 'monotone'],
+    [DisplayType.Line, 'step', 'stepAfter'],
+    [DisplayType.StackedLine, 'step', 'stepAfter'],
+  ] as const)('%s with %s renders %s', (displayType, interpolation, curve) => {
+    expect(getLineCurveType(displayType, interpolation)).toBe(curve);
+  });
+});
+
 describe('getYAxisTicks', () => {
   it('resolves the reported duplicate-tick regression with evenly spaced ticks', () => {
     // 5 ticks collide ("3.3/3.3/3.4/3.5/3.5 GB"); dropping duplicates would
@@ -321,6 +1029,7 @@ describe('getVisibleLineData', () => {
     previousPeriodKey: `${dataKey}.prev`,
     displayName: displayName ?? dataKey,
     valueColumnName: dataKey,
+    groupValues: [],
     color: '#abcdef',
   });
 
@@ -388,6 +1097,7 @@ describe('getSelectedLineData', () => {
     previousPeriodKey: `${dataKey}.prev`,
     displayName: displayName ?? dataKey,
     valueColumnName: dataKey,
+    groupValues: [],
     color: '#abcdef',
   });
 
@@ -434,6 +1144,7 @@ describe('buildActiveClickSeries', () => {
     previousPeriodKey: `${dataKey}.prev`,
     displayName: displayName ?? dataKey,
     valueColumnName: dataKey,
+    groupValues: [],
     color: `#${dataKey}`,
   });
 
@@ -507,6 +1218,7 @@ describe('buildActiveClickSeries', () => {
       previousPeriodKey: 'a.prev',
       displayName: 'Alpha (previous)',
       valueColumnName: 'a',
+      groupValues: [],
       color: '#a',
       isDashed: true,
     };
@@ -609,5 +1321,49 @@ describe('getVisibleTooltipRows', () => {
     const keys = result.rows.map(r => r.dataKey);
     expect(keys.filter(k => k === 's3')).toHaveLength(1);
     expect(result.rows).toHaveLength(20);
+  });
+});
+
+describe('cappedYAxisUpperBound', () => {
+  it('auto-scales to the data max plus 10% headroom when below the cap', () => {
+    expect(cappedYAxisUpperBound(0.5, 1)).toBeCloseTo(0.55);
+  });
+
+  it('never exceeds the cap, even when the data max plus headroom would', () => {
+    // 0.95 * 1.1 = 1.045, clamped to the cap.
+    expect(cappedYAxisUpperBound(0.95, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(5, 1)).toBe(1);
+  });
+
+  it('uses the cap for a flat/zero series instead of a degenerate domain', () => {
+    expect(cappedYAxisUpperBound(0, 1)).toBe(1);
+  });
+
+  it('uses the cap for a negative or non-finite data max', () => {
+    expect(cappedYAxisUpperBound(-1, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(NaN, 1)).toBe(1);
+    expect(cappedYAxisUpperBound(Infinity, 1)).toBe(1);
+  });
+});
+
+describe('compactTickAnchor', () => {
+  it('anchors the first tick to the start edge', () => {
+    expect(compactTickAnchor(0, 5)).toBe('start');
+  });
+
+  it('anchors the last tick to the end edge', () => {
+    expect(compactTickAnchor(4, 5)).toBe('end');
+  });
+
+  it('centers interior ticks', () => {
+    expect(compactTickAnchor(2, 5)).toBe('middle');
+  });
+
+  it('treats a negative index as the start edge', () => {
+    expect(compactTickAnchor(-1, 5)).toBe('start');
+  });
+
+  it('resolves the single-tick case to start (the first-edge check wins)', () => {
+    expect(compactTickAnchor(0, 1)).toBe('start');
   });
 });

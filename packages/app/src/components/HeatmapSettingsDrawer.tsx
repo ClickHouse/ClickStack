@@ -1,20 +1,13 @@
 import { useCallback, useEffect } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
+import { Separator } from '@clickhouse/click-ui';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { TableConnection } from '@hyperdx/common-utils/dist/core/metadata';
-import {
-  Box,
-  Button,
-  Divider,
-  Drawer,
-  Group,
-  SegmentedControl,
-  Stack,
-  Text,
-} from '@mantine/core';
+import { Button, Drawer, Group, Stack } from '@mantine/core';
 import { IconPlayerPlay } from '@tabler/icons-react';
 
+import { HeatmapScaleControl } from '@/components/DBHeatmapChart/HeatmapScaleControl';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 
 const HeatmapSettingsSchema = z.object({
@@ -29,6 +22,8 @@ export default function HeatmapSettingsDrawer({
   opened,
   onClose,
   connection,
+  sourceId,
+  dateRange,
   parentRef,
   defaultValues,
   onSubmit,
@@ -36,6 +31,8 @@ export default function HeatmapSettingsDrawer({
   opened: boolean;
   onClose: () => void;
   connection: TableConnection;
+  sourceId?: string;
+  dateRange?: [Date, Date];
   parentRef?: HTMLElement | null;
   defaultValues: HeatmapSettingsValues;
   onSubmit: (v: HeatmapSettingsValues) => void;
@@ -68,30 +65,18 @@ export default function HeatmapSettingsDrawer({
     >
       <form onSubmit={form.handleSubmit(onSubmit)}>
         <Stack gap="md">
-          <Box>
-            <Text size="sm" fw={500} mb={4}>
-              Scale
-            </Text>
-            <SegmentedControl
-              size="xs"
-              value={scaleType}
-              onChange={v => {
-                if (v === 'log' || v === 'linear') {
-                  form.setValue('scaleType', v);
-                }
-              }}
-              data={[
-                { label: 'Log', value: 'log' },
-                { label: 'Linear', value: 'linear' },
-              ]}
-            />
-          </Box>
+          <HeatmapScaleControl
+            value={scaleType}
+            onChange={v => form.setValue('scaleType', v)}
+          />
 
-          <Divider />
+          <Separator size="xs" />
 
           <SQLInlineEditorControlled
             parentRef={parentRef}
             tableConnection={connection}
+            sourceId={sourceId}
+            dateRange={dateRange}
             control={form.control}
             name="value"
             size="xs"
@@ -107,6 +92,8 @@ export default function HeatmapSettingsDrawer({
           <SQLInlineEditorControlled
             parentRef={parentRef}
             tableConnection={connection}
+            sourceId={sourceId}
+            dateRange={dateRange}
             control={form.control}
             name="count"
             placeholder="SQL expression"
@@ -117,7 +104,7 @@ export default function HeatmapSettingsDrawer({
             error={form.formState.errors.count?.message}
           />
 
-          <Divider />
+          <Separator size="xs" />
           <Group gap="xs" justify="flex-end">
             <Button variant="secondary" onClick={handleClose}>
               Cancel

@@ -17,7 +17,12 @@ logic (`@hyperdx/common-utils`) as the web frontend.
 hdx tui -a <url>                    # Interactive TUI (main command)
 hdx sources -a <url>                # List available sources (with schemas)
 hdx connections                     # List ClickHouse connections (id, name, host)
-hdx dashboards                      # List dashboards with tile summaries
+hdx dashboards [list]               # List dashboards (--query, --format table|json|csv)
+hdx dashboards export --id <id>     # Export a dashboard definition as JSON
+hdx dashboards create               # Create from -f <json> or --name + --chart/--chart-file
+hdx dashboards import -f <json>     # Import an exported definition (--if-not-exists, --name-override)
+hdx saved-searches [list]           # List saved searches
+hdx saved-searches create           # Create a saved search (--name/--source/--where)
 hdx chart -d <dashboard> [-t tile]  # Render dashboard tiles as ANSI charts
 hdx chart -s <source> [--agg ...]   # Ad-hoc chart over a source (builder mode)
 hdx chart --sql <query> -s <source> # Ad-hoc chart from raw SQL
@@ -29,6 +34,7 @@ hdx auth logout                     # Clear saved session
 hdx team list                       # List teams the user belongs to (multi-team)
 hdx team current                    # Show the active team
 hdx team use <name|id>              # Switch the active team (kubectx-style)
+hdx mcp install                     # Add the MCP server to Claude Code, Codex, Cursor, VS Code (interactive only: agents hand it to the user)
 hdx upload-sourcemaps               # Upload JS source maps
 ```
 
@@ -41,9 +47,10 @@ the CLI falls back to the app URL saved in the session file from a previous
 ```
 src/
 ├── cli.tsx              # Entry point — Commander CLI with commands:
-│                        #   tui, sources, connections, dashboards, chart,
-│                        #   query, auth (login/logout/status), team,
-│                        #   upload-sourcemaps
+│                        #   tui, sources, connections,
+│                        #   dashboards (list/export/create/import),
+│                        #   saved-searches (list/create), chart, query,
+│                        #   auth (login/logout/status), team, upload-sourcemaps
 │                        #   Also contains the standalone LoginPrompt component
 ├── App.tsx              # App shell — state machine:
 │                        #   loading → login → pick-source → EventViewer
@@ -67,6 +74,7 @@ src/
 │   ├── ColumnValues.tsx # Shared key-value renderer (used by Column Values tab + Event Details)
 │   ├── LoginForm.tsx    # Email/password login form (used inside TUI App)
 │   └── SourcePicker.tsx # Arrow-key source selector
+├── mcp/                 # `hdx mcp install`: key check, per-agent config writers, Ink prompt
 ├── shared/
 │   ├── tileConfig.ts    # Tile → queryable chart config resolution + per-displayType
 │   │                    #   transforms (ports of web DBDashboardPage / ChartUtils)

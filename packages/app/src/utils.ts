@@ -4,17 +4,24 @@ import { formatDistanceToNowStrict } from 'date-fns';
 import numbro from 'numbro';
 import type { SetStateAction } from 'react';
 import TimestampNano from 'timestamp-nano';
-import { TableConnection } from '@hyperdx/common-utils/dist/core/metadata';
+import {
+  TableConnection,
+  tcFromSource,
+  unquoteIdentifier,
+} from '@hyperdx/common-utils/dist/core/metadata';
+import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
 import {
   CATEGORICAL_PALETTE_TOKENS,
   ChartPaletteToken,
   ColorCondition,
+  isLogSource,
+  isMetricSource,
+  isTraceSource,
   NumericUnit,
   SourceKind,
   TMetricSource,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { SortingState } from '@tanstack/react-table';
 
 import { MetricsDataType, NumberFormat } from './types';
 
@@ -55,10 +62,6 @@ export const isValidUrl = (input: string) => {
   } catch {
     return false;
   }
-};
-
-export const capitalizeFirstLetter = (input: string) => {
-  return input.charAt(0).toUpperCase() + input.slice(1);
 };
 
 export const getShortUrl = (url: string) => {
@@ -355,6 +358,27 @@ export const getLogLevelClass = (lvl: string | undefined) => {
 };
 
 /**
+ * Error or warn level of a log row, or undefined when it is neither.
+ * SeverityNumber is normalized by the SDK, so it wins when set; 0 means
+ * unspecified, which falls back to matching SeverityText.
+ * https://github.com/open-telemetry/opentelemetry-specification/blob/v1.59.0/specification/logs/data-model.md#field-severitynumber
+ */
+export function getLogSeverityLevel({
+  severityNumber,
+  severityText,
+}: {
+  severityNumber?: unknown;
+  severityText?: string;
+}): 'error' | 'warn' | undefined {
+  const number = Number(severityNumber);
+  if (number > 0) {
+    return number >= 17 ? 'error' : number >= 13 ? 'warn' : undefined;
+  }
+  const level = getLogLevelClass(severityText);
+  return level === 'error' || level === 'warn' ? level : undefined;
+}
+
+/**
  * Chart Categorical Palette - ten distinguishable hues based on
  * Observable 10 (https://observablehq.com/@d3/color-schemes), with
  * `chart-blue` swapped to `#437eef` to match the brand link color
@@ -374,9 +398,8 @@ export const getLogLevelClass = (lvl: string | undefined) => {
  *
  * Keep in sync with `CATEGORICAL_PALETTE_TOKENS` in
  * `@hyperdx/common-utils/dist/types` and with the `--color-chart-{hue}`
- * vars in `packages/app/src/theme/themes/_chart-categorical-tokens.scss`
- * (the single shared SCSS source for categorical hues; both brand
- * themes `@use` it).
+ * vars in `packages/app/src/theme/_chart-categorical-tokens.scss`
+ * (the single shared SCSS source for categorical hues).
  */
 type CategoricalChartPaletteToken = (typeof CATEGORICAL_PALETTE_TOKENS)[number];
 
@@ -420,25 +443,13 @@ type SemanticChartColorKey =
   | 'errorHighlight';
 
 /**
- * Per-brand semantic chart palette. SSR / `getComputedStyle` fallback
- * for `getChartColor{Success,Warning,Error,Info,*Highlight}` helpers.
+ * Semantic chart palette. SSR / `getComputedStyle` fallback for
+ * `getChartColor{Success,Warning,Error,Info,*Highlight}` helpers.
  * Live values come from `--color-chart-{success|warning|error|info}[-highlight]`
  * in `_chart-categorical-tokens.scss` (`chart-semantic-tokens` mixin).
- *
- * Kept per-brand (instead of collapsed to one object) so the
- * `Record<'hyperdx' | 'clickstack', SemanticChartHexes>` constraint
- * forces both brands to declare every semantic key — dropping or
- * renaming one in either entry becomes a compile error rather than a
- * silent runtime divergence between SSR and client. The two entries
- * are byte-identical today; collapse to a flat object if and when a
- * brand actually needs to diverge.
  */
-type SemanticChartHexes = Readonly<Record<SemanticChartColorKey, string>>;
-
-const SEMANTIC_CHART_PALETTE: Readonly<
-  Record<'hyperdx' | 'clickstack', SemanticChartHexes>
-> = {
-  hyperdx: {
+const SEMANTIC_CHART_PALETTE: Readonly<Record<SemanticChartColorKey, string>> =
+  {
     success: '#3ca951',
     warning: '#efb118',
     error: '#ff725c',
@@ -446,17 +457,7 @@ const SEMANTIC_CHART_PALETTE: Readonly<
     successHighlight: '#80d9b3',
     warningHighlight: '#f5c94d',
     errorHighlight: '#ffa090',
-  },
-  clickstack: {
-    success: '#3ca951',
-    warning: '#efb118',
-    error: '#ff725c',
-    info: '#437eef',
-    successHighlight: '#80d9b3',
-    warningHighlight: '#f5c94d',
-    errorHighlight: '#ffa090',
-  },
-};
+  };
 
 /**
  * Ordered hex array for positional series assignment.
@@ -495,27 +496,6 @@ export {
 export type { ChartPaletteToken };
 
 /**
- * Detects the active theme by checking for theme classes on documentElement.
- * Returns 'clickstack' if theme-clickstack class is present, 'hyperdx' otherwise.
- * Note: classList.contains() is O(1) and fast - no caching needed.
- */
-function detectActiveTheme(): 'clickstack' | 'hyperdx' {
-  if (typeof window === 'undefined') {
-    // SSR: default to hyperdx (can't detect theme without DOM)
-    return 'hyperdx';
-  }
-
-  try {
-    const isClickStack =
-      document.documentElement.classList.contains('theme-clickstack');
-    return isClickStack ? 'clickstack' : 'hyperdx';
-  } catch {
-    // Fallback if DOM access fails
-    return 'hyperdx';
-  }
-}
-
-/**
  * Returns the Nth categorical chart hex by series index. Index wraps
  * modulo `CATEGORICAL_PALETTE_TOKENS.length`.
  *
@@ -540,10 +520,10 @@ function getColorFromCSSVariable(index: number): string {
  * always resolve to the same value, and skipping `getComputedStyle`
  * avoids an unnecessary layout read per series.
  *
- * Semantic tokens (`chart-success`, `-warning`, `-error`) DO vary per
- * brand, so they read the matching CSS var (`--color-chart-{name}`)
- * via `getComputedStyle` and fall back to the active theme's entry in
- * `SEMANTIC_CHART_PALETTE` for SSR / `getComputedStyle` failures.
+ * Semantic tokens (`chart-success`, `-warning`, `-error`) read the
+ * matching CSS var (`--color-chart-{name}`) via `getComputedStyle` and
+ * fall back to `SEMANTIC_CHART_PALETTE` for SSR / `getComputedStyle`
+ * failures.
  *
  * @example
  *   getColorFromCSSToken('chart-blue')     // Observable blue (both themes)
@@ -591,12 +571,11 @@ function semanticTokenFallback(
     case 'chart-success':
     case 'chart-warning':
     case 'chart-error': {
-      const theme = detectActiveTheme();
       const key = token.slice('chart-'.length) as
         | 'success'
         | 'warning'
         | 'error';
-      return SEMANTIC_CHART_PALETTE[theme][key];
+      return SEMANTIC_CHART_PALETTE[key];
     }
     default: {
       // Exhaustiveness assertion: if a new semantic token lands on
@@ -704,9 +683,8 @@ export function hashCode(str: string) {
 }
 
 /**
- * Theme-aware semantic chart color resolver. Reads `cssVarName` from
- * `documentElement` and falls back to the active theme's value from
- * `SEMANTIC_CHART_PALETTE` (HyperDX during SSR).
+ * Semantic chart color resolver. Reads `cssVarName` from
+ * `documentElement` and falls back to `SEMANTIC_CHART_PALETTE`.
  *
  * Charts typically render client-side after data fetching, so hydration
  * mismatches between the SSR fallback and the live var are rare.
@@ -716,7 +694,7 @@ function getSemanticChartColor(
   key: SemanticChartColorKey,
 ): string {
   if (typeof window === 'undefined') {
-    return SEMANTIC_CHART_PALETTE.hyperdx[key];
+    return SEMANTIC_CHART_PALETTE[key];
   }
 
   try {
@@ -729,11 +707,11 @@ function getSemanticChartColor(
     // Fallback if getComputedStyle fails
   }
 
-  return SEMANTIC_CHART_PALETTE[detectActiveTheme()][key];
+  return SEMANTIC_CHART_PALETTE[key];
 }
 
-// Semantic chart colors (theme-aware). Read from CSS variables with
-// per-theme fallbacks in `SEMANTIC_CHART_PALETTE`.
+// Semantic chart colors. Read from CSS variables with fallbacks in
+// `SEMANTIC_CHART_PALETTE`.
 export function getChartColorSuccess(): string {
   return getSemanticChartColor('--color-chart-success', 'success');
 }
@@ -747,7 +725,7 @@ export function getChartColorError(): string {
 }
 
 /** Chart blue used for info-level logs and similar "neutral / default"
- *  series. Same hue as categorical `chart-blue` on both brands. */
+ *  series. Same hue as categorical `chart-blue`. */
 export function getChartColorInfo(): string {
   return getSemanticChartColor('--color-chart-info', 'info');
 }
@@ -981,6 +959,32 @@ const formatAutoScaleData = (
   return `${scaledValue.toFixed(mantissa)} ${units[i]}${rateSuffix}`;
 };
 
+const AVERAGE_UNITS = [
+  [1e3, 'thousand'],
+  [1e6, 'million'],
+  [1e9, 'billion'],
+  [1e12, 'trillion'],
+] as const;
+
+// numbro's default lowPrecision abbreviates anything that rounds to the next
+// unit (750 -> "0.8k"), while turning it off picks the unit before rounding
+// (999,700 -> "1000k"). Pick the unit from the rounded value instead.
+function averageUnitOptions(
+  displayed: number,
+  mantissa: number,
+): Pick<numbro.Format, 'forceAverage' | 'lowPrecision'> {
+  const abs = Math.abs(displayed);
+  const round = (v: number) => Math.round(v * 10 ** mantissa) / 10 ** mantissa;
+  let scaled = abs;
+  let unit: numbro.Format['forceAverage'];
+  for (const [power, name] of AVERAGE_UNITS) {
+    if (round(scaled) < 1000) break;
+    unit = name;
+    scaled = abs / power;
+  }
+  return unit ? { forceAverage: unit } : { lowPrecision: false };
+}
+
 export const formatNumber = (
   value?: string | number,
   options?: NumberFormat,
@@ -1037,11 +1041,20 @@ export const formatNumber = (
     return formatDurationMs(ms);
   }
 
+  // Factor is only currently available for the time output
+  const factor = options.output === 'time' ? (options.factor ?? 1) : 1;
+
   const numbroFormat: numbro.Format = {
     output: options.output || 'number',
     mantissa: mantissa,
     thousandSeparated: options.thousandSeparated || false,
     average: options.average || false,
+    ...(options.average &&
+      options.output !== 'byte' &&
+      averageUnitOptions(
+        value * factor * (options.output === 'percent' ? 100 : 1),
+        mantissa,
+      )),
     ...(options.output === 'byte' && {
       base: options.decimalBytes ? 'decimal' : 'general',
       spaceSeparated: true,
@@ -1051,9 +1064,6 @@ export const formatNumber = (
       currencySymbol: options.currencySymbol || '$',
     }),
   };
-
-  // Factor is only currently available for the time output
-  const factor = options.output === 'time' ? (options.factor ?? 1) : 1;
 
   return (
     numbro(value * factor).format(numbroFormat) +
@@ -1104,21 +1114,27 @@ export function formatDurationMs(ms: number): string {
   return `${parseFloat((ms / 3_600_000).toFixed(2))}h`;
 }
 
-/** Compact duration labels for axis ticks — fewer decimals, shorter units. */
-export function formatDurationMsCompact(ms: number): string {
-  if (ms < 0) return `-${formatDurationMsCompact(-ms)}`;
+// Compact duration labels for axis ticks. An explicit `precision` overrides
+// each branch's own default significant-digit count.
+export function formatDurationMsCompact(
+  ms: number,
+  precision?: number,
+): string {
+  if (ms < 0) return `-${formatDurationMsCompact(-ms, precision)}`;
   if (ms === 0) return '0';
-  if (ms < 0.001) return `${+(ms * 1e6).toPrecision(2)}ns`;
+  if (ms < 0.001) return `${+(ms * 1e6).toPrecision(precision ?? 2)}ns`;
   if (ms < 1) {
     const µs = ms * 1000;
+    if (precision != null) return `${+µs.toPrecision(precision)}µs`;
     return µs < 10 ? `${+µs.toPrecision(2)}µs` : `${Math.round(µs)}µs`;
   }
   if (ms < 1000) {
+    if (precision != null) return `${+ms.toPrecision(precision)}ms`;
     return ms < 10 ? `${+ms.toPrecision(2)}ms` : `${Math.round(ms)}ms`;
   }
-  if (ms < 120_000) return `${+(ms / 1000).toPrecision(3)}s`;
-  if (ms < 3_600_000) return `${+(ms / 60_000).toPrecision(2)}m`;
-  return `${+(ms / 3_600_000).toPrecision(2)}h`;
+  if (ms < 120_000) return `${+(ms / 1000).toPrecision(precision ?? 3)}s`;
+  if (ms < 3_600_000) return `${+(ms / 60_000).toPrecision(precision ?? 2)}m`;
+  return `${+(ms / 3_600_000).toPrecision(precision ?? 2)}h`;
 }
 
 // format uptime as days, hours, minutes or seconds
@@ -1157,24 +1173,32 @@ export const formatUptime = (seconds: number) => {
 const escapeSqlSingleQuoted = (v: string): string =>
   v.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
+// `arrayIndexes` (optional) holds the positions in `path` that index into an
+// array. It only affects JSON columns: a numeric segment at one of those
+// positions is a 1-based subscript (`Col.\`events\`[1]`), not a quoted key
+// (`Col.\`events\`.\`0\``), which matches nothing. Callers that cannot tell
+// arrays from objects omit it and keep numeric segments as keys.
 export const mergePath = (
   path: string[],
   jsonColumns: string[] = [],
   mapColumns: string[] = [],
+  arrayIndexes?: ReadonlySet<number>,
 ) => {
   const [key, ...rest] = path;
   if (rest.length === 0) {
     return key;
   }
   if (jsonColumns.includes(key)) {
-    return `${key}.${rest
-      .map(v =>
-        v
-          .split('.')
-          .map(v => (v.startsWith('`') && v.endsWith('`') ? v : `\`${v}\``))
-          .join('.'),
-      )
-      .join('.')}`;
+    return rest.reduce((expr, v, i) => {
+      if (arrayIndexes?.has(i + 1) && /^\d+$/.test(v)) {
+        return `${expr}[${Number(v) + 1}]`;
+      }
+      const quoted = v
+        .split('.')
+        .map(v => (v.startsWith('`') && v.endsWith('`') ? v : `\`${v}\``))
+        .join('.');
+      return `${expr}.${quoted}`;
+    }, key);
   }
   if (mapColumns.includes(key)) {
     // Map columns always take string-key subscripts; ClickHouse's Map index
@@ -1193,6 +1217,100 @@ export const mergePath = (
         : `['${escapeSqlSingleQuoted(v)}']`;
     })
     .join('')}`;
+};
+
+// A bare Map subscript as the UI builds it: `LogAttributes['key']` or `` `LogAttributes`['key'] ``
+const MAP_SUBSCRIPT_REGEX =
+  /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\['((?:[^'\\]|\\.)*)'\]$/;
+// A trailing `AS alias` on a SELECT item, with the alias quoted or bare
+const SELECT_ALIAS_REGEX =
+  /\s+AS\s+("(?:[^"\\]|\\.)*"|`[^`]*`|[A-Za-z_][A-Za-z0-9_]*)\s*$/i;
+
+/**
+ * The expression of a SELECT item, without its `AS alias`
+ */
+export const selectItemExpression = (item: string): string =>
+  item.replace(SELECT_ALIAS_REGEX, '').trim();
+
+/**
+ * The alias of a SELECT item, unquoted, or undefined if it has none
+ */
+const selectItemAlias = (item: string): string | undefined => {
+  const alias = SELECT_ALIAS_REGEX.exec(item)?.[1];
+  return alias == null ? undefined : unquoteIdentifier(alias);
+};
+
+/**
+ * Whether a column picked in the UI is in the SELECT list, aliased or not
+ */
+export const isColumnInSelect = (
+  displayedColumns: string[] | undefined,
+  column: string,
+): boolean =>
+  displayedColumns?.some(
+    item => item === column || selectItemExpression(item) === column,
+  ) ?? false;
+
+/**
+ * Label a Map subscript picked in the UI with its key, so the results column
+ * reads `service.name` instead of `arrayElement(LogAttributes, 'service.name')`.
+ * The alias is left off whenever it could change the query.
+ */
+export const withMapKeyAlias = (
+  column: string,
+  selectItems: string[],
+  tableColumns: Set<string>,
+): string => {
+  const match = MAP_SUBSCRIPT_REGEX.exec(column);
+  if (!match) {
+    return column;
+  }
+  // Inverse of escapeSqlSingleQuoted, which mergePath uses to build the subscript
+  const key = match[2].replace(/\\(.)/g, '$1');
+  const selectedNames = selectItems.map(
+    item => selectItemAlias(item) ?? item.trim(),
+  );
+  if (
+    // Nothing to label
+    key === '' ||
+    // Would need escaping inside the quoted alias
+    /["\\]/.test(key) ||
+    // Table columns not loaded yet, so a clash with one cannot be ruled out
+    tableColumns.size === 0 ||
+    // ClickHouse resolves an alias before a column of the same name
+    tableColumns.has(key) ||
+    // Two selected columns cannot share a name
+    selectedNames.includes(key)
+  ) {
+    return column;
+  }
+  return `${column} AS "${key}"`;
+};
+
+/**
+ * The sort to keep once a SELECT item is removed. Sorting on an aliased column
+ * from the table header orders by the alias itself (`"service.name" DESC`),
+ * which stops resolving once the item is gone. Each top-level key that sorts
+ * by that alias is dropped. The default sort is used only when none remain.
+ */
+export const orderByAfterRemovingSelectItem = (
+  item: string,
+  orderBy: string,
+  defaultOrderBy: string,
+): string => {
+  const alias = selectItemAlias(item);
+  if (alias == null) {
+    return orderBy;
+  }
+  const quoted = `"${alias}"`;
+  const keys = splitAndTrimWithBracket(orderBy);
+  const kept = keys.filter(
+    key => key.replace(/\s+(ASC|DESC)$/i, '') !== quoted,
+  );
+  if (kept.length === keys.length) {
+    return orderBy;
+  }
+  return kept.length === 0 ? defaultOrderBy : kept.join(', ');
 };
 
 const _useTry = <T>(fn: () => T): [null | Error | unknown, null | T] => {
@@ -1291,6 +1409,41 @@ export function getAllMetricTables(source: TSource): TableConnection[] {
 }
 
 /**
+ * Tables of the enabled sources on a connection, including metric tables and
+ * materialized views, for SQL editor autocomplete.
+ */
+export function getTableConnectionsForConnection(
+  sources: TSource[] | undefined,
+  connectionId: string | undefined,
+): TableConnection[] {
+  if (!sources || !connectionId) return [];
+  return sources
+    .filter(s => s.connection === connectionId && !s.disabled)
+    .flatMap(source => {
+      const tables: TableConnection[] = getAllMetricTables(source);
+
+      if (!isMetricSource(source)) {
+        tables.push(tcFromSource(source));
+      }
+
+      if (
+        (isLogSource(source) || isTraceSource(source)) &&
+        source.materializedViews
+      ) {
+        tables.push(
+          ...source.materializedViews.map(mv => ({
+            databaseName: mv.databaseName,
+            tableName: mv.tableName,
+            connectionId: source.connection,
+          })),
+        );
+      }
+
+      return tables;
+    });
+}
+
+/**
  * Converts (T | T[]) to T[]. If undefined, empty array
  */
 export function toArray<T>(obj?: T | T[]): T[] {
@@ -1303,50 +1456,6 @@ export const stripTrailingSlash = (url: string | undefined | null): string => {
     throw new Error('URL must be a non-empty string');
   }
   return url.endsWith('/') ? url.slice(0, -1) : url;
-};
-
-/**
- * Converts the given SortingState into a SQL Order By string
- * Note, only the first element of the SortingState is used. Returns
- * undefined if the input is null or empty.
- *
- * Output format: "<column> <ASC|DESC>"
- * */
-export const sortingStateToOrderByString = (
-  sort: SortingState | null,
-): string | undefined => {
-  const firstSort = sort?.at(0);
-  return firstSort
-    ? `${firstSort.id} ${firstSort.desc ? 'DESC' : 'ASC'}`
-    : undefined;
-};
-
-/**
- * Converts the given SQL Order By string into a SortingState.
- *
- * Expects format matching the output of sortingStateToOrderByString
- * ("<column> <ASC|DESC>"). Returns undefined if the input is invalid.
- */
-export const orderByStringToSortingState = (
-  orderBy: string | undefined,
-): SortingState | undefined => {
-  if (!orderBy) {
-    return undefined;
-  }
-
-  const orderByParts = orderBy.split(' ');
-  const endsWithDirection = orderBy.toLowerCase().match(/ (asc|desc)$/i);
-
-  if (orderByParts.length !== 2 || !endsWithDirection) {
-    return undefined;
-  }
-
-  return [
-    {
-      id: orderByParts[0].trim(),
-      desc: orderByParts[1].trim().toUpperCase() === 'DESC',
-    },
-  ];
 };
 
 export const mapKeyBy = <T>(array: T[], key: keyof T) => {
