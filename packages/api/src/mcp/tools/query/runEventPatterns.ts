@@ -6,6 +6,7 @@ import {
   type Granularity,
   splitAndTrimWithBracket,
 } from '@hyperdx/common-utils/dist/core/utils';
+import type { TemplateMiner } from '@hyperdx/common-utils/dist/drain';
 import {
   buildPatternPredicate,
   DATE_MASK,
@@ -53,51 +54,65 @@ const drilldownWhereFailedCounter = getCounter(
 
 // ─── Reusable window mining ──────────────────────────────────────────────────
 
+// Shared by runEventPatterns (single window) and emerging_signals (two-window
+// diff). Each returns either an error result (MCP shape) or the data.
+
+type WindowOptions = {
+  where?: string;
+  whereLanguage?: 'lucene' | 'sql';
+  bodyExpression?: string;
+  sampleSize?: number;
+  trendBuckets?: number;
+  abortSignal?: AbortSignal;
+  /** Dashboard variables and their selected values. Omitted outside a dashboard context. */
+  variables?: ChartVariable[];
+  /** Also render every row filter as one SQL condition for drill-down. */
+  includeDrilldownWhere?: boolean;
+  /** Shared Drain miner, so cluster ids are comparable across windows. */
+  miner?: TemplateMiner;
+  /** Exclude rows at exactly endDate (half-open window), so two adjacent windows don't share a row. */
+  endExclusive?: boolean;
+};
+
 /**
- * Sample + Drain-mine one time window and return the raw pattern groups
- * (template + counts), without MCP response formatting. Shared by
- * runEventPatterns (single window) and emerging_signals (two-window diff).
- *
- * Returns either an error result (MCP shape) or the mined patterns.
+ * Row filters as one SQL condition ('' when there are none). Undefined when
+ * not requested. The source table filter is always included; the caller
+ * filter only when `includesUserFilter` is true (it could not be rendered as
+ * SQL otherwise).
  */
-export async function mineWindowPatterns(
+type Drilldown = { where: string; includesUserFilter: boolean };
+
+type WindowSample = {
+  sampleRows: Record<string, unknown>[];
+  totalCount: number;
+  bodyColumn: string;
+  startDate: Date;
+  endDate: Date;
+  drilldown?: Drilldown;
+};
+
+type MinedWindow = {
+  patterns: ReturnType<typeof minePatterns>['patterns'];
+  sampleMultiplier: number;
+  /** Drain cluster id of each sampled row, in sampleRows order. */
+  rowClusterIds: number[];
+  totalCount: number;
+  sampledCount: number;
+  bodyColumn: string;
+  trendGranularity?: Granularity;
+  trendBucketStarts: number[];
+  drilldown?: Drilldown;
+};
+
+/** Sample rows and count the total for one window, without mining. */
+export async function fetchWindowSample(
   teamId: string,
   sourceId: string,
   startDate: Date,
   endDate: Date,
-  options?: {
-    where?: string;
-    whereLanguage?: 'lucene' | 'sql';
-    bodyExpression?: string;
-    sampleSize?: number;
-    trendBuckets?: number;
-    abortSignal?: AbortSignal;
-    /** Dashboard variables and their selected values. Omitted outside a dashboard context. */
-    variables?: ChartVariable[];
-    /** Also render every row filter as one SQL condition for drill-down. */
-    includeDrilldownWhere?: boolean;
-  },
-): Promise<
-  | { error: McpErrorResult }
-  | {
-      patterns: ReturnType<typeof minePatterns>['patterns'];
-      sampleMultiplier: number;
-      totalCount: number;
-      sampledCount: number;
-      bodyColumn: string;
-      trendGranularity?: Granularity;
-      trendBucketStarts: number[];
-      /**
-       * Row filters as one SQL condition ('' when there are none). Undefined
-       * when not requested. The source table filter is always included; the
-       * caller filter only when `includesUserFilter` is true (it could not be
-       * rendered as SQL otherwise).
-       */
-      drilldown?: { where: string; includesUserFilter: boolean };
-    }
-> {
+  options?: WindowOptions,
+): Promise<{ error: McpErrorResult } | WindowSample> {
   const sampleSize = options?.sampleSize ?? 10_000;
-  const trendBuckets = options?.trendBuckets ?? 0;
 
   const source = await getSource(teamId, sourceId);
   if (!source) {
@@ -200,6 +215,7 @@ export async function mineWindowPatterns(
     orderBy: [{ ordering: 'DESC' as const, valueExpression: 'rand()' }],
     limit: { limit: sampleSize, offset: 0 },
     dateRange: [startDate, endDate] as [Date, Date],
+    ...(options?.endExclusive ? { dateRangeEndInclusive: false } : {}),
     variables: options?.variables,
   } satisfies ChartConfigWithDateRange;
 
@@ -221,6 +237,7 @@ export async function mineWindowPatterns(
     useTextIndexForImplicitColumn,
     limit: { limit: 1, offset: 0 },
     dateRange: [startDate, endDate] as [Date, Date],
+    ...(options?.endExclusive ? { dateRangeEndInclusive: false } : {}),
     variables: options?.variables,
   } satisfies ChartConfigWithDateRange;
 
@@ -309,20 +326,27 @@ export async function mineWindowPatterns(
           where: andSql(tableFilterSql, userWhereSql ?? undefined),
           includesUserFilter: userWhereSql !== null,
         };
+  return { sampleRows, totalCount, bodyColumn, startDate, endDate, drilldown };
+}
 
-  // Wrap the synchronous Drain mining in try/catch. Without this a thrown
-  // Drain error escapes the helper — and since callers (emerging_signals)
-  // await it inside Promise.all and only inspect the returned {error} union
-  // AFTER the await, an unwrapped throw becomes an unhandled rejection / 500
-  // instead of a clean MCP error result.
+/** Drain-mine a fetched window. Synchronous, so callers control the order windows enter a shared miner. */
+export function mineWindowSample(
+  sample: WindowSample,
+  options?: Pick<WindowOptions, 'trendBuckets' | 'miner'>,
+): { error: McpErrorResult } | MinedWindow {
+  const { sampleRows, totalCount, bodyColumn, startDate, endDate, drilldown } =
+    sample;
+  // Return a Drain error as an {error} result instead of throwing, so callers
+  // that only inspect the union get a clean MCP error rather than a 500.
   let mined: ReturnType<typeof minePatterns>;
   try {
     mined = minePatterns(sampleRows, {
       totalCount,
       startDate,
       endDate,
-      trendBuckets,
+      trendBuckets: options?.trendBuckets ?? 0,
       maxSamples: 5,
+      miner: options?.miner,
       getBody: row => {
         const raw = row.__hdx_pattern_body;
         return raw != null ? String(raw) : '';
@@ -343,29 +367,33 @@ export async function mineWindowPatterns(
     drilldown,
     patterns: mined.patterns,
     sampleMultiplier: mined.sampleMultiplier,
+    rowClusterIds: mined.rowClusterIds,
     sampledCount: sampleRows.length,
     trendGranularity: mined.trendGranularity,
     trendBucketStarts: mined.trendBucketStarts,
   };
 }
 
-// ─── Drain template normalization (emerging_signals cross-window keying) ─────
-
 /**
- * Normalize a Drain template so the same logical pattern matches across
- * windows despite Drain assigning different cluster ids each run. We collapse
- * runs of whitespace and treat the placeholder token uniformly. Distinct
- * placeholder PLACEMENTS remain distinct (only the placeholder glyph is
- * unified, its position is preserved), so unrelated templates do not collapse.
- *
- * Pure string logic — used by the emerging_signals MCP tool.
+ * Sample + Drain-mine one time window and return the raw pattern groups
+ * (template + counts), without MCP response formatting.
  */
-export function normalizeTemplate(pattern: string): string {
-  return pattern
-    .replace(/<\*>/g, '\u0001') // stable placeholder marker
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+export async function mineWindowPatterns(
+  teamId: string,
+  sourceId: string,
+  startDate: Date,
+  endDate: Date,
+  options?: WindowOptions,
+): Promise<{ error: McpErrorResult } | MinedWindow> {
+  const sample = await fetchWindowSample(
+    teamId,
+    sourceId,
+    startDate,
+    endDate,
+    options,
+  );
+  if ('error' in sample) return sample;
+  return mineWindowSample(sample, options);
 }
 
 // ─── Event pattern mining ────────────────────────────────────────────────────
