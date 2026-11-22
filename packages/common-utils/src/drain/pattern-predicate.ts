@@ -1,5 +1,7 @@
 import { escapeSqlString } from '@/core/utils';
 
+import { DATE_MASK, DATE_TOKEN, MONTH, WEEKDAY } from './config';
+
 const PATTERN_WILDCARD = '<*>';
 
 /**
@@ -30,8 +32,10 @@ export type PatternRegexOptions = {
    *
    * With extra delimiters the miner makes each mask a token of its own while
    * the delimiters split the raw date (`2026-11-04T06` mines as `<DATE> T06`).
-   * So a mask matches up to three runs joined by one separator, and the
-   * separator beside it is optional. parsePatternPredicate reads none of
+   * So `<DATE>` matches up to three date parts (digits, or month and weekday
+   * names) joined by one separator. The separator beside it is optional only
+   * where the masker leaves none: after a klog severity letter (`I1104`) and
+   * before a `T` time (`2026-11-04T06`). parsePatternPredicate reads none of
    * these back.
    */
   masks?: string[];
@@ -91,58 +95,93 @@ function tokensOf(template: string, options?: PatternRegexOptions): string[] {
   return template.split(split).filter(t => t.length > 0);
 }
 
+// How one form of the regex spells separators and runs between them.
+type Separators = {
+  /** One separator character. */
+  one: string;
+  /** A run of separators between two tokens. */
+  run: string;
+  /** An optional run of separators. */
+  optional: string;
+  /** One run of non-separators: a token. */
+  token: string;
+  /** Zero or more non-separators. */
+  rest: string;
+};
+
 // A template token as a regex: `<*>` becomes `wildcard`, each mask becomes
-// `mask`, the rest is literal.
+// `mask(name)`, the rest is literal.
 function tokenRegex(
   word: string,
   masks: string[],
   wildcard: string,
-  mask: string,
+  mask: (name: string) => string,
 ): string {
   if (word === PATTERN_WILDCARD) return wildcard;
   if (masks.length === 0) return escapeRe2Literal(word);
   return word
     .split(`<${masks[0]}>`)
     .map(part => tokenRegex(part, masks.slice(1), wildcard, mask))
-    .join(mask);
+    .join(mask(masks[0]));
 }
 
-// A masked date spans at most three runs between delimiters: 2026-11-04,
-// 04/Nov/2026, 04.11.2026.
+// The parts of a masked date: 2026-11-04, 04/Nov/2026, Wed Nov 4 (one mask
+// per word), the klog 1104.
+const DATE_PART = `(?:[0-9]{1,4}|${MONTH}|${WEEKDAY})`;
+// A masked date spans at most three runs between delimiters.
 const MAX_MASK_RUNS = 3;
 
-// Joins token regexes with `separator`, or with `optionalSeparator` beside a
-// mask token when the miner split masks off with extra delimiters.
+function maskRegex(
+  name: string,
+  seps: Separators,
+  options?: PatternRegexOptions,
+): string {
+  if ((options?.extraDelimiters ?? []).length === 0) return seps.token;
+  const part = name === DATE_MASK ? DATE_PART : seps.token;
+  return `${part}(?:${seps.one}${part}){0,${MAX_MASK_RUNS - 1}}`;
+}
+
+// The masker glues a date to a klog severity letter before it (I1104) and to
+// a time after it (2026-11-04T06); the miner then splits them into tokens.
+const SEVERITY_LETTER = /^[IWEF]$/;
+const GLUED_TIME = /^T[0-9]/;
+
+// Joins the token regexes with separator runs. With extra delimiters and
+// date masks, the run beside <DATE> is optional where the masker leaves no
+// separator, and a <*> there can hold either a glued or a separate token.
 function joinTokens(
   tokens: string[],
   toRegex: (token: string) => string,
-  separator: string,
-  optionalSeparator: string,
+  seps: Separators,
   options?: PatternRegexOptions,
 ): string {
-  const maskTokens = new Set(
-    (options?.extraDelimiters ?? []).length === 0
-      ? []
-      : (options?.masks ?? []).map(m => `<${m}>`),
-  );
-  return tokens
-    .map((t, i) =>
-      i === 0
-        ? toRegex(t)
-        : (maskTokens.has(t) || maskTokens.has(tokens[i - 1])
-            ? optionalSeparator
-            : separator) + toRegex(t),
-    )
-    .join('');
-}
-
-function maskRegex(
-  run: string,
-  separator: string,
-  options?: PatternRegexOptions,
-): string {
-  if ((options?.extraDelimiters ?? []).length === 0) return run;
-  return `${run}(?:${separator}${run}){0,${MAX_MASK_RUNS - 1}}`;
+  const glues =
+    (options?.extraDelimiters ?? []).length > 0 &&
+    (options?.masks ?? []).includes(DATE_MASK);
+  const isDate = (t: string | undefined) => glues && t === DATE_TOKEN;
+  const parts: string[] = [];
+  tokens.forEach((t, i) => {
+    const prev = tokens[i - 1];
+    const next = tokens[i + 1];
+    let join = i === 0 ? '' : seps.run;
+    let regex = toRegex(t);
+    if (t === PATTERN_WILDCARD && isDate(prev)) {
+      join = '';
+      regex = `(?:${seps.optional}T[0-9]${seps.rest}|${seps.run}${seps.token})`;
+      if (isDate(next)) regex += seps.run;
+    } else if (t === PATTERN_WILDCARD && isDate(next)) {
+      regex = `(?:${seps.token}${seps.run}|[IWEF]${seps.optional})`;
+    } else if (isDate(t) && prev === PATTERN_WILDCARD) {
+      join = '';
+    } else if (
+      (isDate(prev) && GLUED_TIME.test(t)) ||
+      (isDate(t) && prev != null && SEVERITY_LETTER.test(prev))
+    ) {
+      join = seps.optional;
+    }
+    parts.push(join + regex);
+  });
+  return parts.join('');
 }
 
 /** Anchored RE2 regex that a value matches when it fits the Drain template. */
@@ -153,12 +192,20 @@ export function templateToRegex(
   const separators = separatorClass(options);
   const separator = `[${separators}]`;
   const nonSeparators = `[^${separators}]+`;
-  const mask = maskRegex(nonSeparators, separator, options);
+  const seps: Separators = {
+    one: separator,
+    run: `${separator}+`,
+    optional: `${separator}*`,
+    token: nonSeparators,
+    rest: `[^${separators}]*`,
+  };
   const body = joinTokens(
     tokensOf(template, options),
-    t => tokenRegex(t, options?.masks ?? [], nonSeparators, mask),
-    `${separator}+`,
-    `${separator}*`,
+    t =>
+      tokenRegex(t, options?.masks ?? [], nonSeparators, name =>
+        maskRegex(name, seps, options),
+      ),
+    seps,
     options,
   );
   return `^${separator}*${body}${separator}*$`;
@@ -182,15 +229,23 @@ export function buildPatternPredicate(
 const COMPACT_START = '^ ?';
 const COMPACT_END = ' ?$';
 const COMPACT_WILDCARD = '[^ ]+';
+const COMPACT_SEPARATORS: Separators = {
+  one: ' ',
+  run: ' ',
+  optional: ' ?',
+  token: COMPACT_WILDCARD,
+  rest: '[^ ]*',
+};
 
 // Regex over a value whose separator runs were replaced by single spaces.
 function compactRegex(template: string, options?: PatternRegexOptions): string {
-  const mask = maskRegex(COMPACT_WILDCARD, ' ', options);
   const body = joinTokens(
     tokensOf(template, options),
-    t => tokenRegex(t, options?.masks ?? [], COMPACT_WILDCARD, mask),
-    ' ',
-    ' ?',
+    t =>
+      tokenRegex(t, options?.masks ?? [], COMPACT_WILDCARD, name =>
+        maskRegex(name, COMPACT_SEPARATORS, options),
+      ),
+    COMPACT_SEPARATORS,
     options,
   );
   return `${COMPACT_START}${body}${COMPACT_END}`;

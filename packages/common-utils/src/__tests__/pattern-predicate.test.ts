@@ -428,14 +428,30 @@ describe('templateToRegex with masks', () => {
     expect(matches('<DATE> <*> INFO x', '2026-11-04 INFO x')).toBe(false);
   });
 
-  it('with delimiters, a mask matches a date of up to three runs', () => {
+  it('with delimiters, a mask matches a date of up to three parts', () => {
+    const m = (template: string, value: string) =>
+      matches(template, value, PATTERN_REGEX_OPTIONS);
+    expect(m('<DATE> started', '2026-11-04 started')).toBe(true);
+    expect(m('access <DATE> 12', 'access [04/Nov/2026:12]')).toBe(true);
+    expect(m('<DATE> <DATE> <DATE> up', 'Wed, Nov 4 up')).toBe(true);
+    expect(m('<DATE> started', '2026-11-04-01 started')).toBe(false);
+    expect(m('<DATE> started', 'boot started')).toBe(false);
+    expect(m('<DATE> started', 'job-42-x started')).toBe(false);
+  });
+
+  it('with delimiters, a mask touches only a severity letter or a T time', () => {
     const m = (template: string, value: string) =>
       matches(template, value, PATTERN_REGEX_OPTIONS);
     expect(m('<DATE> T06 started', '2026-11-04T06 started')).toBe(true);
     expect(m('<DATE> <*> started', '2026-11-04T06 started')).toBe(true);
-    expect(m('access <DATE> 12', 'access [04/Nov/2026:12]')).toBe(true);
-    expect(m('<DATE> started', '2026-11-04-01 started')).toBe(false);
-    expect(m('<DATE> started', 'boot started')).toBe(true);
+    expect(m('<DATE> <*> started', '2026-11-04 boot started')).toBe(true);
+    expect(m('I <DATE> <*> done', 'I1104 06 done')).toBe(true);
+    expect(m('<*> <DATE> <*> done', 'E1104 06 done')).toBe(true);
+    expect(m('<*> <DATE> <*> done', 'job 2026-11-04 06 done')).toBe(true);
+    expect(m('ts <DATE> <*> msg done', 'tsunami 5 msg done')).toBe(false);
+    expect(m('ts <DATE> <*> msg done', 'ts 2026-11-04 5 msg done')).toBe(true);
+    expect(m('<DATE> started', '2026-11-04x started')).toBe(false);
+    expect(m('x <DATE> started', 'x2026-11-04 started')).toBe(false);
     expect(
       buildCompactPatternPredicate(
         'Body',
