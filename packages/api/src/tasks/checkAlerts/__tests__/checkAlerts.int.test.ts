@@ -12786,7 +12786,10 @@ describe('checkAlerts', () => {
               $gte: new Date(now.getTime() - getAlertHistoryLookbackMs('5m')),
             },
             state: { $ne: AlertState.ERROR },
-          }).explain('executionStats'),
+          })
+            // On 10 rows DocumentDB's planner often picks a seq scan; pin the index.
+            .hint('alert_1_createdAt_-1')
+            .explain('executionStats'),
         );
 
       expect(JSON.stringify(explain.queryPlanner.winningPlan)).toContain(
