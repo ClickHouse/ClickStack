@@ -2,19 +2,21 @@ import {
   buildPatternPredicate,
   MAX_PREDICATE_TEMPLATE_LENGTH,
   minePatterns,
+  PATTERN_REGEX_OPTIONS,
   templateToRegex,
 } from '@hyperdx/common-utils/dist/drain';
 
 import { andSql } from '@/mcp/tools/query/patternDrilldown';
 
 // RE2 spells code points \x{HHHH} and categories \pZ; JS (with the u flag)
-// spells them \u{HHHH} and \p{Z}. ClickHouse behaviour is covered by
-// integration tests.
+// spells them \u{HHHH} and \p{Z}, and has no POSIX classes. ClickHouse
+// behaviour is covered by integration tests.
 function toJsRegex(re2: string): RegExp {
   return RegExp(
     re2
       .replace(/\\x\{([0-9A-Fa-f]+)\}/g, '\\u{$1}')
-      .replace(/(?<!\\)\\p([A-Z])/g, '\\p{$1}'),
+      .replace(/(?<!\\)\\p([A-Z])/g, '\\p{$1}')
+      .replace(/\[:punct:\]/g, '!-\\/:-@\\[-\\x60{-~'),
     'u',
   );
 }
@@ -128,7 +130,7 @@ describe('templateToRegex', () => {
     expect(patterns.length).toBeGreaterThan(1);
 
     for (const p of patterns) {
-      const re = toJsRegex(templateToRegex(p.pattern));
+      const re = toJsRegex(templateToRegex(p.pattern, PATTERN_REGEX_OPTIONS));
       const members = p.samples.map(s => s.body);
       expect(members).toHaveLength(p.sampleCount);
       for (const m of members) expect(re.test(m)).toBe(true);

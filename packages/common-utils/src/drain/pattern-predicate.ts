@@ -25,8 +25,14 @@ export type PatternRegexOptions = {
    * The names of the masks the miner applied, e.g. `[DATE_MASK]`. Each
    * `<NAME>` in a template then matches one or more characters of a token,
    * as a whole token or inside one (`backup_<DATE>.tar`). Without this, it
-   * is literal text. A whole-token mask matches like `<*>`, so
-   * parsePatternPredicate reads it back as `<*>`.
+   * is literal text. Without extra delimiters a whole-token mask matches
+   * like `<*>`, so parsePatternPredicate reads it back as `<*>`.
+   *
+   * With extra delimiters the miner makes each mask a token of its own while
+   * the delimiters split the raw date (`2026-11-04T06` mines as `<DATE> T06`).
+   * So a mask matches up to three runs joined by one separator, and the
+   * separator beside it is optional. parsePatternPredicate reads none of
+   * these back.
    */
   masks?: string[];
 };
@@ -85,15 +91,58 @@ function tokensOf(template: string, options?: PatternRegexOptions): string[] {
   return template.split(split).filter(t => t.length > 0);
 }
 
-// A template token as a regex: `<*>` and each mask become `wildcard`, the
-// rest is literal.
-function tokenRegex(word: string, masks: string[], wildcard: string): string {
+// A template token as a regex: `<*>` becomes `wildcard`, each mask becomes
+// `mask`, the rest is literal.
+function tokenRegex(
+  word: string,
+  masks: string[],
+  wildcard: string,
+  mask: string,
+): string {
   if (word === PATTERN_WILDCARD) return wildcard;
   if (masks.length === 0) return escapeRe2Literal(word);
   return word
     .split(`<${masks[0]}>`)
-    .map(part => tokenRegex(part, masks.slice(1), wildcard))
-    .join(wildcard);
+    .map(part => tokenRegex(part, masks.slice(1), wildcard, mask))
+    .join(mask);
+}
+
+// A masked date spans at most three runs between delimiters: 2026-11-04,
+// 04/Nov/2026, 04.11.2026.
+const MAX_MASK_RUNS = 3;
+
+// Joins token regexes with `separator`, or with `optionalSeparator` beside a
+// mask token when the miner split masks off with extra delimiters.
+function joinTokens(
+  tokens: string[],
+  toRegex: (token: string) => string,
+  separator: string,
+  optionalSeparator: string,
+  options?: PatternRegexOptions,
+): string {
+  const maskTokens = new Set(
+    (options?.extraDelimiters ?? []).length === 0
+      ? []
+      : (options?.masks ?? []).map(m => `<${m}>`),
+  );
+  return tokens
+    .map((t, i) =>
+      i === 0
+        ? toRegex(t)
+        : (maskTokens.has(t) || maskTokens.has(tokens[i - 1])
+            ? optionalSeparator
+            : separator) + toRegex(t),
+    )
+    .join('');
+}
+
+function maskRegex(
+  run: string,
+  separator: string,
+  options?: PatternRegexOptions,
+): string {
+  if ((options?.extraDelimiters ?? []).length === 0) return run;
+  return `${run}(?:${separator}${run}){0,${MAX_MASK_RUNS - 1}}`;
 }
 
 /** Anchored RE2 regex that a value matches when it fits the Drain template. */
@@ -104,9 +153,14 @@ export function templateToRegex(
   const separators = separatorClass(options);
   const separator = `[${separators}]`;
   const nonSeparators = `[^${separators}]+`;
-  const body = tokensOf(template, options)
-    .map(t => tokenRegex(t, options?.masks ?? [], nonSeparators))
-    .join(`${separator}+`);
+  const mask = maskRegex(nonSeparators, separator, options);
+  const body = joinTokens(
+    tokensOf(template, options),
+    t => tokenRegex(t, options?.masks ?? [], nonSeparators, mask),
+    `${separator}+`,
+    `${separator}*`,
+    options,
+  );
   return `^${separator}*${body}${separator}*$`;
 }
 
@@ -131,9 +185,14 @@ const COMPACT_WILDCARD = '[^ ]+';
 
 // Regex over a value whose separator runs were replaced by single spaces.
 function compactRegex(template: string, options?: PatternRegexOptions): string {
-  const body = tokensOf(template, options)
-    .map(t => tokenRegex(t, options?.masks ?? [], COMPACT_WILDCARD))
-    .join(' ');
+  const mask = maskRegex(COMPACT_WILDCARD, ' ', options);
+  const body = joinTokens(
+    tokensOf(template, options),
+    t => tokenRegex(t, options?.masks ?? [], COMPACT_WILDCARD, mask),
+    ' ',
+    ' ?',
+    options,
+  );
   return `${COMPACT_START}${body}${COMPACT_END}`;
 }
 
@@ -155,8 +214,14 @@ export function buildCompactPatternPredicate(
 ): string | null {
   if (template.length > MAX_PREDICATE_TEMPLATE_LENGTH) return null;
   const delimiters = options?.extraDelimiters ?? [];
+  // The miner keeps masks whole, so their brackets don't count.
+  const masks = (options?.masks ?? []).map(m => `<${m}>`);
   const splitsToken = tokensOf(template, options).some(
-    t => t !== PATTERN_WILDCARD && [...t].some(c => delimiters.includes(c)),
+    t =>
+      t !== PATTERN_WILDCARD &&
+      [...masks.reduce((rest, m) => rest.split(m).join(''), t)].some(c =>
+        delimiters.includes(c),
+      ),
   );
   if (splitsToken) return null;
   const separatorRun = `[${separatorClass(options)}]+`;

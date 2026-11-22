@@ -1,5 +1,6 @@
 import { TemplateMinerConfig } from '@/drain/config';
-import { Drain } from '@/drain/drain';
+import { Drain, tokenizeContent } from '@/drain/drain';
+import { ASCII_PUNCTUATION } from '@/drain/pattern-predicate';
 import { TemplateMiner } from '@/drain/template-miner';
 
 describe('Drain', () => {
@@ -214,6 +215,52 @@ A format 3`
     expect(template).toEqual(seq1);
 
     expect(() => model.createTemplate(seq1, ['aa'])).toThrow();
+  });
+
+  it('drops the empty tokens left by delimiters at the ends of a line', () => {
+    const model = new Drain(4, 0.4, 100, null, ASCII_PUNCTUATION.split(''));
+    expect(model.getContentAsTokens('{"a":"b"}')).toEqual(['a', 'b']);
+    expect(model.getContentAsTokens(' [x] ')).toEqual(['x']);
+    expect(model.getContentAsTokens('{}')).toEqual([]);
+  });
+
+  it('makes each kept mask a token of its own when delimiters split the line', () => {
+    const delimiters = ASCII_PUNCTUATION.split('');
+    expect(
+      tokenizeContent('[<DATE>T06:12:12Z] ok', delimiters, ['<DATE>']),
+    ).toEqual(['<DATE>', 'T06', '12', '12Z', 'ok']);
+    expect(tokenizeContent('<DATE>T06 ok', [], ['<DATE>'])).toEqual([
+      '<DATE>T06',
+      'ok',
+    ]);
+  });
+
+  it('clusters punctuation-delimited lines as drain3 does', () => {
+    const config = new TemplateMinerConfig();
+    config.drainExtraDelimiters = ASCII_PUNCTUATION.split('');
+    config.maskingInstructions = [];
+    const miner = new TemplateMiner(config);
+    const lines = [
+      '{"level":"info","msg":"user 1 logged in"}',
+      '{"level":"info","msg":"user 2 logged in"}',
+      '{"level":"error","msg":"disk full"}',
+      '[worker-3] job 42 done.',
+      '[worker-7] job 43 done.',
+      '"quoted" line here',
+    ];
+    const ids = lines.map(l => miner.addLogMessage(l).clusterId);
+
+    // Expected values generated with drain3 0.9.11, drain_extra_delimiters =
+    // list(string.punctuation).
+    expect(ids).toEqual([1, 1, 2, 3, 3, 4]);
+    expect(
+      [1, 2, 3, 4].map(id => miner.drain.getCluster(id)?.getTemplate()),
+    ).toEqual([
+      'level info msg user <*> logged in',
+      'level error msg disk full',
+      'worker <*> job <*> done',
+      'quoted line here',
+    ]);
   });
 });
 

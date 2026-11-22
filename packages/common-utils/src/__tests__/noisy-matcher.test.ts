@@ -1,4 +1,4 @@
-import { minePatterns } from '@/drain/mine-patterns';
+import { minePatterns, PATTERN_EXTRA_DELIMITERS } from '@/drain/mine-patterns';
 import {
   buildNoisyBodyMatcher,
   selectNoisyPatterns,
@@ -124,7 +124,7 @@ describe('buildNoisyBodyMatcher', () => {
     const isNoisy = buildNoisyBodyMatcher(
       patterns.map(p => p.pattern),
       new Set([heartbeat!.pattern]),
-      { masked: true },
+      { extraDelimiters: PATTERN_EXTRA_DELIMITERS, masked: true },
     );
     for (const body of noisy) expect(isNoisy(body)).toBe(true);
     expect(isNoisy(rare)).toBe(false);

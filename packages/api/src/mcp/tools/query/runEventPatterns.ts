@@ -8,9 +8,9 @@ import {
 } from '@hyperdx/common-utils/dist/core/utils';
 import {
   buildPatternPredicate,
-  DATE_MASK,
   MAX_PREDICATE_TEMPLATE_LENGTH,
   minePatterns,
+  PATTERN_REGEX_OPTIONS,
 } from '@hyperdx/common-utils/dist/drain';
 import type {
   ChartConfigWithDateRange,
@@ -471,9 +471,11 @@ export async function runEventPatterns(
   const slicedPatterns = rawPatterns.slice(0, topN);
 
   const patterns = slicedPatterns.map((p, i) => {
-    const predicate = buildPatternPredicate(bodyColumn, p.pattern, {
-      masks: [DATE_MASK],
-    });
+    const predicate = buildPatternPredicate(
+      bodyColumn,
+      p.pattern,
+      PATTERN_REGEX_OPTIONS,
+    );
     const whereSnippet =
       predicate == null ? '' : andSql(drilldown?.where, predicate);
 

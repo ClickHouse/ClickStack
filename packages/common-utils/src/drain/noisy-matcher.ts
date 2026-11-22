@@ -1,3 +1,4 @@
+import { tokenizeContent } from './drain';
 import {
   createPatternMasker,
   DENOISE_NOISE_THRESHOLD,
@@ -30,9 +31,10 @@ export function selectNoisyPatterns<T>(
  * member on a different same-length cluster than the one it was counted in.
  *
  * `extraDelimiters` must be the ones the miner was configured with, so the
- * body splits into the same tokens the templates were built from. Likewise set
- * `masked` when the templates come from `minePatterns` (default masks), so the
- * body is masked the same way; drain3's default config has no masks.
+ * body splits into the same tokens the templates were built from
+ * (`PATTERN_EXTRA_DELIMITERS` for `minePatterns`). Likewise set `masked` when
+ * the templates come from `minePatterns` (default masks), so the body is
+ * masked the same way; drain3's default config has no masks.
  */
 export function buildNoisyBodyMatcher(
   templates: string[],
@@ -41,7 +43,7 @@ export function buildNoisyBodyMatcher(
 ): (body: string) => boolean {
   const extraDelimiters = options?.extraDelimiters ?? [];
   const candidates = templates.map(template => {
-    const tokens = tokenize(template, []);
+    const tokens = tokenizeContent(template, []);
     return {
       tokens,
       wildcards: tokens.filter(t => t === PATTERN_WILDCARD).length,
@@ -49,9 +51,15 @@ export function buildNoisyBodyMatcher(
     };
   });
   const masker = options?.masked ? createPatternMasker() : undefined;
+  const maskTokens =
+    masker?.maskNames.map(n => masker.maskPrefix + n + masker.maskSuffix) ?? [];
   return body => {
     const flat = flattenBody(body);
-    const tokens = tokenize(masker ? masker.mask(flat) : flat, extraDelimiters);
+    const tokens = tokenizeContent(
+      masker ? masker.mask(flat) : flat,
+      extraDelimiters,
+      maskTokens,
+    );
     let best: (typeof candidates)[number] | undefined;
     for (const c of candidates) {
       const fits =
@@ -70,16 +78,4 @@ export function buildNoisyBodyMatcher(
     }
     return best?.noisy ?? false;
   };
-}
-
-// Mirrors Drain's tokenizer: delimiters become spaces, then split(/\s+/).
-// Templates are already space-joined tokens, and splitting one on a
-// delimiter would break up `<*>`.
-function tokenize(text: string, extraDelimiters: string[]): string[] {
-  let c = text.trim();
-  for (const delimiter of extraDelimiters) {
-    c = c.split(delimiter).join(' ');
-  }
-  c = c.trim();
-  return c === '' ? [] : c.split(/\s+/);
 }

@@ -5,9 +5,34 @@ import {
   toStartOfInterval,
 } from '@/core/utils';
 
-import { TemplateMinerConfig } from './config';
+import { DATE_MASK, TemplateMinerConfig } from './config';
 import { LogMasker } from './masking';
+import {
+  ASCII_PUNCTUATION,
+  type PatternRegexOptions,
+} from './pattern-predicate';
 import { TemplateMiner } from './template-miner';
+
+// ─── Miner config ────────────────────────────────────────────────────────────
+
+/**
+ * The extra delimiters of the pattern miner: ASCII punctuation, the same as
+ * the web app's drain3 miner, so both split a body into the same tokens.
+ */
+export const PATTERN_EXTRA_DELIMITERS = ASCII_PUNCTUATION.split('');
+
+/** The miner config of minePatterns: punctuation delimiters and date masks. */
+export function createPatternMinerConfig(): TemplateMinerConfig {
+  const config = new TemplateMinerConfig();
+  config.drainExtraDelimiters = [...PATTERN_EXTRA_DELIMITERS];
+  return config;
+}
+
+/** Regex options for templates mined with createPatternMinerConfig. */
+export const PATTERN_REGEX_OPTIONS: PatternRegexOptions = {
+  extraDelimiters: PATTERN_EXTRA_DELIMITERS,
+  masks: [DATE_MASK],
+};
 
 // ─── Denoise constants ───────────────────────────────────────────────────────
 // Shared between the web app and MCP server denoise paths.
@@ -27,7 +52,7 @@ export const DENOISE_NOISE_THRESHOLD = 0.05;
  * compared token by token with a mined template.
  */
 export function createPatternMasker(): LogMasker {
-  return LogMasker.fromConfig(new TemplateMinerConfig());
+  return LogMasker.fromConfig(createPatternMinerConfig());
 }
 
 // ─── Body normalization ──────────────────────────────────────────────────────
@@ -148,8 +173,7 @@ export function minePatterns<TRow extends Record<string, unknown>>(
   }
 
   // ── Set up Drain miner ──
-  const drainConfig = new TemplateMinerConfig();
-  const miner = new TemplateMiner(drainConfig);
+  const miner = new TemplateMiner(createPatternMinerConfig());
 
   // ── Process each row through Drain ──
   const clustered: Array<{

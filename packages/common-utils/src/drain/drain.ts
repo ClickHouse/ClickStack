@@ -2,6 +2,46 @@ import { LogCluster } from './log-cluster';
 import { LruCache } from './lru-cache';
 import { Node } from './node';
 
+/**
+ * Split content into Drain tokens: each extra delimiter becomes a space, then
+ * the content splits on whitespace. With extra delimiters, each `keepTokens`
+ * string (a mask such as `<DATE>`) is a token of its own, never split by the
+ * delimiters nor joined to the text around it: `<DATE>T06` gives `<DATE>` and
+ * `T06`, so a date stays `<DATE>` when the time beside it varies. drain3 has
+ * no such option; with none given this splits exactly as drain3 does.
+ */
+export function tokenizeContent(
+  content: string,
+  extraDelimiters: string[],
+  keepTokens: string[] = [],
+): string[] {
+  const replaceDelimiters = (part: string) => {
+    let c = part;
+    for (const delimiter of extraDelimiters) {
+      c = c.split(delimiter).join(' ');
+    }
+    return c;
+  };
+  const replaceOutside = (part: string, keep: string[]): string => {
+    if (keep.length === 0) return replaceDelimiters(part);
+    const [token, ...rest] = keep;
+    return part
+      .split(token)
+      .map(p => replaceOutside(p, rest))
+      .join(` ${token} `);
+  };
+  let c =
+    extraDelimiters.length === 0
+      ? content
+      : replaceOutside(content, keepTokens);
+  // Trim after the delimiters become spaces: a line that starts or ends
+  // with one would otherwise get an empty token, which drain3 (Python's
+  // str.split()) never produces.
+  c = c.trim();
+  if (c.length === 0) return [];
+  return c.split(/\s+/);
+}
+
 export class Drain {
   logClusterDepth: number;
   private maxNodeDepth: number;
@@ -12,6 +52,7 @@ export class Drain {
   maxClusters: number | null;
   paramStr: string;
   parametrizeNumericTokens: boolean;
+  keepTokens: string[];
 
   private unlimitedStore: Map<number, LogCluster> | null;
   private limitedStore: LruCache<LogCluster> | null;
@@ -25,6 +66,7 @@ export class Drain {
     extraDelimiters: string[] = [],
     paramStr: string = '<*>',
     parametrizeNumericTokens: boolean = true,
+    keepTokens: string[] = [],
   ) {
     if (depth < 3) {
       throw new Error('depth argument must be at least 3');
@@ -39,6 +81,7 @@ export class Drain {
     this.maxClusters = maxClusters;
     this.paramStr = paramStr;
     this.parametrizeNumericTokens = parametrizeNumericTokens;
+    this.keepTokens = keepTokens;
     this.clustersCounter = 0;
 
     if (maxClusters !== null) {
@@ -102,12 +145,7 @@ export class Drain {
   }
 
   getContentAsTokens(content: string): string[] {
-    let c = content.trim();
-    for (const delimiter of this.extraDelimiters) {
-      c = c.split(delimiter).join(' ');
-    }
-    if (c.length === 0) return [];
-    return c.split(/\s+/);
+    return tokenizeContent(content, this.extraDelimiters, this.keepTokens);
   }
 
   getSeqDistance(

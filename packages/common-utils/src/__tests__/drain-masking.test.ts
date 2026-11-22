@@ -216,15 +216,15 @@ describe('patterns with the default masks', () => {
 
   it('keeps klog severities apart, which unmasked mining merges', () => {
     // Unmasked, I1104 and E1104 both route as numbers in Drain's prefix tree;
-    // masked, I<DATE> and E<DATE> route by their severity letter.
+    // masked, the severity letter is a token of its own and routes as a word.
     const lines = dayOfLogs(4, 'Wed').filter(line => /^[IE]\d{4} /.test(line));
     expect(
       mine(lines)
         .map(p => p.pattern)
         .sort(),
     ).toEqual([
-      'E<DATE> <*> 1 main.go:42] sync failed',
-      'I<DATE> <*> 1 main.go:42] sync done',
+      'E <DATE> <*> <*> <*> 345678 1 main go 42 sync failed',
+      'I <DATE> <*> <*> <*> 345678 1 main go 42 sync done',
     ]);
   });
 
