@@ -214,6 +214,7 @@ describe('opampController', () => {
       expect(cfg.receivers['otlp/hyperdx']?.protocols.http.auth).toEqual({
         authenticator: 'bearertokenauth/hyperdx',
       });
+      expect(cfg.service.extensions).toContain('bearertokenauth/hyperdx');
     });
 
     it('adds nothing when ENABLE_INGESTION_API_KEY is set but INGESTION_API_KEY is empty', () => {
@@ -264,6 +265,24 @@ describe('opampController', () => {
       expect(cfg.service.pipelines.traces.receivers).toContain('datadog');
       expect(cfg.service.pipelines.metrics.receivers).toContain('datadog');
       expect(cfg.service.pipelines['logs/in'].receivers).toContain('datadog');
+    });
+
+    it('requires INGESTION_API_KEY on the datadog receiver before any team exists when ENABLE_INGESTION_API_KEY is set', () => {
+      configState.ENABLE_DATADOG_RECEIVER = true;
+      configState.ENABLE_INGESTION_API_KEY = true;
+      configState.INGESTION_API_KEY = 'ingest-key';
+
+      const cfg = buildOtelCollectorConfig([]);
+
+      expect(cfg.extensions['bearertokenauth/datadog']).toEqual({
+        header: 'DD-API-KEY',
+        scheme: '',
+        tokens: ['ingest-key'],
+      });
+      expect(cfg.receivers.datadog?.auth).toEqual({
+        authenticator: 'bearertokenauth/datadog',
+      });
+      expect(cfg.service.extensions).toContain('bearertokenauth/datadog');
     });
 
     it('leaves the datadog receiver unauthenticated when no team API keys exist', () => {

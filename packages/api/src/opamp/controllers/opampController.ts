@@ -199,9 +199,7 @@ export const buildOtelCollectorConfig = (
   // so enforce it rather than open the receiver without auth.
   const collectorAuthenticationEnforced =
     teams[0]?.collectorAuthenticationEnforced ??
-    (teams.length === 0 &&
-      config.ENABLE_INGESTION_API_KEY &&
-      !!config.INGESTION_API_KEY);
+    (teams.length === 0 && config.ENABLE_INGESTION_API_KEY);
 
   const otelCollectorConfig: CollectorConfig = {
     extensions: {},
