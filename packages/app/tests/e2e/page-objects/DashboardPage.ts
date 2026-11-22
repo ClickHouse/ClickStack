@@ -261,7 +261,14 @@ export class DashboardPage {
    * Edit dashboard name
    */
   async editDashboardName(newName: string) {
-    await this.renameDashboard('My Dashboard', newName);
+    // The default name depends on how the dashboard was created: the list-page
+    // "Saved Dashboard" action names it "My Dashboard", while saving a
+    // temporary dashboard carries its name over ("My New Dashboard" by
+    // default). Read whatever is there rather than assuming one.
+    const nameInput = this.page.getByTestId('dashboard-name-input');
+    await expect(nameInput).not.toHaveValue('', { timeout: 10000 });
+    const currentName = await nameInput.inputValue();
+    await this.renameDashboard(currentName, newName);
   }
 
   /**
@@ -630,6 +637,12 @@ export class DashboardPage {
 
   getTileHeatmap(tileIndex = 0) {
     return new HeatmapComponent(this.page, this.getTile(tileIndex));
+  }
+
+  getTileTimeChart(tileIndex = 0): Locator {
+    return this.getTile(tileIndex)
+      .locator('.recharts-responsive-container')
+      .first();
   }
 
   /**
@@ -1058,8 +1071,9 @@ export class DashboardPage {
   }
 
   /**
-   * Fill the "Dropdown values filter" (the filter's `where`) in the open filter
-   * edit form, replacing whatever is there.
+   * Fill the "Dropdown values filter" (the filter's `where`, an ad hoc filter's
+   * "Keys and values filter") in the open filter edit form, replacing whatever
+   * is there.
    *
    * The language is always set explicitly: the form seeds it from the
    * `hdx-search-where-language` localStorage key, which other specs write, so
@@ -1393,10 +1407,13 @@ export class DashboardPage {
   /** Switch the add-filter form between the available value types. */
   async selectFilterType(
     label:
-      | 'Queried values'
+      | 'SQL expression values'
+      | 'SQL query values'
       | 'Static values'
       | 'PromQL label values'
-      | 'Ad hoc keys and values',
+      | 'Ad hoc keys and values'
+      | 'Data source'
+      | 'Connection',
   ) {
     await this.getFilterTypePicker().click();
     await this.getFilterOption(label).click();
@@ -1475,6 +1492,69 @@ export class DashboardPage {
       state: 'visible',
       timeout: 10000,
     });
+  }
+
+  /**
+   * Add a data source variable offering sources of the given kinds, by their
+   * labels in the form (e.g. 'Logs'), and wait for it in the filters list.
+   */
+  async addDataSourceFilterToDashboard(
+    name: string,
+    kindLabels: string[],
+    variableName: string,
+    options?: Pick<FilterRequirementOptions, 'globalRequirement'> & {
+      connectionLabel?: string;
+    },
+  ) {
+    await this.addFiltersButton.click();
+    await this.selectFilterType('Data source');
+    await this.getFilterNameInput().fill(name);
+    const kindsInput = this.page.getByTestId(
+      'filter-allowed-source-kinds-input',
+    );
+    for (const label of kindLabels) {
+      await kindsInput.click();
+      await this.getFilterOption(label).click();
+    }
+    if (options?.connectionLabel !== undefined) {
+      // Close the kinds dropdown, which covers this input; Escape would close
+      // the modal instead
+      await this.getFilterNameInput().click();
+      await this.page
+        .getByTestId('filter-data-source-connection-input')
+        .click();
+      await this.getFilterOption(options.connectionLabel).click();
+    }
+    await this.variableNameInput.fill(variableName);
+    if (options?.globalRequirement !== undefined) {
+      await this.globalRequirementCheckbox.setChecked(
+        options.globalRequirement,
+      );
+    }
+    await this.page.getByTestId('save-filter-button').click();
+    await this.getFilterItemByName(name).waitFor({
+      state: 'visible',
+      timeout: 10000,
+    });
+  }
+
+  /** Add a connection variable and wait for it in the filters list. */
+  async addConnectionFilterToDashboard(name: string, variableName: string) {
+    await this.addFiltersButton.click();
+    await this.selectFilterType('Connection');
+    await this.getFilterNameInput().fill(name);
+    await this.variableNameInput.fill(variableName);
+    await this.page.getByTestId('save-filter-button').click();
+    await this.getFilterItemByName(name).waitFor({
+      state: 'visible',
+      timeout: 10000,
+    });
+  }
+
+  /** Pick a value in a data source or connection variable's filter bar select. */
+  async selectReferenceFilterValue(filterName: string, optionLabel: string) {
+    await this.getFilterSelectByName(filterName).click();
+    await this.getFilterOption(optionLabel).click();
   }
 
   /** The PromQL filter form's label field. */
@@ -1561,6 +1641,89 @@ export class DashboardPage {
     });
   }
 
+  /** The SQL query filter form's preview of the values its query returns. */
+  getSqlQueryFilterPreview(): Locator {
+    return this.getFilterForm().getByTestId('filter-sql-preview');
+  }
+
+  /** The values listed in that preview, joined with ", ". */
+  getSqlQueryFilterPreviewValues(): Locator {
+    return this.getFilterForm().getByTestId('filter-sql-preview-values');
+  }
+
+  /** Run the SQL query filter form's query and show its values. */
+  async previewSqlQueryFilter() {
+    await this.getFilterForm().getByTestId('filter-sql-preview-button').click();
+  }
+
+  /**
+   * Fill the open SQL query filter form. The selects carry their test ids on a
+   * wrapper, so their inputs are reached through it.
+   */
+  async fillSqlQueryFilterForm({
+    name,
+    connectionName,
+    sourceName,
+    sql,
+    variableName,
+  }: {
+    name: string;
+    connectionName: string;
+    sourceName?: string;
+    sql: string;
+    variableName?: string;
+  }) {
+    const form = this.getFilterForm();
+    await this.selectFilterType('SQL query values');
+    await this.getFilterNameInput().fill(name);
+    await form
+      .getByTestId('filter-connection-select')
+      .locator('input:visible')
+      .first()
+      .click();
+    await this.getFilterOption(connectionName).click();
+    if (sourceName !== undefined) {
+      await form
+        .getByTestId('filter-sql-source-select')
+        .locator('input:visible')
+        .first()
+        .click();
+      await this.getFilterOption(sourceName).click();
+    }
+    await form
+      .getByTestId('filter-sql-template-input')
+      .locator('.cm-content')
+      .click();
+    await this.page.keyboard.press(
+      process.platform === 'darwin' ? 'Meta+A' : 'Control+A',
+    );
+    await this.page.keyboard.press('Backspace');
+    // insertText, not type: CodeMirror's bracket auto-closing would corrupt
+    // the macro calls.
+    await this.page.keyboard.insertText(sql);
+    await dismissSqlAutocomplete(this.page);
+    if (variableName !== undefined) {
+      await this.variableNameInput.fill(variableName);
+    }
+  }
+
+  /**
+   * Add a dashboard filter whose dropdown lists the first column of a SQL
+   * query. Assumes the Edit Filters modal is already open; leaves it open on
+   * the filters list, having waited for the new filter to land there.
+   */
+  async addSqlQueryFilterToDashboard(
+    options: Parameters<DashboardPage['fillSqlQueryFilterForm']>[0],
+  ) {
+    await this.addFiltersButton.click();
+    await this.fillSqlQueryFilterForm(options);
+    await this.page.getByTestId('save-filter-button').click();
+    await this.getFilterItemByName(options.name).waitFor({
+      state: 'visible',
+      timeout: 10000,
+    });
+  }
+
   /** The ad hoc filter form's ClickHouse / Prometheus source type control. */
   getAdhocFilterSourceTypeControl(): Locator {
     return this.getFilterForm().getByTestId('adhoc-filter-source-type');
@@ -1599,6 +1762,7 @@ export class DashboardPage {
     options?: {
       variableName?: string;
       sourceType?: 'ClickHouse' | 'Prometheus';
+      where?: FilterWhereOptions;
     },
   ) {
     await this.addFiltersButton.click();
@@ -1612,6 +1776,9 @@ export class DashboardPage {
       this.getAdhocFilterSourcesInput(),
       sourceNames,
     );
+    if (options?.where) {
+      await this.fillFilterDropdownValuesWhere(options.where);
+    }
     if (options?.variableName !== undefined) {
       await this.variableNameInput.fill(options.variableName);
     }
@@ -1962,6 +2129,30 @@ export class DashboardPage {
       .locator('table tbody tr')
       .first()
       .waitFor({ state: 'visible', timeout: 15000 });
+  }
+
+  /** The sort button in the header of column `name` in a table tile. */
+  getTileSortButton(tileIndex: number, name: string) {
+    return this.getTile(tileIndex)
+      .getByTestId('raw-log-table-sort-button')
+      .filter({ hasText: name });
+  }
+
+  /** Cell values of column `name` in a table tile, top to bottom. */
+  async getTileColumnValues(
+    tileIndex: number,
+    name: string,
+  ): Promise<string[]> {
+    const table = this.getTile(tileIndex).locator('table').first();
+    const headers = (await table.locator('thead th').allTextContents()).map(h =>
+      h.trim(),
+    );
+    const index = headers.findIndex(h => h === name);
+    if (index === -1) return [];
+    const cells = table.locator(
+      `tbody tr[data-index] td:nth-child(${index + 1})`,
+    );
+    return (await cells.allTextContents()).map(c => c.trim());
   }
 
   /**

@@ -55,7 +55,6 @@ export function AckAlert({ alert }: { alert: AlertsPageItem }) {
 
   const handleSilenceAlert = React.useCallback(
     (duration: Duration) => {
-      // eslint-disable-next-line no-restricted-syntax
       const mutedUntil = add(new Date(), duration);
       silenceAlert.mutate(
         {

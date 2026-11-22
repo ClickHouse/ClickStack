@@ -16,7 +16,10 @@ Dockerfile:
 1. The `ocb` binary is copied from the official
    `otel/opentelemetry-collector-builder:<version>` image
 2. It's placed into a `golang:<version>-alpine` base (the official OCB image may
-   ship an older Go than the contrib modules require)
+   ship an older Go than the contrib modules require). The base is pinned by
+   digest in both Dockerfiles so upstream republishes don't invalidate the OCB
+   compile cache; bump the tag and digest together in both files
+   (`docker buildx imagetools inspect golang:<tag>` prints the digest)
 3. Version placeholders in `builder-config.yaml` are substituted via `sed`
 4. `ocb` compiles the custom binary from the resolved manifest
 
@@ -157,7 +160,8 @@ config for logs).
 In OpAMP supervisor mode, when collector authentication is enforced the
 receiver authenticates against the team API keys (same as `otlp/hyperdx`) via
 the `DD-API-KEY` header. Set the Datadog Agent's `DD_API_KEY` to a HyperDX
-team ingestion API key.
+team ingestion API key, or to `INGESTION_API_KEY` where the API honors it
+(all-in-one and dev builds, or with `ENABLE_INGESTION_API_KEY=true`).
 
 ## Computing span metrics from ingested traces
 
@@ -433,13 +437,13 @@ processors:
 service:
   pipelines:
     traces:
-      processors: [memory_limiter/custom, batch]
+      processors: [memory_limiter/custom, transform/session_id, batch]
     metrics:
       processors: [memory_limiter/custom, batch]
     logs/out-default:
-      processors: [memory_limiter/custom, transform, batch]
+      processors: [memory_limiter/custom, transform, transform/session_id, batch]
     logs/out-rrweb:
-      processors: [memory_limiter/custom, batch]
+      processors: [memory_limiter/custom, transform/session_id, batch]
 ```
 
 After restart, the collector instantiates `memory_limiter/custom` (and not
@@ -466,9 +470,9 @@ processors:
 service:
   pipelines:
     traces:
-      processors: [memory_limiter, batch/lowlatency]
+      processors: [memory_limiter, transform/session_id, batch/lowlatency]
     logs/out-default:
-      processors: [memory_limiter, transform, batch/lowlatency]
+      processors: [memory_limiter, transform, transform/session_id, batch/lowlatency]
 ```
 
 Notes:
@@ -572,7 +576,8 @@ args:
 ### Files you do NOT need to change
 
 - `packages/otel-collector/builder-config.yaml` — uses placeholders, substituted
-  at build time
+  at build time. The exception is stable (v1.x) components such as
+  `k8sattributesprocessor`: copy their version from the upstream manifest
 - `docker-compose.dev.yml` — reads from `.env` automatically
 - `docker-compose.ci.yml` — reads from `.env` automatically
 
@@ -606,7 +611,7 @@ codebase without needing to publish a Go module tag on every change.
    ```yaml
    receivers:
      - gomod:
-         github.com/hyperdxio/hyperdx/packages/otel-collector/receiver/myreceiver
+         github.com/ClickHouse/ClickStack/packages/otel-collector/receiver/myreceiver
          v0.0.0
        path: ./receiver/myreceiver
    ```

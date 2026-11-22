@@ -485,6 +485,45 @@ function isAbortError(e: unknown): boolean {
   );
 }
 
+/**
+ * Session sources map no precise timestamp, and the player already assumes
+ * the OTel log columns (Body, LogAttributes, ServiceName). Their `Timestamp`
+ * is DateTime64(9); the default `TimestampTime` has only seconds.
+ */
+const SESSION_PRECISE_TIMESTAMP_COLUMN = 'Timestamp';
+
+/**
+ * `Timestamp` when the session table has it, else the source's own
+ * timestamp. With the fallback, chunks are grouped at that precision, which
+ * still tells apart page loads in different seconds. The columns are
+ * usually cached already: the player's field expressions read them.
+ */
+export async function getRRWebTimestampExpression(
+  source: {
+    from: TSessionSource['from'];
+    timestampValueExpression: string;
+    connection: string;
+  },
+  metadata: Metadata,
+): Promise<string> {
+  const fallback = getFirstTimestampValueExpression(
+    source.timestampValueExpression,
+  );
+  try {
+    const column = await metadata.getColumn({
+      databaseName: source.from.databaseName,
+      tableName: source.from.tableName,
+      column: SESSION_PRECISE_TIMESTAMP_COLUMN,
+      connectionId: source.connection,
+    });
+    return column != null ? SESSION_PRECISE_TIMESTAMP_COLUMN : fallback;
+  } catch (error) {
+    // Don't fail the replay over a lookup that only sharpens chunk grouping
+    console.warn('Failed to read session table columns', error);
+    return fallback;
+  }
+}
+
 // OPTIMIZATION STRATEGY
 //
 // 1. Write a clickhouse query to divide a session into different chunks, where each chunk has a start time. Maybe each chunk contains 100 events.
@@ -497,11 +536,18 @@ function isAbortError(e: unknown): boolean {
  * Large rrweb events are split by the recorder into multiple log records
  * ("chunks") that all share the same event timestamp, so ordering by the
  * timestamp alone lets ClickHouse return chunks of one event in arbitrary
- * order, scrambling reassembly. `rr-web.offset` is a monotonically increasing
- * counter stamped on every record, and `rr-web.chunk` is the 1-based chunk
- * index within an event — ordering by both (numerically — the attributes are
- * stored as strings) makes the stream order deterministic.
- * https://github.com/hyperdxio/hyperdx/issues/2569
+ * order, scrambling reassembly. `rr-web.offset` is a counter stamped on every
+ * record, and `rr-web.chunk` is the 1-based chunk index within an event —
+ * ordering by both (numerically — the attributes are stored as strings) makes
+ * the stream order deterministic.
+ * https://github.com/ClickHouse/ClickStack/issues/2569
+ *
+ * SDKs up to clickstack-browser 1.2.0 restart `rr-web.offset` on every page
+ * load, so the full-precision timestamp (see getRRWebTimestampExpression)
+ * sorts ahead of it: at second precision, rows of two page loads in the same
+ * second interleave. The source's own timestamp stays first to match the
+ * table's sort key; in the default schema it is `toDateTime(Timestamp)`, so
+ * `Timestamp` only breaks its ties.
  */
 export function buildRRWebStreamChartConfig({
   source,
@@ -513,6 +559,7 @@ export function buildRRWebStreamChartConfig({
   limit,
   offset,
   getSessionSourceFieldExpression,
+  preciseTimestampExpression,
 }: {
   source: {
     from: TSessionSource['from'];
@@ -527,6 +574,7 @@ export function buildRRWebStreamChartConfig({
   limit: number;
   offset: number;
   getSessionSourceFieldExpression: FieldExpressionGenerator;
+  preciseTimestampExpression: string;
 }) {
   const eventAttributeExpression = (key: string) =>
     getSessionSourceFieldExpression(
@@ -557,6 +605,11 @@ export function buildRRWebStreamChartConfig({
         valueExpression: `${eventAttributeExpression('rr-web.event')}`,
         alias: 'ev',
       },
+      // Tells apart events of different page loads that share an `ev`
+      {
+        valueExpression: preciseTimestampExpression,
+        alias: 'ts',
+      },
     ],
     dateRange: [startDate, endDate] as [Date, Date],
     from: source.from,
@@ -566,7 +619,13 @@ export function buildRRWebStreamChartConfig({
     implicitColumnExpression:
       SESSION_TABLE_EXPRESSIONS.implicitColumnExpression,
     connection: source.connection,
-    orderBy: `${source.timestampValueExpression} ASC, toUInt64OrZero(${eventAttributeExpression('rr-web.offset')}) ASC, toUInt64OrZero(${eventAttributeExpression('rr-web.chunk')}) ASC`,
+    orderBy: [
+      ...new Set([source.timestampValueExpression, preciseTimestampExpression]),
+      `toUInt64OrZero(${eventAttributeExpression('rr-web.offset')})`,
+      `toUInt64OrZero(${eventAttributeExpression('rr-web.chunk')})`,
+    ]
+      .map(expression => `${expression} ASC`)
+      .join(', '),
     limit: {
       limit,
       offset,
@@ -649,6 +708,10 @@ export function useRRWebEventStream(
 
       const MAX_LIMIT = 1e6;
 
+      const preciseTimestampExpression = await getRRWebTimestampExpression(
+        source,
+        metadata,
+      );
       const query = await renderChartConfig(
         buildRRWebStreamChartConfig({
           source,
@@ -660,6 +723,7 @@ export function useRRWebEventStream(
           limit: Math.min(MAX_LIMIT, parseInt(queryLimit)),
           offset: parseInt(offset),
           getSessionSourceFieldExpression,
+          preciseTimestampExpression,
         }),
         metadata,
         source.querySettings,

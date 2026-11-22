@@ -141,7 +141,7 @@ const InfraCorrelationGroup = ({
     }[range];
     return [
       sub(new Date(timestamp), duration),
-      // eslint-disable-next-line no-restricted-syntax
+      // eslint-disable-next-line react-hooks/purity
       min([add(new Date(timestamp), duration), new Date()]),
     ];
   }, [timestamp, range]);

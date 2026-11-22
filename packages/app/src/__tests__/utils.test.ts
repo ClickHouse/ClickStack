@@ -2,9 +2,10 @@ import {
   ChartPaletteTokenSchema,
   ColorCondition,
   NumericUnit,
+  SourceKind,
+  TLogSource,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { SortingState } from '@tanstack/react-table';
 import { act, renderHook } from '@testing-library/react';
 
 import { MetricsDataType, NumberFormat } from '@/types';
@@ -22,14 +23,13 @@ import {
   getColorFromCSSToken,
   getLogSeverityLevel,
   getMetricTableName,
+  getTableConnectionsForConnection,
   isColumnInSelect,
   mapKeyBy,
   mergePath,
   orderByAfterRemovingSelectItem,
-  orderByStringToSortingState,
   parseTimestampToMs,
   resolveConditionalColor,
-  sortingStateToOrderByString,
   stripTrailingSlash,
   useQueryHistory,
   withMapKeyAlias,
@@ -300,6 +300,60 @@ describe('getAllMetricTables', () => {
     });
 
     expect(getAllMetricTables(source)).toEqual([]);
+  });
+});
+
+describe('getTableConnectionsForConnection', () => {
+  const logSource: TLogSource = {
+    kind: SourceKind.Log,
+    id: 'logs',
+    name: 'Logs',
+    connection: 'conn1',
+    from: { databaseName: 'otel', tableName: 'logs' },
+    timestampValueExpression: 'Timestamp',
+    defaultTableSelectExpression: 'Body',
+    materializedViews: [
+      {
+        databaseName: 'otel',
+        tableName: 'logs_mv',
+        dimensionColumns: 'ServiceName',
+        minGranularity: '1 minute',
+        timestampColumn: 'Timestamp',
+        aggregatedColumns: [],
+      },
+    ],
+  };
+  const otherConnectionSource: TLogSource = {
+    ...logSource,
+    id: 'other',
+    connection: 'conn2',
+    from: { databaseName: 'other', tableName: 'logs' },
+    materializedViews: undefined,
+  };
+  const disabledSource: TLogSource = {
+    ...logSource,
+    id: 'disabled',
+    disabled: true,
+    from: { databaseName: 'otel', tableName: 'disabled' },
+  };
+
+  const tables = (connectionId: string | undefined) =>
+    getTableConnectionsForConnection(
+      [logSource, otherConnectionSource, disabledSource],
+      connectionId,
+    ).map(tc => `${tc.connectionId}:${tc.databaseName}.${tc.tableName}`);
+
+  it('lists source tables and materialized views on the connection', () => {
+    expect(tables('conn1')).toEqual(['conn1:otel.logs', 'conn1:otel.logs_mv']);
+  });
+
+  it('skips disabled sources and other connections', () => {
+    expect(tables('conn2')).toEqual(['conn2:other.logs']);
+  });
+
+  it('returns nothing without sources or a connection', () => {
+    expect(getTableConnectionsForConnection(undefined, 'conn1')).toEqual([]);
+    expect(tables(undefined)).toEqual([]);
   });
 });
 
@@ -1152,99 +1206,6 @@ describe('useQueryHistory', () => {
   });
 });
 
-describe('sortingStateToOrderByString', () => {
-  it('returns undefined for null input', () => {
-    expect(sortingStateToOrderByString(null)).toBeUndefined();
-  });
-
-  it('returns undefined for empty array', () => {
-    const sortingState: SortingState = [];
-    expect(sortingStateToOrderByString(sortingState)).toBeUndefined();
-  });
-
-  it('converts sorting state with desc: false to ASC order', () => {
-    const sortingState: SortingState = [{ id: 'timestamp', desc: false }];
-    expect(sortingStateToOrderByString(sortingState)).toBe('timestamp ASC');
-  });
-
-  it('converts sorting state with desc: true to DESC order', () => {
-    const sortingState: SortingState = [{ id: 'timestamp', desc: true }];
-    expect(sortingStateToOrderByString(sortingState)).toBe('timestamp DESC');
-  });
-
-  it('handles column names with special characters', () => {
-    const sortingState: SortingState = [{ id: 'user_count', desc: false }];
-    expect(sortingStateToOrderByString(sortingState)).toBe('user_count ASC');
-  });
-});
-
-describe('orderByStringToSortingState', () => {
-  it('returns undefined for undefined input', () => {
-    expect(orderByStringToSortingState(undefined)).toBeUndefined();
-  });
-
-  it('returns undefined for empty string', () => {
-    expect(orderByStringToSortingState('')).toBeUndefined();
-  });
-
-  it('converts "column ASC" to sorting state with desc: false', () => {
-    const result = orderByStringToSortingState('timestamp ASC');
-    expect(result).toEqual([{ id: 'timestamp', desc: false }]);
-  });
-
-  it('converts "column DESC" to sorting state with desc: true', () => {
-    const result = orderByStringToSortingState('timestamp DESC');
-    expect(result).toEqual([{ id: 'timestamp', desc: true }]);
-  });
-
-  it('handles case insensitive direction keywords', () => {
-    expect(orderByStringToSortingState('col asc')).toEqual([
-      { id: 'col', desc: false },
-    ]);
-    expect(orderByStringToSortingState('col Asc')).toEqual([
-      { id: 'col', desc: false },
-    ]);
-    expect(orderByStringToSortingState('col desc')).toEqual([
-      { id: 'col', desc: true },
-    ]);
-    expect(orderByStringToSortingState('col Desc')).toEqual([
-      { id: 'col', desc: true },
-    ]);
-    expect(orderByStringToSortingState('col DESC')).toEqual([
-      { id: 'col', desc: true },
-    ]);
-  });
-
-  it('returns undefined for invalid format without direction', () => {
-    expect(orderByStringToSortingState('timestamp')).toBeUndefined();
-  });
-
-  it('returns undefined for invalid format with wrong number of parts', () => {
-    expect(orderByStringToSortingState('col name ASC')).toBeUndefined();
-  });
-
-  it('returns undefined for invalid direction keyword', () => {
-    expect(orderByStringToSortingState('col INVALID')).toBeUndefined();
-  });
-
-  it('handles column names with underscores', () => {
-    const result = orderByStringToSortingState('user_count DESC');
-    expect(result).toEqual([{ id: 'user_count', desc: true }]);
-  });
-
-  it('handles column names with numbers', () => {
-    const result = orderByStringToSortingState('col123 ASC');
-    expect(result).toEqual([{ id: 'col123', desc: false }]);
-  });
-
-  it('round-trips correctly with sortingStateToOrderByString', () => {
-    const originalSort: SortingState = [{ id: 'service_name', desc: true }];
-    const orderByString = sortingStateToOrderByString(originalSort);
-    const roundTripSort = orderByStringToSortingState(orderByString);
-    expect(roundTripSort).toEqual(originalSort);
-  });
-});
-
 describe('mapKeyBy', () => {
   it('returns a map', () => {
     const result = mapKeyBy([{ id: 'a' }, { id: 'b' }], 'id');
@@ -1371,6 +1332,40 @@ describe('mergePath', () => {
     it('emits dotted backtick-quoted accessor', () => {
       expect(mergePath(['BodyJson', 'service', 'name'], ['BodyJson'])).toBe(
         'BodyJson.`service`.`name`',
+      );
+    });
+
+    // Without array positions a numeric segment is a JSON object key, as
+    // before: facet keys come from the JSON schema, where `1` is a real key.
+    it('keeps a numeric segment as a quoted key when no array positions are given', () => {
+      expect(mergePath(['Body', 'events', '0', 'id'], ['Body'])).toBe(
+        'Body.`events`.`0`.`id`',
+      );
+    });
+
+    // The row viewer knows which segments index into an array. A JSON array
+    // element is addressed with a 1-based subscript; the quoted key
+    // (`.`0``) matches nothing, so the filter silently returns no rows.
+    it('emits a 1-based subscript for segments marked as array positions', () => {
+      expect(
+        mergePath(
+          ['message', 'events', '0', 'detail', 'parameters', '1', 'value'],
+          ['message'],
+          [],
+          new Set([2, 5]),
+        ),
+      ).toBe('message.`events`[1].`detail`.`parameters`[2].`value`');
+    });
+
+    it('chains subscripts for nested arrays', () => {
+      expect(
+        mergePath(['m', 'grid', '0', '1', 'x'], ['m'], [], new Set([2, 3])),
+      ).toBe('m.`grid`[1][2].`x`');
+    });
+
+    it('keeps a numeric object key quoted when it is not marked as an array position', () => {
+      expect(mergePath(['m', 'counts', '200', 'n'], ['m'], [], new Set())).toBe(
+        'm.`counts`.`200`.`n`',
       );
     });
   });
@@ -1645,8 +1640,7 @@ describe('getColorFromCSSToken', () => {
       throw new Error('getComputedStyle unavailable');
     });
 
-    // Defaults to HyperDX in jsdom because the document has no
-    // theme-clickstack class.
+    // Falls back to the semantic palette when the CSS var cannot be read.
     expect(getColorFromCSSToken('chart-success')).toBe('#3ca951');
     expect(getColorFromCSSToken('chart-warning')).toBe('#efb118');
     expect(getColorFromCSSToken('chart-error')).toBe('#ff725c');

@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { Provider } from 'jotai';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -44,6 +45,25 @@ describe('UserPreferencesModal', () => {
 
       expect(readStoredPreferences().timeZone).toBe('Etc/UTC');
     });
+
+    it.each([
+      ['time-zone-utc', 'Asia/Tokyo', 'Etc/UTC'],
+      ['time-zone-local', 'Etc/UTC', 'local'],
+    ])(
+      'stores the zone from the %s shortcut',
+      async (testId, stored, expected) => {
+        renderModal({ timeZone: stored });
+
+        await userEvent.click(screen.getByTestId(testId));
+
+        expect(readStoredPreferences().timeZone).toBe(expected);
+      },
+    );
+
+    it('has no Default shortcut, since this is the default', () => {
+      renderModal();
+      expect(screen.queryByTestId('time-zone-default')).toBeNull();
+    });
   });
 
   describe('Row click', () => {
@@ -78,6 +98,60 @@ describe('UserPreferencesModal', () => {
         'Expand inline',
       );
       expect(readStoredPreferences().rowClickAction).toBe('expand');
+    });
+  });
+
+  describe('CRT mode', () => {
+    const KONAMI =
+      '{ArrowUp}{ArrowUp}{ArrowDown}{ArrowDown}{ArrowLeft}{ArrowRight}{ArrowLeft}{ArrowRight}ba';
+
+    it('hides the toggle until the Konami code is typed', async () => {
+      renderModal();
+      expect(screen.queryByTestId('crt-mode-switch')).toBeNull();
+
+      await userEvent.keyboard(KONAMI);
+      expect(screen.getByTestId('crt-unlock-scene')).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId('crt-mode-switch'));
+
+      expect(readStoredPreferences().crtMode).toBe(true);
+    });
+
+    it('ignores the Konami code while the modal is closed', async () => {
+      window.localStorage.clear();
+      const ClosedThenOpened = () => {
+        const [opened, setOpened] = React.useState(false);
+        return (
+          <>
+            <button onClick={() => setOpened(true)}>open</button>
+            <UserPreferencesModal opened={opened} onClose={() => {}} />
+          </>
+        );
+      };
+      renderWithMantine(
+        <Provider>
+          <ClosedThenOpened />
+        </Provider>,
+      );
+      await userEvent.keyboard(KONAMI);
+      await userEvent.click(screen.getByText('open'));
+      await screen.findByTestId('time-zone-select');
+
+      expect(screen.queryByTestId('crt-mode-switch')).toBeNull();
+    });
+
+    it('shows the toggle while CRT mode is on so it can be turned off', () => {
+      renderModal({ crtMode: true });
+
+      expect(screen.getByTestId('crt-mode-switch')).toBeChecked();
+    });
+
+    it('keeps the toggle after CRT mode is turned off', async () => {
+      renderModal({ crtMode: true });
+
+      await userEvent.click(screen.getByRole('switch', { name: 'CRT mode' }));
+
+      expect(readStoredPreferences().crtMode).toBe(false);
+      expect(screen.getByTestId('crt-mode-switch')).not.toBeChecked();
     });
   });
 });

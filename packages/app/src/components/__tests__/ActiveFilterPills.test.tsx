@@ -151,6 +151,56 @@ describe('ActiveFilterPills', () => {
     expect(screen.getByText('100 – 500')).toBeInTheDocument();
   });
 
+  it('renders pattern filters and removes them through their handler', () => {
+    const patternFilter = {
+      condition: "NOT match(Body, '^x$')",
+      valueExpression: 'Body',
+      template: 'Connection to db <*> <*> timed out',
+      action: 'exclude' as const,
+    };
+    const onRemovePatternFilter = jest.fn();
+    renderWithMantine(
+      <ActiveFilterPills
+        searchFilters={makeSearchFilters({})}
+        chartConfig={CHART_CONFIG}
+        patternFilters={[patternFilter]}
+        onRemovePatternFilter={onRemovePatternFilter}
+      />,
+    );
+    expect(screen.getByText('Pattern')).toBeInTheDocument();
+    expect(
+      screen.getByText('Connection to db … timed out'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button'));
+    expect(onRemovePatternFilter).toHaveBeenCalledWith(patternFilter);
+  });
+
+  it('counts pattern pills toward MAX_VISIBLE_PILLS after the facet pills', () => {
+    const values = new Set<string | boolean>(
+      Array.from({ length: 7 }, (_, i) => `val${i}`),
+    );
+    const patternFilters = ['first <*>', 'second <*>'].map(template => ({
+      condition: `NOT match(Body, '${template}')`,
+      valueExpression: 'Body',
+      template,
+      action: 'exclude' as const,
+    }));
+    renderWithMantine(
+      <ActiveFilterPills
+        searchFilters={makeSearchFilters({
+          field: { included: values, excluded: new Set<string | boolean>() },
+        })}
+        chartConfig={CHART_CONFIG}
+        patternFilters={patternFilters}
+      />,
+    );
+    // Seven facet pills and the first pattern pill fill the eight slots.
+    expect(screen.getAllByTestId('active-filter-pill-pattern')).toHaveLength(1);
+    fireEvent.click(screen.getByText('+1 more'));
+    expect(screen.getAllByTestId('active-filter-pill-pattern')).toHaveLength(2);
+    expect(screen.getByText('Show less')).toBeInTheDocument();
+  });
+
   it('calls setFilterValue when removing an included pill', () => {
     const searchFilters = makeSearchFilters({
       status: {

@@ -106,7 +106,7 @@ function AlertHistoryCard({
 }) {
   const start = new Date(history.createdAt.toString());
 
-  // eslint-disable-next-line no-restricted-syntax
+  // eslint-disable-next-line react-hooks/purity
   const today = React.useMemo(() => new Date(), []);
 
   const href = React.useMemo(() => {

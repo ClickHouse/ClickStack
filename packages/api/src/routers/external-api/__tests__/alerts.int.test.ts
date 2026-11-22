@@ -3,18 +3,21 @@ import _ from 'lodash';
 import { ObjectId } from 'mongodb';
 import request from 'supertest';
 
+import { createOrgApiKey } from '@/controllers/orgApiKey';
 import {
   getLoggedInAgent,
   getServer,
   RAW_SQL_ALERT_TEMPLATE,
   RAW_SQL_NUMBER_ALERT_TEMPLATE,
 } from '@/fixtures';
-import { AlertSource, AlertThresholdType } from '@/models/alert';
+import { AlertSource, AlertState, AlertThresholdType } from '@/models/alert';
 import Alert from '@/models/alert';
 import Connection from '@/models/connection';
 import Dashboard from '@/models/dashboard';
 import { SavedSearch } from '@/models/savedSearch';
 import { Source } from '@/models/source';
+import Team from '@/models/team';
+import User from '@/models/user';
 import Webhook, { WebhookService } from '@/models/webhook';
 
 // Constants
@@ -189,6 +192,34 @@ describe('External API Alerts', () => {
       ...overrides,
     });
   };
+
+  describe('org API keys', () => {
+    it('attributes the alert to the key service account', async () => {
+      const { doc, key } = await createOrgApiKey(team._id, user._id, {
+        description: 'terraform',
+        expiry: 'never',
+      });
+      const dashboard = await createTestDashboard();
+      const webhook = await createTestWebhook();
+
+      const response = await agent
+        .post(ALERTS_BASE_URL)
+        .set('Authorization', `Bearer ${key}`)
+        .send({
+          dashboardId: dashboard._id.toString(),
+          tileId: dashboard.tiles[0].id,
+          threshold: 100,
+          interval: '1h',
+          source: AlertSource.TILE,
+          thresholdType: AlertThresholdType.ABOVE,
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+        })
+        .expect(200);
+
+      const stored = await Alert.findById(response.body.data.id).lean();
+      expect(stored?.createdBy).toEqual(doc._id);
+    });
+  });
 
   // The readers behind these routes project the referenced dashboard down to
   // the handful of fields the derivation needs, rather than pulling every
@@ -827,6 +858,187 @@ describe('External API Alerts', () => {
       await authRequest('get', `${ALERTS_BASE_URL}?limit=abc`).expect(400);
       await authRequest('get', `${ALERTS_BASE_URL}?limit=1.5`).expect(400);
     });
+
+    describe('filters', () => {
+      beforeEach(async () => {
+        await createTestAlertDirectly({
+          displayName: 'Checkout errors',
+          tags: ['checkout', 'p1'],
+        });
+        await createTestAlertDirectly({
+          displayName: 'Checkout latency',
+          tags: ['checkout'],
+          state: AlertState.ALERT,
+        });
+        await createTestAlertDirectly({
+          displayName: 'Login failures',
+          tags: ['auth'],
+          source: AlertSource.INLINE,
+        });
+      });
+
+      const listNames = async (query: string) => {
+        const response = await authRequest(
+          'get',
+          `${ALERTS_BASE_URL}?${query}`,
+        ).expect(200);
+        return {
+          names: response.body.data.map(a => a.displayName),
+          meta: response.body.meta,
+          header: response.headers['x-total-count'],
+        };
+      };
+
+      it('should return every alert when no filter is given', async () => {
+        const { names, meta } = await listNames('');
+        expect(names).toHaveLength(3);
+        expect(meta.total).toBe(3);
+      });
+
+      it('should filter by a single tag', async () => {
+        const { names, meta } = await listNames('tag=p1');
+        expect(names).toEqual(['Checkout errors']);
+        expect(meta.total).toBe(1);
+      });
+
+      it('should match any of several tags', async () => {
+        const { names } = await listNames('tag=p1&tag=auth');
+        expect(names.sort()).toEqual(['Checkout errors', 'Login failures']);
+      });
+
+      it('should match tags exactly, not by prefix', async () => {
+        const { names } = await listNames('tag=check');
+        expect(names).toEqual([]);
+      });
+
+      it('should search display names case-insensitively', async () => {
+        const { names } = await listNames('search=CHECKOUT');
+        expect(names.sort()).toEqual(['Checkout errors', 'Checkout latency']);
+      });
+
+      it('should treat the search text literally', async () => {
+        const { names } = await listNames('search=.*');
+        expect(names).toEqual([]);
+      });
+
+      it('should filter by state and source', async () => {
+        expect((await listNames('state=ALERT')).names).toEqual([
+          'Checkout latency',
+        ]);
+        expect((await listNames('source=inline')).names).toEqual([
+          'Login failures',
+        ]);
+      });
+
+      it('should combine filters with AND', async () => {
+        const { names } = await listNames('tag=checkout&search=latency');
+        expect(names).toEqual(['Checkout latency']);
+      });
+
+      it('should report the filtered total and page within the filtered set', async () => {
+        const page1 = await listNames('tag=checkout&limit=1&offset=0');
+        expect(page1.names).toHaveLength(1);
+        expect(page1.meta).toEqual({ total: 2, limit: 1, offset: 0 });
+        expect(page1.header).toBe('2');
+
+        const page2 = await listNames('tag=checkout&limit=1&offset=1');
+        expect(page2.names).toHaveLength(1);
+        expect(page2.names[0]).not.toBe(page1.names[0]);
+        expect(page2.meta.total).toBe(2);
+      });
+
+      it('should reject an unknown state or source', async () => {
+        await authRequest('get', `${ALERTS_BASE_URL}?state=BOGUS`).expect(400);
+        await authRequest('get', `${ALERTS_BASE_URL}?source=BOGUS`).expect(400);
+      });
+
+      it('should match any of several sources or states', async () => {
+        expect(
+          (await listNames('source=tile&source=inline')).names.sort(),
+        ).toEqual(['Checkout errors', 'Checkout latency', 'Login failures']);
+        expect((await listNames('state=ALERT&state=OK')).names.sort()).toEqual([
+          'Checkout errors',
+          'Checkout latency',
+          'Login failures',
+        ]);
+        expect((await listNames('state=ALERT&state=DISABLED')).names).toEqual([
+          'Checkout latency',
+        ]);
+      });
+
+      it('should treat a legacy alert without a source as saved_search', async () => {
+        await Alert.collection.insertOne({
+          team: team._id,
+          displayName: 'Legacy alert',
+          threshold: 100,
+          interval: '1h',
+          thresholdType: AlertThresholdType.ABOVE,
+          channel: {
+            type: 'webhook',
+            webhookId: new ObjectId().toString(),
+          },
+        });
+
+        expect((await listNames('source=saved_search')).names).toEqual([
+          'Legacy alert',
+        ]);
+        expect((await listNames('source=tile')).names.sort()).toEqual([
+          'Checkout errors',
+          'Checkout latency',
+        ]);
+      });
+
+      it('should reject the ERROR state, which alerts never hold', async () => {
+        await authRequest('get', `${ALERTS_BASE_URL}?state=ERROR`).expect(400);
+      });
+
+      it('should accept a repeated filter value', async () => {
+        const { names } = await listNames(`${'state=OK&'.repeat(6)}limit=10`);
+        expect(names.sort()).toEqual(['Checkout errors', 'Login failures']);
+      });
+
+      it('should reject oversized filter values', async () => {
+        await authRequest(
+          'get',
+          `${ALERTS_BASE_URL}?search=${'a'.repeat(513)}`,
+        ).expect(400);
+        await authRequest(
+          'get',
+          `${ALERTS_BASE_URL}?tag=${'a'.repeat(33)}`,
+        ).expect(400);
+        const tooManyTags = Array.from({ length: 51 }, (_, i) => `tag=t${i}`);
+        await authRequest(
+          'get',
+          `${ALERTS_BASE_URL}?${tooManyTags.join('&')}`,
+        ).expect(400);
+      });
+
+      it('should treat an empty tag or search as absent', async () => {
+        expect((await listNames('tag=')).names).toHaveLength(3);
+        expect((await listNames('search=')).names).toHaveLength(3);
+      });
+
+      it('should treat a legacy alert without state or tags as OK and untagged', async () => {
+        await Alert.collection.insertOne({
+          team: team._id,
+          displayName: 'Legacy alert',
+          threshold: 100,
+          interval: '1h',
+          thresholdType: AlertThresholdType.ABOVE,
+          channel: {
+            type: 'webhook',
+            webhookId: new ObjectId().toString(),
+          },
+        });
+
+        const ok = await listNames('state=OK');
+        expect(ok.names).toContain('Legacy alert');
+        const alerting = await listNames('state=ALERT');
+        expect(alerting.names).not.toContain('Legacy alert');
+        const tagged = await listNames('tag=checkout');
+        expect(tagged.names).not.toContain('Legacy alert');
+      });
+    });
   });
 
   describe('Updating alerts', () => {
@@ -932,6 +1144,242 @@ describe('External API Alerts', () => {
         `${ALERTS_BASE_URL}/${nonExistentId}`,
       ).expect(404);
       expect(response.body).toEqual({ message: 'Alert not found' });
+    });
+  });
+
+  describe('Silencing alerts', () => {
+    const futureDate = () => new Date(Date.now() + 60 * 60 * 1000);
+
+    it('should silence an alert and return it with the silenced state', async () => {
+      const { alert } = await createTestAlert({ name: 'Silence Test Alert' });
+      const mutedUntil = futureDate().toISOString();
+
+      const response = await authRequest(
+        'post',
+        `${ALERTS_BASE_URL}/${alert.id}/silenced`,
+      )
+        .send({ mutedUntil })
+        .expect(200);
+
+      expect(response.body.data.id).toBe(alert.id);
+      expect(response.body.data.silenced).toMatchObject({
+        by: user._id.toString(),
+        until: mutedUntil,
+      });
+
+      const stored = await Alert.findById(alert.id);
+      expect(stored?.silenced?.until.toISOString()).toBe(mutedUntil);
+      expect(stored?.silenced?.by?.toString()).toBe(user._id.toString());
+    });
+
+    it('should unsilence a silenced alert', async () => {
+      const { alert } = await createTestAlert({ name: 'Unsilence Test Alert' });
+      await authRequest('post', `${ALERTS_BASE_URL}/${alert.id}/silenced`)
+        .send({ mutedUntil: futureDate().toISOString() })
+        .expect(200);
+
+      const response = await authRequest(
+        'delete',
+        `${ALERTS_BASE_URL}/${alert.id}/silenced`,
+      ).expect(200);
+
+      expect(response.body.data.id).toBe(alert.id);
+      expect(response.body.data.silenced).toBeUndefined();
+      const stored = await Alert.findById(alert.id);
+      expect(stored?.silenced).toBeUndefined();
+    });
+
+    it('should return inherited displayName and tags from the silence routes', async () => {
+      const dashboard = await createTestDashboard({ name: 'Inherited' });
+      await Dashboard.updateOne(
+        { _id: dashboard._id },
+        { tags: ['inherited-tag'] },
+      );
+      const alert = await createTestAlertDirectly({
+        dashboard: dashboard._id,
+        tileId: dashboard.tiles[0].id,
+      });
+      const url = `${ALERTS_BASE_URL}/${alert.id}`;
+
+      const fetched = await authRequest('get', url).expect(200);
+      expect(fetched.body.data).toMatchObject({
+        displayName: 'Inherited - Tile',
+        tags: ['inherited-tag'],
+      });
+
+      const silenced = await authRequest('post', `${url}/silenced`)
+        .send({ mutedUntil: futureDate().toISOString() })
+        .expect(200);
+      expect(silenced.body.data).toMatchObject({
+        displayName: fetched.body.data.displayName,
+        tags: fetched.body.data.tags,
+      });
+
+      const unsilenced = await authRequest('delete', `${url}/silenced`).expect(
+        200,
+      );
+      expect(unsilenced.body.data).toMatchObject({
+        displayName: fetched.body.data.displayName,
+        tags: fetched.body.data.tags,
+      });
+    });
+
+    it('should return 404 with a JSON body when silencing a non-existent alert', async () => {
+      const response = await authRequest(
+        'post',
+        `${ALERTS_BASE_URL}/${new ObjectId().toString()}/silenced`,
+      )
+        .send({ mutedUntil: futureDate().toISOString() })
+        .expect(404);
+      expect(response.body).toEqual({ message: 'Alert not found' });
+    });
+
+    it('should return 404 with a JSON body when unsilencing a non-existent alert', async () => {
+      const response = await authRequest(
+        'delete',
+        `${ALERTS_BASE_URL}/${new ObjectId().toString()}/silenced`,
+      ).expect(404);
+      expect(response.body).toEqual({ message: 'Alert not found' });
+    });
+
+    it('should reject a mutedUntil in the past', async () => {
+      const { alert } = await createTestAlert({ name: 'Past Silence Alert' });
+
+      await authRequest('post', `${ALERTS_BASE_URL}/${alert.id}/silenced`)
+        .send({ mutedUntil: new Date(Date.now() - 60 * 1000).toISOString() })
+        .expect(400);
+
+      const stored = await Alert.findById(alert.id);
+      expect(stored?.silenced).toBeUndefined();
+    });
+
+    it('should accept an ISO 8601 timestamp with a UTC offset', async () => {
+      const { alert } = await createTestAlert({ name: 'Offset Silence Alert' });
+      const until = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      const offsetTs = new Date(until.getTime() + 2 * 60 * 60 * 1000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, '+02:00');
+
+      await authRequest('post', `${ALERTS_BASE_URL}/${alert.id}/silenced`)
+        .send({ mutedUntil: offsetTs })
+        .expect(200);
+      const stored = await Alert.findById(alert.id);
+      expect(stored?.silenced?.until.getTime()).toBe(
+        Math.floor(until.getTime() / 1000) * 1000,
+      );
+    });
+
+    it('should expose the silenced state on GET and list reads', async () => {
+      const { alert } = await createTestAlert({ name: 'Read Silence Alert' });
+      const mutedUntil = futureDate().toISOString();
+      await authRequest('post', `${ALERTS_BASE_URL}/${alert.id}/silenced`)
+        .send({ mutedUntil })
+        .expect(200);
+
+      const expected = {
+        by: user._id.toString(),
+        until: mutedUntil,
+        at: expect.any(String),
+      };
+      const single = await authRequest(
+        'get',
+        `${ALERTS_BASE_URL}/${alert.id}`,
+      ).expect(200);
+      expect(single.body.data.silenced).toMatchObject(expected);
+
+      const list = await authRequest('get', ALERTS_BASE_URL).expect(200);
+      const listed = list.body.data.find(
+        (a: { id: string }) => a.id === alert.id,
+      );
+      expect(listed.silenced).toMatchObject(expected);
+    });
+
+    it('should keep an existing silence when the alert is updated', async () => {
+      const { alert } = await createTestAlert({ name: 'Update Silence Alert' });
+      const mutedUntil = futureDate().toISOString();
+      await authRequest('post', `${ALERTS_BASE_URL}/${alert.id}/silenced`)
+        .send({ mutedUntil })
+        .expect(200);
+      const current = await authRequest(
+        'get',
+        `${ALERTS_BASE_URL}/${alert.id}`,
+      ).expect(200);
+
+      await authRequest('put', `${ALERTS_BASE_URL}/${alert.id}`)
+        .send({
+          threshold: 500,
+          interval: '1h',
+          thresholdType: AlertThresholdType.ABOVE,
+          source: AlertSource.TILE,
+          dashboardId: current.body.data.dashboardId,
+          tileId: current.body.data.tileId,
+          channel: current.body.data.channel,
+        })
+        .expect(200);
+
+      const after = await authRequest(
+        'get',
+        `${ALERTS_BASE_URL}/${alert.id}`,
+      ).expect(200);
+      expect(after.body.data.threshold).toBe(500);
+      expect(after.body.data.silenced).toMatchObject({ until: mutedUntil });
+    });
+
+    it('should reject a missing or malformed mutedUntil', async () => {
+      const { alert } = await createTestAlert({ name: 'Bad Silence Alert' });
+      const url = `${ALERTS_BASE_URL}/${alert.id}/silenced`;
+
+      await authRequest('post', url).send({}).expect(400);
+      await authRequest('post', url)
+        .send({ mutedUntil: 'tomorrow' })
+        .expect(400);
+    });
+
+    it('should reject an invalid alert id', async () => {
+      await authRequest('post', `${ALERTS_BASE_URL}/not-an-id/silenced`)
+        .send({ mutedUntil: futureDate().toISOString() })
+        .expect(400);
+    });
+
+    it('should return 404 and leave the alert unchanged for another team', async () => {
+      const { alert } = await createTestAlert({ name: 'Cross Team Alert' });
+      const mutedUntil = futureDate().toISOString();
+      await authRequest('post', `${ALERTS_BASE_URL}/${alert.id}/silenced`)
+        .send({ mutedUntil })
+        .expect(200);
+
+      const otherTeam = await Team.create({ name: 'Other Team' });
+      const otherUser = await User.create({
+        email: 'other-team@deploysentinel.com',
+        team: otherTeam._id,
+      });
+      const silencedUrl = `${ALERTS_BASE_URL}/${alert.id}/silenced`;
+      const otherAuth = `Bearer ${otherUser.accessKey}`;
+
+      const silenceResponse = await request(server.getHttpServer())
+        .post(silencedUrl)
+        .set('Authorization', otherAuth)
+        .send({ mutedUntil: futureDate().toISOString() })
+        .expect(404);
+      expect(silenceResponse.body).toEqual({ message: 'Alert not found' });
+
+      const unsilenceResponse = await request(server.getHttpServer())
+        .delete(silencedUrl)
+        .set('Authorization', otherAuth)
+        .expect(404);
+      expect(unsilenceResponse.body).toEqual({ message: 'Alert not found' });
+
+      const stored = await Alert.findById(alert.id);
+      expect(stored?.silenced?.until.toISOString()).toBe(mutedUntil);
+      expect(stored?.silenced?.by?.toString()).toBe(user._id.toString());
+    });
+
+    it('should reject an invalid alert id when unsilencing', async () => {
+      const response = await authRequest(
+        'delete',
+        `${ALERTS_BASE_URL}/not-an-id/silenced`,
+      ).expect(400);
+      expect(response.body).toEqual({ message: expect.any(String) });
     });
   });
 

@@ -17,6 +17,7 @@ import {
   makeTile,
 } from '@/fixtures';
 import Alert, { AlertSource } from '@/models/alert';
+import Connection from '@/models/connection';
 import Dashboard from '@/models/dashboard';
 import PresetDashboardFilter from '@/models/presetDashboardFilter';
 import { Source } from '@/models/source';
@@ -1518,6 +1519,185 @@ describe('dashboard router', () => {
     );
   });
 
+  describe('data source variables', () => {
+    const dataSourceFilter = {
+      id: new Types.ObjectId().toString(),
+      type: 'DATA_SOURCE' as const,
+      name: 'Logs source',
+      variableName: 'logs',
+      allowedSourceKinds: [SourceKind.Log],
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    };
+
+    it('persists a tile and a filter that reference the variable', async () => {
+      const tile = makeTile({ sourceId: '$logs' });
+      const queriedFilter = {
+        id: new Types.ObjectId().toString(),
+        type: 'QUERY_EXPRESSION' as const,
+        name: 'Service',
+        expression: 'ServiceName',
+        source: '$logs',
+      };
+
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [tile],
+          filters: [dataSourceFilter, queriedFilter],
+        })
+        .expect(200);
+
+      expect(created.body.tiles[0].config.source).toBe('$logs');
+      expect(created.body.filters).toEqual([dataSourceFilter, queriedFilter]);
+    });
+
+    it('rejects a reference to an unknown variable', async () => {
+      const res = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, tiles: [makeTile({ sourceId: '$nope' })] })
+        .expect(400);
+
+      expect(JSON.stringify(res.body)).toMatch(
+        /does not name a data source variable/,
+      );
+    });
+
+    it('rejects a variable offering no kind the reference can use', async () => {
+      const res = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [
+            { ...dataSourceFilter, allowedSourceKinds: [SourceKind.Promql] },
+          ],
+        })
+        .expect(400);
+
+      expect(res.body.message).toMatch(/offers no kind of source/);
+    });
+
+    it('accepts a variable offering some kinds the reference cannot use', async () => {
+      await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [
+            {
+              ...dataSourceFilter,
+              allowedSourceKinds: [SourceKind.Log, SourceKind.Promql],
+            },
+          ],
+        })
+        .expect(200);
+    });
+
+    it('validates a PATCH of tiles against the stored filters', async () => {
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [dataSourceFilter] })
+        .expect(200);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ tiles: [makeTile({ sourceId: '$logs' })] })
+        .expect(200);
+      const res = await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          tiles: [
+            makeTile({ sourceId: '$logs' }),
+            makeTile({ sourceId: '$nope' }),
+          ],
+        })
+        .expect(400);
+      expect(res.body.message).toMatch(/does not name a data source variable/);
+    });
+
+    // Only references an update adds are checked, so editing a variable
+    // doesn't fail on the tiles and filters that already use it.
+    it('saves a filter edit that leaves stored references unsatisfied', async () => {
+      const adhocFilter = {
+        id: new Types.ObjectId().toString(),
+        type: 'ADHOC' as const,
+        name: 'Conditions',
+        sourceType: 'sql' as const,
+        sources: ['$logs'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      };
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [dataSourceFilter, adhocFilter],
+        })
+        .expect(200);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          filters: [
+            { ...dataSourceFilter, allowedSourceKinds: [SourceKind.Promql] },
+            adhocFilter,
+          ],
+        })
+        .expect(200);
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ filters: [adhocFilter] })
+        .expect(200);
+    });
+
+    it('drops an alert on a tile that uses the variable', async () => {
+      await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [
+            makeTile({
+              sourceId: '$logs',
+              alert: makeMockAlert(webhook._id.toString()),
+            }),
+          ],
+          filters: [dataSourceFilter],
+        })
+        .expect(200);
+
+      expect(await Alert.countDocuments({ team: team._id })).toBe(0);
+    });
+
+    it('rejects a tile alert on a tile that uses the variable', async () => {
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [dataSourceFilter],
+        })
+        .expect(200);
+
+      const res = await agent
+        .post('/alerts')
+        .send(
+          makeAlertInput({
+            dashboardId: created.body.id,
+            tileId: created.body.tiles[0].id,
+            webhookId: webhook._id.toString(),
+          }),
+        )
+        .expect(400);
+
+      expect(res.body.message).toMatch(/data source or connection variable/);
+    });
+  });
+
   describe('promql-label filters', () => {
     const createPromqlSource = () =>
       Source.create({
@@ -1847,6 +2027,312 @@ describe('dashboard router', () => {
     });
   });
 
+  describe('SQL query filters', () => {
+    let connectionId: string;
+    beforeEach(async () => {
+      const connection = await Connection.create({
+        team: team._id,
+        name: 'Test Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+      connectionId = connection._id.toString();
+    });
+
+    const makeSqlFilter = (overrides = {}) => ({
+      id: new Types.ObjectId().toString(),
+      type: 'SQL_QUERY' as const,
+      name: 'Environment',
+      connection: connectionId,
+      sqlTemplate: 'SELECT DISTINCT env FROM envs',
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'env',
+      ...overrides,
+    });
+
+    it('persists a SQL query filter on create', async () => {
+      const filter = makeSqlFilter();
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([filter]);
+    });
+
+    it('rejects a connection that does not exist', async () => {
+      const connection = new Types.ObjectId().toString();
+
+      const response = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [makeSqlFilter({ connection })] })
+        .expect(400);
+
+      expect(response.body.message).toContain(connection);
+    });
+
+    it("rejects another team's connection", async () => {
+      const otherTeamConnection = await Connection.create({
+        team: new Types.ObjectId(),
+        name: 'Other Team Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+
+      await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [
+            makeSqlFilter({ connection: otherTeamConnection._id.toString() }),
+          ],
+        })
+        .expect(400);
+    });
+
+    // Same as PromQL sources: an accepted reference that later dangles must
+    // not block unrelated edits.
+    it("lets unrelated edits through after the filter's connection is deleted", async () => {
+      const filter = makeSqlFilter();
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      await Connection.findByIdAndDelete(connectionId);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ name: 'Renamed', filters: [filter] })
+        .expect(200);
+    });
+
+    it('rejects a connection that PATCH introduces', async () => {
+      const filter = makeSqlFilter();
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          filters: [{ ...filter, connection: new Types.ObjectId().toString() }],
+        })
+        .expect(400);
+    });
+
+    it('accepts a PATCH that moves the filter to another team connection', async () => {
+      const filter = makeSqlFilter();
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+      const moved = { ...filter, connection: otherConnection._id.toString() };
+
+      const updated = await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ filters: [moved] })
+        .expect(200);
+
+      expect(updated.body.filters).toEqual([moved]);
+    });
+
+    const connectionFilter = {
+      id: new Types.ObjectId().toString(),
+      type: 'CONNECTION' as const,
+      name: 'Connection',
+      variableName: 'conn',
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    };
+
+    it('accepts a connection variable as the connection', async () => {
+      const filter = makeSqlFilter({ connection: '$conn' });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [connectionFilter, filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([connectionFilter, filter]);
+    });
+
+    it('rejects a reference that names no connection variable', async () => {
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ connection: '$conn' })],
+        })
+        .expect(400);
+
+      expect(response.body.message).toMatch(
+        /does not name a connection variable/,
+      );
+    });
+
+    const createSqlFilterSource = (kind: SourceKind, teamId = team._id) =>
+      Source.create({
+        kind,
+        name: `Test ${kind} source`,
+        team: teamId,
+        connection: connectionId,
+        from: { databaseName: 'test_db', tableName: `${kind}_table` },
+        timestampValueExpression: 'timestamp',
+        defaultTableSelectExpression: 'body',
+      });
+
+    it('persists a SQL query filter with a source', async () => {
+      const source = await createSqlFilterSource(SourceKind.Log);
+      const filter = makeSqlFilter({
+        source: source._id.toString(),
+        sqlTemplate:
+          'SELECT DISTINCT ServiceName FROM $__sourceTable WHERE $__filters',
+      });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([filter]);
+    });
+
+    it('rejects a source that does not exist', async () => {
+      const source = new Types.ObjectId().toString();
+
+      const response = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [makeSqlFilter({ source })] })
+        .expect(400);
+
+      expect(response.body.message).toContain(source);
+    });
+
+    it("rejects another team's source", async () => {
+      const source = await createSqlFilterSource(
+        SourceKind.Log,
+        new Types.ObjectId(),
+      );
+
+      await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ source: source._id.toString() })],
+        })
+        .expect(400);
+    });
+
+    it('rejects a source on another connection', async () => {
+      const source = await createSqlFilterSource(SourceKind.Log);
+      const otherConnection = await Connection.create({
+        team: team._id,
+        name: 'Other Connection',
+        host: 'http://localhost:8123',
+        username: 'default',
+      });
+
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [
+            makeSqlFilter({
+              source: source._id.toString(),
+              connection: otherConnection._id.toString(),
+            }),
+          ],
+        })
+        .expect(400);
+
+      expect(response.body.message).toContain("not on the filter's connection");
+    });
+
+    it('rejects a PromQL source', async () => {
+      const source = await createSqlFilterSource(SourceKind.Promql);
+
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ source: source._id.toString() })],
+        })
+        .expect(400);
+
+      expect(response.body.message).toContain(source._id.toString());
+    });
+
+    it('accepts a source with a connection variable', async () => {
+      const source = await createSqlFilterSource(SourceKind.Log);
+      const filter = makeSqlFilter({
+        connection: '$conn',
+        source: source._id.toString(),
+      });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({ ...MOCK_DASHBOARD, filters: [connectionFilter, filter] })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([connectionFilter, filter]);
+    });
+
+    it('accepts a data source variable', async () => {
+      const dataSourceFilter = {
+        id: new Types.ObjectId().toString(),
+        type: 'DATA_SOURCE' as const,
+        name: 'Logs source',
+        variableName: 'logs',
+        allowedSourceKinds: [SourceKind.Log],
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      };
+      const filter = makeSqlFilter({ connection: '$conn', source: '$logs' });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [connectionFilter, dataSourceFilter, filter],
+        })
+        .expect(200);
+
+      expect(created.body.filters).toEqual([
+        connectionFilter,
+        dataSourceFilter,
+        filter,
+      ]);
+    });
+
+    it('rejects a reference to an unknown data source variable', async () => {
+      const response = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeSqlFilter({ source: '$logs' })],
+        })
+        .expect(400);
+
+      expect(JSON.stringify(response.body)).toMatch(
+        /does not name a data source variable/,
+      );
+    });
+  });
+
   describe('ad hoc filters', () => {
     const createSource = (kind: SourceKind, teamId = team._id) =>
       Source.create({
@@ -1875,6 +2361,7 @@ describe('dashboard router', () => {
     const makeAdhocFilter = (overrides = {}) => ({
       id: new Types.ObjectId().toString(),
       type: 'ADHOC' as const,
+      isBroadcastEnabled: true as const,
       name: 'Ad hoc',
       sourceType: 'sql' as const,
       sources: [logSourceId],
@@ -1900,7 +2387,6 @@ describe('dashboard router', () => {
       const filter = makeAdhocFilter({
         sources: [logSourceId, traceSourceId],
         appliesToSourceIds: [traceSourceId],
-        isBroadcastEnabled: false,
       });
 
       const created = await agent
@@ -1972,6 +2458,8 @@ describe('dashboard router', () => {
       ['an invalid variable name', { variableName: '1adhoc' }],
       ['not variable-enabled', { isVariableEnabled: false }],
       ['variables unset', { isVariableEnabled: undefined }],
+      ['broadcast disabled', { isBroadcastEnabled: false }],
+      ['broadcast unset', { isBroadcastEnabled: undefined }],
       ['a minimum selection', { minSelections: 1 }],
       ['a maximum selection', { maxSelections: 1 }],
       ['a global requirement', { isGlobalRequirement: true }],
@@ -2636,6 +3124,69 @@ describe('dashboard router', () => {
         );
         expect(stillExistingFilter).toBeTruthy();
       });
+    });
+  });
+
+  describe('PATCH /:id server-owned fields', () => {
+    // Security regression: `team` and `createdBy` are server-owned. A PATCH
+    // body that smuggled them used to move a dashboard into another team's
+    // namespace (cross-tenant injection) and forge ownership attribution —
+    // zod-express-middleware's validateRequest validates without replacing
+    // req.body, and the handler used to spread req.body into the update.
+    // Now the handler re-parses the body against
+    // DashboardWithoutIdSchema.partial(), which declares neither field.
+    it('ignores smuggled team and createdBy on PATCH', async () => {
+      const victimTeamId = new mongoose.Types.ObjectId();
+      const victimUserId = new mongoose.Types.ObjectId();
+
+      const created = await agent
+        .post('/dashboards')
+        .send(MOCK_DASHBOARD)
+        .expect(200);
+
+      const updated = await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          name: 'Hijacked Dashboard',
+          team: victimTeamId.toString(),
+          createdBy: victimUserId.toString(),
+        })
+        .expect(200);
+
+      // API response must not echo the forged values
+      expect(updated.body.team).toBe(team._id.toString());
+
+      // Ground truth: the persisted document stays in the owning team
+      const stored = await Dashboard.findById(created.body.id).lean();
+      expect(String(stored?.team)).toBe(team._id.toString());
+      expect(String(stored?.createdBy)).toBe(user._id.toString());
+
+      // And the owner can still reach it (a real move would orphan it)
+      const list = await agent.get('/dashboards').expect(200);
+      const listedIds = list.body.map((d: { _id: string }) => d._id);
+      expect(listedIds).toContain(created.body.id);
+    });
+
+    // Same mechanism via a client that round-trips a full GET response: the
+    // extra keys ride along in the spread and must still be dropped.
+    it('drops server-owned keys from a round-tripped PATCH body', async () => {
+      const created = await agent
+        .post('/dashboards')
+        .send(MOCK_DASHBOARD)
+        .expect(200);
+      const before = await agent.get('/dashboards').expect(200);
+      const full = before.body.find(
+        (d: { _id: string }) => d._id === created.body.id,
+      );
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({ ...full, name: 'Updated Name' })
+        .expect(200);
+
+      const stored = await Dashboard.findById(created.body.id).lean();
+      expect(String(stored?.team)).toBe(team._id.toString());
+      expect(String(stored?.createdBy)).toBe(user._id.toString());
     });
   });
 });

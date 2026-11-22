@@ -111,8 +111,7 @@ const nextConfig = {
     '@opentelemetry/instrumentation',
     '@opentelemetry/sdk-node',
     '@opentelemetry/auto-instrumentations-node',
-    '@hyperdx/node-opentelemetry',
-    '@hyperdx/instrumentation-sentry-node',
+    '@clickhouse/clickstack-node',
     // Outside of Vercel preview deployments, the `/api/[...all]` catch-all
     // proxies to a separately-deployed API service and never imports the
     // `@hyperdx/api` package at runtime. Mark it (and its subpaths) as a
@@ -121,6 +120,10 @@ const nextConfig = {
     // do not pull in passport-saml, mongoose, AWS SDK, etc.
     ...(process.env.HDX_PREVIEW_INLINE_API !== 'true' ? ['@hyperdx/api'] : []),
   ],
+  // Build-only tool that the server trace picks up; its Go binary shows up in image CVE scans.
+  outputFileTracingExcludes: {
+    '*': ['**/node_modules/esbuild/**', '**/node_modules/@esbuild/**'],
+  },
   typescript: {
     tsconfigPath: 'tsconfig.build.json',
   },

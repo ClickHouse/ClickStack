@@ -43,6 +43,7 @@ const baseArgs = {
   lineData,
   selectedSeriesNames: undefined as Set<string> | undefined,
   referenceLineValues: [] as number[],
+  yAxisMaxDomain: undefined as number | undefined,
   yAxisWidth: 40,
 };
 
@@ -116,13 +117,21 @@ describe('useChartScales y-domain', () => {
 
   it('bars stay anchored at zero even when fitting is requested', () => {
     // Otherwise bar lengths stop being proportional to their values.
+    // The upper bound covers the 210-high stack, not the tallest series.
     expect(
       scales({
         fitYAxisToData: true,
         displayType: DisplayType.StackedBar,
         graphResults: [{ a: 100, b: 110 }],
       }).yAxisBounds.domain,
-    ).toEqual([0, 'auto']);
+    ).toEqual([0, 220.5]);
+  });
+
+  it('falls back to the y-axis cap for a flat zero series', () => {
+    expect(
+      scales({ yAxisMaxDomain: 1, graphResults: [{ a: 0, b: 0 }] }).yAxisBounds
+        .domain,
+    ).toEqual([0, 1]);
   });
 
   it('keeps zero pinned when a selection has no numeric values', () => {

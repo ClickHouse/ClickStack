@@ -1,11 +1,10 @@
 import { z } from 'zod';
-import HyperDX from '@hyperdx/browser';
+import { getSessionId } from '@clickhouse/clickstack-browser';
 
 import {
   APP_VERSION,
   BASE_PATH,
   INSTANCE_LABEL,
-  IS_ADHOC_FILTERS_ENABLED,
   IS_ALERT_DETAILS_ENABLED,
   IS_CLICKHOUSE_BUILD,
   IS_DEV,
@@ -86,7 +85,6 @@ const staticFeatures: Record<string, boolean> = {
   promql: IS_PROMQL_ENABLED,
   llmCost: IS_LLM_COST_ENABLED,
   alertDetails: IS_ALERT_DETAILS_ENABLED,
-  adhocFilters: IS_ADHOC_FILTERS_ENABLED,
   instanceLabel: Boolean(INSTANCE_LABEL),
 };
 
@@ -134,14 +132,10 @@ export function setHdxIdentity(next: {
   dynamicFeatures = next.features ?? {};
 }
 
-// The RUM SDK only initializes in non-local mode and after /api/config resolves,
-// so this accessor must tolerate it being absent.
-function safeSessionId(): string | undefined {
-  try {
-    return HyperDX.getSessionId();
-  } catch {
-    return undefined;
-  }
+// Null until the RUM SDK has started, which needs /api/config and never happens
+// in local mode.
+function sessionId(): string | undefined {
+  return getSessionId() ?? undefined;
 }
 
 function getDevice(): HdxDevice {
@@ -195,7 +189,7 @@ function buildReport(): string {
     `platform: ${device.platform}`,
     `language: ${device.language}`,
     `ua:       ${device.userAgent}`,
-    `session:  ${safeSessionId() || 'N/A'}`,
+    `session:  ${sessionId() || 'N/A'}`,
   ];
   return lines.join('\n');
 }
@@ -236,7 +230,7 @@ export function installHdxDebug(): void {
     get device() {
       return getDevice();
     },
-    sessionId: safeSessionId,
+    sessionId,
     report: buildReport,
     copy: async () => {
       const text = buildReport();

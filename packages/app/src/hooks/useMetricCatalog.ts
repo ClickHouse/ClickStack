@@ -155,14 +155,12 @@ export function useMetricCatalog({
             })
             .then(res => res.json())) as ResponseJSON<CatalogRow>;
 
-          return (result?.data ?? []).map(
-            (row): MetricCatalogEntry => ({
-              name: row.MetricName,
-              type: kind,
-              unit: row.MetricUnit || undefined,
-              description: row.MetricDescription || undefined,
-            }),
-          );
+          return (result?.data ?? []).map((row): MetricCatalogEntry => ({
+            name: row.MetricName,
+            type: kind,
+            unit: row.MetricUnit || undefined,
+            description: row.MetricDescription || undefined,
+          }));
         }),
       );
 

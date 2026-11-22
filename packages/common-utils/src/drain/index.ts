@@ -1,5 +1,5 @@
 export type { MaskingInstructionConfig } from './config';
-export { TemplateMinerConfig } from './config';
+export { DATE_MASK, DATE_TOKEN, TemplateMinerConfig } from './config';
 export { Drain } from './drain';
 export { LogCluster } from './log-cluster';
 export { LruCache } from './lru-cache';
@@ -11,11 +11,22 @@ export type {
   TrendBucket,
 } from './mine-patterns';
 export {
+  createPatternMasker,
   DENOISE_NOISE_THRESHOLD,
   DENOISE_SAMPLE_SIZE,
   flattenBody,
   minePatterns,
 } from './mine-patterns';
 export { Node } from './node';
+export { buildNoisyBodyMatcher, selectNoisyPatterns } from './noisy-matcher';
+export type { PatternRegexOptions } from './pattern-predicate';
+export {
+  ASCII_PUNCTUATION,
+  buildCompactPatternPredicate,
+  buildPatternPredicate,
+  MAX_PREDICATE_TEMPLATE_LENGTH,
+  parsePatternPredicate,
+  templateToRegex,
+} from './pattern-predicate';
 export type { AddLogMessageResult, ExtractedParameter } from './template-miner';
 export { TemplateMiner } from './template-miner';

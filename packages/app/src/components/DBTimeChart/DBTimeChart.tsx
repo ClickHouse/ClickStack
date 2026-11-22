@@ -13,11 +13,13 @@ import {
   convertToTimeChartConfig,
   formatResponseForTimeChart,
   getPreviousDateRange,
+  getSelectSeriesColors,
   shouldFillNullsWithZero,
   useTimeChartSettings,
 } from '@/ChartUtils';
 import { ChartAnnotation } from '@/components/charts/chartAnnotations';
 import ChartContainer from '@/components/charts/ChartContainer';
+import ChartEmptyState from '@/components/charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from '@/components/charts/ChartErrorState';
@@ -33,6 +35,7 @@ import {
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useResultColumnFilterKeys } from '@/hooks/useResultColumnFilterKeys';
 import { useChartNumberFormats, useSource } from '@/source';
+import { useTimeZoneLinkParam } from '@/timeZoneOverride';
 import type { TileFilterHandler } from '@/types';
 
 import { ChartTooltipOverlay } from './ChartTooltipOverlay';
@@ -86,6 +89,25 @@ type DBTimeChartComponentProps = {
    * with the series' group-by expressions (or PromQL labels) and values.
    */
   onFilter?: TileFilterHandler;
+  /**
+   * Anchor the first/last x-axis labels inward so they are not clipped on
+   * narrow charts (e.g. side-by-side RED metric tiles). Forwarded to the chart.
+   */
+  compactXAxisLabels?: boolean;
+  /**
+   * Cap the y-axis upper bound (e.g. 1 for a 0-100% rate) while still
+   * auto-scaling below it. Forwarded to the chart.
+   */
+  yAxisMaxDomain?: number;
+  /**
+   * Color each series with its select item's `color` (keyed by the item's
+   * alias) instead of the positional palette. Off by default: saved tiles only
+   * set `color` for table display and other display types ignore it, so a tile
+   * switched from Table to Line keeps its palette. Every group of a grouped
+   * select item would share the one color, so this is for ungrouped series
+   * whose config is built in code, like the trace RED duration percentiles.
+   */
+  applySelectColors?: boolean;
 };
 
 function DBTimeChartComponent({
@@ -113,6 +135,9 @@ function DBTimeChartComponent({
   errorVariant,
   onFocusSeries,
   onFilter,
+  compactXAxisLabels,
+  yAxisMaxDomain,
+  applySelectColors = false,
 }: DBTimeChartComponentProps) {
   const [selectedSeriesSet, setSelectedSeriesSet] = useState<Set<string>>(
     new Set(),
@@ -245,24 +270,31 @@ function DBTimeChartComponent({
     { enabled: showMVOptimizationIndicator || showDateRangeIndicator },
   );
 
-  const { data, isLoading, isError, error, isPlaceholderData, isSuccess } =
-    useQueriedChartConfig(queriedConfig, {
-      placeholderData: (prev: any) => prev,
-      queryKey: [
-        queryKeyPrefix,
-        queriedConfig,
-        'chunked',
-        {
-          disableQueryChunking,
-          enableParallelQueries,
-          parallelizeWhenPossible: me?.team?.parallelizeWhenPossible,
-        },
-      ],
-      enabled: enabled && !isLoadingMe,
-      enableQueryChunking: !disableQueryChunking,
-      enableParallelQueries:
-        enableParallelQueries && me?.team?.parallelizeWhenPossible,
-    });
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isError,
+    error,
+    isPlaceholderData,
+    isSuccess,
+  } = useQueriedChartConfig(queriedConfig, {
+    placeholderData: (prev: any) => prev,
+    queryKey: [
+      queryKeyPrefix,
+      queriedConfig,
+      'chunked',
+      {
+        disableQueryChunking,
+        enableParallelQueries,
+        parallelizeWhenPossible: me?.team?.parallelizeWhenPossible,
+      },
+    ],
+    enabled: enabled && !isLoadingMe,
+    enableQueryChunking: !disableQueryChunking,
+    enableParallelQueries:
+      enableParallelQueries && me?.team?.parallelizeWhenPossible,
+  });
 
   const previousPeriodChartConfig: ChartConfigWithDateRange = useMemo(() => {
     const previousPeriodDateRange =
@@ -292,13 +324,16 @@ function DBTimeChartComponent({
     previousPeriodChartConfig.dateRange,
   ]);
 
-  const { data: previousPeriodData, isLoading: isPreviousPeriodLoading } =
-    useQueriedChartConfig(previousPeriodChartConfig, {
-      placeholderData: (prev: any) => prev,
-      queryKey: [queryKeyPrefix, previousPeriodChartConfig, 'chunked'],
-      enabled: !!(enabled && config.compareToPreviousPeriod),
-      enableQueryChunking: true,
-    });
+  const {
+    data: previousPeriodData,
+    isLoading: isPreviousPeriodLoading,
+    isFetching: isPreviousPeriodFetching,
+  } = useQueriedChartConfig(previousPeriodChartConfig, {
+    placeholderData: (prev: any) => prev,
+    queryKey: [queryKeyPrefix, previousPeriodChartConfig, 'chunked'],
+    enabled: !!(enabled && config.compareToPreviousPeriod),
+    enableQueryChunking: true,
+  });
 
   const isLoadingOrPlaceholder =
     isLoading ||
@@ -306,9 +341,20 @@ function DBTimeChartComponent({
     !data?.isComplete ||
     (config.compareToPreviousPeriod && !previousPeriodData?.isComplete) ||
     isPlaceholderData;
+  // Unlike isLoadingOrPlaceholder, this goes false once both queries settle,
+  // even if one errors, so the empty state can't get stuck loading.
+  const isFetchingAnyPeriod = isFetching || isPreviousPeriodFetching;
 
   const { formatByColumn, chartFormat: axisNumberFormat } =
     useChartNumberFormats(queriedConfig, data?.meta);
+
+  // Per-series colors come from each select item's `color`, the single source
+  // of truth for pinning a series to a palette token, but only for callers
+  // that opt in (see applySelectColors), so saved tiles keep their palette.
+  const seriesColors = useMemo(
+    () => (applySelectColors ? getSelectSeriesColors(config) : undefined),
+    [applySelectColors, config],
+  );
 
   const {
     error: resultFormattingError,
@@ -348,6 +394,7 @@ function DBTimeChartComponent({
         generateEmptyBuckets: shouldFillNullsWithZero(fillNulls),
         source,
         hiddenSeries,
+        seriesColors,
         previousPeriodOffsetSeconds,
         // "Load all" (from the warning / pinned tooltip) overrides everything;
         // otherwise the per-tile Series Limit drives the cap (null = default,
@@ -389,6 +436,7 @@ function DBTimeChartComponent({
     config.seriesLimit,
     previousPeriodData,
     hiddenSeries,
+    seriesColors,
     previousPeriodOffsetSeconds,
     showAllSeries,
   ]);
@@ -482,9 +530,10 @@ function DBTimeChartComponent({
       : undefined;
   }, [activeClickPayload]);
 
+  const addTimeZone = useTimeZoneLinkParam();
   const buildSearchUrl = useCallback(
-    (seriesKey?: string, seriesValue?: number) =>
-      buildSeriesSearchUrl({
+    (seriesKey?: string, seriesValue?: number) => {
+      const url = buildSeriesSearchUrl({
         seriesKey,
         seriesValue,
         clickedActiveLabelDate,
@@ -494,8 +543,11 @@ function DBTimeChartComponent({
         groupColumns,
         valueColumns,
         isSingleValueColumn,
-      }),
+      });
+      return url && addTimeZone(url);
+    },
     [
+      addTimeZone,
       clickedActiveLabelDate,
       config,
       granularity,
@@ -571,9 +623,7 @@ function DBTimeChartComponent({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : resultFormattingError ? (
@@ -586,9 +636,7 @@ function DBTimeChartComponent({
           }
         />
       ) : graphResults.length === 0 ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isFetchingAnyPeriod} />
       ) : (
         <>
           {/* Pinned (click-locked) tooltip; hover is handled in MemoChart. */}
@@ -642,6 +690,8 @@ function DBTimeChartComponent({
             dateRangeEndInclusive={queriedConfig.dateRangeEndInclusive}
             fitYAxisToData={queriedConfig.fitYAxisToData}
             lineInterpolation={queriedConfig.lineInterpolation}
+            compactXAxisLabels={compactXAxisLabels}
+            yAxisMaxDomain={yAxisMaxDomain}
           />
         </>
       )}

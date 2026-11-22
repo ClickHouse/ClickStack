@@ -2,7 +2,13 @@ import isPlainObject from 'lodash/isPlainObject';
 import * as SQLParser from 'node-sql-parser';
 import SqlString from 'sqlstring';
 
-import { ChSql, chSql, concatChSql, wrapChSqlIfNotEmpty } from '@/clickhouse';
+import {
+  ChSql,
+  chSql,
+  concatChSql,
+  isCHIntegerType,
+  wrapChSqlIfNotEmpty,
+} from '@/clickhouse';
 import { stripTypeWrappers } from '@/core/eventDeltas';
 import { compileFormulaAst, FormulaAst, validateFormula } from '@/core/formula';
 import {
@@ -45,6 +51,9 @@ import {
   CteChartConfig,
   DateRange,
   DisplayType,
+  Filter,
+  isLogSource,
+  isTraceSource,
   MetricsDataType,
   PromqlChartConfig,
   QuerySettings,
@@ -55,6 +64,7 @@ import {
   SortSpecificationList,
   SqlAstFilter,
   SQLInterval,
+  TSource,
 } from '@/types';
 import { substituteChartConfigVariables } from '@/variables';
 
@@ -519,18 +529,78 @@ export const rewriteSqlFilterWithKvItems = (
   }
 };
 
+/**
+ * Whether a min/max should aggregate `valueExpression` as-is instead of casting
+ * it to Float64. The cast turns a Date/DateTime into 0 (its string form doesn't
+ * parse as a float), so skip it when the expression is a bare date/time column.
+ * Only tables and single-series number tiles, which can show a date value, skip
+ * it. Charts plot values on a numeric axis and drop non-numeric columns, and in
+ * a time-bucketed result a second date column would be mistaken for the bucket.
+ * Number tiles show the first numeric column, so with several series a date
+ * value would be skipped in favour of another series. Ratios and formulas do
+ * arithmetic on the value, which ClickHouse rejects for dates.
+ */
+async function isMinMaxOnDateTimeColumn(
+  aggFn: string,
+  valueExpression: string,
+  chartConfig: BuilderChartConfigWithOptDateRangeEx,
+  metadata: Metadata,
+): Promise<boolean> {
+  const { databaseName, tableName } = chartConfig.from;
+  const { displayType } = chartConfig;
+  const seriesCount = Array.isArray(chartConfig.select)
+    ? chartConfig.select.length
+    : 0;
+  if (
+    (aggFn !== 'min' && aggFn !== 'max') ||
+    (displayType != null &&
+      displayType !== DisplayType.Table &&
+      displayType !== DisplayType.Number) ||
+    (displayType === DisplayType.Number && seriesCount > 1) ||
+    chartConfig.seriesReturnType === 'ratio' ||
+    (chartConfig.formulas?.length ?? 0) > 0 ||
+    isUsingGranularity(chartConfig) ||
+    hasSubqueryCte(chartConfig.with) ||
+    !databaseName ||
+    !tableName
+  ) {
+    return false;
+  }
+  try {
+    const column = await metadata.getColumn({
+      databaseName,
+      tableName,
+      column: unquoteIdentifier(valueExpression.trim()),
+      connectionId: chartConfig.connection,
+    });
+    return (
+      column != null &&
+      classifyTimestampType(stripTypeWrappers(column.type)) != null
+    );
+  } catch (e) {
+    console.warn(
+      `Column ${valueExpression} lookup failed while choosing min/max cast`,
+      e,
+    );
+    return false;
+  }
+}
+
 const aggFnExpr = ({
   fn,
   expr,
   level,
   where,
   sampleWeightExpression,
+  keepValueType = false,
 }: {
   fn: AggregateFunction | AggregateFunctionWithCombinators;
   expr?: string;
   level?: number;
   where?: string;
   sampleWeightExpression?: string;
+  /** Aggregate `expr` as-is instead of casting it to Float64. */
+  keepValueType?: boolean;
 }) => {
   const isAny = fn === 'any';
   const isNone = fn === 'none';
@@ -539,7 +609,9 @@ const aggFnExpr = ({
   // Cast to float64 because the expr might not be a number
   const unsafeExpr = {
     UNSAFE_RAW_SQL:
-      isAny || isNone ? `${expr}` : `toFloat64OrDefault(toString(${expr}))`,
+      isAny || isNone || keepValueType
+        ? `${expr}`
+        : `toFloat64OrDefault(toString(${expr}))`,
   };
   const whereWithExtraNullCheck = `${where} AND ${unsafeExpr.UNSAFE_RAW_SQL} IS NOT NULL`;
 
@@ -800,6 +872,12 @@ async function renderSelectList(
           expr: select.valueExpression,
           where: whereClause.sql,
           sampleWeightExpression: chartConfig.sampleWeightExpression,
+          keepValueType: await isMinMaxOnDateTimeColumn(
+            select.aggFn,
+            select.valueExpression,
+            chartConfig,
+            metadata,
+          ),
         });
       }
 
@@ -1260,7 +1338,13 @@ function renderFrom({
   );
 }
 
-async function renderWhereExpressionStr({
+/**
+ * Render a where condition as a SQL string: Lucene is serialized against the
+ * table's schema, and the result is rewritten to use materialized columns
+ * where the table has them. Used by chart rendering and by any caller that
+ * needs the same SQL outside a chart config.
+ */
+export async function renderWhereExpressionStr({
   condition,
   language,
   metadata,
@@ -1916,6 +2000,11 @@ const SUM_BUCKETED_COLUMNS = [
  * Names the CTE already defines are skipped to avoid a clash. Grouped-by ones
  * join the bucket GROUP BY instead of `any()`, so rows with different values
  * stay apart; AttributesHash is left alone because the sum windows use it.
+ *
+ * Bucketed has one row per series and time bucket, so it has no raw time
+ * column. `timeColumn` is the time column's name when the group-by references
+ * it (e.g. `toStartOfHour(TimeUnix)`), and empty otherwise; Bucketed then
+ * exposes its bucket start under that name.
  */
 async function getComputedMetricColumns(
   metadata: Metadata,
@@ -1926,6 +2015,7 @@ async function getComputedMetricColumns(
     reservedNames,
     bucketedColumns,
     groupBy,
+    timestampValueExpression,
   }: {
     databaseName: string;
     tableName: string;
@@ -1933,11 +2023,13 @@ async function getComputedMetricColumns(
     reservedNames: string[];
     bucketedColumns: string[];
     groupBy: BuilderChartConfigWithOptDateRangeEx['groupBy'];
+    timestampValueExpression: string | undefined;
   },
 ): Promise<{
   select: string;
   aggregate: string;
   groupBy: string;
+  timeColumn: string;
   project: (c: string) => { UNSAFE_RAW_SQL: string };
 }> {
   let columnNames: string[] = [];
@@ -1994,15 +2086,73 @@ async function getComputedMetricColumns(
   const extra = columnNames.filter(c => !bucketedColumns.includes(c));
   const project = (c: string) =>
     grouped.has(c) ? escape(c) : `any(${escape(c)}) AS ${escape(c)}`;
+  const rawTimeColumn = getFirstTimestampValueExpression(
+    timestampValueExpression || DEFAULT_METRIC_TABLE_TIME_COLUMN,
+  );
   return {
     select: columnNames.map(c => `, ${escape(c)}`).join(''),
     aggregate: extra.map(c => `, ${project(c)}`).join(''),
     groupBy: [...grouped].map(c => `, ${escape(c)}`).join(''),
+    timeColumn: referenced.has(rawTimeColumn) ? escape(rawTimeColumn) : '',
     // Names come from the fixed OTel lists, so they need no quoting.
     project: (c: string) => ({
       UNSAFE_RAW_SQL: grouped.has(c) ? c : `any(${c}) AS ${c}`,
     }),
   };
+}
+
+/**
+ * Exposes the gauge Bucketed query's bucket start under the time column's
+ * name, so a group-by such as `toStartOfHour(TimeUnix)` resolves while Bucketed
+ * keeps one row per series and bucket. The wrapper avoids an alias cycle: the
+ * bucket expression itself reads the raw time column.
+ */
+function withBucketStartAsTime(
+  timeColumn: string,
+  timeBucketCol: string,
+  bucketed: ChSql,
+): ChSql {
+  return timeColumn
+    ? chSql`SELECT *, ${timeBucketCol} AS ${timeColumn} FROM (${bucketed})`
+    : bucketed;
+}
+
+/**
+ * WHERE for a metric source CTE. OTLP sets bit 0 of Flags
+ * (FLAG_NO_RECORDED_VALUE) on a point that has no value, such as a Prometheus
+ * staleness marker. The ClickHouse exporter stores that point as zeros, so it
+ * is left out before any aggregation or delta reads it. A series that comes
+ * back after a marker is then compared with its last real point, so a counter
+ * that restarted behind the marker is clamped like any other counter reset
+ * (see the Sum Source CTE). The gauge and sum CTEs already read Flags, but
+ * HyperDX does not require it on histogram tables, and none of them need it
+ * to be an integer. So a table without an integer Flags column (or a failed
+ * column lookup) is read as before. Nullable is excluded too:
+ * `bitAnd(NULL, 1) = 0` is NULL and would drop the row.
+ */
+async function renderMetricWhere(
+  chartConfig: BuilderChartConfigWithOptDateRangeEx,
+  metadata: Metadata,
+): Promise<ChSql> {
+  const where = await renderWhere(chartConfig, metadata);
+  let hasFlags = false;
+  try {
+    const flags = await metadata.getColumn({
+      databaseName: chartConfig.from.databaseName,
+      tableName: chartConfig.from.tableName,
+      column: 'Flags',
+      connectionId: chartConfig.connection,
+    });
+    hasFlags =
+      flags != null &&
+      isCHIntegerType(flags.type) &&
+      !flags.type.includes('Nullable(');
+  } catch (e) {
+    console.warn('Failed to look up the Flags column of a metric table', e);
+  }
+  return hasFlags
+    ? concatChSql(' AND ', where, chSql`bitAnd(Flags, 1) = 0`)
+    : where;
 }
 
 async function translateMetricChartConfig(
@@ -2064,7 +2214,7 @@ async function translateMetricChartConfig(
       minGranularitySeconds: chartConfig.minGranularitySeconds,
     });
 
-    const where = await renderWhere(
+    const where = await renderMetricWhere(
       {
         ...chartConfig,
         from: {
@@ -2092,6 +2242,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'LastValue', timeBucketCol],
       bucketedColumns: GAUGE_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     return {
@@ -2109,7 +2260,10 @@ async function translateMetricChartConfig(
         },
         {
           name: 'Bucketed',
-          sql: chSql`
+          sql: withBucketStartAsTime(
+            computedColumns.timeColumn,
+            timeBucketCol,
+            chSql`
             SELECT
               ${timeExpr},
               AttributesHash,
@@ -2131,6 +2285,7 @@ async function translateMetricChartConfig(
             GROUP BY AttributesHash, ${timeBucketCol}${{ UNSAFE_RAW_SQL: computedColumns.groupBy }}
             ORDER BY AttributesHash, ${timeBucketCol}
           `,
+          ),
         },
       ],
       select: [
@@ -2170,7 +2325,7 @@ async function translateMetricChartConfig(
     // Render the where clause to limit data selection on the source CTE but also search forward/back one
     // bucket window to ensure that there is enough data to compute a reasonable value on the ends of the
     // series.
-    const where = await renderWhere(
+    const where = await renderMetricWhere(
       {
         ...chartConfig,
         from: {
@@ -2204,6 +2359,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'Rate', 'Sum', timeBucketCol],
       bucketedColumns: SUM_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     /**
@@ -2272,7 +2428,7 @@ async function translateMetricChartConfig(
               StartTimeUnix,
               Flags,
               AggregationTemporality,
-              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}
+              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}${{ UNSAFE_RAW_SQL: computedColumns.timeColumn ? `, \`${timeBucketCol}\` AS ${computedColumns.timeColumn}` : '' }}
             FROM (
               SELECT
                 ${timeExpr},
@@ -2313,8 +2469,12 @@ async function translateMetricChartConfig(
     // groups (mirrors v1's MAX_NUM_GROUPS). Ranking is done in a separate
     // CTE rather than a window, since ClickHouse can't reference a
     // window-aggregate inside another window's ORDER BY.
+    // Skipped for a group-by over the raw time column: ranking would keep only
+    // the 20 largest time buckets and silently drop the rest.
     const shouldApplyIncreaseGroupLimit =
-      _select.aggFn === 'increase' && isUsingGroupBy(chartConfig);
+      _select.aggFn === 'increase' &&
+      isUsingGroupBy(chartConfig) &&
+      !computedColumns.timeColumn;
 
     let outerWhere: string = '';
 
@@ -2466,7 +2626,7 @@ async function translateMetricChartConfig(
           minGranularitySeconds: cteChartConfig.minGranularitySeconds,
         })
       : undefined;
-    const where = await renderWhere(cteChartConfig, metadata);
+    const where = await renderMetricWhere(cteChartConfig, metadata);
 
     // Time bucket grouping is being handled separately, so make sure to ignore the granularity
     // logic for histograms specifically.
@@ -2550,7 +2710,16 @@ async function translateMetricChartConfig(
 
 /** Renders the config's filters into a SQL condition string */
 async function renderFiltersToSql(
-  chartConfig: RawSqlChartConfig,
+  chartConfig: Pick<
+    RawSqlChartConfig,
+    | 'filters'
+    | 'source'
+    | 'from'
+    | 'connection'
+    | 'implicitColumnExpression'
+    | 'bodyExpression'
+    | 'useTextIndexForImplicitColumn'
+  >,
   metadata: Metadata,
 ): Promise<string | undefined> {
   if (
@@ -2598,6 +2767,38 @@ async function renderFiltersToSql(
   ).filter(condition => condition !== undefined);
 
   return conditions.length > 0 ? `(${conditions.join(' AND ')})` : undefined;
+}
+
+/**
+ * The condition `$__filters` expands to for SQL that queries `source`, as for
+ * a raw SQL tile with that source.
+ */
+export function renderSourceFiltersToSql({
+  source,
+  filters,
+  metadata,
+}: {
+  source: TSource;
+  filters: Filter[];
+  metadata: Metadata;
+}): Promise<string | undefined> {
+  const isLogOrTrace = isLogSource(source) || isTraceSource(source);
+  return renderFiltersToSql(
+    {
+      filters,
+      source: source.id,
+      from: source.from,
+      connection: source.connection,
+      implicitColumnExpression: isLogOrTrace
+        ? source.implicitColumnExpression
+        : undefined,
+      bodyExpression: isLogSource(source) ? source.bodyExpression : undefined,
+      useTextIndexForImplicitColumn: isLogOrTrace
+        ? source.useTextIndexForImplicitColumn
+        : undefined,
+    },
+    metadata,
+  );
 }
 
 export async function renderRawSqlChartConfig(

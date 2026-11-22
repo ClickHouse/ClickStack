@@ -17,14 +17,21 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { convertToDashboardDocument } from '@hyperdx/common-utils/dist/core/utils';
 import {
+  collectRefinementIssues,
+  validateDashboardVariableReferences,
+} from '@hyperdx/common-utils/dist/dashboardValidation';
+import {
   type DashboardFilterQueryIssue,
   getAdhocFilterSourceKinds,
   isAdhocFilter,
+  isDataSourceFilter,
   isPrometheusLabelFilter,
   isQueryExpressionFilter,
+  isSqlQueryFilter,
   QUERY_EXPRESSION_FILTER_SOURCE_KINDS,
   type SavedFilterValueIssue,
   type SavedQueryIssue,
+  SQL_QUERY_FILTER_SOURCE_KINDS,
   validateDashboardFilterQueries,
   validateSavedFilterValues,
   validateSavedQuery,
@@ -33,6 +40,7 @@ import {
   displayTypeRequiresSource,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   type DashboardFilter,
   type DashboardTemplate,
@@ -45,6 +53,7 @@ import {
   type QueryExpressionDashboardFilter,
   SavedChartConfig,
   SourceKind,
+  type SqlQueryDashboardFilter,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import {
@@ -74,8 +83,9 @@ import {
 
 import SelectControlled from './components/SelectControlled';
 import { SourceMultiSelectControlled } from './components/SourceMultiSelect';
-import { usePageTitle } from './theme/ThemeProvider';
+import { useConnectionItems } from './hooks/useConnectionItems';
 import api from './api';
+import { usePageTitle } from './brand';
 import { useConnections } from './connection';
 import {
   normalizeRawDashboardTileColors,
@@ -127,6 +137,32 @@ function CollapsibleMessage({
       )}
     </div>
   );
+}
+
+/**
+ * A `$name` that names no variable of the right type in the template. The API
+ * rejects these too, but only once the mappings are filled in, and local mode
+ * doesn't check at all.
+ */
+export function getTemplateVariableReferenceIssues(
+  template: DashboardTemplate,
+): string[] {
+  return collectRefinementIssues(ctx =>
+    validateDashboardVariableReferences(
+      template.tiles,
+      template.filters ?? [],
+      ctx,
+    ),
+  ).map(({ path, message }) => {
+    const [collection, index] = path;
+    const owner =
+      collection === 'tiles' && typeof index === 'number'
+        ? `Tile "${template.tiles[index]?.config.name ?? index}"`
+        : collection === 'filters' && typeof index === 'number'
+          ? `Filter "${template.filters?.[index]?.name ?? index}"`
+          : path.join('.');
+    return `${owner}: ${message}`;
+  });
 }
 
 function FileSelection({
@@ -194,6 +230,24 @@ function FileSelection({
             {result.error.issues.map(issue => (
               <Text key={`${issue.path.join('.')}:${issue.message}`} c="red">
                 {issue.message}
+              </Text>
+            ))}
+          </Stack>
+        ),
+      });
+      return;
+    }
+
+    const referenceIssues = getTemplateVariableReferenceIssues(result.data);
+    if (referenceIssues.length > 0) {
+      onComplete(null);
+      setError({
+        message: 'Failed to Import Dashboard',
+        details: (
+          <Stack gap={0}>
+            {referenceIssues.map(issue => (
+              <Text key={issue} variant="danger">
+                {issue}
               </Text>
             ))}
           </Stack>
@@ -337,10 +391,17 @@ function FileSelection({
             details={
               <Stack gap={0}>
                 {filterQueryWarnings.map(warning => (
-                  <Text key={warning.filterId} c="yellow">
-                    {warning.filterName}: invalid {warning.language} query:{' '}
-                    {warning.where}
-                  </Text>
+                  <Stack key={warning.filterId} gap={0}>
+                    <Text c="yellow">
+                      {warning.filterName}: invalid {warning.language} query:{' '}
+                      {warning.where}
+                    </Text>
+                    {warning.detail && (
+                      <Text c="yellow" size="sm">
+                        {warning.detail}
+                      </Text>
+                    )}
+                  </Stack>
                 ))}
               </Stack>
             }
@@ -390,11 +451,43 @@ function resolveAppliesToSources(
   return { ids: slots.filter(Boolean), slots };
 }
 
+/**
+ * A data source or connection variable reference (`$name`) is portable as
+ * written, so import neither maps it nor asks the user to.
+ */
+const isVariableRef = (name: string | undefined) =>
+  parseVariableReference(name) != null;
+
+const sourceVariableRefs = (names: string[] | undefined) =>
+  names?.filter(isVariableRef) ?? [];
+
+const mappableSourceNames = (names: string[] | undefined) =>
+  names?.filter(name => !isVariableRef(name));
+
 /** Whether the filter names a single source that import must map. */
 const isSourceBackedTemplateFilter = (
   filter: DashboardFilter,
-): filter is QueryExpressionDashboardFilter | PromqlLabelDashboardFilter =>
-  isQueryExpressionFilter(filter) || isPrometheusLabelFilter(filter);
+): filter is
+  | QueryExpressionDashboardFilter
+  | PromqlLabelDashboardFilter
+  | SqlQueryDashboardFilter =>
+  (isQueryExpressionFilter(filter) ||
+    isPrometheusLabelFilter(filter) ||
+    // The source is optional for a SQL query filter
+    (isSqlQueryFilter(filter) && !!filter.source)) &&
+  !isVariableRef(filter.source);
+
+/**
+ * Returns the filter if it names a connection import must map: a SQL query
+ * filter, or a data source variable limited to a connection.
+ */
+const connectionBackedTemplateFilter = (filter: DashboardFilter | undefined) =>
+  filter &&
+  (isSqlQueryFilter(filter) || isDataSourceFilter(filter)) &&
+  filter.connection &&
+  !isVariableRef(filter.connection)
+    ? filter
+    : undefined;
 
 /** Returns the filter if it names a source, or `undefined` if it doesn't. */
 const sourceBackedTemplateFilter = (filter: DashboardFilter | undefined) =>
@@ -421,14 +514,14 @@ const appliesToSourceKinds = (
  * The source kinds a filter of this type can read its dropdown values from, or
  * `undefined` for a filter that reads no source at all.
  */
-const filterSourceKinds = (
-  filter: DashboardFilter,
-): SourceKind[] | undefined =>
+const filterSourceKinds = (filter: DashboardFilter): SourceKind[] | undefined =>
   isPrometheusLabelFilter(filter)
     ? [SourceKind.Promql]
     : isQueryExpressionFilter(filter)
       ? QUERY_EXPRESSION_FILTER_SOURCE_KINDS
-      : undefined;
+      : isSqlQueryFilter(filter)
+        ? SQL_QUERY_FILTER_SOURCE_KINDS
+        : undefined;
 
 /**
  * One mapping select's value. Mantine's Select writes `null` when the user
@@ -446,7 +539,7 @@ const MappingValueSchema = z
  */
 export function buildMappingFormSchema(
   input: DashboardTemplate,
-  sources?: readonly Pick<TSource, 'id' | 'kind'>[],
+  sources?: readonly Pick<TSource, 'id' | 'kind' | 'connection'>[],
 ) {
   return z
     .object({
@@ -458,6 +551,8 @@ export function buildMappingFormSchema(
       connectionMappings: z.array(MappingValueSchema),
       /** A list of filter source mappings, ordered by input filter index */
       filterSourceMappings: z.array(MappingValueSchema).optional(),
+      /** Connection mappings of SQL query filters and data source variables, ordered by input filter index */
+      filterConnectionMappings: z.array(MappingValueSchema).optional(),
       /**
        * Per-filter applies-to source mappings. Each entry is an array of mapped
        * source IDs in the same order as the filter's `appliesToSourceIds` names
@@ -487,6 +582,7 @@ export function buildMappingFormSchema(
         // meaningful source even when the template names one.
         if (
           config.source &&
+          !isVariableRef(config.source) &&
           displayTypeRequiresSource(config.displayType) &&
           !data.tileSourceMappings[idx]
         ) {
@@ -498,7 +594,11 @@ export function buildMappingFormSchema(
         }
         // A raw SQL tile always gets a connection row, and its connection is
         // not optional — leaving it unpicked used to throw on `connection!.id`.
-        if (isRawSqlSavedChartConfig(config) && !data.connectionMappings[idx]) {
+        if (
+          isRawSqlSavedChartConfig(config) &&
+          !isVariableRef(config.connection) &&
+          !data.connectionMappings[idx]
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['connectionMappings', idx],
@@ -514,6 +614,16 @@ export function buildMappingFormSchema(
         });
 
       input.filters?.forEach((filter, idx) => {
+        if (
+          connectionBackedTemplateFilter(filter) &&
+          !data.filterConnectionMappings?.[idx]
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['filterConnectionMappings', idx],
+            message: 'Select a connection for this filter',
+          });
+        }
         if (isAdhocFilter(filter)) {
           const kinds = getAdhocFilterSourceKinds(filter.sourceType);
           const kindMessage =
@@ -523,7 +633,10 @@ export function buildMappingFormSchema(
           const mappedSourceIds = data.filterAdhocSourceMappings?.[idx]?.filter(
             id => !!id,
           );
-          if (!mappedSourceIds?.length) {
+          if (
+            !mappedSourceIds?.length &&
+            sourceVariableRefs(filter.sources).length === 0
+          ) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ['filterAdhocSourceMappings', idx],
@@ -571,6 +684,22 @@ export function buildMappingFormSchema(
               ? 'Select a PromQL source for this filter'
               : 'Select a non-PromQL source for this filter',
           });
+          return;
+        }
+
+        // The filter's query runs on its connection, so its source must be there too.
+        const mappedConnectionId = data.filterConnectionMappings?.[idx];
+        if (
+          isSqlQueryFilter(filter) &&
+          mappedSource &&
+          mappedConnectionId &&
+          mappedSource.connection !== mappedConnectionId
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['filterSourceMappings', idx],
+            message: "Select a source on this filter's connection",
+          });
         }
       });
     });
@@ -582,6 +711,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
   const router = useRouter();
   const { data: sources } = useSources();
   const { data: connections } = useConnections();
+  const connectionItems = useConnectionItems();
   const { data: dashboards } = useDashboards();
   const { data: existingTags } = api.useTags();
   const [dashboardId] = useQueryState('dashboardId', parseAsString);
@@ -601,6 +731,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
         tileSourceMappings: input.tiles.map(() => ''),
         connectionMappings: input.tiles.map(() => ''),
         filterSourceMappings: input.filters?.map(() => '') ?? [],
+        filterConnectionMappings: input.filters?.map(() => '') ?? [],
         filterAppliesToSourceMappings: input.filters?.map(() => []) ?? [],
         filterAdhocSourceMappings: input.filters?.map(() => []) ?? [],
         onClickSourceMappings: input.tiles.map(() => ''),
@@ -624,20 +755,27 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
     const tileSourceMappings = input.tiles.map(tile => {
       const config = tile.config as SavedChartConfig;
-      if (!config.source) return '';
+      if (!config.source || isVariableRef(config.source)) return '';
       const match = sources.find(
         source => source.name.toLowerCase() === config.source!.toLowerCase(),
       );
       return match?.id || '';
     });
 
+    const findConnectionIdByName = (name: string) =>
+      connections.find(conn => conn.name.toLowerCase() === name.toLowerCase())
+        ?.id ?? '';
+
     const connectionMappings = input.tiles.map(tile => {
       const config = tile.config as SavedChartConfig;
-      if (!isRawSqlSavedChartConfig(config)) return '';
-      const match = connections.find(
-        conn => conn.name.toLowerCase() === config.connection.toLowerCase(),
-      );
-      return match?.id || '';
+      if (!isRawSqlSavedChartConfig(config) || isVariableRef(config.connection))
+        return '';
+      return findConnectionIdByName(config.connection);
+    });
+
+    const filterConnectionMappings = input.filters?.map(filter => {
+      const connection = connectionBackedTemplateFilter(filter)?.connection;
+      return connection ? findConnectionIdByName(connection) : '';
     });
 
     const filterSourceMappings = input.filters?.map(filter => {
@@ -697,6 +835,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
     setValue('tileSourceMappings', tileSourceMappings);
     setValue('connectionMappings', connectionMappings);
+    setValue('filterConnectionMappings', filterConnectionMappings);
     setValue('filterSourceMappings', filterSourceMappings);
     multiMappingSlotsRef.current.clear();
     filterAppliesToSourceMappings?.forEach((mapping, idx) => {
@@ -720,6 +859,10 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
     name: 'onClickSourceMappings',
   });
   const connectionMappings = useWatch({ control, name: 'connectionMappings' });
+  const filterConnectionMappings = useWatch({
+    control,
+    name: 'filterConnectionMappings',
+  });
   const onClickDashboardMappings = useWatch({
     control,
     name: 'onClickDashboardMappings',
@@ -728,6 +871,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
   const prevFilterSourceMappingsRef = useRef(filterSourceMappings);
   const prevOnClickSourceMappingsRef = useRef(onClickSourceMappings);
   const prevConnectionMappingsRef = useRef(connectionMappings);
+  const prevFilterConnectionMappingsRef = useRef(filterConnectionMappings);
   const prevOnClickDashboardMappingsRef = useRef(onClickDashboardMappings);
 
   // Propagate source mapping changes to other tiles/filters/onClicks with the
@@ -883,26 +1027,51 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
     sources,
   ]);
 
-  // Propagate connection mapping changes to other RawSQL tiles with the same input connection
+  // Propagate connection mapping changes to other RawSQL tiles and filters
+  // with the same input connection
   useEffect(() => {
     if (isUpdatingRef.current) return;
-    if (!connectionMappings || !input.tiles) return;
+    if (!input.tiles) return;
 
-    const changedIdx = connectionMappings.findIndex(
-      (mapping, idx) =>
-        mapping !== prevConnectionMappingsRef.current?.[idx] &&
-        getFieldState(`connectionMappings.${idx}`).isDirty,
-    );
-    if (changedIdx === -1) return;
+    let inputConnectionName: string | undefined;
+    let connectionId = '';
 
-    prevConnectionMappingsRef.current = connectionMappings;
+    const tileIdx =
+      connectionMappings?.findIndex(
+        (mapping, idx) =>
+          mapping !== prevConnectionMappingsRef.current?.[idx] &&
+          getFieldState(`connectionMappings.${idx}`).isDirty,
+      ) ?? -1;
+    if (connectionMappings && tileIdx !== -1) {
+      prevConnectionMappingsRef.current = connectionMappings;
+      const config = input.tiles[tileIdx]?.config as
+        | SavedChartConfig
+        | undefined;
+      if (config && isRawSqlSavedChartConfig(config)) {
+        inputConnectionName = config.connection;
+        connectionId = connectionMappings[tileIdx] ?? '';
+      }
+    }
 
-    const inputTile = input.tiles[changedIdx];
-    const inputTileConfig = inputTile?.config as SavedChartConfig | undefined;
-    if (!inputTileConfig || !isRawSqlSavedChartConfig(inputTileConfig)) return;
+    if (inputConnectionName == null && filterConnectionMappings) {
+      const filterIdx = filterConnectionMappings.findIndex(
+        (mapping, idx) =>
+          mapping !== prevFilterConnectionMappingsRef.current?.[idx] &&
+          getFieldState(`filterConnectionMappings.${idx}`).isDirty,
+      );
+      if (filterIdx !== -1) {
+        prevFilterConnectionMappingsRef.current = filterConnectionMappings;
+        const connection = connectionBackedTemplateFilter(
+          input.filters?.[filterIdx],
+        )?.connection;
+        if (connection) {
+          inputConnectionName = connection;
+          connectionId = filterConnectionMappings[filterIdx] ?? '';
+        }
+      }
+    }
 
-    const connectionId = connectionMappings[changedIdx] ?? '';
-    const inputTileConnection = inputTileConfig.connection;
+    if (inputConnectionName == null) return;
 
     const keysForTilesWithMatchingConnection = input.tiles
       .map((tile, index) => ({
@@ -912,18 +1081,38 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
       .filter(
         tile =>
           isRawSqlSavedChartConfig(tile.config) &&
-          tile.config.connection === inputTileConnection,
+          tile.config.connection === inputConnectionName,
       )
       .map(({ index }) => `connectionMappings.${index}` as const);
 
+    const keysForFiltersWithMatchingConnection =
+      input.filters
+        ?.map((filter, index) => ({ filter, index }))
+        .filter(
+          ({ filter }) =>
+            connectionBackedTemplateFilter(filter)?.connection ===
+            inputConnectionName,
+        )
+        .map(({ index }) => `filterConnectionMappings.${index}` as const) ?? [];
+
     isUpdatingRef.current = true;
-    for (const key of keysForTilesWithMatchingConnection) {
+    for (const key of [
+      ...keysForTilesWithMatchingConnection,
+      ...keysForFiltersWithMatchingConnection,
+    ]) {
       if (!getFieldState(key).isDirty) {
         setValue(key, connectionId, { shouldValidate: true });
       }
     }
     isUpdatingRef.current = false;
-  }, [connectionMappings, input.tiles, getFieldState, setValue]);
+  }, [
+    connectionMappings,
+    filterConnectionMappings,
+    input.tiles,
+    input.filters,
+    getFieldState,
+    setValue,
+  ]);
 
   // Propagate dashboard mapping changes to other tiles whose onClick targets
   // the same input dashboard. Dashboard-type onClicks in a template store the
@@ -1016,12 +1205,14 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
         };
 
         if (isRawSqlSavedChartConfig(tile.config)) {
-          const connection = findConnection(data.connectionMappings[idx]);
+          const connection = isVariableRef(tile.config.connection)
+            ? tile.config.connection
+            : findConnection(data.connectionMappings[idx])!.id;
           return {
             ...tile,
             config: applyOnClick({
               ...tile.config,
-              connection: connection!.id,
+              connection,
               ...(source ? { source: source.id } : {}),
             }),
           };
@@ -1042,16 +1233,38 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
       // Zip the source mappings with the input filters
       const zippedFilters = input.filters?.map((filter, idx) => {
-        const appliesTo = data.filterAppliesToSourceMappings?.[idx]?.filter(
-          id => !!id?.length,
-        );
-        const appliesToSourceIds = appliesTo?.length ? appliesTo : undefined;
+        // Data source variable references carry over unmapped
+        const appliesTo = [
+          ...sourceVariableRefs(
+            appliesToTemplateFilter(filter)?.appliesToSourceIds,
+          ),
+          ...(data.filterAppliesToSourceMappings?.[idx]?.filter(
+            id => !!id?.length,
+          ) ?? []),
+        ];
+        const appliesToSourceIds = appliesTo.length ? appliesTo : undefined;
         if (isAdhocFilter(filter)) {
           return {
             ...filter,
-            sources:
-              data.filterAdhocSourceMappings?.[idx]?.filter(id => !!id) ?? [],
+            sources: [
+              ...sourceVariableRefs(filter.sources),
+              ...(data.filterAdhocSourceMappings?.[idx]?.filter(id => !!id) ??
+                []),
+            ],
             appliesToSourceIds,
+          };
+        }
+        if (connectionBackedTemplateFilter(filter)) {
+          // A SQL query filter's optional source
+          const source = isSourceBackedTemplateFilter(filter)
+            ? findSource(data.filterSourceMappings?.[idx])
+            : undefined;
+          return {
+            ...filter,
+            // The form schema requires this mapping
+            connection: findConnection(data.filterConnectionMappings?.[idx])!
+              .id,
+            ...(source ? { source: source.id } : {}),
           };
         }
         const source = findSource(data.filterSourceMappings?.[idx]);
@@ -1145,7 +1358,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
               return (
                 <Fragment key={tile.id}>
                   {/** Mapping for the tile's source, if one exists (they're optional for raw sql tiles) */}
-                  {tile.config.source && (
+                  {tile.config.source && !isVariableRef(tile.config.source) && (
                     <Table.Tr>
                       <Table.Td>{tile.config.name}</Table.Td>
                       <Table.Td>Data source</Table.Td>
@@ -1164,7 +1377,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                     </Table.Tr>
                   )}
                   {/** Mapping for the tile's connection, if it's a raw sql tile */}
-                  {isRawSql && (
+                  {isRawSql && !isVariableRef(config.connection) && (
                     <Table.Tr>
                       <Table.Td>{tile.config.name}</Table.Td>
                       <Table.Td>Data connection</Table.Td>
@@ -1173,10 +1386,7 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                         <SelectControlled
                           control={control}
                           name={`connectionMappings.${i}`}
-                          data={connections?.map(conn => ({
-                            value: conn.id,
-                            label: conn.name,
-                          }))}
+                          data={connectionItems}
                           placeholder="Select a connection"
                         />
                       </Table.Td>
@@ -1228,10 +1438,38 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
 
             {/** Map filter sources */}
             {input.filters?.map((filter, i) => {
-              const appliesToSourceIds =
-                appliesToTemplateFilter(filter)?.appliesToSourceIds;
+              // A SQL query filter's source must be on its mapped connection,
+              // unless that is a connection variable, which isn't mapped.
+              const sourceConnectionId = isSqlQueryFilter(filter)
+                ? filterConnectionMappings?.[i]
+                : undefined;
+              const appliesToSourceIds = mappableSourceNames(
+                appliesToTemplateFilter(filter)?.appliesToSourceIds,
+              );
+              const adhocSourceNames = isAdhocFilter(filter)
+                ? mappableSourceNames(filter.sources)
+                : undefined;
               return (
                 <Fragment key={filter.id}>
+                  {connectionBackedTemplateFilter(filter) && (
+                    <Table.Tr>
+                      <Table.Td>{filter.name} (Filter)</Table.Td>
+                      <Table.Td>Data connection</Table.Td>
+                      <Table.Td>
+                        {connectionBackedTemplateFilter(filter)?.connection}
+                      </Table.Td>
+                      <Table.Td>
+                        <SelectControlled
+                          control={control}
+                          name={`filterConnectionMappings.${i}`}
+                          data={connectionItems}
+                          placeholder="Select a connection"
+                        />
+                      </Table.Td>
+                      <Table.Td />
+                      <Table.Td />
+                    </Table.Tr>
+                  )}
                   {isSourceBackedTemplateFilter(filter) && (
                     <Table.Tr>
                       <Table.Td>{filter.name} (Filter)</Table.Td>
@@ -1242,8 +1480,13 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                           control={control}
                           name={`filterSourceMappings.${i}`}
                           data={sources
-                            ?.filter(source =>
-                              filterSourceKinds(filter)?.includes(source.kind),
+                            ?.filter(
+                              source =>
+                                filterSourceKinds(filter)?.includes(
+                                  source.kind,
+                                ) &&
+                                (!sourceConnectionId ||
+                                  source.connection === sourceConnectionId),
                             )
                             .map(source => ({
                               value: source.id,
@@ -1256,11 +1499,11 @@ export function Mapping({ input }: { input: DashboardTemplate }) {
                       <Table.Td />
                     </Table.Tr>
                   )}
-                  {isAdhocFilter(filter) && (
+                  {isAdhocFilter(filter) && !!adhocSourceNames?.length && (
                     <Table.Tr>
                       <Table.Td>{filter.name} (Filter)</Table.Td>
                       <Table.Td>Data sources</Table.Td>
-                      <Table.Td>{filter.sources.join(', ')}</Table.Td>
+                      <Table.Td>{adhocSourceNames.join(', ')}</Table.Td>
                       <Table.Td>
                         <SourceMultiSelectControlled
                           control={control}

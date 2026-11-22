@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import { HTTPError } from 'ky';
 import CopyToClipboard from 'react-copy-to-clipboard';
-import { Badge } from '@clickhouse/click-ui';
+import { Badge, Separator } from '@clickhouse/click-ui';
 import {
   Box,
   Button,
   Card,
-  Divider,
   Group,
   Modal,
   Stack,
@@ -18,7 +17,7 @@ import { notifications } from '@mantine/notifications';
 import { IconLock, IconUserPlus } from '@tabler/icons-react';
 
 import api from '@/api';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
+import { useBrandDisplayName } from '@/brand';
 
 export default function TeamMembersSection() {
   const brandName = useBrandDisplayName();
@@ -218,7 +217,7 @@ export default function TeamMembersSection() {
   return (
     <Box id="team_members" data-testid="team-members-section">
       <Text size="md">Team Members</Text>
-      <Divider my="md" />
+      <Separator size="lg" />
       <Card>
         <Card.Section withBorder py="sm" px="lg">
           <Group align="center" justify="space-between">

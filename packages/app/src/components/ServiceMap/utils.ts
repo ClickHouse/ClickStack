@@ -1,7 +1,31 @@
 import router from 'next/router';
+import SqlString from 'sqlstring';
+import { errorStatusPredicateSql } from '@hyperdx/common-utils/dist/core/spanPredicates';
 import { TTraceSource } from '@hyperdx/common-utils/dist/types';
 
 import type { ServiceAggregation } from '@/hooks/useServiceMap';
+
+export function buildServiceMapErrorWhere({
+  serviceNameExpression,
+  serviceName,
+  spanKindExpression,
+  statusCodeExpression,
+}: {
+  serviceNameExpression: string;
+  serviceName: string;
+  spanKindExpression: string;
+  statusCodeExpression: string;
+}): string {
+  return SqlString.format(
+    `? = ? AND ? IN ('Server', 'Consumer') AND ${errorStatusPredicateSql('?')}`,
+    [
+      SqlString.raw(serviceNameExpression),
+      serviceName,
+      SqlString.raw(spanKindExpression),
+      SqlString.raw(statusCodeExpression),
+    ],
+  );
+}
 
 export function navigateToTraceSearch({
   dateRange,
@@ -281,6 +305,21 @@ export function formatRate(perSecond: number): string {
     return `${perSecond.toFixed(1)} req/s`;
   }
   return `${perSecond.toFixed(2)} req/s`;
+}
+
+/**
+ * Largest map rendered without asking. Past this the dagre layout and React
+ * Flow render are what lock the tab, and a high-cardinality group-by (a URL,
+ * a trace id) can produce thousands of nodes from one keystroke.
+ */
+export const MAX_SERVICE_MAP_NODES = 100;
+
+/** Whether a map of `nodeCount` nodes is held back behind "Show anyway". */
+export function isServiceMapTooLarge(
+  nodeCount: number,
+  showAnyway: boolean,
+): boolean {
+  return !showAnyway && nodeCount > MAX_SERVICE_MAP_NODES;
 }
 
 const MIN_NODE_SIZE = 32;

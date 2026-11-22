@@ -19,10 +19,12 @@ import {
   ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
+  Text,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import { XAxisTickContentProps } from 'recharts/types/util/types';
 import {
   DisplayType,
   LineInterpolation,
@@ -43,7 +45,7 @@ import { useFormatTime } from '@/useFormatTime';
 import { useContentFontSize } from '@/useUserPreferences';
 import { COLORS } from '@/utils';
 
-import { formatAxisTick } from './axisTicks';
+import { compactTickAnchor, formatAxisTick } from './axisTicks';
 import {
   type ActiveClickPayload,
   buildActiveClickSeries,
@@ -133,6 +135,8 @@ export const MemoChart = memo(function MemoChart({
   dateRangeEndInclusive = true,
   fitYAxisToData = false,
   lineInterpolation,
+  compactXAxisLabels = false,
+  yAxisMaxDomain,
 }: {
   // Matches what useChartScales narrows to, so the hook's stricter type is
   // actually checked at this boundary rather than satisfied by `any`.
@@ -181,6 +185,20 @@ export const MemoChart = memo(function MemoChart({
   fitYAxisToData?: boolean;
   /** Unset follows the display type's default (see getLineCurveType). */
   lineInterpolation?: LineInterpolation;
+  /**
+   * When true, anchor the first x-axis label to the start and the last to the
+   * end (instead of centering every label) so edge labels are not clipped on
+   * narrow charts, e.g. the side-by-side RED metrics tiles.
+   */
+  compactXAxisLabels?: boolean;
+  /**
+   * Cap the y-axis upper bound at this value (e.g. 1 for a 0-100% rate). The
+   * axis still auto-scales below the cap so small values keep a tight range,
+   * and a flat/zero series falls back to the cap instead of a degenerate
+   * auto-domain. Applied on every path (selection and fit included) so the
+   * capped axis cannot collapse; only stacked charts ignore it.
+   */
+  yAxisMaxDomain?: number;
 }) {
   const _id = useId();
   const id = _id.replace(/:/g, '');
@@ -332,6 +350,7 @@ export const MemoChart = memo(function MemoChart({
       selectedSeriesNames,
       referenceLineValues,
       axisNumberFormat,
+      yAxisMaxDomain,
       yAxisWidth,
     });
   const yAxisDomain = yAxisBounds.domain;
@@ -443,6 +462,38 @@ export const MemoChart = memo(function MemoChart({
       });
     },
     [formatTime],
+  );
+
+  // Compact mode: anchor the first label to the start and the last to the end
+  // so neither is clipped on a narrow chart. Renders every tick through one
+  // path (axis color, mono) so the axis stays visually consistent. `fill` is
+  // the color Recharts gives every tick, so these match the y-axis labels.
+  const renderCompactXTick = useCallback(
+    ({
+      x,
+      y,
+      payload,
+      index,
+      visibleTicksCount,
+      fill,
+    }: XAxisTickContentProps) => {
+      const textAnchor = compactTickAnchor(index, visibleTicksCount);
+      return (
+        <Text
+          x={x}
+          y={y}
+          dy={8}
+          textAnchor={textAnchor}
+          verticalAnchor="start"
+          fontSize={axisTickFontSize}
+          fontFamily="IBM Plex Mono, monospace"
+          fill={fill}
+        >
+          {xTickFormatter(Number(payload.value), index)}
+        </Text>
+      );
+    },
+    [xTickFormatter, axisTickFontSize],
   );
 
   const tickFormatter = useCallback(
@@ -841,10 +892,14 @@ export const MemoChart = memo(function MemoChart({
             type="number"
             tickFormatter={xTickFormatter}
             minTickGap={100}
-            tick={{
-              fontSize: axisTickFontSize,
-              fontFamily: 'IBM Plex Mono, monospace',
-            }}
+            tick={
+              compactXAxisLabels
+                ? renderCompactXTick
+                : {
+                    fontSize: axisTickFontSize,
+                    fontFamily: 'IBM Plex Mono, monospace',
+                  }
+            }
           />
           <YAxis
             width={yAxisWidth}

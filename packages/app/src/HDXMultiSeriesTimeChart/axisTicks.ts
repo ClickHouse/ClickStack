@@ -341,3 +341,21 @@ export function getExpandableYAxisTicks(
   }
   return { max, ticks: [] };
 }
+
+/**
+ * Text anchor for a compact x-axis tick. The first and last ticks are anchored
+ * to their inner edge so the edge time labels stay inside the plot instead of
+ * clipping; interior ticks stay centered.
+ */
+export function compactTickAnchor(
+  index: number,
+  visibleTicksCount: number,
+): 'start' | 'middle' | 'end' {
+  if (index <= 0) {
+    return 'start';
+  }
+  if (index >= visibleTicksCount - 1) {
+    return 'end';
+  }
+  return 'middle';
+}
