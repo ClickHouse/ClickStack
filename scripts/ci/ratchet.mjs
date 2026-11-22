@@ -7,6 +7,7 @@
  *   e.g. when two count-lowering PRs merge close together and `main`'s
  *   committed baseline briefly sits above the real count.
  * Advisory patterns (see ADVISORY) are counted and reported but never fail.
+ * File sizes get the same treatment per file: see compareSizes.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -94,22 +95,115 @@ export function discoverPackages(root) {
   return found;
 }
 
-function countDir(dir) {
-  const counts = Object.fromEntries(Object.keys(PATTERNS).map(n => [n, 0]));
+function* sourceFiles(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (isSkippedDir(entry.name)) continue;
-      const sub = countDir(full);
-      for (const name of Object.keys(counts)) counts[name] += sub[name];
+      if (!isSkippedDir(entry.name)) yield* sourceFiles(full);
     } else if (entry.isFile() && EXTS.has(path.extname(entry.name))) {
-      const src = readFileSync(full, 'utf8');
-      for (const [name, re] of Object.entries(PATTERNS)) {
-        counts[name] += src.match(re)?.length ?? 0;
-      }
+      yield full;
+    }
+  }
+}
+
+function countDir(dir) {
+  const counts = Object.fromEntries(Object.keys(PATTERNS).map(n => [n, 0]));
+  for (const file of sourceFiles(dir)) {
+    const src = readFileSync(file, 'utf8');
+    for (const [name, re] of Object.entries(PATTERNS)) {
+      counts[name] += src.match(re)?.length ?? 0;
     }
   }
   return counts;
+}
+
+export const MAX_FILE_LINES = 300;
+
+// Tests, stories and type declarations are long for reasons that splitting
+// does not fix.
+const SIZE_EXEMPT =
+  /(^|\/)(__tests__|__mocks__|__fixtures__|tests|migrations)\/|\.(test|spec|stories)\.tsx?$|\.d\.ts$/;
+
+/** Line counts of source files over MAX_FILE_LINES, keyed by repo-relative path. */
+export function collectLargeFiles(root) {
+  const large = {};
+  for (const dir of discoverPackages(root).values()) {
+    for (const file of sourceFiles(dir)) {
+      const rel = path.relative(root, file).split(path.sep).join('/');
+      if (SIZE_EXEMPT.test(rel)) continue;
+      const lines = readFileSync(file, 'utf8').trimEnd().split('\n').length;
+      if (lines > MAX_FILE_LINES) large[rel] = lines;
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(large).sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
+/** A baselined file that is gone, or now under the limit, and was at least this long. */
+function movedFrom(lines, current, baseline) {
+  return Object.keys(baseline).find(
+    old => !(old in current) && baseline[old] >= lines,
+  );
+}
+
+/**
+ * A file already over the limit may not grow, and no other file may cross it.
+ * @returns {{failed: boolean, messages: string[]}}
+ */
+export function compareSizes(current, baseline) {
+  const messages = [];
+  let failed = false;
+  for (const [file, lines] of Object.entries(current)) {
+    const max = baseline[file];
+    const source = max === undefined && movedFrom(lines, current, baseline);
+    if (source) {
+      failed = true;
+      messages.push(
+        `x ${file}: ${lines} lines, moved or split from ${source} — run \`yarn ratchet:update\``,
+      );
+    } else if (max === undefined) {
+      failed = true;
+      messages.push(
+        `x ${file}: ${lines} lines > ${MAX_FILE_LINES} — split it into smaller files`,
+      );
+    } else if (lines > max) {
+      failed = true;
+      messages.push(
+        `x ${file}: ${lines} lines > baseline ${max} — already over ${MAX_FILE_LINES}, so put the new code in another file`,
+      );
+    }
+  }
+  for (const [file, max] of Object.entries(baseline)) {
+    if ((current[file] ?? 0) < max) {
+      messages.push(
+        `! ${file}: ${current[file] ?? `under ${MAX_FILE_LINES + 1}`} lines < baseline ${max} — run \`yarn ratchet:update\` to lock the improvement in`,
+      );
+    }
+  }
+  return { failed, messages };
+}
+
+/**
+ * The baseline `--update` writes. Without `allowGrowth` it only records
+ * shrinkage and moves, so the command the warnings recommend cannot also
+ * accept a file that grew.
+ * @returns {{next: Record<string, number>, refused: string[]}}
+ */
+export function nextSizeBaseline(current, baseline, allowGrowth = false) {
+  const next = {};
+  const refused = [];
+  for (const [file, lines] of Object.entries(current)) {
+    const max =
+      baseline[file] ?? baseline[movedFrom(lines, current, baseline) ?? ''];
+    if (allowGrowth || lines <= max) {
+      next[file] = lines;
+    } else {
+      refused.push(file);
+      if (file in baseline) next[file] = baseline[file];
+    }
+  }
+  return { next, refused };
 }
 
 /** Escape-hatch counts for every workspace package, keyed by package dir name. */
@@ -174,18 +268,40 @@ function main() {
     '../..',
   );
   const baselinePath = path.join(root, 'scripts/ci/ratchet-baseline.json');
+  const sizePath = path.join(root, 'scripts/ci/file-size-baseline.json');
   const current = collectCounts(root);
+  const sizes = collectLargeFiles(root);
+
+  const sizeBaseline = existsSync(sizePath)
+    ? JSON.parse(readFileSync(sizePath, 'utf8'))
+    : {};
 
   if (process.argv.includes('--update')) {
-    writeFileSync(baselinePath, JSON.stringify(current, null, 2) + '\n');
-    console.log(
-      `ratchet baseline written to ${path.relative(root, baselinePath)}`,
+    const { next, refused } = nextSizeBaseline(
+      sizes,
+      sizeBaseline,
+      process.argv.includes('--allow-growth'),
     );
-    return 0;
+    writeFileSync(baselinePath, JSON.stringify(current, null, 2) + '\n');
+    writeFileSync(sizePath, JSON.stringify(next, null, 2) + '\n');
+    console.log(
+      `ratchet baselines written to ${path.relative(root, path.dirname(baselinePath))}`,
+    );
+    for (const file of refused) {
+      console.error(
+        `x ${file}: ${sizes[file]} lines not recorded — \`--update\` only lowers file sizes; split the file, or pass \`--allow-growth\` and say why in the PR`,
+      );
+    }
+    return refused.length ? 1 : 0;
   }
 
-  const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'));
-  const { failed, messages } = compare(current, baseline);
+  const counts = compare(
+    current,
+    JSON.parse(readFileSync(baselinePath, 'utf8')),
+  );
+  const size = compareSizes(sizes, sizeBaseline);
+  const failed = counts.failed || size.failed;
+  const messages = [...counts.messages, ...size.messages];
   for (const message of messages) {
     (message.startsWith('x ') ? console.error : console.warn)(message);
   }
@@ -193,7 +309,7 @@ function main() {
   console.log(
     messages.length
       ? 'ratchet ok: nothing above a gated baseline (see notes above)'
-      : 'ratchet ok: all escape-hatch counts at baseline',
+      : 'ratchet ok: all counts and file sizes at baseline',
   );
   return 0;
 }

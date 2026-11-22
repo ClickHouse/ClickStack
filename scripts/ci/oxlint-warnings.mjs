@@ -219,7 +219,7 @@ function annotate(warnings, root) {
   }
 }
 
-function runOxlint(cwd, oxlintArgs) {
+export function runOxlint(cwd, oxlintArgs) {
   const require = createRequire(path.join(cwd, 'noop.js'));
   const pkgJson = require.resolve('oxlint/package.json');
   const bin = path.join(path.dirname(pkgJson), 'bin/oxlint');

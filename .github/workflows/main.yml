@@ -59,6 +59,7 @@ jobs:
         run:
           node --test scripts/ci/__tests__/ratchet.test.mjs
           scripts/ci/__tests__/oxlint-warnings.test.mjs
+          scripts/ci/__tests__/quality-report.test.mjs
       # Also unconditional, and against the PR's own tree. claude-code-review.yml
       # runs this file too, but from a base-branch checkout, so a PR that breaks
       # what it pins (the AGENTS.md heading every review footer links to) passes
@@ -69,6 +70,13 @@ jobs:
           .github/scripts/code-review/__tests__/review-comments.test.mjs
       - name: Escape-hatch ratchet
         run: node scripts/ci/ratchet.mjs
+      # Advisory: the gates are the ratchet above and each package's
+      # --max-warnings. This only makes the totals visible on the run page.
+      - name: Code quality report
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node scripts/ci/quality-report.mjs >> "$GITHUB_STEP_SUMMARY"
       # Also unconditional: the api's own `ci:lint` regenerates the spec but
       # never asserts on it, and nx can skip or cache-replay that task.
       - name: Check openapi.json is in sync with its sources

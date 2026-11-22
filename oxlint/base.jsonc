@@ -11,7 +11,7 @@
   // the top-level config, which is this file (via extends) when run from a
   // package and the root one when run from the repo root.
   "options": { "typeAware": true, "reportUnusedDisableDirectives": "warn" },
-  "plugins": ["eslint", "typescript"],
+  "plugins": ["eslint", "typescript", "import"],
   "categories": {
     "correctness": "off",
     "suspicious": "off",
@@ -97,6 +97,17 @@
         "reportVarsOnlyUsedAsTypes": true,
       },
     ],
+    // Size and structure. Warnings, so each package's --max-warnings stops
+    // the count rising without blocking on what is already there.
+    "max-lines-per-function": [
+      "warn",
+      { "max": 150, "skipBlankLines": true, "skipComments": true },
+    ],
+    "complexity": ["warn", 20],
+    "max-depth": ["warn", 4],
+    "max-params": ["warn", 4],
+    "no-nested-ternary": "warn",
+    "import/no-cycle": "warn",
     "no-restricted-imports": [
       "error",
       {
@@ -110,6 +121,16 @@
     ],
   },
   "overrides": [
+    {
+      // A describe() callback is one function holding the whole suite.
+      "files": [
+        "**/__tests__/**",
+        "**/*.{test,spec}.{ts,tsx}",
+        "**/tests/**",
+        "**/*.stories.tsx",
+      ],
+      "rules": { "max-lines-per-function": "off" },
+    },
     {
       // typescript-eslint's `eslint-recommended` turns these off for TS files
       // because tsc reports them, and turns no-var/prefer-* on. Plain JS files
