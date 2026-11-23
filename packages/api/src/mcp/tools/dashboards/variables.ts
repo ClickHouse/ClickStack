@@ -21,8 +21,8 @@ import type {
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
 import { z } from 'zod';
 
-import { getConnectionsByTeam } from '@/controllers/connection';
 import type { McpContext } from '@/mcp/tools/types';
+import { getMcpConnections } from '@/mcp/utils/connections';
 import { getMcpSources } from '@/mcp/utils/sources';
 import {
   convertToInternalTileConfig,
@@ -179,7 +179,7 @@ export async function getReferenceTargets(
 ): Promise<ReferenceTargets> {
   const [sources, connections] = await Promise.all([
     getMcpSources(context),
-    getConnectionsByTeam(context.teamId),
+    getMcpConnections(context),
   ]);
   return {
     sources: sources.map(source => ({

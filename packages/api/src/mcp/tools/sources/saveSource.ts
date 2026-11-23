@@ -2,10 +2,10 @@ import { SourceSchemaNoId } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 
 import * as config from '@/config';
-import { validateConnectionId } from '@/controllers/connection';
 import { createSource, updateSource } from '@/controllers/sources';
 import { UPSERT_TOOL } from '@/mcp/tools/annotations';
 import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
+import { validateMcpConnectionId } from '@/mcp/utils/connections';
 import {
   mcpServerError,
   mcpUserError,
@@ -54,9 +54,9 @@ export function registerSaveSource({
       // Reject a connection that isn't a valid ObjectId owned by this team
       // (createSource/updateSource don't check, so this avoids a 500 CastError
       // or a cross-team credential reference).
-      const connectionCheck = await validateConnectionId(
+      const connectionCheck = await validateMcpConnectionId(
+        context,
         input.connection,
-        new mongoose.Types.ObjectId(teamId),
       );
       if (!connectionCheck.ok) {
         return mcpUserError(connectionCheck.message);
