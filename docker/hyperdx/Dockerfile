@@ -7,7 +7,7 @@
 # - Mongo
 # - Otel Collector (otelcol)
 
-ARG NODE_VERSION=22.23.4
+ARG NODE_VERSION=22.23.5
 ARG CLICKHOUSE_VERSION=26.10.3.7
 ARG OTEL_COLLECTOR_VERSION=0.165.0
 ARG OTEL_COLLECTOR_CORE_VERSION=1.71.0
@@ -125,8 +125,10 @@ ENV OTEL_RESOURCE_ATTRIBUTES="service.version=$CODE_VERSION"
 ENV OTEL_SERVICE_NAME=hdx-oss-app
 ENV NODE_ENV=production
 
-# Remove package managers from production image (not needed at runtime)
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+# Pick up Alpine security fixes newer than the base image, then remove package
+# managers from production image (not needed at runtime)
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
@@ -200,8 +202,10 @@ COPY --from=migrate-builder /migrate /usr/local/bin/migrate
 
 # Install MongoDB and other dependencies (consolidated into a single RUN command).
 # libstdc++/libgcc are the Node.js runtime deps, installed before the v3.9
-# repositories are appended so they resolve from this image's own Alpine release.
-RUN apk add --no-cache libstdc++ libgcc && \
+# repositories are appended so they resolve from this image's own Alpine release,
+# as does the upgrade that picks up security fixes newer than the base image.
+RUN apk upgrade --no-cache && \
+  apk add --no-cache libstdc++ libgcc && \
   echo 'http://dl-cdn.alpinelinux.org/alpine/v3.9/main' >> /etc/apk/repositories && \
   echo 'http://dl-cdn.alpinelinux.org/alpine/v3.9/community' >> /etc/apk/repositories && \
   apk update && \
