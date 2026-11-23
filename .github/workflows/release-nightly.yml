@@ -121,6 +121,9 @@ jobs:
           file: ./docker/hyperdx/Dockerfile
           platforms: ${{ matrix.platform }}
           target: prod
+          # CODE_VERSION is constant for nightly, so without this the cached
+          # `apk upgrade` layer would be reused until the base image moves.
+          no-cache-filters: prod
           build-contexts: |
             hyperdx=./docker/hyperdx
             api=./packages/api
@@ -198,6 +201,7 @@ jobs:
           file: ./docker/hyperdx/Dockerfile
           platforms: ${{ matrix.platform }}
           target: all-in-one-noauth
+          no-cache-filters: all-in-one-base
           build-contexts: |
             clickhouse=./docker/clickhouse
             otel-collector=./docker/otel-collector
@@ -277,6 +281,7 @@ jobs:
           file: ./docker/hyperdx/Dockerfile
           platforms: ${{ matrix.platform }}
           target: all-in-one-auth
+          no-cache-filters: all-in-one-base
           build-contexts: |
             clickhouse=./docker/clickhouse
             otel-collector=./docker/otel-collector
