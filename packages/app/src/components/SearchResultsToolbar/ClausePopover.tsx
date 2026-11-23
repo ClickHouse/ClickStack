@@ -64,6 +64,14 @@ const nestedListHandlesEscape = (target: EventTarget | null) => {
     ) != null
   )
     return true;
+  // An Autocomplete list is a sibling of its input, not an ancestor, so the
+  // checks above miss it. Its listbox is only mounted while it is open.
+  if (
+    target
+      .closest('[data-testid$="-popover"]')
+      ?.querySelector('[role="listbox"]') != null
+  )
+    return true;
   const editor = target.closest('.cm-editor');
   if (!(editor instanceof HTMLElement)) return false;
   if (editor.querySelector('.cm-tooltip-autocomplete') != null) return true;

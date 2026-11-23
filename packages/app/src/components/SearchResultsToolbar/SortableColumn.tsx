@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ActionIcon, Box, Group, Text, Textarea } from '@mantine/core';
@@ -8,13 +8,20 @@ export function SortableColumn({
   id,
   label,
   onRemove,
-  onEdit,
+  editText,
+  onStartEdit,
+  onChangeEdit,
+  onFinishEdit,
 }: {
   id: string;
   label: string;
   onRemove: () => void;
-  /** Called with the trimmed expression when an edit changes the column. */
-  onEdit?: (next: string) => void;
+  /** The text being edited, or null when this row is not being edited. */
+  editText: string | null;
+  onStartEdit: () => void;
+  onChangeEdit: (text: string) => void;
+  /** Receives the edited text to keep, or null to cancel the edit. */
+  onFinishEdit: (next: string | null) => void;
 }) {
   const {
     attributes,
@@ -25,26 +32,20 @@ export function SortableColumn({
     isDragging,
   } = useSortable({ id });
 
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(label);
+  const editing = editText != null;
   // Enter and Escape unmount the input, which can fire blur. Without this the
-  // edit would be committed (or discarded) a second time.
+  // edit would be finished a second time.
   const finishedRef = useRef(false);
 
   const startEdit = () => {
-    if (!onEdit) return;
     finishedRef.current = false;
-    setDraft(label);
-    setEditing(true);
+    onStartEdit();
   };
 
-  const finishEdit = (commit: boolean) => {
+  const finishEdit = (next: string | null) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    setEditing(false);
-    const next = draft.trim();
-    // An empty value reverts, so a column is not removed by accident.
-    if (commit && next && next !== label) onEdit?.(next);
+    onFinishEdit(next);
   };
 
   return (
@@ -82,26 +83,26 @@ export function SortableColumn({
           <Textarea
             size="xs"
             aria-label={`Edit ${label}`}
-            value={draft}
+            value={editText}
             // A column is one expression. Pasted line breaks would otherwise
             // be stored as part of it.
             onChange={e =>
-              setDraft(e.currentTarget.value.replace(/\s*\r?\n\s*/g, ' '))
+              onChangeEdit(e.currentTarget.value.replace(/\s*\r?\n\s*/g, ' '))
             }
             onFocus={e => {
               const end = e.currentTarget.value.length;
               e.currentTarget.setSelectionRange(end, end);
             }}
-            onBlur={() => finishEdit(true)}
+            onBlur={() => finishEdit(editText)}
             onKeyDown={e => {
               if (e.key === 'Enter') {
                 // The search form is an ancestor, so Enter would submit it.
                 e.preventDefault();
                 e.stopPropagation();
-                finishEdit(true);
+                finishEdit(editText);
               } else if (e.key === 'Escape') {
                 e.stopPropagation();
-                finishEdit(false);
+                finishEdit(null);
               }
             }}
             autoFocus
@@ -132,13 +133,13 @@ export function SortableColumn({
               flex: 1,
               minWidth: 0,
               overflowWrap: 'anywhere',
-              cursor: onEdit ? 'text' : undefined,
+              cursor: 'text',
             }}
           >
             {label}
           </Text>
         )}
-        {onEdit && !editing && (
+        {!editing && (
           <ActionIcon
             variant="subtle"
             size="xs"

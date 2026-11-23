@@ -63,6 +63,11 @@ export function ColumnsPopover({
 }) {
   const [draft, setDraft] = useState(value);
   const [search, setSearch] = useState('');
+  // The row being edited in place. Kept here so the popover can see it as an
+  // unsaved change before a click outside reads `dirty`.
+  const [edit, setEdit] = useState<{ index: number; text: string } | null>(
+    null,
+  );
   // Autocomplete writes the chosen option back into the input after
   // onOptionSubmit. Ignore that write so the field clears.
   const ignoreNextChangeRef = useRef(false);
@@ -94,9 +99,21 @@ export function ColumnsPopover({
     setDraft(items.filter((_, i) => i !== index).join(', '));
   };
 
-  const updateColumn = (index: number, next: string) => {
-    setDraft(items.map((item, i) => (i === index ? next : item)).join(', '));
+  const finishEdit = (index: number, next: string | null) => {
+    setEdit(null);
+    const trimmed = next?.trim() ?? '';
+    // An empty value reverts, so a column is not removed by accident.
+    if (trimmed && trimmed !== items[index]) {
+      setDraft(
+        items.map((item, i) => (i === index ? trimmed : item)).join(', '),
+      );
+    }
   };
+
+  const pendingEdit =
+    edit != null &&
+    edit.text.trim() !== '' &&
+    edit.text.trim() !== items[edit.index];
 
   const columnIds = items.map(columnId);
   const sensors = useSensors(
@@ -124,18 +141,26 @@ export function ColumnsPopover({
       title={value || defaultValue}
       initialMode="pick"
       onOpen={() => {
+        setEdit(null);
         // The form stores "" while the source default is in use. Show that
         // default as the editor value; Apply keeps "" unless it was edited.
         setDraft(value || defaultValue);
         setSearch('');
       }}
       onReset={() => {
+        setEdit(null);
         setDraft(defaultValue);
         setSearch('');
       }}
       resetDisabled={clauseResetDisabled(draft, defaultValue)}
       applyDisabled={clauseApplyDisabled(draft)}
-      dirty={clauseDirty(draft, value, defaultValue)}
+      // A column edit or search text not yet added is unsaved too. A click
+      // outside reads `dirty` before the edit's blur has committed it.
+      dirty={
+        clauseDirty(draft, value, defaultValue) ||
+        pendingEdit ||
+        search.trim() !== ''
+      }
       onApply={() => {
         const submitted = storedClause(draft, value, defaultValue);
         const next = storedColumns(submitted);
@@ -165,7 +190,10 @@ export function ColumnsPopover({
                         id={columnId(item, index)}
                         label={item}
                         onRemove={() => removeColumn(index)}
-                        onEdit={next => updateColumn(index, next)}
+                        editText={edit?.index === index ? edit.text : null}
+                        onStartEdit={() => setEdit({ index, text: item })}
+                        onChangeEdit={text => setEdit({ index, text })}
+                        onFinishEdit={next => finishEdit(index, next)}
                       />
                     ))}
                   </Stack>

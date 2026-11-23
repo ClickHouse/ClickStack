@@ -367,9 +367,11 @@ describe('ColumnsPopover', () => {
     expect(await screen.findByText('SeverityText')).toBeInTheDocument();
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(confirm).not.toHaveBeenCalled();
-    expect(
-      screen.getByTestId('search-columns-button-popover'),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId('search-columns-button')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
     expect(input).toHaveValue('Severity');
   });
 
@@ -505,6 +507,47 @@ describe('ColumnsPopover', () => {
     expect(
       screen.getByTestId('search-columns-button-popover'),
     ).toBeInTheDocument();
+  });
+
+  it('asks when a click outside lands during an unsaved inline edit', async () => {
+    const { onApply } = renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByText('Body'));
+    fireEvent.change(screen.getByTestId('search-columns-edit-input'), {
+      target: { value: 'upper(Body) AS message' },
+    });
+    confirm.mockResolvedValueOnce(false);
+    fireEvent.mouseDown(document.documentElement);
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(
+      screen.getByTestId('search-columns-button-popover'),
+    ).toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('does not ask for an inline edit that has not changed the column', async () => {
+    renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByText('Body'));
+    expect(screen.getByTestId('search-columns-edit-input')).toHaveValue('Body');
+    fireEvent.mouseDown(document.documentElement);
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('search-columns-button-popover'),
+      ).not.toBeInTheDocument(),
+    );
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('asks when a click outside lands with unadded search text', async () => {
+    renderPopover();
+    openPopover();
+    fireEvent.change(await screen.findByPlaceholderText('Search columns'), {
+      target: { value: 'upper(Body)' },
+    });
+    confirm.mockResolvedValueOnce(false);
+    fireEvent.mouseDown(document.documentElement);
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
   });
 
   it('ignores a second dismiss while the discard dialog is open', async () => {
