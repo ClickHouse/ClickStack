@@ -27,6 +27,7 @@ import {
   isLogSource,
   isTraceSource,
   MetadataMaterializedViews,
+  QuerySettings,
 } from '@hyperdx/common-utils/dist/types';
 import {
   keepPreviousData,
@@ -783,6 +784,7 @@ export function useGetMetricNames(
     dateRange,
     timestampValueExpression,
     namePattern,
+    querySettings,
   }: {
     databaseName: string;
     tableName: string;
@@ -790,6 +792,7 @@ export function useGetMetricNames(
     dateRange: [Date, Date];
     timestampValueExpression: string;
     namePattern?: string;
+    querySettings?: QuerySettings;
   },
   options?: Partial<UseQueryOptions<MetricNames>>,
 ) {
@@ -804,6 +807,7 @@ export function useGetMetricNames(
         dateRange,
         timestampValueExpression,
         namePattern,
+        querySettings,
       },
     ],
     queryFn: async ({ signal }) =>
@@ -814,6 +818,7 @@ export function useGetMetricNames(
         dateRange,
         timestampValueExpression,
         namePattern,
+        querySettings,
         signal,
       }),
     // An empty table name means the source has no table for this metric kind.
