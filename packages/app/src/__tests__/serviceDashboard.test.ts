@@ -288,7 +288,7 @@ describe('Service Dashboard', () => {
   });
 
   describe('useServiceDashboardExpressions', () => {
-    const mockColumns: ColumnMeta[] = [
+    const mockColumns: ColumnMeta[] = fromPartial([
       { name: 'Duration', type: 'UInt64' },
       { name: 'TraceId', type: 'String' },
       { name: 'ServiceName', type: 'String' },
@@ -296,7 +296,7 @@ describe('Service Dashboard', () => {
       { name: 'SpanKind', type: 'String' },
       { name: 'StatusCode', type: 'String' },
       { name: 'SpanAttributes', type: 'Map(String, String)' },
-    ] as ColumnMeta[];
+    ]);
 
     const mockJsonColumns: string[] = [];
 
@@ -427,8 +427,8 @@ describe('Service Dashboard', () => {
     it('should use materialized endpoint column when available', () => {
       const columnsWithEndpoint: ColumnMeta[] = [
         ...mockColumns,
-        { name: 'endpoint', type: 'String' },
-      ] as ColumnMeta[];
+        fromPartial({ name: 'endpoint', type: 'String' }),
+      ];
 
       jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
         fromPartial({

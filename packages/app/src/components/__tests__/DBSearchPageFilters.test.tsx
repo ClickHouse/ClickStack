@@ -768,9 +768,10 @@ describe('FilterGroup', () => {
     );
 
     // Find and click the "Only" button for banana
-    const bananaRow = screen
-      .getByText('banana')
-      .closest('.filterCheckbox') as HTMLElement;
+    const bananaRow = screen.getByText('banana').closest('.filterCheckbox');
+    if (!(bananaRow instanceof HTMLElement)) {
+      throw new Error('banana filter row not found');
+    }
     const onlyButton = within(bananaRow).getByText('Only');
     await userEvent.click(onlyButton);
 

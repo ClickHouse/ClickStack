@@ -1,5 +1,6 @@
 import {
   MetricsDataType,
+  SourceKind,
   TMetricSource,
 } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
@@ -12,16 +13,16 @@ jest.mock('@/hooks/useMetadata');
 
 const mockUseGetKeyValues = jest.mocked(useGetKeyValues);
 
-const METRIC_SOURCE = {
+const METRIC_SOURCE = fromPartial<TMetricSource>({
   id: 'metric-source-1',
-  kind: 'metric',
+  kind: SourceKind.Metric,
   name: 'Metrics',
   connection: 'conn-1',
   from: { databaseName: 'default', tableName: '' },
   timestampValueExpression: 'TimeUnix',
   resourceAttributesExpression: 'ResourceAttributes',
   metricTables: { [MetricsDataType.Gauge]: 'otel_metrics_gauge' },
-} as unknown as TMetricSource;
+});
 
 const DATE_RANGE: [Date, Date] = [
   new Date('2024-01-01T00:00:00Z'),

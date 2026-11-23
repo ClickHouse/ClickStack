@@ -4,7 +4,6 @@ import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/browser'
 import { DEFAULT_PROMQL_REDUCER } from '@hyperdx/common-utils/dist/core/promql';
 import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import {
-  ChartConfigWithDateRange,
   ChartConfigWithOptDateRange,
   DisplayType,
   MetricsDataType,
@@ -93,7 +92,7 @@ jest.mock('@/api', () => ({
 const createMockChartConfig = (
   overrides: Partial<ChartConfigWithOptDateRange> = {},
 ): ChartConfigWithOptDateRange =>
-  ({
+  fromPartial<ChartConfigWithOptDateRange>({
     connection: 'foo',
     from: {
       databaseName: 'default',
@@ -104,7 +103,7 @@ const createMockChartConfig = (
     timestampValueExpression: 'TimestampTime',
     groupBy: 'SeverityText',
     ...overrides,
-  }) as ChartConfigWithOptDateRange;
+  });
 
 const createMockQueryResponse = (data: any[]): ResponseJSON<any> => {
   return {
@@ -132,14 +131,14 @@ describe('useChartConfig', () => {
     it('returns windows aligned to the granularity if the granularity is auto', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:00'),
               new Date('2023-01-10 01:00:00'),
             ],
             granularity: 'auto', // will be 1 minute
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             30, // 30s
             5 * 60, // 5m
@@ -174,14 +173,14 @@ describe('useChartConfig', () => {
     it('returns windows aligned to the granularity if the granularity is larger than the window size', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:00'),
               new Date('2023-01-10 00:10:00'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             30, // 30s
             60, // 1m
@@ -223,14 +222,14 @@ describe('useChartConfig', () => {
     it('Skips windows that would be double-queried due to alignment', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:08:00'),
               new Date('2023-01-10 00:10:00'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             15, // 15s
           ],
@@ -256,7 +255,7 @@ describe('useChartConfig', () => {
     it('returns windows aligned to the granularity if the granularity is smaller than the window size', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-09 22:00:40'),
               new Date('2023-01-10 00:00:30'),
@@ -264,7 +263,7 @@ describe('useChartConfig', () => {
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
             dateRangeEndInclusive: true,
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             15 * 60, // 15m
             30 * 60, // 30m
@@ -312,14 +311,14 @@ describe('useChartConfig', () => {
     it('does not return a window that starts before the overall start date', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:30'),
               new Date('2023-01-10 00:02:00'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             60, // 1m
           ],
@@ -345,14 +344,14 @@ describe('useChartConfig', () => {
     it('returns a single window matching the input date range if the input date range is empty', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:30'),
               new Date('2023-01-10 00:00:30'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             60, // 1m
             5 * 60, // 5m
@@ -402,7 +401,7 @@ describe('useChartConfig', () => {
       const createPromqlConfig = (
         overrides: Partial<ChartConfigWithOptDateRange> = {},
       ): ChartConfigWithOptDateRange =>
-        ({
+        fromPartial<ChartConfigWithOptDateRange>({
           configType: 'promql',
           promqlExpression: 'e2e_service_up',
           connection: 'foo',
@@ -412,7 +411,7 @@ describe('useChartConfig', () => {
             new Date('2023-01-10 01:00:00'),
           ],
           ...overrides,
-        }) as ChartConfigWithOptDateRange;
+        });
 
       /** The server resolves the connection and table from the source alone. */
       const expectOnlySourceNamed = (params: object) => {
