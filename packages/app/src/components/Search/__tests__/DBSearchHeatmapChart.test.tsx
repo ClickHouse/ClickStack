@@ -190,8 +190,6 @@ describe('DBSearchHeatmapChart', () => {
     const lastProps = deltaChartPropsLog[deltaChartPropsLog.length - 1];
     expect(lastProps.legendPrefix).toBeTruthy();
     expect(React.isValidElement(lastProps.legendPrefix)).toBe(true);
-    expect((lastProps.legendPrefix as React.ReactElement).type).toBe(
-      MockedColorLegend,
-    );
+    expect(lastProps.legendPrefix).toMatchObject({ type: MockedColorLegend });
   });
 });

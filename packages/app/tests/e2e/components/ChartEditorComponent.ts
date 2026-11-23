@@ -1436,10 +1436,10 @@ export class ChartEditorComponent {
     const expressionInput = this.page
       .getByTestId('formula-expression-input')
       .last();
-    await expressionInput.fill(expression);
     if (alias !== undefined) {
       await this.page.getByTestId('series-alias-input').last().fill(alias);
     }
+    await expressionInput.fill(expression);
     await expressionInput.blur();
   }
 

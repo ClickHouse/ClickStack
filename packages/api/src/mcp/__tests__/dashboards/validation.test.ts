@@ -1,4 +1,5 @@
 import { DASHBOARD_VARIABLE_NAME_MAX_LENGTH } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import {
@@ -64,7 +65,7 @@ function makeSqlTile(overrides: {
   sourceId?: string;
   displayType?: string;
 }): ExternalDashboardTileWithId {
-  return {
+  return fromAny({
     id: 'sql-tile',
     x: 0,
     y: 0,
@@ -78,7 +79,7 @@ function makeSqlTile(overrides: {
       sqlTemplate: overrides.sqlTemplate,
       ...(overrides.sourceId ? { sourceId: overrides.sourceId } : {}),
     },
-  } as ExternalDashboardTileWithId;
+  });
 }
 
 describe('tile-level where rejection (builder tiles)', () => {
@@ -251,7 +252,7 @@ describe('getRawSqlTilesMissingRequiredSource', () => {
   });
 
   it('ignores builder (non-SQL) tiles entirely', () => {
-    const builderTile = {
+    const builderTile: ExternalDashboardTileWithId = fromAny({
       id: 'builder',
       x: 0,
       y: 0,
@@ -263,7 +264,7 @@ describe('getRawSqlTilesMissingRequiredSource', () => {
         sourceId,
         select: [{ aggFn: 'count', valueExpression: '', where: '' }],
       },
-    } as unknown as ExternalDashboardTileWithId;
+    });
     expect(getRawSqlTilesMissingRequiredSource([builderTile])).toEqual([]);
   });
 
@@ -433,7 +434,7 @@ describe('getRawSqlTileMacroHints', () => {
   });
 
   it('ignores builder (non-SQL) tiles entirely', () => {
-    const builderTile = {
+    const builderTile: ExternalDashboardTileWithId = fromAny({
       id: 'builder',
       x: 0,
       y: 0,
@@ -445,7 +446,7 @@ describe('getRawSqlTileMacroHints', () => {
         sourceId,
         select: [{ aggFn: 'count', valueExpression: '', where: '' }],
       },
-    } as unknown as ExternalDashboardTileWithId;
+    });
     expect(getRawSqlTileMacroWarnings([builderTile])).toEqual([]);
   });
 

@@ -10,6 +10,7 @@ import {
   PromqlSavedChartConfig,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 
@@ -368,7 +369,7 @@ describe('collectTileContainerRefIssues', () => {
 // loosely typed so a fixture can model that; the read-path heal is what these
 // tests are about.
 function makeDoc(overrides: Record<string, unknown> = {}): DashboardDocument {
-  return {
+  return fromAny({
     _id: new mongoose.Types.ObjectId(),
     name: 'Test',
     tiles: [],
@@ -378,7 +379,7 @@ function makeDoc(overrides: Record<string, unknown> = {}): DashboardDocument {
     savedQueryLanguage: null,
     savedFilterValues: [],
     ...overrides,
-  } as unknown as DashboardDocument;
+  });
 }
 
 function makeTile(

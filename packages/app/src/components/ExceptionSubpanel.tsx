@@ -14,12 +14,12 @@ import {
 import { ColumnDef, Row, Table as TanstackTable } from '@tanstack/react-table';
 
 import { CopySnippet } from '@/components/ClickStackOnboarding/CopySnippet';
+import { getSourceMappedFrame } from '@/sourceMappedFrame';
 import type {
   StacktraceBreadcrumb,
   StacktraceFrame as TStacktraceFrame,
 } from '@/types';
 import { FormatTime } from '@/useFormatTime';
-import { useSourceMappedFrame } from '@/useSourceMappedFrame';
 import { UNKNOWN_FUNCTION } from '@/utils/sentryStackParser';
 
 import { Table, TableCellButton } from './Table';
@@ -210,7 +210,7 @@ const StacktraceRow = ({
 
   const frame = row.original;
 
-  const { isLoading, enrichedFrame } = useSourceMappedFrame();
+  const { isLoading, enrichedFrame } = getSourceMappedFrame();
 
   const augmentedFrame = enrichedFrame ?? frame;
   const hasContext = !!augmentedFrame.context_line;

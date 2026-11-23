@@ -1,51 +1,52 @@
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { resolveSourceIds } from '@/KubernetesDashboardPage';
 
 describe('resolveSourceIds', () => {
-  const mockLogSource: TSource = {
+  const mockLogSource: TSource = fromPartial({
     id: 'log-1',
     name: 'Log Source 1',
     kind: SourceKind.Log,
     connection: 'connection-1',
     metricSourceId: 'metric-1',
-  } as TSource;
+  });
 
-  const mockMetricSource: TSource = {
+  const mockMetricSource: TSource = fromPartial({
     id: 'metric-1',
     name: 'Metric Source 1',
     kind: SourceKind.Metric,
     connection: 'connection-1',
     logSourceId: 'log-1',
-  } as TSource;
+  });
 
-  const mockMetricSourceNotCorrelated: TSource = {
+  const mockMetricSourceNotCorrelated: TSource = fromPartial({
     id: 'metric-1-not-correlated',
     name: 'Metric Source Not Correlated',
     kind: SourceKind.Metric,
     connection: 'connection-1',
-  } as TSource;
+  });
 
-  const mockLogSourceNotCorrelated: TSource = {
+  const mockLogSourceNotCorrelated: TSource = fromPartial({
     id: 'log-1-not-correlated',
     name: 'Log Source Not Correlated',
     kind: SourceKind.Log,
     connection: 'connection-1',
-  } as TSource;
+  });
 
-  const mockLogSource2: TSource = {
+  const mockLogSource2: TSource = fromPartial({
     id: 'log-2',
     name: 'Log Source 2',
     kind: SourceKind.Log,
     connection: 'connection-2',
-  } as TSource;
+  });
 
-  const mockMetricSource2: TSource = {
+  const mockMetricSource2: TSource = fromPartial({
     id: 'metric-2',
     name: 'Metric Source 2',
     kind: SourceKind.Metric,
     connection: 'connection-2',
-  } as TSource;
+  });
 
   describe('when both source IDs are provided', () => {
     it('should return both source IDs as-is', () => {
@@ -290,18 +291,18 @@ describe('resolveSourceIds', () => {
 
   describe('edge cases', () => {
     it('should handle multiple sources on the same connection', () => {
-      const logSource3: TSource = {
+      const logSource3: TSource = fromPartial({
         id: 'log-3',
         name: 'Log Source 3',
         kind: SourceKind.Log,
         connection: 'connection-1',
-      } as TSource;
-      const metricSource3: TSource = {
+      });
+      const metricSource3: TSource = fromPartial({
         id: 'metric-3',
         name: 'Metric Source 3',
         kind: SourceKind.Metric,
         connection: 'connection-1',
-      } as TSource;
+      });
       const sources = [
         mockLogSource,
         logSource3,

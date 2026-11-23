@@ -4094,7 +4094,7 @@ __metadata:
     "@clickhouse/clickstack-node": "npm:^1.0.2"
     "@clickhouse/client-common": "npm:1.23.0-head.fae5998.1"
     "@esm2cjs/p-queue": "npm:^7.3.0"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@hyperdx/passport-local-mongoose": "npm:^9.0.1"
     "@modelcontextprotocol/sdk": "npm:^1.32.0"
     "@opentelemetry/api": "npm:~1.9.1"
@@ -4106,6 +4106,7 @@ __metadata:
     "@opentelemetry/sdk-trace-base": "npm:^2.8.0"
     "@slack/webhook": "npm:^7.0.0"
     "@stoplight/spectral-cli": "npm:^6.15.0"
+    "@total-typescript/shoehorn": "npm:^0.1.2"
     "@types/compression": "npm:^1.7.3"
     "@types/cors": "npm:^2.8.14"
     "@types/express": "npm:^4.17.13"
@@ -4189,7 +4190,7 @@ __metadata:
     "@dnd-kit/utilities": "npm:^3.2.2"
     "@hookform/resolvers": "npm:^3.9.0"
     "@hyperdx/api": "workspace:*"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@mantine/core": "npm:^9.0.0"
     "@mantine/dates": "npm:^9.0.0"
     "@mantine/dropzone": "npm:^9.0.0"
@@ -4309,7 +4310,7 @@ __metadata:
   resolution: "@hyperdx/cli@workspace:packages/cli"
   dependencies:
     "@clickhouse/client": "npm:1.23.0-head.fae5998.1"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@jest/globals": "npm:^30.2.0"
     "@types/crypto-js": "npm:^4.2.2"
     "@types/jest": "npm:^29.5.14"
@@ -4336,7 +4337,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@hyperdx/common-utils@npm:^0.36.0, @hyperdx/common-utils@workspace:packages/common-utils":
+"@hyperdx/common-utils@npm:^0.36.1, @hyperdx/common-utils@workspace:packages/common-utils":
   version: 0.0.0-use.local
   resolution: "@hyperdx/common-utils@workspace:packages/common-utils"
   dependencies:
