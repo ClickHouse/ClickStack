@@ -1,0 +1,120 @@
+name: Dependency Scan
+# Report-only: findings go to the job summary and code scanning and never fail
+# the run. The daily schedule catches advisories published against unchanged
+# dependencies. Image scanning lives in docker-build.yml.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/package.json'
+      - yarn.lock
+      - .yarnrc.yml
+      - packages/otel-collector/go.mod
+      - packages/otel-collector/go.sum
+      - packages/otel-collector/cmd/**
+      - docker/otel-collector/Dockerfile
+      - .github/workflows/dependency-scan.yml
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  yarn-audit:
+    name: yarn npm audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      # Reads yarn.lock directly, so no install is needed. Dev tooling is skipped,
+      # except in the CLI, which bundles its devDependencies into the release.
+      - name: Audit dependencies
+        run: |
+          status=0
+          {
+            echo '### yarn npm audit (high and critical)'
+            echo '#### Production dependencies, all workspaces'
+            echo '```'
+            yarn npm audit --all --recursive --environment production \
+              --severity high 2>&1 || status=$?
+            echo '```'
+            echo '#### @hyperdx/cli, including bundled devDependencies'
+            echo '```'
+            yarn workspace @hyperdx/cli npm audit --recursive \
+              --severity high 2>&1 || status=$?
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::warning title=yarn npm audit::Advisories found or audit failed, see the job summary"
+          fi
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    defaults:
+      run:
+        working-directory: packages/otel-collector
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      # govulncheck reports stdlib advisories for the Go on PATH, so match the
+      # release the shipped binary is built with rather than go.mod's minimum.
+      - name: Read Go version from the Dockerfile
+        id: go-version
+        working-directory: .
+        run: |
+          version=$(sed -nE 's/^FROM golang:([0-9.]+)-.* AS migrate-builder$/\1/p' \
+            docker/otel-collector/Dockerfile)
+          if [ -z "$version" ]; then
+            echo "::error::No golang version found on the migrate-builder FROM line in docker/otel-collector/Dockerfile"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+          cache-dependency-path: packages/otel-collector/go.sum
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+      # Text mode exits 3 on findings; SARIF mode always exits 0. The SARIF
+      # paths are relative to the module, so prefix them for code scanning.
+      - name: Scan the migrate tool
+        continue-on-error: true
+        run: |
+          status=0
+          govulncheck ./... > report.txt 2>&1 || status=$?
+          {
+            echo '### govulncheck (packages/otel-collector)'
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::warning title=govulncheck::Vulnerabilities found or scan failed, see the job summary"
+          fi
+          govulncheck -format sarif ./... > raw.sarif
+          jq '(.. | objects | select(.uriBaseId? == "%SRCROOT%") | .uri) |= "packages/otel-collector/" + .' \
+            raw.sarif > govulncheck.sarif
+      # PR uploads would add a code scanning check that fails on new alerts.
+      - name: Upload to code scanning
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: packages/otel-collector/govulncheck.sarif
+          category: govulncheck

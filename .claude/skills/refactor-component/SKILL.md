@@ -178,7 +178,7 @@ cd packages/app && yarn ci:unit   # Unit tests (or the appropriate package)
 make e2e   # E2E tests — re-run the same tests from step 1 to catch regressions
 ```
 
-If lint fails with import-sort or formatting errors, run `npx eslint --fix <file>` on the affected files and re-check. If there are unused-import warnings, remove the unused imports manually.
+If lint fails with import-sort or formatting errors, run `npx oxlint --fix <file>` and `npx oxfmt <file>` from the package directory and re-check. If there are unused-import warnings, remove the unused imports manually.
 
 If an E2E test fails, investigate whether the failure is related to the refactoring (e.g. a broken import path at runtime) or a pre-existing flake. Fix refactoring-related failures before presenting the result. The E2E tests identified in step 1 are the most important — if those pass, the refactor is safe.
 

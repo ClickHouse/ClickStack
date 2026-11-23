@@ -15,6 +15,7 @@ import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions
 
 const mockUseSqlQueryFilterValues = jest.fn();
 const mockCompletionLabels: string[] = [];
+const mockTables: string[] = [];
 let mockSources: TSource[] = [];
 
 const logSource = (id: string, connection: string): TSource => ({
@@ -71,16 +72,29 @@ jest.mock('@/components/SQLEditor/SQLEditor', () => ({
     name,
     rules,
     additionalCompletions,
+    tableConnections,
   }: {
     control: FilterFormControl;
     name: 'sqlTemplate';
     rules?: RegisterOptions<FilterFormValues, 'sqlTemplate'>;
     additionalCompletions?: { label: string }[];
+    tableConnections?: {
+      connectionId: string;
+      databaseName: string;
+      tableName: string;
+    }[];
   }) => {
     mockCompletionLabels.splice(
       0,
       mockCompletionLabels.length,
       ...(additionalCompletions ?? []).map(c => c.label),
+    );
+    mockTables.splice(
+      0,
+      mockTables.length,
+      ...(tableConnections ?? []).map(
+        tc => `${tc.connectionId}:${tc.databaseName}.${tc.tableName}`,
+      ),
     );
     return (
       <textarea data-testid="sql-input" {...control.register(name, rules)} />
@@ -173,6 +187,33 @@ describe('SqlQueryFilterEditForm', () => {
         ),
       ),
     ).toEqual([]);
+  });
+
+  it("suggests the tables of the selected connection's sources", async () => {
+    mockSources = [logSource('logs1', 'conn1'), logSource('logs2', 'conn2')];
+    renderWithMantine(<Harness defaultValues={{ connection: 'conn1' }} />);
+
+    expect(mockTables).toEqual(['conn1:default.otel_logs']);
+
+    fireEvent.change(screen.getByTestId('connection-input'), {
+      target: { value: 'conn2' },
+    });
+
+    await waitFor(() =>
+      expect(mockTables).toEqual(['conn2:default.otel_logs']),
+    );
+  });
+
+  it('suggests the tables of the connection a connection variable selects', () => {
+    mockSources = [logSource('logs1', 'conn1'), logSource('logs2', 'conn2')];
+    renderWithMantine(
+      <Harness
+        defaultValues={{ connection: '$conn' }}
+        referenceValues={new Map([['conn', 'conn2']])}
+      />,
+    );
+
+    expect(mockTables).toEqual(['conn2:default.otel_logs']);
   });
 
   it('accepts a query that references a known variable', async () => {

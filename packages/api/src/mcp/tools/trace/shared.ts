@@ -3,32 +3,13 @@ import type { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { timeFilterExpr } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import type { QuerySettings } from '@hyperdx/common-utils/dist/types';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import {
-  MCP_CLICKHOUSE_SETTINGS,
-  MCP_REQUEST_TIMEOUT,
-} from '@/mcp/tools/query/helpers';
+import { MCP_CLICKHOUSE_SETTINGS } from '@/mcp/tools/query/helpers';
 
 export function durationDivisor(precision: number): number {
   // durationPrecision is the number of decimal digits in the stored value.
   // precision=9 → ns (divide by 1e6 for ms), precision=6 → µs (divide by 1e3),
   // precision=3 → already ms (divide by 1).
   return Math.pow(10, Math.max(0, precision - 3));
-}
-
-export async function getMcpClickhouseClient(
-  teamId: string,
-  connectionId: string,
-): Promise<ClickhouseClient | null> {
-  const connection = await getConnectionById(teamId, connectionId, true);
-  if (!connection) return null;
-  return new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-    requestTimeout: MCP_REQUEST_TIMEOUT,
-  });
 }
 
 // MCP settings win over source.querySettings so a source can't relax the

@@ -1,4 +1,5 @@
-import { TSource } from '@hyperdx/common-utils/dist/types';
+import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   buildContextWhereClause,
@@ -11,9 +12,9 @@ import {
 import { ROW_DATA_ALIASES } from '@/components/DBRowDataPanel';
 
 const makeLogSource = (overrides = {}): TSource =>
-  ({
+  fromPartial({
     id: 'src-1',
-    kind: 'log',
+    kind: SourceKind.Log,
     name: 'Test Logs',
     from: { databaseName: 'default', tableName: 'otel_logs' },
     connection: 'conn-1',
@@ -23,7 +24,7 @@ const makeLogSource = (overrides = {}): TSource =>
     eventAttributesExpression: 'LogAttributes',
     defaultTableSelectExpression: '*',
     ...overrides,
-  }) as unknown as TSource;
+  });
 
 describe('extractQuickFilters', () => {
   it('creates a service pill from serviceNameExpression', () => {

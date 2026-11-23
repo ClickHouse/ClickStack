@@ -1,4 +1,5 @@
 // Port from ChartUtils + source.ts
+import type { ClickHouseSettings } from '@clickhouse/client-common';
 import { add as fnsAdd, format as fnsFormat } from 'date-fns';
 import { formatInTimeZone, zonedTimeToUtc } from 'date-fns-tz';
 import { omit } from 'lodash';
@@ -59,6 +60,15 @@ import {
 import { validateVariableReferencesInTemplate } from '@/variables';
 
 import { SkipIndexMetadata, TableMetadata } from './metadata';
+
+/** Source `querySettings` in the shape the ClickHouse client expects. */
+export function querySettingsToClickHouseSettings(
+  querySettings: QuerySettings | undefined,
+): ClickHouseSettings {
+  return Object.fromEntries(
+    (querySettings ?? []).map(({ setting, value }) => [setting, value]),
+  );
+}
 
 /** The default maximum number of buckets setting when determining a bucket duration for 'auto' granularity */
 export const DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS = 60;
@@ -1463,6 +1473,41 @@ export type TextIndexTokenizer =
       minCutoffLength?: number;
     }
   | { type: 'array' };
+
+/** Reads a setting from `system.tables.engine_full`, which ends with the SETTINGS clause. */
+export function getEngineSetting(engineFull: string, name: string) {
+  const settingsClause = engineFull.match(/ SETTINGS (.*)$/)?.[1] ?? '';
+  return splitAndTrimWithBracket(settingsClause)
+    .map(setting => setting.split(' = '))
+    .find(([key]) => key === name)?.[1];
+}
+
+const DEFAULT_TEXT_INDEX_DICTIONARY_BLOCK_SIZE = 512;
+
+/**
+ * A text index's dictionary block size: the index argument, else the table's
+ * `text_index_dictionary_block_size`, else the server's, else ClickHouse's 512.
+ */
+export function getTextIndexDictionaryBlockSize({
+  typeFull,
+  engineFull,
+  serverMergeTreeSettings,
+}: {
+  typeFull?: string;
+  engineFull?: string;
+  serverMergeTreeSettings?: Map<string, string>;
+}): number {
+  const value =
+    typeFull?.match(/\bdictionary_block_size\s*=\s*(\d+)/)?.[1] ??
+    (engineFull
+      ? getEngineSetting(engineFull, 'text_index_dictionary_block_size')
+      : undefined) ??
+    serverMergeTreeSettings?.get('text_index_dictionary_block_size');
+  const size = Number(value);
+  return Number.isInteger(size) && size > 0
+    ? size
+    : DEFAULT_TEXT_INDEX_DICTIONARY_BLOCK_SIZE;
+}
 
 /**
  * Parses the tokenizer and any associated tokenizer parameters from a text index type definition.

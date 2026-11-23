@@ -1,5 +1,5 @@
 import React from 'react';
-import { useForm } from 'react-hook-form';
+import { Control, useForm } from 'react-hook-form';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import {
@@ -7,27 +7,34 @@ import {
   PasswordInputControlled,
 } from '@/components/InputControlled';
 
-// Test wrapper component that provides form context
-function TestForm({ children }: { children: React.ReactElement }) {
-  const { control } = useForm({
+type TestFormValues = { testInput: string; testPassword: string };
+
+function TestForm({
+  children,
+}: {
+  children: (control: Control<TestFormValues>) => React.ReactElement;
+}) {
+  const { control } = useForm<TestFormValues>({
     defaultValues: {
       testInput: '',
       testPassword: '',
     },
   });
 
-  return <form>{React.cloneElement(children, { control } as any)}</form>;
+  return <form>{children(control)}</form>;
 }
 
 describe('InputControlled', () => {
   it('renders input with correct props', () => {
     renderWithMantine(
       <TestForm>
-        <InputControlled
-          name="testInput"
-          placeholder="Test input"
-          control={{} as any}
-        />
+        {control => (
+          <InputControlled
+            name="testInput"
+            placeholder="Test input"
+            control={control}
+          />
+        )}
       </TestForm>,
     );
 
@@ -38,11 +45,13 @@ describe('InputControlled', () => {
   it('handles input changes', async () => {
     renderWithMantine(
       <TestForm>
-        <InputControlled
-          name="testInput"
-          placeholder="Test input"
-          control={{} as any}
-        />
+        {control => (
+          <InputControlled
+            name="testInput"
+            placeholder="Test input"
+            control={control}
+          />
+        )}
       </TestForm>,
     );
 
@@ -59,11 +68,13 @@ describe('PasswordInputControlled', () => {
   it('renders password input with correct props', () => {
     renderWithMantine(
       <TestForm>
-        <PasswordInputControlled
-          name="testPassword"
-          placeholder="Enter password"
-          control={{} as any}
-        />
+        {control => (
+          <PasswordInputControlled
+            name="testPassword"
+            placeholder="Enter password"
+            control={control}
+          />
+        )}
       </TestForm>,
     );
 
@@ -75,11 +86,13 @@ describe('PasswordInputControlled', () => {
   it('handles password input changes', async () => {
     renderWithMantine(
       <TestForm>
-        <PasswordInputControlled
-          name="testPassword"
-          placeholder="Enter password"
-          control={{} as any}
-        />
+        {control => (
+          <PasswordInputControlled
+            name="testPassword"
+            placeholder="Enter password"
+            control={control}
+          />
+        )}
       </TestForm>,
     );
 

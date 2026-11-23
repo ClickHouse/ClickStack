@@ -19,12 +19,14 @@ import type { ChSql } from '@hyperdx/common-utils/dist/clickhouse';
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 
+import type { ClickhouseClient } from '@/clickhouse';
 import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
   isQueryOutOfTime,
   isServerError,
+  MCP_REQUEST_TIMEOUT,
   parseTimeRange,
 } from '@/mcp/tools/query/helpers';
 import {
@@ -34,11 +36,14 @@ import {
 } from '@/mcp/tools/trace/breakdownSchema';
 import {
   durationDivisor,
-  getMcpClickhouseClient,
   inclusiveTimeFilter,
   mcpQuerySettings,
 } from '@/mcp/tools/trace/shared';
 import type { ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
 
 // The child stage looks spans up by TraceId, which is not in the sort key, so
@@ -90,11 +95,15 @@ export function registerTraceBreakdown({
         );
       }
 
-      const clickhouseClient = await getMcpClickhouseClient(
-        teamId.toString(),
-        source.connection.toString(),
-      );
-      if (!clickhouseClient) {
+      let clickhouseClient: ClickhouseClient;
+      try {
+        clickhouseClient = await getMcpClickhouseClient(
+          context,
+          source.connection.toString(),
+          { requestTimeout: MCP_REQUEST_TIMEOUT },
+        );
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection not found for source: ${input.sourceId}`,
         );

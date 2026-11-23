@@ -1,5 +1,6 @@
 import type { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { renderWhereExpressionStr } from '@hyperdx/common-utils/dist/core/renderChartConfig';
+import { DATE_TOKEN } from '@hyperdx/common-utils/dist/drain';
 import type {
   ChartVariable,
   UseTextIndex,
@@ -9,7 +10,9 @@ import { substituteVariables } from '@hyperdx/common-utils/dist/variables';
 export const PATTERN_MATCH_SEMANTICS =
   'whereSnippet matches values with the same whitespace-separated token count as the ' +
   'template, the same literal tokens (case-sensitive) in the same positions, and exactly ' +
-  'one non-whitespace token at each <*>. Every sampled member of the cluster matches. ' +
+  `one non-whitespace token at each <*>, and one or more non-whitespace characters at each ${DATE_TOKEN} ` +
+  `(also inside a token, e.g. backup_${DATE_TOKEN}.tar). ` +
+  'Every sampled member of the cluster matches. ' +
   'It can also match unsampled events whose shape fits, including ones Drain would have ' +
   'put in a more specific cluster, so the drill-down is a superset of cluster membership.';
 

@@ -1,31 +1,30 @@
 #!/usr/bin/env node
 /**
- * ESLint wrapper that says which warnings are new.
+ * oxlint wrapper that says which warnings are new.
  *
  * Ceiling mode (each package's `lint` script):
- *   node ../../scripts/ci/eslint-warnings.mjs . --ext .ts --max-warnings 302
- * Runs ESLint, then, when the warning count exceeds the ceiling, lists the
+ *   node ../../scripts/ci/oxlint-warnings.mjs --max-warnings 302
+ * Runs oxlint, then, when the warning count exceeds the ceiling, lists the
  * warnings on lines this branch changed (vs the merge-base with the PR base or
  * origin/main) and emits GitHub annotations for them. Plain
- * `eslint --max-warnings` only prints "too many warnings" somewhere inside
+ * `oxlint --max-warnings` only prints "too many warnings" somewhere inside
  * hundreds of pre-existing ones.
  *
- * Staged mode (lint-staged pre-commit):
- *   node scripts/ci/eslint-warnings.mjs --staged --fix <files>
+ * Staged mode (lint-staged pre-commit, from the repo root):
+ *   node scripts/ci/oxlint-warnings.mjs --staged --fix <files>
  * Fails only on warnings on lines the commit adds or changes, so touching a
- * file with old warnings doesn't block the commit.
+ * file with old warnings doesn't block the commit. oxlint lints each file
+ * with the `.oxlintrc.json` of the package it lives in (nested configs).
  *
- * Every other argument is passed through to ESLint.
+ * Every other argument is passed through to oxlint.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function parseArgs(argv) {
-  const eslintArgs = [];
+  const oxlintArgs = [];
   let maxWarnings;
   let staged = false;
   for (let i = 0; i < argv.length; i++) {
@@ -37,13 +36,13 @@ export function parseArgs(argv) {
     } else if (arg.startsWith('--max-warnings=')) {
       maxWarnings = Number(arg.slice('--max-warnings='.length));
     } else {
-      eslintArgs.push(arg);
+      oxlintArgs.push(arg);
     }
   }
   if (maxWarnings !== undefined && !Number.isInteger(maxWarnings)) {
     throw new Error('--max-warnings needs an integer');
   }
-  return { eslintArgs, maxWarnings, staged };
+  return { oxlintArgs, maxWarnings, staged };
 }
 
 /**
@@ -69,6 +68,73 @@ export function parseAddedLines(diff, root) {
     }
   }
   return added;
+}
+
+/**
+ * Groups oxlint's `--format json` diagnostics into ESLint-style per-file
+ * results, so the rest of this script (and its output) reads like before.
+ * `code` is `plugin(rule)`; native ESLint rules drop the `eslint/` prefix.
+ * Diagnostics without a code (unused disable directives, a JS plugin that
+ * threw) keep `ruleId: null`.
+ */
+export function toResults(output, cwd) {
+  const byFile = new Map();
+  for (const d of output.diagnostics) {
+    const filePath = path.resolve(cwd, d.filename);
+    const span = d.labels?.[0]?.span;
+    const match = /^(.+)\((.+)\)$/.exec(d.code ?? '');
+    const ruleId = match
+      ? match[1] === 'eslint'
+        ? match[2]
+        : `${match[1]}/${match[2]}`
+      : null;
+    if (!byFile.has(filePath)) byFile.set(filePath, []);
+    byFile.get(filePath).push({
+      ruleId,
+      severity: d.severity === 'error' ? 2 : 1,
+      message: d.message,
+      line: span?.line ?? 0,
+      column: span?.column ?? 0,
+    });
+  }
+  return [...byFile]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([filePath, messages]) => {
+      messages.sort((a, b) => a.line - b.line || a.column - b.column);
+      return {
+        filePath,
+        messages,
+        errorCount: messages.filter(m => m.severity === 2).length,
+        warningCount: messages.filter(m => m.severity === 1).length,
+      };
+    });
+}
+
+/** ESLint's `stylish` layout, which is what this script printed before. */
+export function formatStylish(results, cwd) {
+  let out = '';
+  let errors = 0;
+  let warnings = 0;
+  for (const result of results) {
+    if (!result.messages.length) continue;
+    out += `\n${path.relative(cwd, result.filePath)}\n`;
+    for (const m of result.messages) {
+      const where = `${m.line}:${m.column}`.padStart(7);
+      const level = m.severity === 2 ? 'error  ' : 'warning';
+      out += `${where}  ${level}  ${m.message}  ${m.ruleId ?? ''}`.trimEnd();
+      out += '\n';
+    }
+    errors += result.errorCount;
+    warnings += result.warningCount;
+  }
+  const total = errors + warnings;
+  if (total) {
+    out +=
+      `\n✖ ${total} problem${total === 1 ? '' : 's'} ` +
+      `(${errors} error${errors === 1 ? '' : 's'}, ` +
+      `${warnings} warning${warnings === 1 ? '' : 's'})\n`;
+  }
+  return out;
 }
 
 export function collectWarnings(results) {
@@ -148,33 +214,31 @@ function annotate(warnings, root) {
     const file = path.relative(root, w.filePath);
     const message = `${w.message} (${w.ruleId})`.replace(/\r?\n/g, ' ');
     console.log(
-      `::error file=${file},line=${w.line},col=${w.column},title=New ESLint warning::${message}`,
+      `::error file=${file},line=${w.line},col=${w.column},title=New oxlint warning::${message}`,
     );
   }
 }
 
-function runEslint(cwd, eslintArgs) {
+function runOxlint(cwd, oxlintArgs) {
   const require = createRequire(path.join(cwd, 'noop.js'));
-  const pkgJson = require.resolve('eslint/package.json');
-  const bin = path.join(path.dirname(pkgJson), 'bin/eslint.js');
-  const tmp = mkdtempSync(path.join(tmpdir(), 'eslint-warnings-'));
-  const outFile = path.join(tmp, 'results.json');
+  const pkgJson = require.resolve('oxlint/package.json');
+  const bin = path.join(path.dirname(pkgJson), 'bin/oxlint');
+  const { status, stdout } = spawnSync(
+    process.execPath,
+    [bin, ...oxlintArgs, '--format', 'json'],
+    {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'inherit'],
+    },
+  );
   try {
-    const { status } = spawnSync(
-      process.execPath,
-      [bin, ...eslintArgs, '--format', 'json', '--output-file', outFile],
-      { cwd, stdio: 'inherit' },
-    );
-    let results;
-    try {
-      results = JSON.parse(readFileSync(outFile, 'utf8'));
-    } catch {
-      // ESLint crashed (bad config, bad flag) and has already said why.
-      process.exit(status || 2);
-    }
-    return { status, results, ESLint: require('eslint').ESLint };
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    return { status, results: toResults(JSON.parse(stdout), cwd) };
+  } catch {
+    // oxlint failed before linting (bad config, bad flag); it printed why.
+    process.stdout.write(stdout ?? '');
+    process.exit(status || 2);
   }
 }
 
@@ -199,11 +263,15 @@ async function main() {
     '../..',
   );
   const cwd = process.cwd();
-  const { eslintArgs, maxWarnings, staged } = parseArgs(process.argv.slice(2));
-  const { status, results, ESLint } = runEslint(cwd, eslintArgs);
-  const stylish = await new ESLint({ cwd }).loadFormatter('stylish');
+  const { oxlintArgs, maxWarnings, staged } = parseArgs(process.argv.slice(2));
+  // Staged files can all be ignored by their package config (next-env.d.ts),
+  // which oxlint otherwise treats as an error.
+  const { results } = runOxlint(
+    cwd,
+    staged ? ['--no-error-on-unmatched-pattern', ...oxlintArgs] : oxlintArgs,
+  );
   const warnings = collectWarnings(results);
-  const hasErrors = results.some(r => r.errorCount > 0) || status === 2;
+  const hasErrors = results.some(r => r.errorCount > 0);
 
   if (staged) {
     const changed = changedLines(root, true);
@@ -211,24 +279,25 @@ async function main() {
       ? warnings.filter(w => changed.addedLines.get(w.filePath)?.has(w.line))
       : [];
     process.stdout.write(
-      await stylish.format(
+      formatStylish(
         onlyErrorsAnd(results, new Set(fresh.map(w => w.raw))),
+        cwd,
       ),
     );
     if (fresh.length) {
       console.error(
-        `\n✖ ${fresh.length} new ESLint warning(s) on lines this commit changes. ` +
+        `\n✖ ${fresh.length} new oxlint warning(s) on lines this commit changes. ` +
           'Fix them before committing; CI caps the warning count per package.',
       );
     }
     return hasErrors || fresh.length ? 1 : 0;
   }
 
-  process.stdout.write(await stylish.format(results));
+  process.stdout.write(formatStylish(results, cwd));
   if (maxWarnings === undefined || warnings.length <= maxWarnings) {
     if (maxWarnings !== undefined && warnings.length < maxWarnings) {
       console.log(
-        `${warnings.length} ESLint warnings, ceiling ${maxWarnings}. ` +
+        `${warnings.length} oxlint warnings, ceiling ${maxWarnings}. ` +
           `Lower --max-warnings to ${warnings.length} to lock in the improvement.`,
       );
     }
@@ -237,7 +306,7 @@ async function main() {
 
   const pkg = path.relative(root, cwd) || '.';
   const summary =
-    `${pkg}: ${warnings.length} ESLint warnings, ceiling is ${maxWarnings} ` +
+    `${pkg}: ${warnings.length} oxlint warnings, ceiling is ${maxWarnings} ` +
     `(--max-warnings in ${path.join(pkg, 'package.json')}).`;
   console.error(`\n✖ ${summary}`);
   const changed = changedLines(root, false);
@@ -266,7 +335,7 @@ async function main() {
     'Fix the new warnings. Raise the ceiling only if the increase is deliberate.',
   );
   if (process.env.GITHUB_ACTIONS === 'true') {
-    console.log(`::error title=ESLint warning ceiling exceeded::${summary}`);
+    console.log(`::error title=oxlint warning ceiling exceeded::${summary}`);
   }
   return 1;
 }

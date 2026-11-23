@@ -184,6 +184,37 @@ describe('useMetricNames', () => {
     );
   });
 
+  it('passes the source query settings to the index read', async () => {
+    const querySettings = [{ setting: 'max_threads', value: '2' }];
+
+    renderHook(() => useMetricNames({ ...METRIC_SOURCE, querySettings }), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() =>
+      expect(streamDistinctIndexValues).toHaveBeenCalledWith(
+        expect.objectContaining({ querySettings }),
+      ),
+    );
+  });
+
+  it('passes the source query settings to the exhaustive query', () => {
+    const querySettings = [
+      { setting: 'force_optimize_skip_unused_shards', value: '0' },
+    ];
+
+    renderHook(
+      () =>
+        useMetricNames({ ...METRIC_SOURCE, querySettings }, undefined, 'up'),
+      { wrapper: createWrapper() },
+    );
+
+    expect(useGetMetricNames).toHaveBeenCalledWith(
+      expect.objectContaining({ querySettings }),
+      expect.anything(),
+    );
+  });
+
   it('does not enable the exhaustive query while the index read is healthy', async () => {
     renderHook(() => useMetricNames(METRIC_SOURCE), {
       wrapper: createWrapper(),

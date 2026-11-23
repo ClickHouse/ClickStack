@@ -2,7 +2,11 @@ import { DisplayType } from '@hyperdx/common-utils/dist/types';
 
 import { ChartExplorerPage } from '../page-objects/ChartExplorerPage';
 import { expect, test } from '../utils/base-test';
-import { DEFAULT_LOGS_SOURCE_NAME, E2E_LOGS_TABLE } from '../utils/constants';
+import {
+  DEFAULT_LOGS_SOURCE_NAME,
+  DEFAULT_METRICS_SOURCE_NAME,
+  E2E_LOGS_TABLE,
+} from '../utils/constants';
 
 test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
   let chartExplorerPage: ChartExplorerPage;
@@ -158,6 +162,119 @@ test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
         .toEqual(descendingLabels.slice(0, seriesLimit));
     });
   });
+
+  test('should query an edited Order By instead of the last header sort on a table', async () => {
+    const { chartEditor } = chartExplorerPage;
+    let headerSortValues: string[] = [];
+    let headerSortDesc = false;
+
+    await test.step('Query a table grouped by ServiceName', async () => {
+      await expect(chartExplorerPage.form).toBeVisible();
+      await chartExplorerPage.page.waitForLoadState('networkidle');
+      await chartEditor.setChartType(DisplayType.Table);
+      await chartEditor.setGroupBy('ServiceName');
+      await chartEditor.runQuery(false);
+      await expect(
+        chartExplorerPage.getTableSortButton('ServiceName'),
+      ).toBeVisible({ timeout: 15000 });
+    });
+
+    await test.step('Sort by clicking the ServiceName header', async () => {
+      await chartExplorerPage.getTableSortButton('ServiceName').click();
+      await expect
+        .poll(() => chartExplorerPage.getOrderByText(), { timeout: 10000 })
+        .toMatch(/^ServiceName (ASC|DESC)$/);
+      headerSortDesc = (await chartExplorerPage.getOrderByText()).endsWith(
+        'DESC',
+      );
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(1);
+
+      await expect
+        .poll(
+          async () =>
+            (await chartExplorerPage.getTableColumnValues('ServiceName'))
+              .length,
+          { timeout: 10000 },
+        )
+        .toBeGreaterThan(1);
+      headerSortValues =
+        await chartExplorerPage.getTableColumnValues('ServiceName');
+    });
+
+    await test.step('Edit the Order By to the opposite direction with a trailing modifier', async () => {
+      // "NULLS LAST" has no trailing ASC/DESC, so the table can't show it as a
+      // header sort; it must still be queried as typed.
+      await chartEditor.setOrderBy(
+        `ServiceName ${headerSortDesc ? 'ASC' : 'DESC'} NULLS LAST`,
+      );
+      await chartEditor.runQuery(false);
+
+      await expect
+        .poll(() => chartExplorerPage.getTableColumnValues('ServiceName'), {
+          timeout: 10000,
+        })
+        .toEqual([...headerSortValues].reverse());
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(0);
+    });
+
+    await test.step('Clear the Order By and verify the header sort is not restored', async () => {
+      await chartEditor.setOrderBy('');
+      await chartEditor.runQuery(false);
+
+      await expect
+        .poll(
+          async () =>
+            (await chartExplorerPage.getTableColumnValues('ServiceName'))
+              .length,
+          { timeout: 10000 },
+        )
+        .toBeGreaterThan(1);
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(0);
+      expect(await chartExplorerPage.getOrderByText()).toBe('');
+    });
+  });
+
+  test(
+    'should sort a metric table by a formula column whose alias has a space',
+    { tag: ['@full-stack'] },
+    async ({ page }) => {
+      const { chartEditor } = chartExplorerPage;
+
+      await test.step('Query a metric table with a formula aliased "duration min"', async () => {
+        await expect(chartExplorerPage.form).toBeVisible();
+        await chartEditor.setChartType(DisplayType.Table);
+        await chartEditor.selectSource(DEFAULT_METRICS_SOURCE_NAME);
+        await chartEditor.selectMetricForSeries(
+          0,
+          'container.cpu.utilization',
+          'container.cpu.utilization:::::::gauge',
+        );
+        await chartEditor.addFormula('A * 100', 'duration min');
+        await chartEditor.runQuery(false);
+        await expect(
+          chartExplorerPage.getTableSortButton('duration min'),
+        ).toBeVisible({ timeout: 15000 });
+      });
+
+      await test.step('Sort by the formula column and verify the query succeeds', async () => {
+        await chartExplorerPage.getTableSortButton('duration min').click();
+
+        await expect
+          .poll(() => chartExplorerPage.getOrderByText(), { timeout: 10000 })
+          .toMatch(/^"duration min" (ASC|DESC)$/);
+        await expect(
+          chartExplorerPage
+            .getTableSortButton('duration min')
+            .getByTestId('raw-log-table-sort-indicator'),
+        ).toBeVisible({ timeout: 15000 });
+        await page.waitForLoadState('networkidle');
+        await expect(page.getByTestId('chart-error-state')).toHaveCount(0);
+        await expect(
+          page.locator('table tbody tr[data-index]').first(),
+        ).toBeVisible();
+      });
+    },
+  );
 
   test('should apply a custom ORDER BY on a categorical pie chart', async () => {
     let ascendingLabels: string[] = [];

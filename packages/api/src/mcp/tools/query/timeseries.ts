@@ -72,8 +72,6 @@ const timeseriesSchema = z.object({
 // ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerTimeseries({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_timeseries',
     {
@@ -144,13 +142,9 @@ export function registerTimeseries({ context, registerTool }: ToolRegistrar) {
         ...(input.granularity ? { granularity: input.granularity } : {}),
       });
 
-      const result = await runConfigTile(
-        teamId.toString(),
-        tile,
-        startDate,
-        endDate,
-        { granularity: input.granularity },
-      );
+      const result = await runConfigTile(context, tile, startDate, endDate, {
+        granularity: input.granularity,
+      });
 
       // Surface language-mismatch warnings so the agent knows the top-level
       // where was not applied to every select item.

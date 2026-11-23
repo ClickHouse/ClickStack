@@ -16,16 +16,20 @@ import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
   MCP_CLICKHOUSE_SETTINGS,
+  MCP_REQUEST_TIMEOUT,
   parseTimeRange,
 } from '@/mcp/tools/query/helpers';
 import {
   durationDivisor,
-  getMcpClickhouseClient,
   inclusiveTimeFilter,
   mcpQuerySettings,
   type TimeFilterParams,
 } from '@/mcp/tools/trace/shared';
 import type { ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
 import logger from '@/utils/logger';
 
@@ -355,11 +359,15 @@ export function registerTraceWaterfall({
         );
       }
 
-      const clickhouseClient = await getMcpClickhouseClient(
-        teamId.toString(),
-        source.connection.toString(),
-      );
-      if (!clickhouseClient) {
+      let clickhouseClient: ClickhouseClient;
+      try {
+        clickhouseClient = await getMcpClickhouseClient(
+          context,
+          source.connection.toString(),
+          { requestTimeout: MCP_REQUEST_TIMEOUT },
+        );
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection not found for source: ${input.sourceId}`,
         );
@@ -686,10 +694,16 @@ export function registerTraceWaterfall({
           if (
             logSource.connection.toString() !== source.connection.toString()
           ) {
-            logClient = await getMcpClickhouseClient(
-              teamId.toString(),
-              logSource.connection.toString(),
-            );
+            try {
+              logClient = await getMcpClickhouseClient(
+                context,
+                logSource.connection.toString(),
+                { requestTimeout: MCP_REQUEST_TIMEOUT },
+              );
+            } catch (e) {
+              if (!(e instanceof McpConnectionNotFoundError)) throw e;
+              logClient = null;
+            }
           }
           if (!logClient) {
             logsNote = `connection for log source ${source.logSourceId} not found`;

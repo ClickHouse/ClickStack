@@ -37,7 +37,11 @@ import {
   useSqlQueryFilterValues,
 } from '@/hooks/useSqlQueryFilterValues';
 import { useSources } from '@/source';
-import { truncateText, usePrevious } from '@/utils';
+import {
+  getTableConnectionsForConnection,
+  truncateText,
+  usePrevious,
+} from '@/utils';
 import { resolveConnectionSourceSync } from '@/utils/connectionSourceSync';
 
 import { TOOLTIP_PORTAL_TARGET } from './constants';
@@ -172,6 +176,10 @@ export const SqlQueryFilterEditForm = ({
     !!resolvedConnection &&
     !!sqlTemplate?.trim() &&
     unresolvedVariables.length === 0;
+  const tableConnections = useMemo(
+    () => getTableConnectionsForConnection(sources, resolvedConnection),
+    [sources, resolvedConnection],
+  );
   const queryClient = useQueryClient();
   const runPreview = () => {
     if (!canPreview) return;
@@ -272,6 +280,7 @@ export const SqlQueryFilterEditForm = ({
             height="150px"
             enableLineWrapping
             placeholder={PLACEHOLDER_SQL}
+            tableConnections={tableConnections}
             additionalCompletions={completions}
             onSubmit={runPreview}
             parentRef={TOOLTIP_PORTAL_TARGET}

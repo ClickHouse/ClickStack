@@ -1,6 +1,7 @@
 import React from 'react';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import {
   ColorRulesEditor,
@@ -8,20 +9,17 @@ import {
 } from '@/components/ColorRulesEditor';
 
 // Stable localIds so tests can reference them by index.
-// Uses `as ColorRuleWithId` because spreading Partial<ColorRuleWithId> over a
-// concrete rule base widens the discriminated union in TS's view; the cast is safe
-// because callers always supply valid operator/value combinations.
 function makeRule(
   overrides: Partial<ColorRuleWithId> = {},
   id = crypto.randomUUID(),
 ): ColorRuleWithId {
-  return {
+  return fromAny<ColorRuleWithId, Record<string, unknown>>({
     localId: id,
     operator: 'gt',
     value: 0,
     color: 'chart-blue',
     ...overrides,
-  } as ColorRuleWithId;
+  });
 }
 
 describe('ColorRulesEditor', () => {

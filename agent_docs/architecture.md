@@ -70,7 +70,8 @@ the OpenAPI spec and `yarn lint:openapi` to validate it.
 
 `scripts/ci/check-openapi-sync.sh` (run by `make ci-lint` and by CI) fails if the
 committed spec is stale. `swaggerOptions` in `src/utils/swagger.ts` is also an
-input, and the spec is in `.prettierignore` because docgen owns its formatting.
+input, and the spec is in `ignorePatterns` in `.oxfmtrc.json` because docgen owns
+its formatting.
 
 ### MCP Server (`src/mcp/`)
 
@@ -105,7 +106,7 @@ pings `/v1/opamp` with status, and the server returns updated config when needed
 - **Model**: `models/agent.ts` - agent state persistence
 - **Proto**: `proto/` - Protocol Buffer definitions for OpAMP and anyvalue
 
-Config is derived from the team document with the ingestion API key.
+Config is derived from the team document with the ingestion API key. `INGESTION_API_KEY` is also accepted on all-in-one and dev builds, or anywhere with `ENABLE_INGESTION_API_KEY=true`.
 
 ### Background Tasks (`src/tasks/`)
 

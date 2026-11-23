@@ -26,10 +26,14 @@ import {
 import { ObjectId } from 'mongodb';
 import ms from 'ms';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { PromQLQueryError } from '@/controllers/promql';
 import { getSource } from '@/controllers/sources';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
 import {
@@ -42,7 +46,10 @@ import {
   isConfigTile,
 } from '@/routers/external-api/v2/utils/dashboards';
 import { isQueryTimeoutError } from '@/tasks/checkAlerts/errors';
-import { isClickHouseError } from '@/utils/clickhouseErrors';
+import {
+  getClickHouseErrorType,
+  isClickHouseError,
+} from '@/utils/clickhouseErrors';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 import { externalDashboardTileSchemaWithId } from '@/utils/zod';
@@ -486,7 +493,7 @@ function toPlainMetricTables(
 }
 
 export async function runConfigTile(
-  teamId: string,
+  context: McpContext,
   tile: ExternalDashboardTileWithId,
   startDate: Date,
   endDate: Date,
@@ -511,6 +518,7 @@ export async function runConfigTile(
     partialSearchResults?: boolean;
   },
 ) {
+  const { teamId } = context;
   if (!isConfigTile(tile)) {
     return mcpUserError('Invalid tile: config field missing');
   }
@@ -542,7 +550,7 @@ export async function runConfigTile(
       const selectStr =
         typeof builderConfig.select === 'string' ? builderConfig.select : '';
       return runEventPatterns(
-        teamId,
+        context,
         builderConfig.source,
         startDate,
         endDate,
@@ -576,23 +584,19 @@ export async function runConfigTile(
     );
     if (kindMismatch) return kindMismatch;
 
-    const connection = await getConnectionById(
-      teamId,
-      source.connection.toString(),
-      true,
-    );
-    if (!connection) {
+    let clickhouseClient: ClickhouseClient;
+    try {
+      clickhouseClient = await getMcpClickhouseClient(
+        context,
+        source.connection.toString(),
+        { requestTimeout: MCP_REQUEST_TIMEOUT },
+      );
+    } catch (e) {
+      if (!(e instanceof McpConnectionNotFoundError)) throw e;
       return mcpUserError(
         `Connection not found for source: ${builderConfig.source}`,
       );
     }
-
-    const clickhouseClient = new ClickhouseClient({
-      host: connection.host,
-      username: connection.username,
-      password: connection.password,
-      requestTimeout: MCP_REQUEST_TIMEOUT,
-    });
 
     const isSearch = builderConfig.displayType === DisplayType.Search;
     const isMetricSource = source.kind === SourceKind.Metric;
@@ -799,23 +803,19 @@ export async function runConfigTile(
     }
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    savedConfig.connection,
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      savedConfig.connection,
+      { requestTimeout: MCP_REQUEST_TIMEOUT },
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(
       `Connection not found: ${savedConfig.connection}. Call clickstack_list_sources to discover available connection IDs.`,
     );
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-    requestTimeout: MCP_REQUEST_TIMEOUT,
-  });
 
   const chartConfig = {
     ...savedConfig,
@@ -1029,6 +1029,33 @@ export function errorHint(
       'this works for both DateTime and DateTime64 columns. For the sql tool, prefer ' +
       '`$__timeFilter(Timestamp)` which handles casting automatically. ' +
       'Bare ISO 8601 strings will NOT auto-cast to DateTime/DateTime64.'
+    );
+  }
+  // hasToken() accepts one token of ASCII letters and digits; '_', '-', '.',
+  // '@', ':' and spaces are separators. Agents reach for it in SQL filters
+  // with ids, emails and snake_case names. The BAD_ARGUMENTS + hasToken
+  // fallback keeps the hint if ClickHouse rewords the message.
+  if (
+    /Needle must not contain whitespace or separator characters/i.test(msg) ||
+    (/\bhasToken\b/.test(msg) &&
+      (getClickHouseErrorType(error) === 'BAD_ARGUMENTS' ||
+        /BAD_ARGUMENTS|Code: 36\b/.test(msg)))
+  ) {
+    // position() works on every ClickHouse version and, unlike LIKE, has no '_'
+    // wildcard. hasAllTokens() is newer and only worth adding with a text index.
+    const sqlAlternatives =
+      "position(col, 'payment_failed') > 0 for the exact term. If the column " +
+      "has a text index, prefix it with hasAllTokens(col, 'payment_failed') AND " +
+      'so the index can skip granules.';
+    return (
+      'hasToken() takes a single token of letters and digits; "_", "-", ".", ' +
+      '"@", ":" and spaces all split tokens, so a needle like payment_failed, ' +
+      'a UUID or an email is rejected. ' +
+      (options?.rawSql
+        ? `Use ${sqlAlternatives}`
+        : 'Put the term in a Lucene filter (whereLanguage:"lucene", e.g. ' +
+          '"payment_failed"), which splits it into tokens and still uses the ' +
+          `text index. In SQL, use ${sqlAlternatives}`)
     );
   }
   if (/Syntax error.*\bAS\b/.test(msg)) {

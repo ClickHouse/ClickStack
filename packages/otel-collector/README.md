@@ -16,7 +16,10 @@ Dockerfile:
 1. The `ocb` binary is copied from the official
    `otel/opentelemetry-collector-builder:<version>` image
 2. It's placed into a `golang:<version>-alpine` base (the official OCB image may
-   ship an older Go than the contrib modules require)
+   ship an older Go than the contrib modules require). The base is pinned by
+   digest in both Dockerfiles so upstream republishes don't invalidate the OCB
+   compile cache; bump the tag and digest together in both files
+   (`docker buildx imagetools inspect golang:<tag>` prints the digest)
 3. Version placeholders in `builder-config.yaml` are substituted via `sed`
 4. `ocb` compiles the custom binary from the resolved manifest
 
@@ -157,7 +160,8 @@ config for logs).
 In OpAMP supervisor mode, when collector authentication is enforced the
 receiver authenticates against the team API keys (same as `otlp/hyperdx`) via
 the `DD-API-KEY` header. Set the Datadog Agent's `DD_API_KEY` to a HyperDX
-team ingestion API key.
+team ingestion API key, or to `INGESTION_API_KEY` where the API honors it
+(all-in-one and dev builds, or with `ENABLE_INGESTION_API_KEY=true`).
 
 ## Computing span metrics from ingested traces
 

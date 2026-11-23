@@ -1,5 +1,6 @@
 import router from 'next/router';
 import { SourceKind, TTraceSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   buildServiceMapErrorWhere,
@@ -68,6 +69,15 @@ describe('navigateToTraceSearch', () => {
     jest.clearAllMocks();
   });
 
+  // router.push accepts a UrlObject too; navigateToTraceSearch always passes a string.
+  function getPushedUrl(): string {
+    const callArg = jest.mocked(router.push).mock.calls[0]?.[0];
+    if (typeof callArg !== 'string') {
+      throw new Error('Expected router.push to be called with a string URL');
+    }
+    return callArg;
+  }
+
   it('should navigate to search page with correct query parameters', () => {
     const dateRange: [Date, Date] = [
       new Date('2024-01-15T10:00:00.000Z'),
@@ -82,7 +92,7 @@ describe('navigateToTraceSearch', () => {
 
     expect(router.push).toHaveBeenCalledTimes(1);
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     expect(callArg).toContain('/search?');
 
     // Parse query params
@@ -109,7 +119,7 @@ describe('navigateToTraceSearch', () => {
       where: 'status_code = 500',
     });
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     const url = new URL(callArg, 'http://localhost');
     const params = url.searchParams;
 
@@ -132,7 +142,7 @@ describe('navigateToTraceSearch', () => {
       where: complexWhere,
     });
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     const url = new URL(callArg, 'http://localhost');
     const params = url.searchParams;
 
@@ -153,7 +163,7 @@ describe('navigateToTraceSearch', () => {
       where: whereWithSpecialChars,
     });
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     const url = new URL(callArg, 'http://localhost');
     const params = url.searchParams;
 
@@ -649,7 +659,7 @@ describe('getNodeSize', () => {
 });
 
 describe('deriveDisplayMetrics', () => {
-  const source = { durationPrecision: 9 } as unknown as TTraceSource;
+  const source = fromPartial<TTraceSource>({ durationPrecision: 9 });
   const oneHour: [Date, Date] = [
     new Date('2024-01-01T00:00:00.000Z'),
     new Date('2024-01-01T01:00:00.000Z'),

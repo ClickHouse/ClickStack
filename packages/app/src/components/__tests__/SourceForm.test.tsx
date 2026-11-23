@@ -1,4 +1,5 @@
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import '@testing-library/jest-dom';
 
@@ -9,7 +10,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
       const mockOnCreate = jest.fn();
 
       // Mock sources data
-      const sources = [
+      const sources: Record<string, unknown>[] = [
         {
           id: 'trace-source-1',
           name: 'Trace Source 1',
@@ -18,7 +19,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
         },
       ];
 
-      const newLogSource: TSource = {
+      const newLogSource: TSource = fromPartial({
         id: 'new-log-source',
         name: 'New Log Source',
         kind: SourceKind.Log,
@@ -29,7 +30,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
         },
         timestampValueExpression: 'Timestamp',
         traceSourceId: 'trace-source-1', // This will trigger bidirectional linking
-      } as TSource;
+      });
 
       // This is the bidirectional linking logic from the component
       const correlationFields: Record<
@@ -41,22 +42,24 @@ describe('TableSourceForm Bidirectional Linking', () => {
         ],
       };
 
+      const newSourceFields: Record<string, unknown> = newLogSource;
+
       // Execute the bidirectional linking logic
       for (const [fieldName, targetConfigs] of Object.entries(
         correlationFields,
       )) {
-        const targetSourceId = (newLogSource as any)[fieldName];
+        const targetSourceId = newSourceFields[fieldName];
         if (targetSourceId) {
           for (const { targetKind, targetField } of targetConfigs) {
             const targetSource = sources.find(s => s.id === targetSourceId);
             if (targetSource && targetSource.kind === targetKind) {
               // Only update if the target field is empty
-              if (!(targetSource as any)[targetField]) {
+              if (!targetSource[targetField]) {
                 await mockUpdateSourceMutateAsync({
                   source: {
                     ...targetSource,
                     [targetField]: newLogSource.id,
-                  } as TSource,
+                  },
                 });
               }
             }
@@ -84,7 +87,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
       const mockOnCreate = jest.fn();
 
       // Mock sources data
-      const sources = [
+      const sources: Record<string, unknown>[] = [
         {
           id: 'log-source-1',
           name: 'Log Source 1',
@@ -93,7 +96,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
         },
       ];
 
-      const newTraceSource: TSource = {
+      const newTraceSource: TSource = fromPartial({
         id: 'new-trace-source',
         name: 'New Trace Source',
         kind: SourceKind.Trace,
@@ -104,7 +107,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
         },
         timestampValueExpression: 'Timestamp',
         logSourceId: 'log-source-1', // This will trigger bidirectional linking
-      } as TSource;
+      });
 
       // This is the bidirectional linking logic from the component for trace sources
       const correlationFields: Record<
@@ -116,22 +119,24 @@ describe('TableSourceForm Bidirectional Linking', () => {
         ],
       };
 
+      const newSourceFields: Record<string, unknown> = newTraceSource;
+
       // Execute the bidirectional linking logic
       for (const [fieldName, targetConfigs] of Object.entries(
         correlationFields,
       )) {
-        const targetSourceId = (newTraceSource as any)[fieldName];
+        const targetSourceId = newSourceFields[fieldName];
         if (targetSourceId) {
           for (const { targetKind, targetField } of targetConfigs) {
             const targetSource = sources.find(s => s.id === targetSourceId);
             if (targetSource && targetSource.kind === targetKind) {
               // Only update if the target field is empty
-              if (!(targetSource as any)[targetField]) {
+              if (!targetSource[targetField]) {
                 await mockUpdateSourceMutateAsync({
                   source: {
                     ...targetSource,
                     [targetField]: newTraceSource.id,
-                  } as TSource,
+                  },
                 });
               }
             }
@@ -159,7 +164,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
       const mockOnCreate = jest.fn();
 
       // Mock sources with existing correlations
-      const sources = [
+      const sources: Record<string, unknown>[] = [
         {
           id: 'log-source-1',
           name: 'Log Source 1',
@@ -168,7 +173,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
         },
       ];
 
-      const newTraceSource: TSource = {
+      const newTraceSource: TSource = fromPartial({
         id: 'new-trace-source',
         name: 'New Trace Source',
         kind: SourceKind.Trace,
@@ -179,7 +184,7 @@ describe('TableSourceForm Bidirectional Linking', () => {
         },
         timestampValueExpression: 'Timestamp',
         logSourceId: 'log-source-1', // This should NOT establish bidirectional link
-      } as TSource;
+      });
 
       // This is the bidirectional linking logic from the component for trace sources
       const correlationFields: Record<
@@ -191,22 +196,24 @@ describe('TableSourceForm Bidirectional Linking', () => {
         ],
       };
 
+      const newSourceFields: Record<string, unknown> = newTraceSource;
+
       // Execute the bidirectional linking logic
       for (const [fieldName, targetConfigs] of Object.entries(
         correlationFields,
       )) {
-        const targetSourceId = (newTraceSource as any)[fieldName];
+        const targetSourceId = newSourceFields[fieldName];
         if (targetSourceId) {
           for (const { targetKind, targetField } of targetConfigs) {
             const targetSource = sources.find(s => s.id === targetSourceId);
             if (targetSource && targetSource.kind === targetKind) {
               // Only update if the target field is empty
-              if (!(targetSource as any)[targetField]) {
+              if (!targetSource[targetField]) {
                 await mockUpdateSourceMutateAsync({
                   source: {
                     ...targetSource,
                     [targetField]: newTraceSource.id,
-                  } as TSource,
+                  },
                 });
               }
             }

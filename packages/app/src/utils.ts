@@ -6,6 +6,7 @@ import type { SetStateAction } from 'react';
 import TimestampNano from 'timestamp-nano';
 import {
   TableConnection,
+  tcFromSource,
   unquoteIdentifier,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
@@ -13,12 +14,14 @@ import {
   CATEGORICAL_PALETTE_TOKENS,
   ChartPaletteToken,
   ColorCondition,
+  isLogSource,
+  isMetricSource,
+  isTraceSource,
   NumericUnit,
   SourceKind,
   TMetricSource,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { SortingState } from '@tanstack/react-table';
 
 import { MetricsDataType, NumberFormat } from './types';
 
@@ -157,7 +160,7 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
   // State to store our value
   // Pass initial state function to useState so logic is only executed once
   const [storedValue, setStoredValue] = useState<T>(
-    getLocalStorageValue<T>(key) ?? initialValue,
+    () => getLocalStorageValue<T>(key) ?? initialValue,
   );
 
   // Create a unique ID for this hook instance
@@ -1463,6 +1466,41 @@ export function getAllMetricTables(source: TSource): TableConnection[] {
 }
 
 /**
+ * Tables of the enabled sources on a connection, including metric tables and
+ * materialized views, for SQL editor autocomplete.
+ */
+export function getTableConnectionsForConnection(
+  sources: TSource[] | undefined,
+  connectionId: string | undefined,
+): TableConnection[] {
+  if (!sources || !connectionId) return [];
+  return sources
+    .filter(s => s.connection === connectionId && !s.disabled)
+    .flatMap(source => {
+      const tables: TableConnection[] = getAllMetricTables(source);
+
+      if (!isMetricSource(source)) {
+        tables.push(tcFromSource(source));
+      }
+
+      if (
+        (isLogSource(source) || isTraceSource(source)) &&
+        source.materializedViews
+      ) {
+        tables.push(
+          ...source.materializedViews.map(mv => ({
+            databaseName: mv.databaseName,
+            tableName: mv.tableName,
+            connectionId: source.connection,
+          })),
+        );
+      }
+
+      return tables;
+    });
+}
+
+/**
  * Converts (T | T[]) to T[]. If undefined, empty array
  */
 export function toArray<T>(obj?: T | T[]): T[] {
@@ -1475,50 +1513,6 @@ export const stripTrailingSlash = (url: string | undefined | null): string => {
     throw new Error('URL must be a non-empty string');
   }
   return url.endsWith('/') ? url.slice(0, -1) : url;
-};
-
-/**
- * Converts the given SortingState into a SQL Order By string
- * Note, only the first element of the SortingState is used. Returns
- * undefined if the input is null or empty.
- *
- * Output format: "<column> <ASC|DESC>"
- * */
-export const sortingStateToOrderByString = (
-  sort: SortingState | null,
-): string | undefined => {
-  const firstSort = sort?.at(0);
-  return firstSort
-    ? `${firstSort.id} ${firstSort.desc ? 'DESC' : 'ASC'}`
-    : undefined;
-};
-
-/**
- * Converts the given SQL Order By string into a SortingState.
- *
- * Expects format matching the output of sortingStateToOrderByString
- * ("<column> <ASC|DESC>"). Returns undefined if the input is invalid.
- */
-export const orderByStringToSortingState = (
-  orderBy: string | undefined,
-): SortingState | undefined => {
-  if (!orderBy) {
-    return undefined;
-  }
-
-  const orderByParts = orderBy.split(' ');
-  const endsWithDirection = orderBy.toLowerCase().match(/ (asc|desc)$/i);
-
-  if (orderByParts.length !== 2 || !endsWithDirection) {
-    return undefined;
-  }
-
-  return [
-    {
-      id: orderByParts[0].trim(),
-      desc: orderByParts[1].trim().toUpperCase() === 'DESC',
-    },
-  ];
 };
 
 export const mapKeyBy = <T>(array: T[], key: keyof T) => {

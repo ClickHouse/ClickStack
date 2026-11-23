@@ -1,0 +1,311 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "extends": ["../../oxlint/base.jsonc"],
+  "plugins": ["eslint", "typescript", "react", "nextjs"],
+  // ESLint plugins oxlint has no native port for. The @eslint-react
+  // sub-plugins keep the names ESLint registered them under, so existing
+  // `eslint-disable` comments still match.
+  "jsPlugins": [
+    {
+      "name": "@eslint-react",
+      "specifier": "eslint-plugin-react-x"
+    },
+    {
+      "name": "@eslint-react/dom",
+      "specifier": "eslint-plugin-react-dom"
+    },
+    {
+      "name": "@eslint-react/web-api",
+      "specifier": "eslint-plugin-react-web-api"
+    },
+    {
+      "name": "@eslint-react/naming-convention",
+      "specifier": "eslint-plugin-react-naming-convention"
+    },
+    {
+      "name": "@eslint-react/rsc",
+      "specifier": "eslint-plugin-react-rsc"
+    },
+    // Only for no-location-assign-relative-destination; every other
+    // @next/next rule is native (`nextjs/`).
+    {
+      "name": "next-js",
+      "specifier": "@next/eslint-plugin-next"
+    },
+    {
+      "name": "react-hook-form",
+      "specifier": "../../oxlint/react-hook-form-plugin.mjs"
+    },
+    "eslint-plugin-simple-import-sort",
+    "eslint-plugin-playwright",
+    "eslint-plugin-storybook",
+    // ESLint's own no-restricted-syntax; oxlint has no native port.
+    { "name": "eslint-js", "specifier": "oxlint-plugin-eslint" }
+  ],
+  "globals": {
+    "React": "readonly",
+    "JSX": "readonly",
+    "NodeJS": "readonly",
+    "window": "readonly",
+    "document": "readonly",
+    "navigator": "readonly",
+    "console": "readonly",
+    "setTimeout": "readonly",
+    "clearTimeout": "readonly",
+    "setInterval": "readonly",
+    "clearInterval": "readonly",
+    "fetch": "readonly",
+    "process": "readonly",
+    "module": "readonly",
+    "require": "readonly",
+    "__dirname": "readonly",
+    "__filename": "readonly",
+    "exports": "readonly",
+    "Buffer": "readonly"
+  },
+  "ignorePatterns": [
+    "next-env.d.ts",
+    "playwright-report/**",
+    ".next/**",
+    ".next-e2e/**",
+    ".storybook/**",
+    "storybook-static/**",
+    "node_modules/**",
+    "out/**",
+    "build/**",
+    "coverage/**",
+    "dist/**",
+    "**/*.config.js",
+    "**/*.config.ts",
+    "**/*.config.cjs",
+    "**/*.config.mjs",
+    "public/__ENV.js",
+    "public/pyodide/**",
+    "global-setup.js",
+    "scripts/**"
+  ],
+  "rules": {
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-unsafe-type-assertion": "warn",
+    "no-unused-expressions": "warn",
+    "no-console": [
+      "error",
+      {
+        "allow": ["warn", "error"]
+      }
+    ],
+    "nextjs/google-font-display": "warn",
+    "nextjs/google-font-preconnect": "warn",
+    "nextjs/next-script-for-ga": "warn",
+    "nextjs/no-async-client-component": "warn",
+    "nextjs/no-before-interactive-script-outside-document": "warn",
+    "nextjs/no-css-tags": "warn",
+    "nextjs/no-head-element": "warn",
+    "nextjs/no-html-link-for-pages": "error",
+    "nextjs/no-img-element": "warn",
+    "next-js/no-location-assign-relative-destination": "warn",
+    "nextjs/no-page-custom-font": "warn",
+    "nextjs/no-styled-jsx-in-document": "warn",
+    "nextjs/no-sync-scripts": "error",
+    "nextjs/no-title-in-document-head": "warn",
+    "nextjs/no-typos": "warn",
+    "nextjs/no-unwanted-polyfillio": "warn",
+    "nextjs/inline-script-id": "error",
+    "nextjs/no-assign-module-variable": "error",
+    "nextjs/no-document-import-in-page": "error",
+    "nextjs/no-duplicate-head": "error",
+    "nextjs/no-head-import-in-document": "error",
+    "nextjs/no-script-component-in-head": "error",
+    "@eslint-react/jsx-key-before-spread": "error",
+    "@eslint-react/jsx-no-comment-textnodes": "warn",
+    "@eslint-react/no-access-state-in-setstate": "error",
+    "@eslint-react/no-array-index-key": "warn",
+    "@eslint-react/no-children-count": "warn",
+    "@eslint-react/no-children-for-each": "warn",
+    "@eslint-react/no-children-map": "warn",
+    "@eslint-react/no-children-only": "warn",
+    "@eslint-react/no-children-to-array": "warn",
+    "@eslint-react/no-clone-element": "error",
+    "@eslint-react/no-component-will-mount": "error",
+    "@eslint-react/no-component-will-receive-props": "error",
+    "@eslint-react/no-component-will-update": "error",
+    "@eslint-react/no-context-provider": "error",
+    "@eslint-react/no-create-ref": "error",
+    "@eslint-react/no-direct-mutation-state": "error",
+    "@eslint-react/no-forward-ref": "error",
+    "@eslint-react/no-missing-key": "error",
+    "@eslint-react/no-redundant-should-component-update": "error",
+    "@eslint-react/no-set-state-in-component-did-mount": "warn",
+    "@eslint-react/no-set-state-in-component-did-update": "warn",
+    "@eslint-react/no-set-state-in-component-will-update": "warn",
+    "@eslint-react/no-unsafe-component-will-mount": "warn",
+    "@eslint-react/no-unsafe-component-will-receive-props": "warn",
+    "@eslint-react/no-unsafe-component-will-update": "warn",
+    "@eslint-react/no-unnecessary-use-prefix": "error",
+    "@eslint-react/no-unused-class-component-members": "warn",
+    "@eslint-react/no-use-context": "error",
+    "@eslint-react/use-state": "error",
+    "@eslint-react/rsc/function-definition": "error",
+    "@eslint-react/dom/no-dangerously-set-innerhtml": "warn",
+    "@eslint-react/dom/no-dangerously-set-innerhtml-with-children": "error",
+    "@eslint-react/dom/no-find-dom-node": "error",
+    "@eslint-react/dom/no-flush-sync": "error",
+    "@eslint-react/dom/no-hydrate": "error",
+    "@eslint-react/dom/no-namespace": "error",
+    "@eslint-react/dom/no-render": "error",
+    "@eslint-react/dom/no-render-return-value": "error",
+    "@eslint-react/dom/no-script-url": "warn",
+    "@eslint-react/dom/no-unsafe-iframe-sandbox": "warn",
+    "@eslint-react/dom/no-use-form-state": "error",
+    "@eslint-react/dom/no-void-elements-with-children": "error",
+    "@eslint-react/web-api/no-leaked-event-listener": "warn",
+    "@eslint-react/web-api/no-leaked-interval": "warn",
+    "@eslint-react/web-api/no-leaked-resize-observer": "warn",
+    "@eslint-react/web-api/no-leaked-timeout": "warn",
+    "@eslint-react/naming-convention/context-name": "warn",
+    "@eslint-react/naming-convention/id-name": "error",
+    "@eslint-react/naming-convention/ref-name": "error",
+    "@eslint-react/no-unstable-default-props": "error",
+    "react-hook-form/no-use-watch": "error",
+    "simple-import-sort/exports": "error",
+    "simple-import-sort/imports": [
+      2,
+      {
+        "groups": [
+          ["^react$", "^next", "^[a-z]", "^@"],
+          ["^@/"],
+          ["^\\.\\.(?!/?$)", "^\\.\\./?$"],
+          ["^\\./(?=.*/)(?!/?$)", "^\\.(?!/?$)", "^\\./?$"],
+          ["^.+\\.s?css$"],
+          ["^\\u0000"]
+        ]
+      }
+    ],
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+    "react/static-components": "error",
+    "react/use-memo": "error",
+    "react/preserve-manual-memoization": "error",
+    "react/incompatible-library": "warn",
+    "react/immutability": "error",
+    "react/globals": "error",
+    "react/refs": "error",
+    "react/set-state-in-effect": "warn",
+    "react/error-boundaries": "error",
+    "react/purity": "error",
+    "react/set-state-in-render": "error",
+    "react/unsupported-syntax": "warn",
+    "eslint-js/no-restricted-syntax": [
+      "error",
+      {
+        "selector": "JSXElement[openingElement.name.name=\"Button\"] JSXAttribute[name.name=\"variant\"][value.value=\"light\"]",
+        "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for Button. See agent_docs/code_style.md"
+      },
+      {
+        "selector": "JSXElement[openingElement.name.name=\"Button\"] JSXAttribute[name.name=\"variant\"][value.value=\"filled\"]",
+        "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for Button. See agent_docs/code_style.md"
+      },
+      {
+        "selector": "JSXElement[openingElement.name.name=\"Button\"] JSXAttribute[name.name=\"variant\"][value.value=\"outline\"]",
+        "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for Button. See agent_docs/code_style.md"
+      },
+      {
+        "selector": "JSXElement[openingElement.name.name=\"Button\"] JSXAttribute[name.name=\"variant\"][value.value=\"default\"]",
+        "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for Button. See agent_docs/code_style.md"
+      },
+      {
+        "selector": "JSXElement[openingElement.name.name=\"ActionIcon\"] JSXAttribute[name.name=\"variant\"][value.value=\"light\"]",
+        "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for ActionIcon. See agent_docs/code_style.md"
+      },
+      {
+        "selector": "JSXElement[openingElement.name.name=\"ActionIcon\"] JSXAttribute[name.name=\"variant\"][value.value=\"filled\"]",
+        "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for ActionIcon. See agent_docs/code_style.md"
+      },
+      {
+        "selector": "JSXElement[openingElement.name.name=\"ActionIcon\"] JSXAttribute[name.name=\"variant\"][value.value=\"outline\"]",
+        "message": "Use variant=\"primary\", \"secondary\", or \"danger\" for ActionIcon. See agent_docs/code_style.md"
+      }
+    ]
+    // @eslint-react/no-leaked-conditional-rendering is not enabled: it needs
+    // type information, which oxlint does not give JS plugins.
+  },
+  "overrides": [
+    {
+      "files": ["**/*.{js,jsx}"],
+      "rules": {
+        "typescript/no-unsafe-type-assertion": "off"
+      }
+    },
+    {
+      "files": ["src/**/__tests__/**/*.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
+      "rules": {
+        "@eslint-react/no-unnecessary-use-prefix": "off"
+      }
+    },
+    {
+      "files": ["tests/e2e/**/*.{ts,js}"],
+      "rules": {
+        "playwright/expect-expect": [
+          "warn",
+          {
+            "assertFunctionNames": [
+              "expectFieldSuggestion",
+              "expectValueSuggestion",
+              "expectTileBlockedOn",
+              "expectTileLoaded"
+            ]
+          }
+        ],
+        "playwright/max-nested-describe": "warn",
+        "playwright/missing-playwright-await": "error",
+        "playwright/no-conditional-expect": "warn",
+        "playwright/no-conditional-in-test": "warn",
+        "playwright/no-element-handle": "warn",
+        "playwright/no-eval": "warn",
+        "playwright/no-focused-test": "error",
+        "playwright/no-force-option": "warn",
+        "playwright/no-nested-step": "warn",
+        "playwright/no-page-pause": "warn",
+        "playwright/no-skipped-test": "warn",
+        "playwright/no-standalone-expect": "error",
+        "playwright/no-unsafe-references": "error",
+        "playwright/no-unused-locators": "error",
+        "playwright/no-useless-await": "warn",
+        "playwright/no-useless-not": "warn",
+        "playwright/no-wait-for-navigation": "error",
+        "playwright/no-wait-for-selector": "warn",
+        "playwright/no-wait-for-timeout": "warn",
+        "playwright/prefer-web-first-assertions": "error",
+        "playwright/valid-describe-callback": "error",
+        "playwright/valid-expect": "error",
+        "playwright/valid-expect-in-promise": "error",
+        "playwright/valid-test-tags": "error",
+        "playwright/valid-title": "error",
+        "no-console": "off",
+        "no-empty": "off",
+        "no-empty-pattern": "off",
+        "nextjs/no-html-link-for-pages": "off",
+        "no-restricted-imports": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.stories.{ts,tsx,js,jsx,mjs,cjs}",
+        "**/*.story.{ts,tsx,js,jsx,mjs,cjs}"
+      ],
+      "rules": {
+        "storybook/await-interactions": "error",
+        "storybook/context-in-play-function": "error",
+        "storybook/default-exports": "error",
+        "storybook/hierarchy-separator": "warn",
+        "storybook/no-redundant-story-name": "warn",
+        "storybook/no-renderer-packages": "error",
+        "storybook/prefer-pascal-case": "warn",
+        "storybook/story-exports": "error",
+        "storybook/use-storybook-expect": "error",
+        "storybook/use-storybook-testing-library": "error",
+        "react/rules-of-hooks": "off"
+      }
+    }
+  ]
+}

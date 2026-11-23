@@ -138,6 +138,20 @@ export const hasMetricFormulas = (
   chartConfig: BuilderChartConfigWithOptDateRange,
 ): boolean => (chartConfig.formulas?.length ?? 0) > 0;
 
+/**
+ * Whether a metric config renders as one composed query (see
+ * renderMultiSeriesMetricChartConfig): more than one series, or any formula.
+ * Every output column of a composed query is an explicit alias of the outer
+ * SELECT.
+ */
+export const isComposedMetricChartConfig = (
+  chartConfig: BuilderChartConfigWithOptDateRange,
+): boolean =>
+  isMetricChartConfig(chartConfig) &&
+  Array.isArray(chartConfig.select) &&
+  (chartConfig.select.length > 1 ||
+    (chartConfig.select.length === 1 && hasMetricFormulas(chartConfig)));
+
 // TODO: apply this to all chart configs
 export const setChartSelectsAlias = (
   config: BuilderChartConfigWithOptDateRange,
@@ -186,7 +200,8 @@ const MULTI_SERIES_SORT_ALIAS_PREFIX = '__hdx_sort_';
  * early. Escaping happens only at SQL-emission time — collision dedup and
  * the meta column names consumers see keep the raw name.
  */
-const quotedColumnName = (name: string) => `"${name.replace(/"/g, '""')}"`;
+export const quotedColumnName = (name: string) =>
+  `"${name.replace(/"/g, '""')}"`;
 
 // Histogram translations bake the group-by dimensions into a single Array
 // column named GROUP_ALIAS instead of projecting them as individual columns
@@ -529,18 +544,78 @@ export const rewriteSqlFilterWithKvItems = (
   }
 };
 
+/**
+ * Whether a min/max should aggregate `valueExpression` as-is instead of casting
+ * it to Float64. The cast turns a Date/DateTime into 0 (its string form doesn't
+ * parse as a float), so skip it when the expression is a bare date/time column.
+ * Only tables and single-series number tiles, which can show a date value, skip
+ * it. Charts plot values on a numeric axis and drop non-numeric columns, and in
+ * a time-bucketed result a second date column would be mistaken for the bucket.
+ * Number tiles show the first numeric column, so with several series a date
+ * value would be skipped in favour of another series. Ratios and formulas do
+ * arithmetic on the value, which ClickHouse rejects for dates.
+ */
+async function isMinMaxOnDateTimeColumn(
+  aggFn: string,
+  valueExpression: string,
+  chartConfig: BuilderChartConfigWithOptDateRangeEx,
+  metadata: Metadata,
+): Promise<boolean> {
+  const { databaseName, tableName } = chartConfig.from;
+  const { displayType } = chartConfig;
+  const seriesCount = Array.isArray(chartConfig.select)
+    ? chartConfig.select.length
+    : 0;
+  if (
+    (aggFn !== 'min' && aggFn !== 'max') ||
+    (displayType != null &&
+      displayType !== DisplayType.Table &&
+      displayType !== DisplayType.Number) ||
+    (displayType === DisplayType.Number && seriesCount > 1) ||
+    chartConfig.seriesReturnType === 'ratio' ||
+    (chartConfig.formulas?.length ?? 0) > 0 ||
+    isUsingGranularity(chartConfig) ||
+    hasSubqueryCte(chartConfig.with) ||
+    !databaseName ||
+    !tableName
+  ) {
+    return false;
+  }
+  try {
+    const column = await metadata.getColumn({
+      databaseName,
+      tableName,
+      column: unquoteIdentifier(valueExpression.trim()),
+      connectionId: chartConfig.connection,
+    });
+    return (
+      column != null &&
+      classifyTimestampType(stripTypeWrappers(column.type)) != null
+    );
+  } catch (e) {
+    console.warn(
+      `Column ${valueExpression} lookup failed while choosing min/max cast`,
+      e,
+    );
+    return false;
+  }
+}
+
 const aggFnExpr = ({
   fn,
   expr,
   level,
   where,
   sampleWeightExpression,
+  keepValueType = false,
 }: {
   fn: AggregateFunction | AggregateFunctionWithCombinators;
   expr?: string;
   level?: number;
   where?: string;
   sampleWeightExpression?: string;
+  /** Aggregate `expr` as-is instead of casting it to Float64. */
+  keepValueType?: boolean;
 }) => {
   const isAny = fn === 'any';
   const isNone = fn === 'none';
@@ -549,7 +624,9 @@ const aggFnExpr = ({
   // Cast to float64 because the expr might not be a number
   const unsafeExpr = {
     UNSAFE_RAW_SQL:
-      isAny || isNone ? `${expr}` : `toFloat64OrDefault(toString(${expr}))`,
+      isAny || isNone || keepValueType
+        ? `${expr}`
+        : `toFloat64OrDefault(toString(${expr}))`,
   };
   const whereWithExtraNullCheck = `${where} AND ${unsafeExpr.UNSAFE_RAW_SQL} IS NOT NULL`;
 
@@ -810,6 +887,12 @@ async function renderSelectList(
           expr: select.valueExpression,
           where: whereClause.sql,
           sampleWeightExpression: chartConfig.sampleWeightExpression,
+          keepValueType: await isMinMaxOnDateTimeColumn(
+            select.aggFn,
+            select.valueExpression,
+            chartConfig,
+            metadata,
+          ),
         });
       }
 
@@ -1932,6 +2015,11 @@ const SUM_BUCKETED_COLUMNS = [
  * Names the CTE already defines are skipped to avoid a clash. Grouped-by ones
  * join the bucket GROUP BY instead of `any()`, so rows with different values
  * stay apart; AttributesHash is left alone because the sum windows use it.
+ *
+ * Bucketed has one row per series and time bucket, so it has no raw time
+ * column. `timeColumn` is the time column's name when the group-by references
+ * it (e.g. `toStartOfHour(TimeUnix)`), and empty otherwise; Bucketed then
+ * exposes its bucket start under that name.
  */
 async function getComputedMetricColumns(
   metadata: Metadata,
@@ -1942,6 +2030,7 @@ async function getComputedMetricColumns(
     reservedNames,
     bucketedColumns,
     groupBy,
+    timestampValueExpression,
   }: {
     databaseName: string;
     tableName: string;
@@ -1949,11 +2038,13 @@ async function getComputedMetricColumns(
     reservedNames: string[];
     bucketedColumns: string[];
     groupBy: BuilderChartConfigWithOptDateRangeEx['groupBy'];
+    timestampValueExpression: string | undefined;
   },
 ): Promise<{
   select: string;
   aggregate: string;
   groupBy: string;
+  timeColumn: string;
   project: (c: string) => { UNSAFE_RAW_SQL: string };
 }> {
   let columnNames: string[] = [];
@@ -2010,15 +2101,35 @@ async function getComputedMetricColumns(
   const extra = columnNames.filter(c => !bucketedColumns.includes(c));
   const project = (c: string) =>
     grouped.has(c) ? escape(c) : `any(${escape(c)}) AS ${escape(c)}`;
+  const rawTimeColumn = getFirstTimestampValueExpression(
+    timestampValueExpression || DEFAULT_METRIC_TABLE_TIME_COLUMN,
+  );
   return {
     select: columnNames.map(c => `, ${escape(c)}`).join(''),
     aggregate: extra.map(c => `, ${project(c)}`).join(''),
     groupBy: [...grouped].map(c => `, ${escape(c)}`).join(''),
+    timeColumn: referenced.has(rawTimeColumn) ? escape(rawTimeColumn) : '',
     // Names come from the fixed OTel lists, so they need no quoting.
     project: (c: string) => ({
       UNSAFE_RAW_SQL: grouped.has(c) ? c : `any(${c}) AS ${c}`,
     }),
   };
+}
+
+/**
+ * Exposes the gauge Bucketed query's bucket start under the time column's
+ * name, so a group-by such as `toStartOfHour(TimeUnix)` resolves while Bucketed
+ * keeps one row per series and bucket. The wrapper avoids an alias cycle: the
+ * bucket expression itself reads the raw time column.
+ */
+function withBucketStartAsTime(
+  timeColumn: string,
+  timeBucketCol: string,
+  bucketed: ChSql,
+): ChSql {
+  return timeColumn
+    ? chSql`SELECT *, ${timeBucketCol} AS ${timeColumn} FROM (${bucketed})`
+    : bucketed;
 }
 
 /**
@@ -2146,6 +2257,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'LastValue', timeBucketCol],
       bucketedColumns: GAUGE_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     return {
@@ -2163,7 +2275,10 @@ async function translateMetricChartConfig(
         },
         {
           name: 'Bucketed',
-          sql: chSql`
+          sql: withBucketStartAsTime(
+            computedColumns.timeColumn,
+            timeBucketCol,
+            chSql`
             SELECT
               ${timeExpr},
               AttributesHash,
@@ -2185,6 +2300,7 @@ async function translateMetricChartConfig(
             GROUP BY AttributesHash, ${timeBucketCol}${{ UNSAFE_RAW_SQL: computedColumns.groupBy }}
             ORDER BY AttributesHash, ${timeBucketCol}
           `,
+          ),
         },
       ],
       select: [
@@ -2258,6 +2374,7 @@ async function translateMetricChartConfig(
       reservedNames: ['AttributesHash', 'Rate', 'Sum', timeBucketCol],
       bucketedColumns: SUM_BUCKETED_COLUMNS,
       groupBy: chartConfig.groupBy,
+      timestampValueExpression: chartConfig.timestampValueExpression,
     });
 
     /**
@@ -2326,7 +2443,7 @@ async function translateMetricChartConfig(
               StartTimeUnix,
               Flags,
               AggregationTemporality,
-              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}
+              IsMonotonic${{ UNSAFE_RAW_SQL: computedColumns.select }}${{ UNSAFE_RAW_SQL: computedColumns.timeColumn ? `, \`${timeBucketCol}\` AS ${computedColumns.timeColumn}` : '' }}
             FROM (
               SELECT
                 ${timeExpr},
@@ -2367,8 +2484,12 @@ async function translateMetricChartConfig(
     // groups (mirrors v1's MAX_NUM_GROUPS). Ranking is done in a separate
     // CTE rather than a window, since ClickHouse can't reference a
     // window-aggregate inside another window's ORDER BY.
+    // Skipped for a group-by over the raw time column: ranking would keep only
+    // the 20 largest time buckets and silently drop the rest.
     const shouldApplyIncreaseGroupLimit =
-      _select.aggFn === 'increase' && isUsingGroupBy(chartConfig);
+      _select.aggFn === 'increase' &&
+      isUsingGroupBy(chartConfig) &&
+      !computedColumns.timeColumn;
 
     let outerWhere: string = '';
 
@@ -3378,13 +3499,7 @@ export async function renderChartConfig(
   // (and without formulas). A single-series chart with a formula (e.g.
   // `A * 100`) also takes the composed path — the formula projects over the
   // pivoted value columns, which only the composed shape produces.
-  if (
-    isMetricChartConfig(substitutedChartConfig) &&
-    Array.isArray(substitutedChartConfig.select) &&
-    (substitutedChartConfig.select.length > 1 ||
-      (substitutedChartConfig.select.length === 1 &&
-        hasMetricFormulas(substitutedChartConfig)))
-  ) {
+  if (isComposedMetricChartConfig(substitutedChartConfig)) {
     return renderMultiSeriesMetricChartConfig(
       substitutedChartConfig,
       metadata,

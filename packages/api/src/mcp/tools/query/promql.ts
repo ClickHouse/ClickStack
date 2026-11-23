@@ -49,8 +49,6 @@ const promqlSchema = z.object({
 // ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerPromql({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_promql',
     {
@@ -107,7 +105,7 @@ export function registerPromql({ context, registerTool }: ToolRegistrar) {
               granularity: input.granularity,
             });
 
-      return runConfigTile(teamId.toString(), tile, startDate, endDate);
+      return runConfigTile(context, tile, startDate, endDate);
     },
   );
 }
