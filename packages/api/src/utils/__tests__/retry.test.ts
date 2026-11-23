@@ -31,8 +31,7 @@ describe('withRetry', () => {
   });
 
   it('should not retry on 4xx client errors except 429', async () => {
-    const error400 = new Error('bad request') as any;
-    error400.status = 400;
+    const error400 = Object.assign(new Error('bad request'), { status: 400 });
 
     const fn400 = jest.fn().mockRejectedValue(error400);
 
@@ -43,8 +42,7 @@ describe('withRetry', () => {
   });
 
   it('should not retry on 3xx redirect responses', async () => {
-    const redirectError = new Error('redirect') as any;
-    redirectError.status = 302;
+    const redirectError = Object.assign(new Error('redirect'), { status: 302 });
 
     const fn = jest.fn().mockRejectedValue(redirectError);
 
@@ -55,8 +53,7 @@ describe('withRetry', () => {
   });
 
   it('should retry on 429 Too Many Requests', async () => {
-    const error429 = new Error('rate limited') as any;
-    error429.status = 429;
+    const error429 = Object.assign(new Error('rate limited'), { status: 429 });
 
     const fn429 = jest
       .fn()
@@ -72,8 +69,9 @@ describe('withRetry', () => {
   });
 
   it('should retry on 5xx server errors', async () => {
-    const error500 = new Error('internal server error') as any;
-    error500.status = 500;
+    const error500 = Object.assign(new Error('internal server error'), {
+      status: 500,
+    });
 
     const fn500 = jest
       .fn()
@@ -113,11 +111,11 @@ describe('withRetry', () => {
   });
 
   it('should strictly obey retryOnlyOnStatus if provided', async () => {
-    const error500 = new Error('internal server error') as any;
-    error500.status = 500;
+    const error500 = Object.assign(new Error('internal server error'), {
+      status: 500,
+    });
 
-    const error429 = new Error('rate limited') as any;
-    error429.status = 429;
+    const error429 = Object.assign(new Error('rate limited'), { status: 429 });
 
     const fn = jest
       .fn()

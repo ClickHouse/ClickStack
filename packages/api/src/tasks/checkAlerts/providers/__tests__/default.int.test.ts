@@ -1,4 +1,5 @@
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import { createAlert } from '@/controllers/alerts';
@@ -216,8 +217,8 @@ describe('DefaultAlertProvider', () => {
         expect(alertSource!.timestampValueExpression).toBe('timestamp');
 
         // Ensure it's a plain object, not a mongoose document
-        expect((alertSource as any).toObject).toBeUndefined(); // mongoose documents have toObject method
-        expect((alertSource as any).save).toBeUndefined(); // mongoose documents have save method
+        expect('toObject' in alertSource!).toBe(false); // mongoose documents have toObject method
+        expect('save' in alertSource!).toBe(false); // mongoose documents have save method
       }
     });
 
@@ -602,7 +603,7 @@ describe('DefaultAlertProvider', () => {
       // Create alert with invalid source
       await Alert.create({
         team: team._id,
-        source: 'UNSUPPORTED_SOURCE' as any,
+        source: fromAny('UNSUPPORTED_SOURCE'),
         threshold: 10,
         thresholdType: AlertThresholdType.ABOVE,
         interval: '5m',

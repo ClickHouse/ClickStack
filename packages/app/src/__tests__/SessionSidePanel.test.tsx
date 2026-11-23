@@ -1,6 +1,7 @@
 import { MantineProvider } from '@mantine/core';
 import { Notifications, notifications } from '@mantine/notifications';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import SessionSidePanel from '@/SessionSidePanel';
 import {
@@ -69,12 +70,8 @@ jest.mock('@mantine/notifications', () => {
   };
 });
 
-const mockedCopy = copyTextToClipboard as jest.MockedFunction<
-  typeof copyTextToClipboard
->;
-const mockedShow = notifications.show as jest.MockedFunction<
-  typeof notifications.show
->;
+const mockedCopy = jest.mocked(copyTextToClipboard);
+const mockedShow = jest.mocked(notifications.show);
 
 function setLocationHref(url: string) {
   const parsed = new URL(url, 'http://localhost');
@@ -86,19 +83,17 @@ function renderPanel() {
     <MantineProvider>
       <Notifications />
       <SessionSidePanel
-        traceSource={{ id: 'trace-source' } as any}
-        sessionSource={{ id: 'session-source' } as any}
+        traceSource={fromPartial({ id: 'trace-source' })}
+        sessionSource={fromPartial({ id: 'session-source' })}
         sessionId="sid-abc"
-        session={
-          {
-            sessionId: 'sid-abc',
-            userEmail: 'user@example.com',
-            minTimestamp: '2024-01-01T00:00:00Z',
-            maxTimestamp: '2024-01-01T01:00:00Z',
-            errorCount: '0',
-            sessionCount: '5',
-          } as any
-        }
+        session={fromPartial({
+          sessionId: 'sid-abc',
+          userEmail: 'user@example.com',
+          minTimestamp: '2024-01-01T00:00:00Z',
+          maxTimestamp: '2024-01-01T01:00:00Z',
+          errorCount: '0',
+          sessionCount: '5',
+        })}
         dateRange={[new Date(0), new Date(1)]}
         onClose={jest.fn()}
       />

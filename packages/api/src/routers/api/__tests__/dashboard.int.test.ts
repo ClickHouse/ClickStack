@@ -6,6 +6,7 @@ import {
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import { omit } from 'lodash';
 import mongoose, { Types } from 'mongoose';
 
@@ -100,7 +101,7 @@ describe('dashboard router', () => {
     const tileWithLegacyColor = makeTile();
     tileWithLegacyColor.config = {
       ...tileWithLegacyColor.config,
-      color: 'chart-1' as any,
+      color: fromAny('chart-1'),
     };
 
     const created = await agent
@@ -151,7 +152,10 @@ describe('dashboard router', () => {
   // PATCH, so a follow-up no-op PATCH would surface a regression.
   it('returns hue-named tokens on GET (list) for a Mongo-seeded legacy chart-N tile', async () => {
     const tileWithLegacy = makeTile();
-    (tileWithLegacy.config as any).color = 'chart-1';
+    tileWithLegacy.config = {
+      ...tileWithLegacy.config,
+      color: fromAny('chart-1'),
+    };
     const seeded = await Dashboard.create({
       name: 'Pre-rename Dashboard',
       team: team._id,

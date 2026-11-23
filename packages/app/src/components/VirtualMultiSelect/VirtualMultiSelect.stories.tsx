@@ -36,10 +36,10 @@ const meta: Meta<typeof VirtualMultiSelect> = {
 
   decorators: [
     (Story, ctx) => {
-      const [values, onChange] = useState<string[]>([]);
+      const [values, setValues] = useState<string[]>([]);
       return (
         <Box maw={128}>
-          <Story args={{ ...ctx.args, data, values, onChange }} />
+          <Story args={{ ...ctx.args, data, values, onChange: setValues }} />
         </Box>
       );
     },

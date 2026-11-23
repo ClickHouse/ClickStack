@@ -1,15 +1,16 @@
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { distinctSections } from '@/components/Sources/SourceForm/sourceFormUtils';
 
 const makeSource = (id: string, section?: string): TSource =>
-  ({
+  fromPartial({
     id,
     name: id,
     kind: SourceKind.Log,
     connection: 'conn-a',
     ...(section === undefined ? {} : { section }),
-  }) as unknown as TSource;
+  });
 
 describe('distinctSections', () => {
   it('returns [] for undefined sources', () => {

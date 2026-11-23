@@ -84,6 +84,41 @@ export class ChartExplorerPage {
     return titles.filter(t => t.length > 0);
   }
 
+  /** The sort button in the header of the results table column `name`. */
+  getTableSortButton(name: string) {
+    return this.page
+      .getByTestId('raw-log-table-sort-button')
+      .filter({ hasText: name });
+  }
+
+  /** Header sort arrows shown in the results table. */
+  getTableSortIndicators() {
+    return this.page.getByTestId('raw-log-table-sort-indicator');
+  }
+
+  /** The text of the chart editor's ORDER BY input, excluding its placeholder. */
+  async getOrderByText(): Promise<string> {
+    const content = this.page
+      .getByTestId('order-by-input')
+      .locator('.cm-content');
+    // CodeMirror renders the placeholder only when the editor is empty.
+    if ((await content.locator('.cm-placeholder').count()) > 0) return '';
+    return ((await content.textContent()) ?? '').trim();
+  }
+
+  /** Cell values of results table column `name`, top to bottom. */
+  async getTableColumnValues(name: string): Promise<string[]> {
+    const headers = (
+      await this.page.locator('table thead th').allTextContents()
+    ).map(h => h.trim());
+    const index = headers.findIndex(h => h === name);
+    if (index === -1) return [];
+    const cells = this.page.locator(
+      `table tbody tr[data-index] td:nth-child(${index + 1})`,
+    );
+    return (await cells.allTextContents()).map(c => c.trim());
+  }
+
   // Getters for assertions
 
   get form() {

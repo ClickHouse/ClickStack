@@ -1,4 +1,5 @@
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import {
@@ -17,7 +18,7 @@ const sourceId = new mongoose.Types.ObjectId().toString();
 function filter(
   overrides: Partial<ExternalDashboardFilterWithId> = {},
 ): ExternalDashboardFilterWithId {
-  return {
+  return fromAny({
     id: new mongoose.Types.ObjectId().toString(),
     type: 'QUERY_EXPRESSION',
     name: 'Service',
@@ -25,7 +26,7 @@ function filter(
     sourceId,
     whereLanguage: 'sql',
     ...overrides,
-  } as ExternalDashboardFilterWithId;
+  });
 }
 
 const variableFilter = filter({

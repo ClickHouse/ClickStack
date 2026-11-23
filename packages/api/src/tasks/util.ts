@@ -1,6 +1,11 @@
 import { set } from 'lodash';
 
+import { CODE_VERSION } from '@/config';
 import logger from '@/utils/logger';
+
+export const WEBHOOK_USER_AGENT = CODE_VERSION
+  ? `ClickStack-Alerts/${CODE_VERSION}`
+  : 'ClickStack-Alerts';
 
 // transfer keys of attributes with dot into nested object
 // ex: { 'a.b': 'c', 'd.e.f': 'g' } -> { a: { b: 'c' }, d: { e: { f: 'g' } } }

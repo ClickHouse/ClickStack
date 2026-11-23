@@ -802,7 +802,7 @@ describe('TableSearchMatchIndicator', () => {
     matchIndices: [],
     currentMatchIndex: 0,
     dedupedRows: mockDedupedRows,
-    tableRows: mockTableRows as any[],
+    tableRows: mockTableRows,
     getRowId,
     onMatchClick: jest.fn(),
   };
@@ -1064,7 +1064,7 @@ describe('TableSearchMatchIndicator', () => {
       const onMatchClick = jest.fn();
       const user = userEvent.setup();
 
-      const { container } = renderWithMantine(
+      renderWithMantine(
         <TableSearchMatchIndicator
           {...defaultProps}
           searchQuery="longtask"
@@ -1073,8 +1073,8 @@ describe('TableSearchMatchIndicator', () => {
         />,
       );
 
-      const indicators = container.querySelectorAll('[title*="Match"]');
-      await user.click(indicators[0] as HTMLElement);
+      const indicators = screen.getAllByTitle(/Match/);
+      await user.click(indicators[0]);
 
       expect(onMatchClick).toHaveBeenCalledWith(0);
     });
@@ -1083,7 +1083,7 @@ describe('TableSearchMatchIndicator', () => {
       const onMatchClick = jest.fn();
       const user = userEvent.setup();
 
-      const { container } = renderWithMantine(
+      renderWithMantine(
         <TableSearchMatchIndicator
           {...defaultProps}
           searchQuery="hdx-oss-dev-api"
@@ -1092,14 +1092,14 @@ describe('TableSearchMatchIndicator', () => {
         />,
       );
 
-      const indicators = container.querySelectorAll('[title*="Match"]');
+      const indicators = screen.getAllByTitle(/Match/);
 
       // Click second indicator
-      await user.click(indicators[1] as HTMLElement);
+      await user.click(indicators[1]);
       expect(onMatchClick).toHaveBeenCalledWith(1);
 
       // Click third indicator
-      await user.click(indicators[2] as HTMLElement);
+      await user.click(indicators[2]);
       expect(onMatchClick).toHaveBeenCalledWith(2);
     });
 
@@ -1174,7 +1174,7 @@ describe('TableSearchMatchIndicator', () => {
           searchQuery="test"
           matchIndices={largeMatchIndices}
           dedupedRows={largeDedupedRows}
-          tableRows={largeTableRows as any[]}
+          tableRows={largeTableRows}
         />,
       );
 
@@ -1282,7 +1282,7 @@ describe('TableSearchMatchIndicator', () => {
           searchQuery="middleware"
           matchIndices={[5, 6]}
           dedupedRows={extendedRows}
-          tableRows={extendedTableRows as any[]}
+          tableRows={extendedTableRows}
           currentMatchIndex={0}
         />,
       );

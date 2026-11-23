@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { Dashboard } from '@/dashboard';
 import useTileSelection from '@/hooks/useTileSelection';
@@ -16,7 +17,7 @@ function renderSelectionHook(dashboard: Dashboard) {
 
 describe('useTileSelection — handleGroupSelected', () => {
   it('deletes a source group that is emptied when all its tiles move to the new group', () => {
-    const dashboard: Dashboard = {
+    const dashboard: Dashboard = fromPartial({
       name: 'Test',
       containers: [
         {
@@ -46,7 +47,7 @@ describe('useTileSelection — handleGroupSelected', () => {
           h: 4,
         },
       ],
-    } as Dashboard;
+    });
 
     const { hook, getDashboard } = renderSelectionHook(dashboard);
     act(() => {
@@ -63,7 +64,7 @@ describe('useTileSelection — handleGroupSelected', () => {
   });
 
   it('keeps a source group that still has remaining tiles', () => {
-    const dashboard: Dashboard = {
+    const dashboard: Dashboard = fromPartial({
       name: 'Test',
       containers: [
         {
@@ -93,7 +94,7 @@ describe('useTileSelection — handleGroupSelected', () => {
           h: 4,
         },
       ],
-    } as Dashboard;
+    });
 
     const { hook, getDashboard } = renderSelectionHook(dashboard);
     act(() => {
@@ -110,7 +111,7 @@ describe('useTileSelection — handleGroupSelected', () => {
   });
 
   it('does not delete unrelated empty containers', () => {
-    const dashboard: Dashboard = {
+    const dashboard: Dashboard = fromPartial({
       name: 'Test',
       containers: [
         {
@@ -129,7 +130,7 @@ describe('useTileSelection — handleGroupSelected', () => {
           h: 4,
         },
       ],
-    } as Dashboard;
+    });
 
     const { hook, getDashboard } = renderSelectionHook(dashboard);
     act(() => {

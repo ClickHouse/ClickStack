@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import { getServer, randomMongoId } from '@/fixtures';
@@ -54,11 +55,13 @@ describe('unaddressableTileAlertIds', () => {
     // The failure this guards is MaxTimeMSExpired on a read sequenced last on
     // a shared budget. Reproducing that needs a slow collection, so the read
     // itself is made to reject instead.
-    const find = jest.spyOn(Dashboard, 'find').mockReturnValue({
-      maxTimeMS: () => ({
-        lean: () => Promise.reject(new Error('MaxTimeMSExpired')),
+    const find = jest.spyOn(Dashboard, 'find').mockReturnValue(
+      fromAny({
+        maxTimeMS: () => ({
+          lean: () => Promise.reject(new Error('MaxTimeMSExpired')),
+        }),
       }),
-    } as never);
+    );
 
     try {
       const withheld = await unaddressableTileAlertIds({
@@ -115,9 +118,11 @@ describe('unaddressableTileAlertIds', () => {
     const alerts = [alert(dashboard._id, 'tile-1')];
 
     // Never settles, which is the shape of a wait maxTimeMS cannot see.
-    const find = jest.spyOn(Dashboard, 'find').mockReturnValue({
-      maxTimeMS: () => ({ lean: () => new Promise(() => {}) }),
-    } as never);
+    const find = jest.spyOn(Dashboard, 'find').mockReturnValue(
+      fromAny({
+        maxTimeMS: () => ({ lean: () => new Promise(() => {}) }),
+      }),
+    );
 
     try {
       const withheld = await unaddressableTileAlertIds({
@@ -144,14 +149,16 @@ describe('unaddressableTileAlertIds', () => {
     });
     const alerts = [alert(dashboard._id, 'tile-1')];
 
-    const find = jest.spyOn(Dashboard, 'find').mockReturnValue({
-      maxTimeMS: () => ({
-        lean: () =>
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('MongoNetworkError')), 100),
-          ),
+    const find = jest.spyOn(Dashboard, 'find').mockReturnValue(
+      fromAny({
+        maxTimeMS: () => ({
+          lean: () =>
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('MongoNetworkError')), 100),
+            ),
+        }),
       }),
-    } as never);
+    );
     // getCounter memoizes by name, so this is the instrument the module under
     // test captured at import — no options, or it would warn about a mismatch.
     const add = jest.spyOn(

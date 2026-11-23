@@ -10,6 +10,7 @@ import {
   UseQueryResult,
 } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import useOffsetPaginatedQuery from '@/hooks/useOffsetPaginatedQuery';
 
@@ -81,7 +82,7 @@ import { queryPromqlChartConfig } from '@/utils/promqlChartQuery';
 const createMockChartConfig = (
   overrides: Partial<ChartConfigWithDateRange> = {},
 ): ChartConfigWithDateRange =>
-  ({
+  fromPartial({
     timestampValueExpression: 'Timestamp',
     connection: 'foo',
     from: {
@@ -98,7 +99,7 @@ const createMockChartConfig = (
     },
     orderBy: 'Timestamp DESC',
     ...overrides,
-  }) as ChartConfigWithDateRange;
+  });
 
 describe('useOffsetPaginatedQuery', () => {
   // Increase timeout for complex async operations
@@ -143,17 +144,11 @@ describe('useOffsetPaginatedQuery', () => {
     };
 
     // Reset and set up the mock to return a fresh client each time
-    (
-      getClickhouseClient as jest.MockedFunction<typeof getClickhouseClient>
-    ).mockReset();
-    (
-      getClickhouseClient as jest.MockedFunction<typeof getClickhouseClient>
-    ).mockReturnValue(mockClickhouseClient);
+    jest.mocked(getClickhouseClient).mockReset();
+    jest.mocked(getClickhouseClient).mockReturnValue(mockClickhouseClient);
 
     // Mock renderChartConfig
-    (
-      renderChartConfig as jest.MockedFunction<typeof renderChartConfig>
-    ).mockResolvedValue({
+    jest.mocked(renderChartConfig).mockResolvedValue({
       sql: 'SELECT * FROM traces',
       params: {},
     });
@@ -162,7 +157,9 @@ describe('useOffsetPaginatedQuery', () => {
     mockMetadata = {
       getSetting: jest.fn().mockResolvedValue(null),
     };
-    jest.mocked(useMetadataWithSettings).mockReturnValue(mockMetadata as any);
+    jest
+      .mocked(useMetadataWithSettings)
+      .mockReturnValue(fromPartial(mockMetadata));
   });
 
   describe('Time Window Generation', () => {
