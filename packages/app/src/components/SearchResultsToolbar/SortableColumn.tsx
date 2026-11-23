@@ -1,16 +1,20 @@
+import { useRef, useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ActionIcon, Box, Group, Text } from '@mantine/core';
-import { IconGripVertical, IconX } from '@tabler/icons-react';
+import { ActionIcon, Box, Group, Text, TextInput } from '@mantine/core';
+import { IconGripVertical, IconPencil, IconX } from '@tabler/icons-react';
 
 export function SortableColumn({
   id,
   label,
   onRemove,
+  onEdit,
 }: {
   id: string;
   label: string;
   onRemove: () => void;
+  /** Called with the trimmed expression when an edit changes the column. */
+  onEdit?: (next: string) => void;
 }) {
   const {
     attributes,
@@ -20,6 +24,28 @@ export function SortableColumn({
     transition,
     isDragging,
   } = useSortable({ id });
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(label);
+  // Enter and Escape unmount the input, which can fire blur. Without this the
+  // edit would be committed (or discarded) a second time.
+  const finishedRef = useRef(false);
+
+  const startEdit = () => {
+    if (!onEdit) return;
+    finishedRef.current = false;
+    setDraft(label);
+    setEditing(true);
+  };
+
+  const finishEdit = (commit: boolean) => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    setEditing(false);
+    const next = draft.trim();
+    // An empty value reverts, so a column is not removed by accident.
+    if (commit && next && next !== label) onEdit?.(next);
+  };
 
   return (
     <Box
@@ -52,14 +78,58 @@ export function SortableColumn({
         >
           <IconGripVertical size={14} />
         </ActionIcon>
-        <Text
-          size="xs"
-          ff="monospace"
-          lh={1.5}
-          style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}
-        >
-          {label}
-        </Text>
+        {editing ? (
+          <TextInput
+            size="xs"
+            aria-label={`Edit ${label}`}
+            value={draft}
+            onChange={e => setDraft(e.currentTarget.value)}
+            onBlur={() => finishEdit(true)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                // The search form is an ancestor, so Enter would submit it.
+                e.preventDefault();
+                e.stopPropagation();
+                finishEdit(true);
+              } else if (e.key === 'Escape') {
+                e.stopPropagation();
+                finishEdit(false);
+              }
+            }}
+            autoFocus
+            ff="monospace"
+            style={{ flex: 1, minWidth: 0 }}
+            // Lets ClausePopover pass Escape through instead of discarding.
+            data-handles-escape
+            data-testid="search-columns-edit-input"
+          />
+        ) : (
+          <Text
+            size="xs"
+            ff="monospace"
+            lh={1.5}
+            onClick={startEdit}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflowWrap: 'anywhere',
+              cursor: onEdit ? 'text' : undefined,
+            }}
+          >
+            {label}
+          </Text>
+        )}
+        {onEdit && !editing && (
+          <ActionIcon
+            variant="subtle"
+            size="xs"
+            onClick={startEdit}
+            aria-label={`Edit ${label}`}
+            style={{ flexShrink: 0 }}
+          >
+            <IconPencil size={14} />
+          </ActionIcon>
+        )}
         <ActionIcon
           variant="subtle"
           size="xs"

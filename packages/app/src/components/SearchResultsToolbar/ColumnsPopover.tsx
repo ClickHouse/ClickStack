@@ -64,7 +64,7 @@ export function ColumnsPopover({
   const [draft, setDraft] = useState(value);
   const [search, setSearch] = useState('');
   // Autocomplete writes the chosen option back into the input after
-  // onOptionSubmit. Ignore that write so a picked map key keeps its alias.
+  // onOptionSubmit. Ignore that write so the field clears.
   const ignoreNextChangeRef = useRef(false);
 
   // An empty stored SELECT means "use the source default". An empty draft does
@@ -92,6 +92,10 @@ export function ColumnsPopover({
 
   const removeColumn = (index: number) => {
     setDraft(items.filter((_, i) => i !== index).join(', '));
+  };
+
+  const updateColumn = (index: number, next: string) => {
+    setDraft(items.map((item, i) => (i === index ? next : item)).join(', '));
   };
 
   const columnIds = items.map(columnId);
@@ -161,6 +165,7 @@ export function ColumnsPopover({
                         id={columnId(item, index)}
                         label={item}
                         onRemove={() => removeColumn(index)}
+                        onEdit={next => updateColumn(index, next)}
                       />
                     ))}
                   </Stack>
@@ -182,7 +187,7 @@ export function ColumnsPopover({
               }}
               onOptionSubmit={option => {
                 ignoreNextChangeRef.current = true;
-                setSearch(withMapKeyAlias(option, items, knownColumns));
+                addColumn(option);
               }}
               data={options}
               limit={50}
@@ -201,9 +206,9 @@ export function ColumnsPopover({
             </Button>
           </Group>
           <Text size="xs" c="dimmed">
-            Select a column, or type an expression such as{' '}
-            <Code>upper(Body) as message</Code> and add it to the list. Then
-            click Apply.
+            Select a column to add it, or type an expression such as{' '}
+            <Code>upper(Body) as message</Code> and click Add. Click a column to
+            edit it. Then click Apply.
           </Text>
         </Stack>
       )}

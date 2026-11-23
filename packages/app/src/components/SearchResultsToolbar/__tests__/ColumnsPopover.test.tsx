@@ -161,7 +161,7 @@ describe('ColumnsPopover', () => {
     expect(input).toHaveValue("LogAttributes['region']");
   });
 
-  it('shows a map key alias in the input before adding it', async () => {
+  it('adds a picked map key with its alias and clears the input', async () => {
     renderPopover({
       fieldOptions: ["LogAttributes['ads.consent_given']"],
     });
@@ -173,10 +173,6 @@ describe('ColumnsPopover', () => {
     fireEvent.click(
       await screen.findByText("LogAttributes['ads.consent_given']"),
     );
-    expect(input).toHaveValue(
-      `LogAttributes['ads.consent_given'] AS "ads.consent_given"`,
-    );
-    fireEvent.click(screen.getByTestId('search-columns-add-button'));
     expect(input).toHaveValue('');
     expect(
       screen.getByText(
@@ -185,17 +181,12 @@ describe('ColumnsPopover', () => {
     ).toBeInTheDocument();
   });
 
-  it('fills the input from a suggestion and adds only on Add', async () => {
+  it('adds a column as soon as a suggestion is picked', async () => {
     const { onApply } = renderPopover();
     openPopover();
     const input = await screen.findByPlaceholderText('Search columns');
     fireEvent.change(input, { target: { value: 'Severity' } });
     fireEvent.click(await screen.findByText('SeverityText'));
-    expect(input).toHaveValue('SeverityText');
-    expect(
-      screen.queryByLabelText('Remove SeverityText'),
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('search-columns-add-button'));
     expect(input).toHaveValue('');
     expect(screen.getByLabelText('Remove SeverityText')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('search-columns-button-apply'));
@@ -219,6 +210,85 @@ describe('ColumnsPopover', () => {
       'Timestamp, Body, upper(Body) as message',
       [],
     );
+  });
+
+  describe('editing a column in place', () => {
+    const tz = `LogAttributes['tz'] AS "tz"`;
+    const openWithTz = async () => {
+      const rendered = renderPopover({
+        value: `Timestamp, ${tz}`,
+        defaultValue: 'Timestamp',
+      });
+      openPopover();
+      fireEvent.click(await screen.findByLabelText(`Edit ${tz}`));
+      return {
+        ...rendered,
+        input: screen.getByTestId('search-columns-edit-input'),
+      };
+    };
+
+    it('renames an alias on Enter and reports the old item as removed', async () => {
+      const { onApply, input } = await openWithTz();
+      expect(input).toHaveValue(tz);
+      fireEvent.change(input, {
+        target: { value: `LogAttributes['tz'] AS "timezone"` },
+      });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(
+        screen.queryByTestId('search-columns-edit-input'),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByLabelText(`Remove LogAttributes['tz'] AS "timezone"`),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('search-columns-button-apply'));
+      expect(onApply).toHaveBeenCalledWith(
+        `Timestamp, LogAttributes['tz'] AS "timezone"`,
+        [tz],
+      );
+    });
+
+    it('commits on blur', async () => {
+      const { input } = await openWithTz();
+      fireEvent.change(input, {
+        target: { value: `LogAttributes['tz'] AS "zone"` },
+      });
+      fireEvent.blur(input);
+      expect(
+        screen.getByLabelText(`Remove LogAttributes['tz'] AS "zone"`),
+      ).toBeInTheDocument();
+    });
+
+    it('starts editing when the column text is clicked', async () => {
+      renderPopover();
+      openPopover();
+      fireEvent.click(await screen.findByText('Body'));
+      expect(screen.getByTestId('search-columns-edit-input')).toHaveValue(
+        'Body',
+      );
+    });
+
+    it('cancels on Escape without closing the popover or asking to discard', async () => {
+      const { input } = await openWithTz();
+      fireEvent.change(input, {
+        target: { value: `LogAttributes['tz'] AS "timezone"` },
+      });
+      fireEvent.keyDown(input, { key: 'Escape' });
+      expect(screen.getByLabelText(`Remove ${tz}`)).toBeInTheDocument();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(
+        screen.getByTestId('search-columns-button-popover'),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('search-columns-edit-input'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('reverts an empty value instead of removing the column', async () => {
+      const { input } = await openWithTz();
+      fireEvent.change(input, { target: { value: '   ' } });
+      fireEvent.blur(input);
+      expect(screen.getByLabelText(`Remove ${tz}`)).toBeInTheDocument();
+    });
   });
 
   it('resets a changed column list to the source default', async () => {
