@@ -12,12 +12,9 @@ import {
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
 
-import {
-  getConnectionById,
-  getConnectionsByTeam,
-} from '@/controllers/connection';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
-import type { ToolRegistrar } from '@/mcp/tools/types';
+import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
+import { getMcpConnection, getMcpConnections } from '@/mcp/utils/connections';
 import { PROMQL_SOURCE_USAGE } from '@/mcp/utils/promql';
 import { getVisibleMcpSources } from '@/mcp/utils/sources';
 import { runWithTimeout } from '@/mcp/utils/timeout';
@@ -75,10 +72,10 @@ class PreviewClickhouseClient extends ClickhouseClient {
  * carries metricTables + the discovery nextSteps).
  */
 async function attachMetricNamePreviews({
-  teamId,
+  context,
   entries,
 }: {
-  teamId: string;
+  context: McpContext;
   entries: Array<{
     summary: Record<string, unknown>;
     databaseName: string;
@@ -100,7 +97,9 @@ async function attachMetricNamePreviews({
   >();
   await Promise.all(
     connectionIds.map(async connectionId => {
-      const connection = await getConnectionById(teamId, connectionId, true);
+      const connection = await getMcpConnection(context, connectionId, {
+        selectPassword: true,
+      });
       if (!connection) return;
       const clickhouseClient = new PreviewClickhouseClient({
         host: connection.host,
@@ -227,7 +226,7 @@ export function registerListSources({
     async () => {
       const [visibleSources, connections] = await Promise.all([
         getVisibleMcpSources(context),
-        getConnectionsByTeam(teamId.toString()),
+        getMcpConnections(context),
       ]);
 
       const metricPreviewEntries: Array<{
@@ -331,7 +330,7 @@ export function registerListSources({
       // Best-effort: never let preview sampling fail or stall the catalog.
       try {
         await attachMetricNamePreviews({
-          teamId: teamId.toString(),
+          context,
           entries: metricPreviewEntries,
         });
       } catch (e) {

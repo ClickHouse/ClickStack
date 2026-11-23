@@ -1,8 +1,8 @@
 import type { ClickhouseClientOptions } from '@hyperdx/common-utils/dist/clickhouse';
 
 import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
 import type { McpContext } from '@/mcp/tools/types';
+import { getMcpConnection } from '@/mcp/utils/connections';
 
 export class McpConnectionNotFoundError extends Error {
   constructor(readonly connectionId: string) {
@@ -22,11 +22,9 @@ export async function getMcpClickhouseClient(
   connectionId: string,
   options?: Pick<ClickhouseClientOptions, 'requestTimeout'>,
 ): Promise<ClickhouseClient> {
-  const connection = await getConnectionById(
-    context.teamId,
-    connectionId,
-    true,
-  );
+  const connection = await getMcpConnection(context, connectionId, {
+    selectPassword: true,
+  });
   if (!connection) {
     throw new McpConnectionNotFoundError(connectionId);
   }
