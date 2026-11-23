@@ -88,7 +88,13 @@ describe('useAvailableMetricNames', () => {
   });
 
   it('names the source so its query settings apply', () => {
-    mockQuery({ data: undefined });
+    mockUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
     render();
     expect(mockUseGetKeyValues).toHaveBeenCalledWith(
       expect.objectContaining({
