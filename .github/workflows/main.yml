@@ -79,10 +79,12 @@ jobs:
         id: quality
         if: always()
         continue-on-error: true
-        timeout-minutes: 2
-        run:
-          node scripts/ci/quality-report.mjs --comment
-          "$RUNNER_TEMP/quality-comment.md" >> "$GITHUB_STEP_SUMMARY"
+        timeout-minutes: 3
+        # `nx affected` above builds dist only for what the PR touches, and
+        # type-aware lint counts change when common-utils is unbuilt.
+        run: |
+          npx nx run @hyperdx/common-utils:ci:build
+          node scripts/ci/quality-report.mjs --comment "$RUNNER_TEMP/quality-comment.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Comment PR with code quality report
         # Skip fork and Dependabot PRs: their GITHUB_TOKEN is read-only
         if:

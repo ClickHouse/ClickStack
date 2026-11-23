@@ -140,23 +140,45 @@ export function collectLargeFiles(root) {
   );
 }
 
-/** A baselined file that is gone, or now under the limit, and was at least this long. */
-function movedFrom(lines, current, baseline) {
-  return Object.keys(baseline).find(
-    old => !(old in current) && baseline[old] >= lines,
+/**
+ * Pairs new oversized files with baselined files deleted from disk. A source
+ * covers at most its own line count, so a move or a split passes but new code
+ * cannot hide behind an unrelated deletion. A file that only shrank is not a
+ * source: its lines are still in the tree.
+ * @returns {Map<string, string>} new path -> baselined path it came from
+ */
+function findMoves(current, baseline, exists) {
+  const left = new Map(
+    Object.entries(baseline).filter(
+      ([file]) => !(file in current) && !exists(file),
+    ),
   );
+  const moves = new Map();
+  for (const [file, lines] of Object.entries(current)) {
+    if (file in baseline) continue;
+    const sameName = old => path.basename(old) === path.basename(file);
+    const source = [...left.keys()]
+      .sort((x, y) => sameName(y) - sameName(x))
+      .find(old => left.get(old) >= lines);
+    if (source) {
+      moves.set(file, source);
+      left.set(source, left.get(source) - lines);
+    }
+  }
+  return moves;
 }
 
 /**
  * A file already over the limit may not grow, and no other file may cross it.
  * @returns {{failed: boolean, messages: string[]}}
  */
-export function compareSizes(current, baseline) {
+export function compareSizes(current, baseline, exists = () => false) {
   const messages = [];
   let failed = false;
+  const moves = findMoves(current, baseline, exists);
   for (const [file, lines] of Object.entries(current)) {
     const max = baseline[file];
-    const source = max === undefined && movedFrom(lines, current, baseline);
+    const source = moves.get(file);
     if (source) {
       failed = true;
       messages.push(
@@ -190,12 +212,16 @@ export function compareSizes(current, baseline) {
  * accept a file that grew.
  * @returns {{next: Record<string, number>, refused: string[]}}
  */
-export function nextSizeBaseline(current, baseline, allowGrowth = false) {
+export function nextSizeBaseline(
+  current,
+  baseline,
+  { allowGrowth = false, exists = () => false } = {},
+) {
   const next = {};
   const refused = [];
+  const moves = findMoves(current, baseline, exists);
   for (const [file, lines] of Object.entries(current)) {
-    const max =
-      baseline[file] ?? baseline[movedFrom(lines, current, baseline) ?? ''];
+    const max = baseline[file] ?? (moves.has(file) ? lines : undefined);
     if (allowGrowth || lines <= max) {
       next[file] = lines;
     } else {
@@ -262,11 +288,13 @@ export function compare(current, baseline) {
   return { failed, improved, messages };
 }
 
-function main() {
-  const root = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '../..',
-  );
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../..',
+);
+
+export function main(root = REPO_ROOT, argv = process.argv) {
+  const exists = file => existsSync(path.join(root, file));
   const baselinePath = path.join(root, 'scripts/ci/ratchet-baseline.json');
   const sizePath = path.join(root, 'scripts/ci/file-size-baseline.json');
   const current = collectCounts(root);
@@ -276,12 +304,11 @@ function main() {
     ? JSON.parse(readFileSync(sizePath, 'utf8'))
     : {};
 
-  if (process.argv.includes('--update')) {
-    const { next, refused } = nextSizeBaseline(
-      sizes,
-      sizeBaseline,
-      process.argv.includes('--allow-growth'),
-    );
+  if (argv.includes('--update')) {
+    const { next, refused } = nextSizeBaseline(sizes, sizeBaseline, {
+      allowGrowth: argv.includes('--allow-growth'),
+      exists,
+    });
     writeFileSync(baselinePath, JSON.stringify(current, null, 2) + '\n');
     writeFileSync(sizePath, JSON.stringify(next, null, 2) + '\n');
     console.log(
@@ -299,7 +326,7 @@ function main() {
     current,
     JSON.parse(readFileSync(baselinePath, 'utf8')),
   );
-  const size = compareSizes(sizes, sizeBaseline);
+  const size = compareSizes(sizes, sizeBaseline, exists);
   const failed = counts.failed || size.failed;
   const messages = [...counts.messages, ...size.messages];
   for (const message of messages) {

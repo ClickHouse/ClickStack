@@ -16,6 +16,7 @@ import {
   compare,
   compareSizes,
   discoverPackages,
+  main,
   nextSizeBaseline,
 } from '../ratchet.mjs';
 
@@ -216,6 +217,29 @@ test('a moved file points at ratchet:update instead of asking for a split', () =
   assert.match(messages[0], /moved or split from a\.ts/);
 });
 
+test('a file that shrank but still exists does not license a new large file', () => {
+  const baseline = { 'shrunk.ts': 1600 };
+  const current = { 'new.ts': 1500 };
+  const exists = file => file === 'shrunk.ts';
+  assert.match(
+    compareSizes(current, baseline, exists).messages[0],
+    /new\.ts: 1500 lines > 300/,
+  );
+  assert.deepEqual(nextSizeBaseline(current, baseline, { exists }), {
+    next: {},
+    refused: ['new.ts'],
+  });
+});
+
+test('a deleted file covers new files only up to its own line count', () => {
+  const baseline = { 'old.ts': 1000 };
+  const current = { 'part1.ts': 600, 'part2.ts': 400, 'extra.ts': 400 };
+  assert.deepEqual(nextSizeBaseline(current, baseline), {
+    next: { 'part1.ts': 600, 'part2.ts': 400 },
+    refused: ['extra.ts'],
+  });
+});
+
 test('update records shrinkage and moves but refuses growth unless allowed', () => {
   const baseline = { 'a.ts': 500, 'b.ts': 500, 'old.ts': 900 };
   const current = { 'a.ts': 400, 'b.ts': 600, 'moved.ts': 900, 'new.ts': 950 };
@@ -223,8 +247,27 @@ test('update records shrinkage and moves but refuses growth unless allowed', () 
     next: { 'a.ts': 400, 'b.ts': 500, 'moved.ts': 900 },
     refused: ['b.ts', 'new.ts'],
   });
-  assert.deepEqual(nextSizeBaseline(current, baseline, true), {
+  assert.deepEqual(nextSizeBaseline(current, baseline, { allowGrowth: true }), {
     next: current,
     refused: [],
   });
+});
+
+test('--update exits 1 and leaves a grown file out unless --allow-growth', () => {
+  const root = fixture({ app: { 'src/big.ts': 'x;\n'.repeat(400) } });
+  mkdirSync(path.join(root, 'scripts/ci'), { recursive: true });
+  const sizePath = path.join(root, 'scripts/ci/file-size-baseline.json');
+  const read = file => JSON.parse(readFileSync(file, 'utf8'));
+
+  assert.equal(main(root, ['--update']), 1);
+  assert.deepEqual(read(sizePath), {});
+  assert.deepEqual(
+    read(path.join(root, 'scripts/ci/ratchet-baseline.json')),
+    collectCounts(root),
+  );
+  assert.equal(main(root, []), 1);
+
+  assert.equal(main(root, ['--update', '--allow-growth']), 0);
+  assert.deepEqual(read(sizePath), { 'packages/app/src/big.ts': 400 });
+  assert.equal(main(root, []), 0);
 });
