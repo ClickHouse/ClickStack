@@ -17,6 +17,7 @@ test('lint section totals each rule across packages, most common first', () => {
   assert.match(out, /\| `complexity` \| 2 \| 4 \| 6 \|/);
   assert.match(out, /\| `max-depth` \| 3 \| 0 \| 3 \|/);
   assert.ok(out.indexOf('complexity') < out.indexOf('max-depth'));
+  assert.match(out, /api 5\/5, app 4\/9 \(count\/limit\)/);
   assert.match(out, /\| \*\*Total\*\* \| 5 \| 4 \|/);
   assert.match(out, /\| \*\*Limit\*\* \| 5 \| 9 \|/);
 });

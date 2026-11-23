@@ -11,6 +11,9 @@ jobs:
   lint:
     timeout-minutes: 8
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -73,10 +76,24 @@ jobs:
       # Advisory: the gates are the ratchet above and each package's
       # --max-warnings. This only makes the totals visible on the run page.
       - name: Code quality report
+        id: quality
         if: always()
         continue-on-error: true
         timeout-minutes: 2
-        run: node scripts/ci/quality-report.mjs >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          node scripts/ci/quality-report.mjs > "$RUNNER_TEMP/quality-report.md"
+          cat "$RUNNER_TEMP/quality-report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Comment PR with code quality report
+        # Skip fork and Dependabot PRs: their GITHUB_TOKEN is read-only
+        if:
+          always() && steps.quality.outcome == 'success' && github.event_name ==
+          'pull_request' && github.event.pull_request.head.repo.fork != true &&
+          github.actor != 'dependabot[bot]'
+        continue-on-error: true
+        uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3.12.0
+        with:
+          message-path: ${{ runner.temp }}/quality-report.md
+          message-id: code-quality-report
       # Also unconditional: the api's own `ci:lint` regenerates the spec but
       # never asserts on it, and nx can skip or cache-replay that task.
       - name: Check openapi.json is in sync with its sources

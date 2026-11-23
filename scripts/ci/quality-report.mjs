@@ -14,10 +14,12 @@ import {
 
 const TOP = 15;
 
-function table(header, rows) {
-  return [header, header.map(() => '---'), ...rows]
+// Collapsed so the PR comment stays a few lines long.
+function table(summary, header, rows) {
+  const body = [header, header.map(() => '---'), ...rows]
     .map(cells => `| ${cells.join(' | ')} |`)
     .join('\n');
+  return `<details>\n<summary>${summary}</summary>\n\n${body}\n\n</details>`;
 }
 
 export function sizeSection(large) {
@@ -25,8 +27,9 @@ export function sizeSection(large) {
   const excess = files.reduce((sum, [, n]) => sum + n - MAX_FILE_LINES, 0);
   return [
     '### File size',
-    `${files.length} source files over ${MAX_FILE_LINES} lines, ${excess} lines over the limit in total. Largest ${Math.min(TOP, files.length)}:`,
+    `${files.length} source files over ${MAX_FILE_LINES} lines, ${excess} lines over the limit in total.`,
     table(
+      `Largest ${Math.min(TOP, files.length)}`,
       ['File', 'Lines'],
       files.slice(0, TOP).map(([file, n]) => [`\`${file}\``, n]),
     ),
@@ -46,7 +49,11 @@ export function lintSection(byPackage) {
     .sort(([, a], [, b]) => b - a);
   return [
     '### oxlint warnings',
+    packages
+      .map(p => `${p} ${total(p)}/${byPackage[p].limit ?? '?'}`)
+      .join(', ') + ' (count/limit).',
     table(
+      'By rule',
       ['Rule', ...packages, 'Total'],
       [
         ...rules.map(([rule, sum]) => [
