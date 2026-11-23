@@ -3,14 +3,16 @@ import {
   DisplayType,
   MetricsDataType,
 } from '@hyperdx/common-utils/dist/types';
+import { Row } from '@tanstack/react-table';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   getAliasedResultColumns,
   numericRowSortingFn,
 } from '@/components/DBTable/sorting';
 
-function makeRow(value: unknown) {
-  return { getValue: (_key: string) => value } as any;
+function makeRow(value: unknown): Row<unknown> {
+  return fromPartial({ getValue: (_key: string) => value });
 }
 
 describe('numericRowSortingFn', () => {

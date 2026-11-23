@@ -139,7 +139,7 @@ describe('TimelineMinimap', () => {
     fireEvent.pointerUp(minimap, { clientX: 600, pointerId: 1 });
 
     expect(controller.zoomToRange).toHaveBeenCalledTimes(1);
-    const [start, end] = (controller.zoomToRange as jest.Mock).mock.calls[0];
+    const [start, end] = jest.mocked(controller.zoomToRange).mock.calls[0];
     expect(start).toBeCloseTo(0.2, 5);
     expect(end).toBeCloseTo(0.6, 5);
   });
@@ -158,9 +158,10 @@ describe('TimelineMinimap', () => {
     fireEvent.pointerMove(minimap, { clientX: 475, pointerId: 1 });
 
     expect(controller.panToOffset).toHaveBeenCalled();
-    const lastCall = (controller.panToOffset as jest.Mock).mock.calls.at(-1);
+    const lastCall = jest.mocked(controller.panToOffset).mock.calls.at(-1);
     // moved +0.1 frac → offset 0.25 -> ~0.35
-    expect(lastCall[0]).toBeCloseTo(0.35, 5);
+    expect(lastCall).toBeDefined();
+    expect(lastCall?.[0]).toBeCloseTo(0.35, 5);
     expect(controller.zoomToRange).not.toHaveBeenCalled();
   });
 
@@ -178,9 +179,10 @@ describe('TimelineMinimap', () => {
     fireEvent.pointerMove(minimap, { clientX: 700, pointerId: 1 });
 
     expect(controller.zoomToRange).toHaveBeenCalled();
-    const lastCall = (controller.zoomToRange as jest.Mock).mock.calls.at(-1);
-    expect(lastCall[0]).toBeCloseTo(0.25, 5); // start unchanged
-    expect(lastCall[1]).toBeCloseTo(0.7, 5); // end pushed to 0.7
+    const lastCall = jest.mocked(controller.zoomToRange).mock.calls.at(-1);
+    expect(lastCall).toBeDefined();
+    expect(lastCall?.[0]).toBeCloseTo(0.25, 5); // start unchanged
+    expect(lastCall?.[1]).toBeCloseTo(0.7, 5); // end pushed to 0.7
   });
 
   it('double-click resets when zoomed', () => {

@@ -429,13 +429,13 @@ export function useNewTimeQuery({
 
   const [
     deprecatedDisplayedTimeInputValue,
-    deprecatedSetDisplayedTimeInputValue,
+    setDeprecatedDisplayedTimeInputValue,
   ] = useState<string>(() => {
     return initialDisplayValue ?? dateRangeToString(initialTimeRange, timeZone);
   });
 
   const _setDisplayedTimeInputValue =
-    setDisplayedTimeInputValue ?? deprecatedSetDisplayedTimeInputValue;
+    setDisplayedTimeInputValue ?? setDeprecatedDisplayedTimeInputValue;
 
   const [{ from, to }, setTimeRangeQuery] = useQueryStates(
     timeRangeQueryStateMap,
@@ -444,7 +444,7 @@ export function useNewTimeQuery({
     },
   );
 
-  const [searchedTimeRange, setSearchedTimeRange] = useState<[Date, Date]>(
+  const [searchedTimeRange, setSearchedTimeRange] = useState<[Date, Date]>(() =>
     from != null && to != null
       ? [new Date(from), new Date(to)]
       : initialTimeRange,

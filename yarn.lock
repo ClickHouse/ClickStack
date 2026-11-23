@@ -4094,7 +4094,7 @@ __metadata:
     "@clickhouse/clickstack-node": "npm:^1.0.2"
     "@clickhouse/client-common": "npm:1.23.0-head.fae5998.1"
     "@esm2cjs/p-queue": "npm:^7.3.0"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@hyperdx/passport-local-mongoose": "npm:^9.0.1"
     "@modelcontextprotocol/sdk": "npm:^1.32.0"
     "@opentelemetry/api": "npm:~1.9.1"
@@ -4189,7 +4189,7 @@ __metadata:
     "@dnd-kit/utilities": "npm:^3.2.2"
     "@hookform/resolvers": "npm:^3.9.0"
     "@hyperdx/api": "workspace:*"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@mantine/core": "npm:^9.0.0"
     "@mantine/dates": "npm:^9.0.0"
     "@mantine/dropzone": "npm:^9.0.0"
@@ -4217,6 +4217,7 @@ __metadata:
     "@testing-library/jest-dom": "npm:^6.4.2"
     "@testing-library/react": "npm:^16.3.0"
     "@testing-library/user-event": "npm:^14.5.2"
+    "@total-typescript/shoehorn": "npm:^0.1.2"
     "@types/crypto-js": "npm:^4"
     "@types/flat": "npm:^5.0.5"
     "@types/identity-obj-proxy": "npm:^3"
@@ -4308,7 +4309,7 @@ __metadata:
   resolution: "@hyperdx/cli@workspace:packages/cli"
   dependencies:
     "@clickhouse/client": "npm:1.23.0-head.fae5998.1"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@jest/globals": "npm:^30.2.0"
     "@types/crypto-js": "npm:^4.2.2"
     "@types/jest": "npm:^29.5.14"
@@ -4335,7 +4336,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@hyperdx/common-utils@npm:^0.36.0, @hyperdx/common-utils@workspace:packages/common-utils":
+"@hyperdx/common-utils@npm:^0.36.1, @hyperdx/common-utils@workspace:packages/common-utils":
   version: 0.0.0-use.local
   resolution: "@hyperdx/common-utils@workspace:packages/common-utils"
   dependencies:
@@ -10516,6 +10517,13 @@ __metadata:
   peerDependencies:
     "@testing-library/dom": ">=7.21.4"
   checksum: 10c0/374bbf9f477fdc278f4bf56d6a27f88b1801c90cce9dffc414777dbf33fb1e421efc7341ee169cb286435bb742076a7899bb463c9927d2acca95aafaa5324820
+  languageName: node
+  linkType: hard
+
+"@total-typescript/shoehorn@npm:^0.1.2":
+  version: 0.1.2
+  resolution: "@total-typescript/shoehorn@npm:0.1.2"
+  checksum: 10c0/e1bb904a3c46bd00a3a31a4f24a07a5de8f6c4aebb811f4ac108dfad066d2797c682b49bbcd09e98e2bd12e8b67db9bcb793e02e2ed8a996e1fe0d232a7efcf1
   languageName: node
   linkType: hard
 

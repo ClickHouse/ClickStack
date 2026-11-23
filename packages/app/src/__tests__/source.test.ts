@@ -3,12 +3,14 @@ import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   ChartConfigWithOptTimestamp,
   NumberFormat,
+  RawSqlConfigWithDateRange,
   SourceKind,
   TLogSource,
   TTraceSource,
 } from '@hyperdx/common-utils/dist/types';
 import { notifications } from '@mantine/notifications';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   getBuilderValueColumnCount,
@@ -180,10 +182,10 @@ describe('getEventBody', () => {
 
 describe('getTraceDurationNumberFormat', () => {
   it('returns undefined for non-trace sources', () => {
-    const logSource = {
+    const logSource = fromPartial<TLogSource>({
       kind: SourceKind.Log,
       id: 'log-source',
-    } as TLogSource;
+    });
     const result = getTraceDurationNumberFormat(logSource, {
       valueExpression: 'count()',
     });
@@ -318,19 +320,21 @@ describe('useUpdateSource', () => {
 });
 
 describe('useSources validation notifications', () => {
-  const mockUseQuery = useQuery as jest.Mock;
-  const mockHdxServer = hdxServer as jest.Mock;
-  const mockShow = notifications.show as jest.Mock;
+  const mockUseQuery = jest.mocked(useQuery);
+  const mockHdxServer = jest.mocked(hdxServer);
+  const mockShow = jest.mocked(notifications.show);
 
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
   it('reuses the same notification id for repeated validation errors', async () => {
-    let capturedQueryFn: (() => Promise<unknown>) | undefined;
+    let capturedQueryFn: (() => unknown) | undefined;
     mockUseQuery.mockImplementation(({ queryFn }) => {
-      capturedQueryFn = queryFn;
-      return { data: [] };
+      if (typeof queryFn === 'function') {
+        capturedQueryFn = () => queryFn(fromPartial({}));
+      }
+      return fromPartial({ data: [] });
     });
 
     const invalidSource = {
@@ -344,9 +348,11 @@ describe('useSources validation notifications', () => {
       serviceNameExpression: 42,
     };
 
-    mockHdxServer.mockReturnValue({
-      json: jest.fn().mockResolvedValue([invalidSource]),
-    });
+    mockHdxServer.mockReturnValue(
+      fromPartial({
+        json: jest.fn().mockResolvedValue([invalidSource]),
+      }),
+    );
 
     useSources();
     expect(capturedQueryFn).toBeDefined();
@@ -388,34 +394,34 @@ const NUMBER_FORMAT: NumberFormat = { output: 'number' };
 function makeBuilderConfig(
   overrides: Partial<ChartConfigWithOptTimestamp> = {},
 ): ChartConfigWithOptTimestamp {
-  return {
+  return fromPartial({
     connection: 'test-connection',
     source: TRACE_SOURCE.id,
     from: { databaseName: 'default', tableName: 'otel_traces' },
     select: [],
     where: '',
     ...overrides,
-  } as unknown as ChartConfigWithOptTimestamp;
+  });
 }
 
 function makeRawSqlConfig(
-  overrides: Partial<ChartConfigWithOptTimestamp> = {},
+  overrides: Partial<RawSqlConfigWithDateRange> = {},
 ): ChartConfigWithOptTimestamp {
-  return {
+  return fromPartial({
     configType: 'sql',
     sqlTemplate: 'SELECT 1',
     connection: 'test-connection',
     source: TRACE_SOURCE.id,
     ...overrides,
-  } as unknown as ChartConfigWithOptTimestamp;
+  });
 }
 
 describe('useSingleSeriesNumberFormat', () => {
-  const mockUseQuery = useQuery as jest.Mock;
+  const mockUseQuery = jest.mocked(useQuery);
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseQuery.mockReturnValue({ data: TRACE_SOURCE });
+    mockUseQuery.mockReturnValue(fromPartial({ data: TRACE_SOURCE }));
   });
 
   it.each<{
@@ -519,14 +525,14 @@ describe('useSingleSeriesNumberFormat', () => {
 });
 
 describe('useChartNumberFormats', () => {
-  const mockUseQuery = useQuery as jest.Mock;
+  const mockUseQuery = jest.mocked(useQuery);
 
   const META_A = { name: 'col_a', type: 'Float64' } as ColumnMetaType;
   const META_B = { name: 'col_b', type: 'Float64' } as ColumnMetaType;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseQuery.mockReturnValue({ data: TRACE_SOURCE });
+    mockUseQuery.mockReturnValue(fromPartial({ data: TRACE_SOURCE }));
   });
 
   // --- chartFormat resolution ---

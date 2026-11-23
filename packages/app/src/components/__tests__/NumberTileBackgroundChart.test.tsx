@@ -1,6 +1,8 @@
 import React from 'react';
+import { isPromqlChartConfig } from '@hyperdx/common-utils/dist/guards';
 import { DisplayType, PromqlReducer } from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { convertToPromqlSparklineChartConfig } from '@/ChartUtils';
 import NumberTileBackgroundChart, {
@@ -150,12 +152,12 @@ describe('buildSparklineQueryConfig', () => {
 });
 
 describe('NumberTileBackgroundChart', () => {
-  const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
+  const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseQueriedChartConfig.mockReturnValue({ data: undefined });
-    (useSource as jest.Mock).mockReturnValue({ data: null });
+    mockUseQueriedChartConfig.mockReturnValue(fromPartial({ data: undefined }));
+    jest.mocked(useSource).mockReturnValue(fromPartial({ data: undefined }));
   });
 
   it('strips groupBy from the issued query so the sparkline matches the single displayed aggregate', () => {
@@ -185,7 +187,10 @@ describe('NumberTileBackgroundChart', () => {
     expect(queriedConfig).not.toHaveProperty('groupBy');
     // A builder tile has no query to share with its value, so it keeps its own
     // namespaced key rather than the one the hook builds.
-    expect(options.queryKey).toEqual(['number-tile-background', queriedConfig]);
+    expect(options?.queryKey).toEqual([
+      'number-tile-background',
+      queriedConfig,
+    ]);
   });
 
   it('issues no query while the tile is disabled', () => {
@@ -208,7 +213,7 @@ describe('NumberTileBackgroundChart', () => {
     );
 
     const [, options] = mockUseQueriedChartConfig.mock.calls[0];
-    expect(options.enabled).toBe(false);
+    expect(options?.enabled).toBe(false);
   });
 
   it("scopes a builder tile's own key with the prefix, when given one", () => {
@@ -231,7 +236,7 @@ describe('NumberTileBackgroundChart', () => {
     );
 
     const [queriedConfig, options] = mockUseQueriedChartConfig.mock.calls[0];
-    expect(options.queryKey).toEqual([
+    expect(options?.queryKey).toEqual([
       'tile-1',
       'number-tile-background',
       queriedConfig,
@@ -328,9 +333,11 @@ describe('NumberTileBackgroundChart', () => {
 
     it('plots one point per sample, with no zeros between them', () => {
       const values = [1, 1.2, 1.1, 1.3, 1.25, 1.4, 1.35, 1.5, 1.45, 1.6, 1.55];
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: sampleRows(values, promqlConfig.dateRange[0], 60),
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: sampleRows(values, promqlConfig.dateRange[0], 60),
+        }),
+      );
 
       renderWithMantine(
         <NumberTileBackgroundChart
@@ -374,9 +381,9 @@ describe('NumberTileBackgroundChart', () => {
       );
 
       const queriedConfig = mockUseQueriedChartConfig.mock.calls[0][0];
-      expect(queriedConfig.promqlExpression).toEqual([
-        { expression: 'e2e_service_up', queryType: 'range' },
-      ]);
+      expect(
+        isPromqlChartConfig(queriedConfig) && queriedConfig.promqlExpression,
+      ).toEqual([{ expression: 'e2e_service_up', queryType: 'range' }]);
     });
 
     // An instant query answers with a single point, so there is no trend.

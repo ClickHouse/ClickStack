@@ -1223,8 +1223,6 @@ function KubernetesDashboardPage() {
 
   const whereClause = searchQuery;
 
-  const [_searchQuery, _setSearchQuery] = React.useState<string | null>(null);
-
   const { data: logSourceJsonColumns, isLoading: isLoadingJsonColumns } =
     useJsonColumns(
       logSource && {

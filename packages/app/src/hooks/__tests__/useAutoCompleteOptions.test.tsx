@@ -4,6 +4,7 @@ import { JSDataType } from '@hyperdx/common-utils/dist/clickhouse';
 import { Field } from '@hyperdx/common-utils/dist/core/metadata';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook } from '@testing-library/react';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import { LuceneLanguageFormatter } from '@/components/SearchInput/SearchInputV2';
 import {
@@ -104,16 +105,20 @@ describe('useAutoCompleteOptions', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    (useAllFields as jest.Mock).mockReturnValue({
-      data: mockFields,
-      isLoading: false,
-      error: null,
-    });
+    jest.mocked(useAllFields).mockReturnValue(
+      fromPartial({
+        data: mockFields,
+        isLoading: false,
+        error: null,
+      }),
+    );
 
-    (useGetKeyValues as jest.Mock).mockReturnValue({
-      data: null,
-      isFetching: false,
-    });
+    jest.mocked(useGetKeyValues).mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isFetching: false,
+      }),
+    );
 
     wrapper = makeWrapper();
   });
@@ -144,15 +149,17 @@ describe('useAutoCompleteOptions', () => {
   });
 
   it('should return key value options with correct lucene formatting', () => {
-    (useGetKeyValues as jest.Mock).mockReturnValue({
-      data: [
-        {
-          key: 'ResourceAttributes.service.name',
-          value: ['frontend', 'backend'],
-        },
-      ],
-      isFetching: false,
-    });
+    jest.mocked(useGetKeyValues).mockReturnValue(
+      fromPartial({
+        data: [
+          {
+            key: 'ResourceAttributes.service.name',
+            value: ['frontend', 'backend'],
+          },
+        ],
+        isFetching: false,
+      }),
+    );
 
     const { result } = renderHook(
       () =>
@@ -191,20 +198,24 @@ describe('useAutoCompleteOptions', () => {
   });
 
   it('should handle nested key value options', () => {
-    (useGetKeyValues as jest.Mock).mockReturnValue({
-      data: [
-        {
-          key: 'ResourceAttributes',
-          value: [
-            {
-              'service.name': 'frontend',
-              'deployment.environment': 'production',
-            },
-          ],
-        },
-      ],
-      isFetching: false,
-    });
+    // Map-typed keys can return object values at runtime, which Facet's
+    // string[] type does not model.
+    jest.mocked(useGetKeyValues).mockReturnValue(
+      fromAny({
+        data: [
+          {
+            key: 'ResourceAttributes',
+            value: [
+              {
+                'service.name': 'frontend',
+                'deployment.environment': 'production',
+              },
+            ],
+          },
+        ],
+        isFetching: false,
+      }),
+    );
 
     const { result } = renderHook(
       () =>

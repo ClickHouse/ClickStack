@@ -191,7 +191,7 @@ export const BarChartPreview = () => {
             <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end' }}>
               {values.map((value, i) => (
                 <div
-                  key={i}
+                  key={CHART_COLORS[i].name}
                   style={{
                     width: 16,
                     height: value * 1.5,
