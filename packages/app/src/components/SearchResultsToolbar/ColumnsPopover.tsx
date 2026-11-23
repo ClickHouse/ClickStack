@@ -191,7 +191,20 @@ export function ColumnsPopover({
               }}
               data={options}
               limit={50}
-              comboboxProps={{ withinPortal: false }}
+              comboboxProps={{
+                withinPortal: false,
+                // Wider than the input so long names fit, but inside the popover.
+                width: 'min(400px, calc(100vw - 48px))',
+              }}
+              styles={{
+                // Column names differ at the end, so clipping hides the part
+                // that tells them apart.
+                option: {
+                  whiteSpace: 'normal',
+                  overflowWrap: 'anywhere',
+                  lineHeight: 1.4,
+                },
+              }}
               style={{ flex: 1 }}
               data-testid="search-columns-add-input"
             />
