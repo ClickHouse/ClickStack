@@ -4106,6 +4106,7 @@ __metadata:
     "@opentelemetry/sdk-trace-base": "npm:^2.8.0"
     "@slack/webhook": "npm:^7.0.0"
     "@stoplight/spectral-cli": "npm:^6.15.0"
+    "@total-typescript/shoehorn": "npm:^0.1.2"
     "@types/compression": "npm:^1.7.3"
     "@types/cors": "npm:^2.8.14"
     "@types/express": "npm:^4.17.13"

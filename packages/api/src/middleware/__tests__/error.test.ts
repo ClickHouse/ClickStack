@@ -1,4 +1,5 @@
-import type { Request, Response } from 'express';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
+import type { Response } from 'express';
 
 // --- mocks (hoisted; names must be prefixed with `mock`) ---
 const mockCounterAdd = jest.fn();
@@ -27,12 +28,12 @@ import { appErrorHandler } from '@/middleware/error';
 import { Api404Error } from '@/utils/errors';
 
 const invoke = (err: unknown): Response => {
-  const res = {
+  const res: Response = fromPartial({
     headersSent: false,
     status: jest.fn().mockReturnThis(),
     json: jest.fn(),
-  } as unknown as Response;
-  appErrorHandler(err as any, {} as Request, res, jest.fn());
+  });
+  appErrorHandler(fromAny(err), fromPartial({}), res, jest.fn());
   return res;
 };
 
