@@ -1,8 +1,8 @@
 import PQueue from '@esm2cjs/p-queue';
 import { trace } from '@opentelemetry/api';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import type { ToolResult } from '@/mcp/tools/types';
+import type { McpContext, ToolResult } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
 import { DeadlineExceededError, withDeadline } from '@/mcp/utils/timeout';
 import { getCounter } from '@/utils/instrumentation';
@@ -158,13 +158,13 @@ function fitToBudget(
 }
 
 export async function runSqlBatch({
-  teamId,
+  context,
   queries,
   defaults,
   startDate,
   endDate,
 }: {
-  teamId: string;
+  context: McpContext;
   queries: SqlBatchQuery[];
   defaults: { connectionId: string; sourceId?: string };
   startDate: Date;
@@ -185,7 +185,7 @@ export async function runSqlBatch({
     SQL_SINGLE_RESPONSE_LIMIT,
     Math.floor(SQL_BATCH_RESPONSE_BUDGET / queries.length),
   );
-  const lookupSource = createSourceLookup(teamId);
+  const lookupSource = createSourceLookup(context);
   const queue = new PQueue({ concurrency: SQL_BATCH_CONCURRENCY });
   // Fixed before anything is queued so every query races the same budget.
   const deadlineAt = Date.now() + SQL_BATCH_DEADLINE_MS;
@@ -222,7 +222,7 @@ export async function runSqlBatch({
         const result: ToolResult = await queue.add(() =>
           withDeadline(
             signal =>
-              runConfigTile(teamId, prepared.tile, startDate, endDate, {
+              runConfigTile(context, prepared.tile, startDate, endDate, {
                 abortSignal: signal,
                 maxResponseChars,
                 lookupSource,

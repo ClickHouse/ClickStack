@@ -19,10 +19,11 @@ import type {
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { getConnectionsByTeam } from '@/controllers/connection';
-import { getSources } from '@/controllers/sources';
+import type { McpContext } from '@/mcp/tools/types';
+import { getMcpConnections } from '@/mcp/utils/connections';
+import { getMcpSources } from '@/mcp/utils/sources';
 import {
   convertToInternalTileConfig,
   type ExternalDashboard,
@@ -174,11 +175,11 @@ export type ReferenceTargets = {
 };
 
 export async function getReferenceTargets(
-  teamId: string,
+  context: McpContext,
 ): Promise<ReferenceTargets> {
   const [sources, connections] = await Promise.all([
-    getSources(teamId),
-    getConnectionsByTeam(teamId),
+    getMcpSources(context),
+    getMcpConnections(context),
   ]);
   return {
     sources: sources.map(source => ({

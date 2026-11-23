@@ -163,6 +163,16 @@ export function newWarnings(warnings, addedLines) {
   };
 }
 
+/** Per-file line sets present in both maps. */
+export function intersectLines(a, b) {
+  const both = new Map();
+  for (const [file, lines] of a) {
+    const other = b.get(file);
+    if (other) both.set(file, new Set([...lines].filter(n => other.has(n))));
+  }
+  return both;
+}
+
 function git(args, cwd) {
   return execFileSync('git', args, {
     cwd,
@@ -187,10 +197,19 @@ function changedLines(root, staged) {
     // lint-staged hides unstaged edits, so the working tree is the staged
     // content plus whatever --fix just wrote.
     if (staged) {
-      return {
-        base: 'HEAD',
-        addedLines: parseAddedLines(git([...DIFF_ARGS, 'HEAD'], root), root),
-      };
+      const addedLines = parseAddedLines(
+        git([...DIFF_ARGS, 'HEAD'], root),
+        root,
+      );
+      // Concluding a merge: lines that came in unchanged from the other
+      // parent are not this commit's, so only keep lines new to both sides.
+      let theirs;
+      try {
+        theirs = parseAddedLines(git([...DIFF_ARGS, 'MERGE_HEAD'], root), root);
+      } catch {
+        return { base: 'HEAD', addedLines };
+      }
+      return { base: 'HEAD', addedLines: intersectLines(addedLines, theirs) };
     }
     const baseRef = `origin/${process.env.GITHUB_BASE_REF || 'main'}`;
     const mergeBase = git(['merge-base', 'HEAD', baseRef], root).trim();

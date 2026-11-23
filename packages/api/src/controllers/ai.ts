@@ -15,7 +15,7 @@ import {
 import type { LanguageModel } from 'ai';
 import * as chrono from 'chrono-node';
 import ms from 'ms';
-import z from 'zod';
+import z from 'zod/v3';
 
 import { ClickhouseClient } from '@/clickhouse';
 import * as config from '@/config';

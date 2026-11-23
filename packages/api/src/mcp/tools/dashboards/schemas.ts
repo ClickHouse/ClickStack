@@ -31,7 +31,7 @@ import {
   SqlQueryDashboardFilterSchema,
   StaticListDashboardFilterSchema,
 } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   getMetricSelectIssues,

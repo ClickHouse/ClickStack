@@ -1411,7 +1411,7 @@ describe('alerts router', () => {
   });
 
   describe('GET /alerts/:id/history', () => {
-    const createTileAlert = async () => {
+    const createTileAlert = async (): Promise<string> => {
       const dashboard = await agent
         .post('/dashboards')
         .send(MOCK_DASHBOARD)
@@ -1426,7 +1426,7 @@ describe('alerts router', () => {
           }),
         )
         .expect(200);
-      return alert.body.data._id as string;
+      return alert.body.data._id;
     };
 
     it('returns firing and recovery transitions within the range', async () => {

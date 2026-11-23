@@ -19,12 +19,13 @@ import type { ChSql } from '@hyperdx/common-utils/dist/clickhouse';
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
   isQueryOutOfTime,
   isServerError,
+  MCP_REQUEST_TIMEOUT,
   parseTimeRange,
 } from '@/mcp/tools/query/helpers';
 import {
@@ -34,12 +35,16 @@ import {
 } from '@/mcp/tools/trace/breakdownSchema';
 import {
   durationDivisor,
-  getMcpClickhouseClient,
   inclusiveTimeFilter,
   mcpQuerySettings,
 } from '@/mcp/tools/trace/shared';
 import type { ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 
 // The child stage looks spans up by TraceId, which is not in the sort key, so
 // it reads every span in the window regardless of how few parents matched.
@@ -59,8 +64,6 @@ export function registerTraceBreakdown({
   context,
   registerTool,
 }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_trace_top_time_consuming_ops',
     {
@@ -78,7 +81,7 @@ export function registerTraceBreakdown({
       }
       const { startDate, endDate } = timeRange;
 
-      const source = await getSource(teamId.toString(), input.sourceId);
+      const source = await getMcpSource(context, input.sourceId);
       if (!source) {
         return mcpUserError(
           `Source not found: ${input.sourceId}. Call clickstack_list_sources to find available source IDs.`,
@@ -90,11 +93,15 @@ export function registerTraceBreakdown({
         );
       }
 
-      const clickhouseClient = await getMcpClickhouseClient(
-        teamId.toString(),
-        source.connection.toString(),
-      );
-      if (!clickhouseClient) {
+      let clickhouseClient: ClickhouseClient;
+      try {
+        clickhouseClient = await getMcpClickhouseClient(
+          context,
+          source.connection.toString(),
+          { requestTimeout: MCP_REQUEST_TIMEOUT },
+        );
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection not found for source: ${input.sourceId}`,
         );

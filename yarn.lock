@@ -4024,21 +4024,30 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hono/node-server@npm:^1.19.13":
-  version: 1.19.18
-  resolution: "@hono/node-server@npm:1.19.18"
+"@hono/node-server@npm:^1.19.9 || ^2.0.5":
+  version: 2.1.8
+  resolution: "@hono/node-server@npm:2.1.8"
   peerDependencies:
-    hono: ^4
-  checksum: 10c0/724fdba976ebe2373937a2e5fe250a8dea1bce7784725352d58c62756b02ad564ce7a7d976a4fae56b367dfefa5cae90d75a7495934c8b0789d71f50aff9ffc3
+    hono: ^4 || ^5.0.0-0
+  checksum: 10c0/16900425ef58e908d2d3e12c44206663165ae07d267e68dbc987ac6c1b3f977bbac6b9566be60171efb60d230aeb7c559f4865cd6ff68c50ca99514320d711eb
   languageName: node
   linkType: hard
 
-"@hookform/resolvers@npm:^3.9.0":
+"@hookform/resolvers@npm:3.9.0":
   version: 3.9.0
   resolution: "@hookform/resolvers@npm:3.9.0"
   peerDependencies:
     react-hook-form: ^7.0.0
   checksum: 10c0/0e0e55f63abbd212cf14abbd39afad1f9b6105d6b25ce827fc651b624ed2be467ebe9b186026e0f032062db59ce2370b14e9583b436ae2d057738bdd6f04356c
+  languageName: node
+  linkType: hard
+
+"@hookform/resolvers@patch:@hookform/resolvers@npm%3A3.9.0#~/.yarn/patches/@hookform-resolvers-npm-3.9.0-6238a72f77.patch":
+  version: 3.9.0
+  resolution: "@hookform/resolvers@patch:@hookform/resolvers@npm%3A3.9.0#~/.yarn/patches/@hookform-resolvers-npm-3.9.0-6238a72f77.patch::version=3.9.0&hash=d19886"
+  peerDependencies:
+    react-hook-form: ^7.0.0
+  checksum: 10c0/dd1388677ac221bef22bed393321495a6ded8d8c923760465516039689ecc2089594981e7f339638bb9599fdbc4a418b16df1bc96a3e7156cb3135722b6b5c04
   languageName: node
   linkType: hard
 
@@ -4094,7 +4103,7 @@ __metadata:
     "@clickhouse/clickstack-node": "npm:^1.0.2"
     "@clickhouse/client-common": "npm:1.23.0-head.fae5998.1"
     "@esm2cjs/p-queue": "npm:^7.3.0"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@hyperdx/passport-local-mongoose": "npm:^9.0.1"
     "@modelcontextprotocol/sdk": "npm:^1.32.0"
     "@opentelemetry/api": "npm:~1.9.1"
@@ -4106,6 +4115,7 @@ __metadata:
     "@opentelemetry/sdk-trace-base": "npm:^2.8.0"
     "@slack/webhook": "npm:^7.0.0"
     "@stoplight/spectral-cli": "npm:^6.15.0"
+    "@total-typescript/shoehorn": "npm:^0.1.2"
     "@types/compression": "npm:^1.7.3"
     "@types/cors": "npm:^2.8.14"
     "@types/express": "npm:^4.17.13"
@@ -4165,8 +4175,8 @@ __metadata:
     typescript: "npm:^6.0.3"
     undici: "npm:^7.29.0"
     uuid: "npm:^11.1.1"
-    zod: "npm:3.25"
-    zod-express-middleware: "npm:^1.4.0"
+    zod: "npm:^4.6.6"
+    zod-express-middleware: "patch:zod-express-middleware@npm%3A1.4.0#~/.yarn/patches/zod-express-middleware-npm-1.4.0-951b3b605a.patch"
   languageName: unknown
   linkType: soft
 
@@ -4187,9 +4197,9 @@ __metadata:
     "@dnd-kit/core": "npm:^6.3.1"
     "@dnd-kit/sortable": "npm:^10.0.0"
     "@dnd-kit/utilities": "npm:^3.2.2"
-    "@hookform/resolvers": "npm:^3.9.0"
+    "@hookform/resolvers": "patch:@hookform/resolvers@npm%3A3.9.0#~/.yarn/patches/@hookform-resolvers-npm-3.9.0-6238a72f77.patch"
     "@hyperdx/api": "workspace:*"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@mantine/core": "npm:^9.0.0"
     "@mantine/dates": "npm:^9.0.0"
     "@mantine/dropzone": "npm:^9.0.0"
@@ -4300,7 +4310,7 @@ __metadata:
     typescript: "npm:^6.0.3"
     uplot: "patch:uplot@npm%3A1.6.32#~/.yarn/patches/uplot-npm-1.6.32-350d2da00d.patch"
     uplot-react: "npm:^1.2.2"
-    zod: "npm:3.25"
+    zod: "npm:^4.6.6"
   languageName: unknown
   linkType: soft
 
@@ -4309,7 +4319,7 @@ __metadata:
   resolution: "@hyperdx/cli@workspace:packages/cli"
   dependencies:
     "@clickhouse/client": "npm:1.23.0-head.fae5998.1"
-    "@hyperdx/common-utils": "npm:^0.36.0"
+    "@hyperdx/common-utils": "npm:^0.36.1"
     "@jest/globals": "npm:^30.2.0"
     "@types/crypto-js": "npm:^4.2.2"
     "@types/jest": "npm:^29.5.14"
@@ -4336,7 +4346,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@hyperdx/common-utils@npm:^0.36.0, @hyperdx/common-utils@workspace:packages/common-utils":
+"@hyperdx/common-utils@npm:^0.36.1, @hyperdx/common-utils@workspace:packages/common-utils":
   version: 0.0.0-use.local
   resolution: "@hyperdx/common-utils@workspace:packages/common-utils"
   dependencies:
@@ -4370,7 +4380,7 @@ __metadata:
     tsc-alias: "npm:^1.8.8"
     tsup: "npm:^8.4.0"
     typescript: "npm:^6.0.3"
-    zod: "npm:3.25"
+    zod: "npm:^4.6.6"
   languageName: unknown
   linkType: soft
 
@@ -4394,7 +4404,7 @@ __metadata:
     tsc-alias: "npm:^1.8.8"
     tsx: "npm:^4.19.0"
     typescript: "npm:^6.0.3"
-    zod: "npm:3.25"
+    zod: "npm:^4.6.6"
   bin:
     hdx-eval: ./dist/cli.js
   languageName: unknown
@@ -29948,7 +29958,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod-express-middleware@npm:^1.4.0":
+"zod-express-middleware@npm:1.4.0":
   version: 1.4.0
   resolution: "zod-express-middleware@npm:1.4.0"
   peerDependencies:
@@ -29956,6 +29966,17 @@ __metadata:
     express: ^4.17.1
     zod: ^3.2.0
   checksum: 10c0/4f5973ef4c6fe6d65ecec291f6b4028c67549b136be6ec0978c2310d901c2328b3879b736e651f05b516d99b53a807ea50981eb8179ee90eaedcffc35278cb10
+  languageName: node
+  linkType: hard
+
+"zod-express-middleware@patch:zod-express-middleware@npm%3A1.4.0#~/.yarn/patches/zod-express-middleware-npm-1.4.0-951b3b605a.patch":
+  version: 1.4.0
+  resolution: "zod-express-middleware@patch:zod-express-middleware@npm%3A1.4.0#~/.yarn/patches/zod-express-middleware-npm-1.4.0-951b3b605a.patch::version=1.4.0&hash=0915a5"
+  peerDependencies:
+    "@types/express": ^4.17.12
+    express: ^4.17.1
+    zod: ^3.2.0
+  checksum: 10c0/697a8eea74401a57c1fe19fe04f95d30cdd568d721b48e307d964d1bd8168569196689ae1fd1c3e1084b6b2c7a0d2003bcff8f517923a5256c7eb2d906daa400
   languageName: node
   linkType: hard
 
@@ -29968,28 +29989,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:3.25":
-  version: 3.25.76
-  resolution: "zod@npm:3.25.76"
-  checksum: 10c0/5718ec35e3c40b600316c5b4c5e4976f7fee68151bc8f8d90ec18a469be9571f072e1bbaace10f1e85cf8892ea12d90821b200e980ab46916a6166a4260a983c
-  languageName: node
-  linkType: hard
-
-"zod@npm:^3.25 || ^4.0, zod@npm:^4.1.11":
-  version: 4.3.6
-  resolution: "zod@npm:4.3.6"
-  checksum: 10c0/860d25a81ab41d33aa25f8d0d07b091a04acb426e605f396227a796e9e800c44723ed96d0f53a512b57be3d1520f45bf69c0cb3b378a232a00787a2609625307
-  languageName: node
-  linkType: hard
-
-"zod@npm:^4.1.12":
-  version: 4.4.3
-  resolution: "zod@npm:4.4.3"
-  checksum: 10c0/7ea31b558e88f9faf44f31dd185e2e1cbf51fed3081787fb96cc2534749b50c0acfc6da7f0922a7353ed092dd358c7d50c28ea96c94d04af64191bd33152eca3
-  languageName: node
-  linkType: hard
-
-"zod@npm:^4.3.6":
+"zod@npm:^3.25 || ^4.0, zod@npm:^4.1.11, zod@npm:^4.1.12, zod@npm:^4.3.6, zod@npm:^4.6.6":
   version: 4.6.7
   resolution: "zod@npm:4.6.7"
   checksum: 10c0/4ce2eb14034317b7254e347ca37b5ad591cf8333147030cf05b9b5d31692d45073f7f2747aa50cf8c6b29012194d2b22978cecc89969cf34a0d18e89d0ee7d7b

@@ -1,4 +1,5 @@
-import { SavedSearch, TSource } from '@hyperdx/common-utils/dist/types';
+import { SavedSearch } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 // Mock config so we can control HDX_LOCAL_DEFAULT_SOURCES in tests
 jest.mock('../config', () => ({
@@ -325,10 +326,7 @@ describe('localSources', () => {
     const envDefaults = [{ id: 'env-src', name: 'Env Source' }];
     mockedConfig.HDX_LOCAL_DEFAULT_SOURCES = JSON.stringify(envDefaults);
 
-    const stored = localSources.create({ name: 'My Source' } as Omit<
-      TSource,
-      'id'
-    >);
+    const stored = localSources.create(fromPartial({ name: 'My Source' }));
     mockedUtils.parseJSON.mockClear();
 
     const all = localSources.getAll();

@@ -4,6 +4,7 @@ import {
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { findBodyResultColumn, useDenoisedRows } from '@/hooks/useDenoisedRows';
 import { useGroupedPatterns } from '@/hooks/usePatterns';
@@ -15,12 +16,12 @@ jest.mock('@/hooks/usePatterns', () => ({
 
 const mockUseGroupedPatterns = jest.mocked(useGroupedPatterns);
 
-const source = {
+const source = fromPartial<TSource>({
   id: 'logs',
   kind: SourceKind.Log,
   bodyExpression: 'Body',
   severityTextExpression: 'SeverityText',
-} as unknown as TSource;
+});
 
 const config = (select: string): BuilderChartConfigWithDateRange => ({
   select,

@@ -7,7 +7,7 @@ import {
   useState,
 } from 'react';
 import { Controller, useFieldArray, useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {
   SourceKind,
   SourceSchema,

@@ -2,7 +2,7 @@ import type {
   McpServer,
   ToolCallback,
 } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AnyZodObject } from 'zod';
+import type { AnyZodObject } from 'zod/v3';
 
 import type { McpContext, RegisterToolFn } from '@/mcp/tools/types';
 

@@ -1,4 +1,4 @@
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse, PathParams } from 'msw';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { Card } from '@mantine/core';
 import type { Meta, StoryObj } from '@storybook/nextjs';
@@ -65,14 +65,20 @@ const defaultHandlers = {
   tables: http.get('*/api/clickhouse/tables', () => {
     return HttpResponse.json(mockTables);
   }),
-  createSource: http.post('*/api/sources', async ({ request }) => {
-    const body = (await request.json()) as Record<string, unknown>;
-    return HttpResponse.json({ id: 'new-source-id', ...body });
-  }),
-  updateSource: http.put('*/api/sources/:id', async ({ request }) => {
-    const body = (await request.json()) as Record<string, unknown>;
-    return HttpResponse.json(body);
-  }),
+  createSource: http.post<PathParams, Record<string, unknown>>(
+    '*/api/sources',
+    async ({ request }) => {
+      const body = await request.json();
+      return HttpResponse.json({ id: 'new-source-id', ...body });
+    },
+  ),
+  updateSource: http.put<PathParams, Record<string, unknown>>(
+    '*/api/sources/:id',
+    async ({ request }) => {
+      const body = await request.json();
+      return HttpResponse.json(body);
+    },
+  ),
   deleteSource: http.delete('*/api/sources/:id', () => {
     return HttpResponse.json({ success: true });
   }),

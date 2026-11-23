@@ -10,15 +10,17 @@ import {
 import { type MetricTable, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import SqlString from 'sqlstring';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { McpContext, ToolRegistrar, ToolResult } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
-import { isHiddenSource } from '@/mcp/utils/promql';
+import { getVisibleMcpSource } from '@/mcp/utils/sources';
 import {
   MCP_QUERY_MAX_EXECUTION_SEC,
   MCP_TIMEOUT_GRACE_MS,
@@ -98,8 +100,8 @@ async function describeSourceSchema(
   progress: DescribeProgress,
 ): Promise<ToolResult> {
   const { teamId } = context;
-  const source = await getSource(teamId, sourceId);
-  if (!source || isHiddenSource(context, source)) {
+  const source = await getVisibleMcpSource(context, sourceId);
+  if (!source) {
     return mcpUserError(
       `Source "${sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,
     );
@@ -203,20 +205,16 @@ async function describeSourceSchema(
     };
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(`Connection not found for source "${sourceId}".`);
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
   const databaseName = source.from.databaseName;
   const tableName = discoveryTableName;

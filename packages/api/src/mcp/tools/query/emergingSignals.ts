@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
@@ -139,8 +139,6 @@ export function registerEmergingSignals({
   context,
   registerTool,
 }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_emerging_signals',
     {
@@ -210,14 +208,14 @@ export function registerEmergingSignals({
 
       const [curRes, baseRes] = await Promise.all([
         mineWindowPatterns(
-          teamId.toString(),
+          context,
           input.sourceId,
           cur.startDate,
           cur.endDate,
           opts,
         ),
         mineWindowPatterns(
-          teamId.toString(),
+          context,
           input.sourceId,
           base.startDate,
           base.endDate,
