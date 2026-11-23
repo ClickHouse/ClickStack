@@ -12,11 +12,14 @@ import { trace } from '@opentelemetry/api';
 import SqlString from 'sqlstring';
 import { z } from 'zod';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { McpContext, ToolRegistrar, ToolResult } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
 import { isHiddenSource } from '@/mcp/utils/promql';
 import {
@@ -203,20 +206,16 @@ async function describeSourceSchema(
     };
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(`Connection not found for source "${sourceId}".`);
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
   const databaseName = source.from.databaseName;
   const tableName = discoveryTableName;

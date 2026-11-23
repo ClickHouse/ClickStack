@@ -3,12 +3,15 @@ import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import { z } from 'zod';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { parseTimeRange } from '@/mcp/tools/query/helpers';
-import type { ToolRegistrar } from '@/mcp/tools/types';
+import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
 import { MCP_TOOL_TIMEOUT_MS, runWithTimeout } from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
@@ -77,7 +80,7 @@ export function registerListMetrics({
 
       const deadlineAt = Date.now() + LIST_TIMEOUT_MS;
       const outcome = await runWithTimeout(
-        signal => listMetricsImpl(teamId.toString(), input, deadlineAt, signal),
+        signal => listMetricsImpl(context, input, deadlineAt, signal),
         { timeoutMs: LIST_TIMEOUT_MS },
       );
       if (!outcome.timedOut) {
@@ -96,11 +99,12 @@ export function registerListMetrics({
 }
 
 async function listMetricsImpl(
-  teamId: string,
+  context: McpContext,
   input: z.infer<typeof listMetricsSchema>,
   deadlineAt: number,
   signal: AbortSignal,
 ) {
+  const { teamId } = context;
   const source = await getSource(teamId, input.sourceId);
   if (!source) {
     return mcpUserError(
@@ -147,20 +151,16 @@ async function listMetricsImpl(
     );
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(`Connection not found for source "${input.sourceId}".`);
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
 
   const limit = input.limit ?? DEFAULT_LIMIT;

@@ -282,7 +282,7 @@ export function registerQueryTiles({
               const result = await withDeadline(
                 signal =>
                   runConfigTile(
-                    teamId.toString(),
+                    context,
                     resolvedTile.tile,
                     startDate,
                     endDate,

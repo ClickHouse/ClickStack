@@ -26,10 +26,14 @@ import {
 import { ObjectId } from 'mongodb';
 import ms from 'ms';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { PromQLQueryError } from '@/controllers/promql';
 import { getSource } from '@/controllers/sources';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
 import {
@@ -489,7 +493,7 @@ function toPlainMetricTables(
 }
 
 export async function runConfigTile(
-  teamId: string,
+  context: McpContext,
   tile: ExternalDashboardTileWithId,
   startDate: Date,
   endDate: Date,
@@ -514,6 +518,7 @@ export async function runConfigTile(
     partialSearchResults?: boolean;
   },
 ) {
+  const { teamId } = context;
   if (!isConfigTile(tile)) {
     return mcpUserError('Invalid tile: config field missing');
   }
@@ -545,7 +550,7 @@ export async function runConfigTile(
       const selectStr =
         typeof builderConfig.select === 'string' ? builderConfig.select : '';
       return runEventPatterns(
-        teamId,
+        context,
         builderConfig.source,
         startDate,
         endDate,
@@ -579,23 +584,19 @@ export async function runConfigTile(
     );
     if (kindMismatch) return kindMismatch;
 
-    const connection = await getConnectionById(
-      teamId,
-      source.connection.toString(),
-      true,
-    );
-    if (!connection) {
+    let clickhouseClient: ClickhouseClient;
+    try {
+      clickhouseClient = await getMcpClickhouseClient(
+        context,
+        source.connection.toString(),
+        { requestTimeout: MCP_REQUEST_TIMEOUT },
+      );
+    } catch (e) {
+      if (!(e instanceof McpConnectionNotFoundError)) throw e;
       return mcpUserError(
         `Connection not found for source: ${builderConfig.source}`,
       );
     }
-
-    const clickhouseClient = new ClickhouseClient({
-      host: connection.host,
-      username: connection.username,
-      password: connection.password,
-      requestTimeout: MCP_REQUEST_TIMEOUT,
-    });
 
     const isSearch = builderConfig.displayType === DisplayType.Search;
     const isMetricSource = source.kind === SourceKind.Metric;
@@ -802,23 +803,19 @@ export async function runConfigTile(
     }
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    savedConfig.connection,
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      savedConfig.connection,
+      { requestTimeout: MCP_REQUEST_TIMEOUT },
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(
       `Connection not found: ${savedConfig.connection}. Call clickstack_list_sources to discover available connection IDs.`,
     );
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-    requestTimeout: MCP_REQUEST_TIMEOUT,
-  });
 
   const chartConfig = {
     ...savedConfig,
