@@ -7,7 +7,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { fromPartial } from '@total-typescript/shoehorn';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import {
   SourceManagementMenu,
@@ -29,13 +29,13 @@ const makeSource = (
   kind: SourceKind,
   overrides: Partial<TSource> = {},
 ): TSource =>
-  ({
+  fromAny<TSource, Record<string, unknown>>({
     id,
     name,
     kind,
     connection: 'conn-a',
     ...overrides,
-  }) as unknown as TSource;
+  });
 
 describe('SourceManagementMenu', () => {
   it('does not render the kebab trigger when no actions are wired', () => {

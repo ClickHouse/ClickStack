@@ -186,23 +186,16 @@ describe('MCP Event Deltas Tool', () => {
       expect(severity.baseline).toBeUndefined();
       expect(severity.targetCount).toBeGreaterThan(0);
       expect(severity.baselineCount).toBeGreaterThan(0);
-      const errorDelta = (
-        severity.topDeltas as Array<{
-          value: string;
-          targetPct: number;
-          baselinePct: number;
-        }>
-      ).find(v => v.value === 'ERROR');
+      const topDeltas: Array<{
+        value: string;
+        targetPct: number;
+        baselinePct: number;
+      }> = severity.topDeltas;
+      const errorDelta = topDeltas.find(v => v.value === 'ERROR');
       expect(errorDelta).toBeDefined();
       // Target window planted ERROR, baseline window planted INFO.
       expect(errorDelta!.targetPct).toBeGreaterThan(errorDelta!.baselinePct);
-      const infoDelta = (
-        severity.topDeltas as Array<{
-          value: string;
-          targetPct: number;
-          baselinePct: number;
-        }>
-      ).find(v => v.value === 'INFO');
+      const infoDelta = topDeltas.find(v => v.value === 'INFO');
       expect(infoDelta).toBeDefined();
       expect(infoDelta!.baselinePct).toBeGreaterThan(infoDelta!.targetPct);
     });

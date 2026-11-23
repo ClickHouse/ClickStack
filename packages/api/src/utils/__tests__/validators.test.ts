@@ -1,4 +1,5 @@
 import { WebhookService } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import dns from 'dns';
 
 import { createHandlebarsWithHelpers } from '@/tasks/checkAlerts/transports';
@@ -560,8 +561,8 @@ describe('validators', () => {
     });
 
     it('should return false if password is invalid', () => {
-      expect(validators.validatePassword(null as any)).toBe(false);
-      expect(validators.validatePassword(undefined as any)).toBe(false);
+      expect(validators.validatePassword(fromAny(null))).toBe(false);
+      expect(validators.validatePassword(fromAny(undefined))).toBe(false);
       expect(validators.validatePassword('')).toBe(false);
       expect(validators.validatePassword('1234567')).toBe(false);
       expect(validators.validatePassword('abcdefghijk')).toBe(false); // 11 chars

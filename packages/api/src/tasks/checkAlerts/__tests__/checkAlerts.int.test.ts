@@ -8,6 +8,7 @@ import {
   Tile,
   WebhookService,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 import ms from 'ms';
 import { z } from 'zod';
@@ -1113,8 +1114,8 @@ describe('checkAlerts', () => {
       }> = {},
     ): AlertDetails => {
       const base = {
-        alert: { groupBy: overrides.alertGroupBy } as any,
-        source: {} as any,
+        alert: fromPartial<IAlert>({ groupBy: overrides.alertGroupBy }),
+        source: fromPartial<ISource>({}),
         previousMap: new Map(),
       };
 
@@ -1122,10 +1123,10 @@ describe('checkAlerts', () => {
         return {
           ...base,
           taskType: AlertTaskType.TILE,
-          tile: {
+          tile: fromPartial({
             config: { groupBy: overrides.tileGroupBy ?? '' },
-          } as any,
-          dashboard: {} as any,
+          }),
+          dashboard: fromPartial({}),
         };
       }
 
@@ -1143,7 +1144,7 @@ describe('checkAlerts', () => {
       return {
         ...base,
         taskType: AlertTaskType.SAVED_SEARCH,
-        savedSearch: {} as any,
+        savedSearch: fromPartial({}),
       };
     };
 
@@ -1277,15 +1278,15 @@ describe('checkAlerts', () => {
         defaultTableSelectExpression: 'Timestamp, Body',
       },
       savedSearch: {
-        _id: 'fake-saved-search-id' as any,
-        team: 'team-123' as any,
+        _id: fromAny('fake-saved-search-id'),
+        team: fromAny('team-123'),
         id: 'fake-saved-search-id',
         name: 'My Search',
         select: 'Body',
         where: 'Body: "error"',
         whereLanguage: 'lucene',
         orderBy: 'timestamp',
-        source: 'fake-source-id' as any,
+        source: fromAny('fake-source-id'),
         tags: ['test'],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1317,7 +1318,7 @@ describe('checkAlerts', () => {
         id: 'id-123',
         name: 'My Dashboard',
         tiles: [testTile],
-        team: 'team-123' as any,
+        team: fromAny('team-123'),
         tags: ['test'],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1362,7 +1363,7 @@ describe('checkAlerts', () => {
     beforeEach(async () => {
       jest
         .spyOn(slack, 'postMessageToWebhook')
-        .mockResolvedValueOnce(null as any);
+        .mockResolvedValueOnce(fromAny(null));
     });
 
     afterEach(async () => {
@@ -2023,7 +2024,7 @@ describe('checkAlerts', () => {
 
       jest
         .spyOn(slack, 'postMessageToWebhook')
-        .mockResolvedValueOnce(null as any);
+        .mockResolvedValueOnce(fromAny(null));
 
       jest.spyOn(checkAlert, 'handleSendGenericWebhook');
     });
@@ -3072,7 +3073,9 @@ describe('checkAlerts', () => {
     it('INLINE alert (group by) - notifies per group', async () => {
       // Two groups fire, so two notifications go out (the shared beforeEach
       // only mocks a single call).
-      jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+      jest
+        .spyOn(slack, 'postMessageToWebhook')
+        .mockResolvedValue(fromAny(null));
 
       const {
         team,
@@ -3246,7 +3249,7 @@ describe('checkAlerts', () => {
         webhookSettings: Partial<IWebhook>;
       }> = {}) => {
         const fixture = await setupSavedSearchAlertTest({
-          webhookSettings: webhookSettings as IWebhook,
+          webhookSettings,
         });
         const dashboard = await new Dashboard({
           name: 'Errors Dashboard',
@@ -4183,7 +4186,7 @@ describe('checkAlerts', () => {
               headers: status === 302 ? { Location: redirectTarget } : {},
             });
           });
-          global.fetch = fetchMock as any;
+          global.fetch = fetchMock;
 
           const {
             team,
@@ -4396,7 +4399,7 @@ describe('checkAlerts', () => {
             status: 500,
             text: jest.fn().mockResolvedValue('resolve send failed'),
           });
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock;
 
         const {
           team,
@@ -4571,7 +4574,7 @@ describe('checkAlerts', () => {
           status: 500,
           text: jest.fn().mockResolvedValue('group webhook failed'),
         });
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock;
 
         const {
           team,
@@ -4588,7 +4591,7 @@ describe('checkAlerts', () => {
             name: 'Generic Webhook',
             description: 'generic webhook',
             body: JSON.stringify({ text: '{{title}}' }),
-          } as IWebhook,
+          },
         });
 
         const now = new Date('2023-11-16T22:12:00.000Z');
@@ -5073,7 +5076,7 @@ describe('checkAlerts', () => {
           url: 'https://webhook.site/no-body',
           name: 'Bodyless Generic Webhook',
           // Intentionally no `body`.
-        } as IWebhook,
+        },
       });
 
       const now = new Date('2023-11-16T22:12:00.000Z');
@@ -6930,9 +6933,9 @@ describe('checkAlerts', () => {
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(4);
 
       // Verify the resolution notification was sent for service-b
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       const resolutionCall = calls.find(call =>
-        call[1].text.includes('My Search'),
+        call[1].text?.includes('My Search'),
       );
       expect(resolutionCall).toBeDefined();
     });
@@ -7615,9 +7618,9 @@ describe('checkAlerts', () => {
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(4);
 
       // Verify the resolution notification was sent for service-b
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       const resolutionCall = calls.find(call =>
-        call[1].text.includes('My Search'),
+        call[1].text?.includes('My Search'),
       );
       expect(resolutionCall).toBeDefined();
     });
@@ -8009,7 +8012,7 @@ describe('checkAlerts', () => {
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(2);
 
       // Validate webhook messages contain correct group names
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       const messages = calls.map((call: any) => ({
         url: call[0],
         text: call[1].text,
@@ -11498,7 +11501,7 @@ describe('checkAlerts', () => {
       expect((await Alert.findById(details.alert.id))!.state).toBe('OK');
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(2);
 
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       expect(JSON.stringify(calls[0][1])).toContain('Alert for');
       expect(JSON.stringify(calls[1][1])).toContain(
         'The alert has been resolved',
@@ -11570,7 +11573,7 @@ describe('checkAlerts', () => {
 
         jest
           .spyOn(slack, 'postMessageToWebhook')
-          .mockResolvedValue(null as any);
+          .mockResolvedValue(fromAny(null));
 
         const details = await createAlertDetails(
           team,
@@ -11671,7 +11674,7 @@ describe('checkAlerts', () => {
 
         jest
           .spyOn(slack, 'postMessageToWebhook')
-          .mockResolvedValue(null as any);
+          .mockResolvedValue(fromAny(null));
 
         const details = await createAlertDetails(
           team,
@@ -11758,7 +11761,7 @@ describe('checkAlerts', () => {
 
         jest
           .spyOn(slack, 'postMessageToWebhook')
-          .mockResolvedValue(null as any);
+          .mockResolvedValue(fromAny(null));
 
         const details = await createAlertDetails(
           team,

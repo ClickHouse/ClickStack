@@ -7,6 +7,7 @@ import {
   type PromqlSourceBackend,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 import { Types } from 'mongoose';
 
 import * as config from '@/config';
@@ -55,14 +56,14 @@ function fakeUpstreamResponse(
       controller.close();
     },
   });
-  return {
+  return fromPartial({
     ok: status >= 200 && status < 300,
     status,
     headers: new Headers({ 'content-type': contentType }),
     body,
     text: jest.fn().mockResolvedValue(JSON.stringify(payload)),
     json: jest.fn().mockResolvedValue(payload),
-  } as unknown as Response;
+  });
 }
 
 // What ClickHouse's prometheus_api_v1 handler answers the router's
@@ -529,7 +530,7 @@ describe('prometheus router', () => {
         .expect(200);
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(mockFetch.mock.calls[0][0] as string).toMatch(
+      expect(String(mockFetch.mock.calls[0][0])).toMatch(
         /^http:\/\/vmselect:8481\/select\/0\/prometheus\/api\/v1\/query_range/,
       );
     });
@@ -594,7 +595,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       expect(requested.searchParams.get('extra_label')).toBe('namespace=prod');
       expect(requested.searchParams.get('query')).toBe('up');
     });
@@ -629,7 +630,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       expect(requested.searchParams.get('query')).toBe('up');
     });
 
@@ -664,7 +665,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       expect(requested.searchParams.get('timeout')).toBe('30s');
     });
 
@@ -697,7 +698,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       expect(requested.searchParams.get('stats')).toBe('none');
     });
 
@@ -734,7 +735,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       expect(requested.searchParams.get('extra_label')).toBe('namespace=prod');
       expect(requested.searchParams.get('query')).toBe('up');
     });
@@ -764,7 +765,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       expect(requested.searchParams.get('step')).toBe('15s');
     });
 
@@ -920,14 +921,16 @@ describe('prometheus router', () => {
         tableName: 'no_such_table_for_fallback',
       });
       // A stock ClickHouse answers the probe with a plain-text 404.
-      mockFetch.mockResolvedValueOnce({
-        status: 404,
-        text: jest
-          .fn()
-          .mockResolvedValue(
-            'There is no handle /prometheus/api/v1/format_query',
-          ),
-      } as unknown as Response);
+      mockFetch.mockResolvedValueOnce(
+        fromPartial({
+          status: 404,
+          text: jest
+            .fn()
+            .mockResolvedValue(
+              'There is no handle /prometheus/api/v1/format_query',
+            ),
+        }),
+      );
 
       const res = await agent
         .get('/v1/prometheus/query_range')
@@ -2531,7 +2534,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       const sentStart = Number(requested.searchParams.get('start'));
       expect(Number(requested.searchParams.get('end'))).toBe(end);
       expect(sentStart).toBeGreaterThan(end - thirtyDays);
@@ -2565,7 +2568,7 @@ describe('prometheus router', () => {
         })
         .expect(200);
 
-      const requested = new URL(mockFetch.mock.calls[0][0] as string);
+      const requested = new URL(String(mockFetch.mock.calls[0][0]));
       const sentStart = Number(requested.searchParams.get('start'));
       expect(Number(requested.searchParams.get('end'))).toBe(end);
       expect(end - sentStart).toBe(PROMETHEUS_MAX_EXEMPLAR_WINDOW_SEC);
