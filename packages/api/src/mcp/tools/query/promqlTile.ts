@@ -24,6 +24,8 @@ import {
   resolvePromqlTarget,
   runPromqlQuery,
 } from '@/controllers/promql';
+import type { McpContext } from '@/mcp/tools/types';
+import { getMcpConnection } from '@/mcp/utils/connections';
 
 /** The tile fields that decide what a PromQL tile queries and how its result is shaped. */
 type PromqlTileConfig = Pick<
@@ -110,20 +112,22 @@ export function toPromqlTileResult(
  * the tile can't draw, and ClickHouse errors from the table-function backend.
  */
 export async function runPromqlTile({
-  teamId,
+  context,
   config,
   dateRange,
   variables,
   signal,
 }: {
-  teamId: string;
+  context: McpContext;
   config: PromqlTileConfig & Pick<PromqlSavedChartConfig, 'source'>;
   dateRange: [Date, Date];
   variables?: ChartVariable[];
   signal?: AbortSignal;
 }) {
-  const target = await resolvePromqlTarget(teamId, config.source, {
+  const target = await resolvePromqlTarget(context.teamId, config.source, {
     selectPassword: true,
+    getConnection: (connectionId, options) =>
+      getMcpConnection(context, connectionId, options),
   });
   if ('error' in target) {
     throw new PromQLQueryError(
