@@ -3690,7 +3690,7 @@ export async function renderMetricExemplarsChartConfig(
 
   return concatChSql(' ', [
     chSql`SELECT
-      toUnixTimestamp64Milli(ex_TimeUnix) AS timestamp,
+      toUnixTimestamp64Milli(toDateTime64(ex_TimeUnix, 9)) AS timestamp,
       ex_Value AS value,
       ex_TraceId AS traceId,
       ex_SpanId AS spanId,
