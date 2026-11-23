@@ -1,6 +1,6 @@
 import { env } from 'next-runtime-env';
 
-// eslint-disable-next-line no-restricted-imports -- package.json lives outside src, no @/ alias reaches it
+// Relative import: package.json lives outside src, no @/ alias reaches it
 import packageJson from '../package.json';
 
 // ONLY USED IN LOCAL MODE
