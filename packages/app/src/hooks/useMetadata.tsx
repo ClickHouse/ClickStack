@@ -54,7 +54,7 @@ export const SINGLE_KEY_VALUES_LIMIT = 10000;
 
 // Hook to get metadata with proper settings applied
 export function useMetadataWithSettings() {
-  const [metadata, setMetadata] = useState(getMetadata());
+  const [metadata, setMetadata] = useState(getMetadata);
   const { data: me } = api.useMe();
   const settingsAppliedRef = useRef(false);
   const queryClient = useQueryClient();

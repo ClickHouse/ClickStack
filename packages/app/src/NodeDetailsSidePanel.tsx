@@ -443,8 +443,8 @@ export default function NodeDetailsSidePanel(props: {
 
   return (
     <NodeDetailsSidePanelInner
-      {...props}
       key={nodeName || 'empty'}
+      {...props}
       nodeName={nodeName}
       setNodeName={setNodeName}
     />

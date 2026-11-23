@@ -57,7 +57,7 @@ export default function ContextSubpanel({
   const origTimestamp = rowData[ROW_DATA_ALIASES.TIMESTAMP];
   const { whereLanguage: originalLanguage = 'lucene' } =
     dbSqlRowTableConfig ?? {};
-  const [range, setRange] = useState<number>(ms('30s'));
+  const [range, setRange] = useState<number>(() => ms('30s'));
   const [activePreset, setActivePreset] = useState('all');
   const { control, reset } = useForm({
     defaultValues: {

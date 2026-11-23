@@ -2325,7 +2325,7 @@ function DBSearchPageContent() {
     setNewSourceModalOpened(true);
   }, []);
 
-  const [isDrawerChildModalOpen, setDrawerChildModalOpen] = useState(false);
+  const [isDrawerChildModalOpen, setIsDrawerChildModalOpen] = useState(false);
 
   const rowTableContext = useMemo(
     () => ({
@@ -2335,7 +2335,7 @@ function DBSearchPageContent() {
       generateSearchUrl,
       dbSqlRowTableConfig,
       isChildModalOpen: isDrawerChildModalOpen,
-      setChildModalOpen: setDrawerChildModalOpen,
+      setChildModalOpen: setIsDrawerChildModalOpen,
       source: searchedSource,
     }),
     [
