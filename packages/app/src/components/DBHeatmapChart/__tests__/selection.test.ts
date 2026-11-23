@@ -1,4 +1,4 @@
-import type uPlot from 'uplot';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   applySelectionToChart,
@@ -40,7 +40,7 @@ function makeStubU(opts?: {
 describe('applySelectionToChart', () => {
   it('clears the selection when bounds is null', () => {
     const u = makeStubU();
-    applySelectionToChart(u as unknown as uPlot, null, 'linear');
+    applySelectionToChart(fromPartial(u), null, 'linear');
     expect(u.setSelect).toHaveBeenCalledTimes(1);
     expect(u.setSelect).toHaveBeenCalledWith(
       { left: 0, top: 0, width: 0, height: 0 },
@@ -51,7 +51,7 @@ describe('applySelectionToChart', () => {
 
   it('clears the selection when bounds is undefined', () => {
     const u = makeStubU();
-    applySelectionToChart(u as unknown as uPlot, undefined, 'linear');
+    applySelectionToChart(fromPartial(u), undefined, 'linear');
     expect(u.setSelect).toHaveBeenCalledWith(
       { left: 0, top: 0, width: 0, height: 0 },
       false,
@@ -61,14 +61,14 @@ describe('applySelectionToChart', () => {
   it('returns early without calling setSelect when y scale is unpopulated', () => {
     const u = makeStubU({ yScale: { min: undefined, max: undefined } });
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 1, yMax: 5 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     expect(u.setSelect).not.toHaveBeenCalled();
   });
 
   it('converts xMin/xMax from seconds to ms before calling valToPos', () => {
     const u = makeStubU();
     const bounds: SelectionBounds = { xMin: 5, xMax: 10, yMin: 1, yMax: 9 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     expect(u.valToPos).toHaveBeenCalledWith(5_000, 'x');
     expect(u.valToPos).toHaveBeenCalledWith(10_000, 'x');
   });
@@ -76,7 +76,7 @@ describe('applySelectionToChart', () => {
   it('passes raw y values through under linear scale', () => {
     const u = makeStubU({ yScale: { min: 0, max: 100 } });
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 5, yMax: 50 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     // y values must NOT be log-transformed under linear scale.
     expect(u.valToPos).toHaveBeenCalledWith(50, 'y');
     expect(u.valToPos).toHaveBeenCalledWith(5, 'y');
@@ -85,7 +85,7 @@ describe('applySelectionToChart', () => {
   it('applies Math.log to y values under log scale', () => {
     const u = makeStubU({ yScale: { min: 0, max: 100 } });
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 1, yMax: Math.E };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'log');
+    applySelectionToChart(fromPartial(u), bounds, 'log');
     // Math.log(1) === 0, Math.log(Math.E) === 1
     expect(u.valToPos).toHaveBeenCalledWith(0, 'y');
     expect(u.valToPos).toHaveBeenCalledWith(1, 'y');
@@ -94,7 +94,7 @@ describe('applySelectionToChart', () => {
   it('clamps yMin === 0 to the chart-floor (yScaleMin) under linear scale', () => {
     const u = makeStubU({ yScale: { min: 2, max: 100 } });
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 50 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     // yMin=0 should clamp UP to yScale.min (2), not pass through.
     expect(u.valToPos).toHaveBeenCalledWith(2, 'y');
     expect(u.valToPos).not.toHaveBeenCalledWith(0, 'y');
@@ -103,7 +103,7 @@ describe('applySelectionToChart', () => {
   it('clamps yMin === 0 to the chart-floor (yScaleMin) under log scale', () => {
     const u = makeStubU({ yScale: { min: -1, max: 5 } });
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: Math.E };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'log');
+    applySelectionToChart(fromPartial(u), bounds, 'log');
     // yMin=0 (or any non-positive) bypasses Math.log and clamps to yScale.min.
     expect(u.valToPos).toHaveBeenCalledWith(-1, 'y');
   });
@@ -111,14 +111,14 @@ describe('applySelectionToChart', () => {
   it('clamps yMax above the chart ceiling to yScaleMax under linear', () => {
     const u = makeStubU({ yScale: { min: 0, max: 10 } });
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 1, yMax: 999 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     expect(u.valToPos).toHaveBeenCalledWith(10, 'y');
   });
 
   it('handles reversed xMin > xMax via Math.min/max for left/right', () => {
     const u = makeStubU();
     const bounds: SelectionBounds = { xMin: 10, xMax: 5, yMin: 1, yMax: 9 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     // valToPos identity: xMin*1000=10000, xMax*1000=5000
     // left should be Math.min(10000, 5000) = 5000, width = 10000-5000 = 5000
     const call = u.setSelect.mock.calls[0][0];
@@ -134,7 +134,7 @@ describe('applySelectionToChart', () => {
       valToPos: (val, axis) => (axis === 'y' ? 100 - val : val),
     });
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 2, yMax: 8 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     const call = u.setSelect.mock.calls[0][0];
     // yHighPx = 100-8 = 92, yLowPx = 100-2 = 98, height = max(0, 98-92) = 6
     expect(call.top).toBe(92);
@@ -144,7 +144,7 @@ describe('applySelectionToChart', () => {
   it('passes fireHook=false to setSelect to avoid re-entering the setSelect hook', () => {
     const u = makeStubU();
     const bounds: SelectionBounds = { xMin: 0, xMax: 1, yMin: 1, yMax: 9 };
-    applySelectionToChart(u as unknown as uPlot, bounds, 'linear');
+    applySelectionToChart(fromPartial(u), bounds, 'linear');
     const fireHook = u.setSelect.mock.calls[0][1];
     expect(fireHook).toBe(false);
   });

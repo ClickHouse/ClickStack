@@ -11,13 +11,13 @@ jest.mock('../useMetadata', () => ({
 }));
 
 describe('useFieldExpressionGenerator', () => {
-  const mockSource = {
+  const mockSource = fromPartial<TSource>({
     from: {
       databaseName: 'test_db',
       tableName: 'traces',
     },
     connection: 'conn1',
-  } as TSource;
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();

@@ -200,7 +200,7 @@ describe('useOnClickLinkBuilder', () => {
 
     // Clicking the failing row fires the toast.
     const preventDefault = jest.fn();
-    action.onClickError!({ preventDefault } as any);
+    action.onClickError!(fromPartial({ preventDefault }));
     expect(preventDefault).toHaveBeenCalledTimes(1);
     expect(jest.mocked(notifications.show)).toHaveBeenCalledWith(
       expect.objectContaining({

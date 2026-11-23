@@ -24,7 +24,6 @@ import {
   TraceTotalDurationStat,
   useEventsAroundFocus,
 } from '@/components/DBTraceWaterfallChart';
-import { TimelineChart } from '@/components/TimelineChart';
 import { TRACE_WATERFALL_ROW_LIMIT } from '@/components/traceWaterfallLimits';
 import {
   TraceTriggerRow,
@@ -40,6 +39,10 @@ jest.mock('@/components/traceWaterfallLimits', () => ({
   TRACE_WATERFALL_ROW_LIMIT: 3,
   TRACE_WATERFALL_FETCH_LIMIT: 4,
 }));
+
+// Read at render time, so the hoisted mock factory can reference it.
+const mockTimelineChartProps: { latest: any } = { latest: {} };
+
 jest.mock('@/components/TimelineChart', () => {
   const flattenText = (value: React.ReactNode): string => {
     if (value == null || typeof value === 'boolean') {
@@ -62,7 +65,7 @@ jest.mock('@/components/TimelineChart', () => {
   };
 
   const mockComponent = function MockTimelineChart(props: any) {
-    mockComponent.latestProps = props;
+    mockTimelineChartProps.latest = props;
     return (
       <div data-testid="timeline-chart">
         TimelineChart
@@ -74,7 +77,6 @@ jest.mock('@/components/TimelineChart', () => {
       </div>
     );
   };
-  mockComponent.latestProps = {};
 
   const MockTimelineMinimap = function MockTimelineMinimap(props: any) {
     MockTimelineMinimap.latestProps = props;
@@ -138,7 +140,6 @@ jest.mock('@/hooks/useWaterfallSearchState', () => ({
 const mockUseOffsetPaginatedQuery = jest.mocked(useOffsetPaginatedQuery);
 const mockUseRowWhere = jest.mocked(useRowWhere);
 const mockUseColumns = jest.mocked(useColumns);
-const MockTimelineChart = TimelineChart as any;
 
 // Mirrors useColumns, which is disabled, so never loading, without a table.
 // A loading query result carries no data, so the two states are built apart.
@@ -245,7 +246,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     jest.clearAllMocks();
     mockUseBrowserTraceEvents.mockImplementation(passBrowserTraceEventsThrough);
     mockUseRowWhere.mockReturnValue(() => ({ where: 'row-id', aliasWith: [] }));
-    MockTimelineChart.latestProps = {};
+    mockTimelineChartProps.latest = {};
     mockUseWaterfallSearchState.mockReturnValue(makeWaterfallSearchState());
     setupColumnsMock({ data: [] });
   });
@@ -359,8 +360,8 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Verify the chart received the correct data
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
-    expect(MockTimelineChart.latestProps.rows[0]).toBeTruthy();
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows[0]).toBeTruthy();
   });
 
   it('renders TimelineChart with both trace and log data', async () => {
@@ -373,9 +374,9 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Verify both trace and log data are present
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
-    expect(MockTimelineChart.latestProps.rows[0]).toBeTruthy(); // Trace row
-    expect(MockTimelineChart.latestProps.rows[1]).toBeTruthy(); // Log row
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows[0]).toBeTruthy(); // Trace row
+    expect(mockTimelineChartProps.latest.rows[1]).toBeTruthy(); // Log row
   });
 
   it.each([
@@ -390,7 +391,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
   });
 
   it.each([
@@ -408,7 +409,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    const logRow = MockTimelineChart.latestProps.rows.find(
+    const logRow = mockTimelineChartProps.latest.rows.find(
       (row: { type?: string }) => row.type === SourceKind.Log,
     );
     expect(logRow.events[0].backgroundColor).toBe(expectedColor());
@@ -548,7 +549,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     expect(screen.queryByTestId('trace-total-stats')).not.toBeInTheDocument();
   });
 
@@ -804,9 +805,9 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Verify the chart received the HTTP span with URL
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
 
-    expect(MockTimelineChart.latestProps.rows[0]).toBeTruthy();
+    expect(mockTimelineChartProps.latest.rows[0]).toBeTruthy();
     expect(
       screen.getByText('http span https://example-api.clickhouse.com/users'),
     ).toBeInTheDocument();
@@ -831,7 +832,7 @@ describe('DBTraceWaterfallChartContainer', () => {
   });
 
   const findRow = (type: string) =>
-    MockTimelineChart.latestProps.rows.find(
+    mockTimelineChartProps.latest.rows.find(
       (row: { type?: string }) => row.type === type,
     );
 
@@ -892,7 +893,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     expect(screen.getByText(errors)).toBeInTheDocument();
-    const logRow = MockTimelineChart.latestProps.rows.find(
+    const logRow = mockTimelineChartProps.latest.rows.find(
       (row: { type?: string }) => row.type === SourceKind.Log,
     );
     const label = renderWithMantine(logRow.label);
@@ -932,7 +933,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent(null);
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows).toHaveLength(1);
+    expect(mockTimelineChartProps.latest.rows).toHaveLength(1);
   });
 
   it('renders Spans and Logs chips when log source is present', async () => {
@@ -959,13 +960,13 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
 
     const showLogsChip = screen.getByTestId('show-logs-chip');
     await user.click(showLogsChip);
 
     await waitFor(() => {
-      expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+      expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     });
   });
 
@@ -975,13 +976,13 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
 
     const showSpansChip = screen.getByTestId('show-spans-chip');
     await user.click(showSpansChip);
 
     await waitFor(() => {
-      expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+      expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     });
   });
 
@@ -1055,7 +1056,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Valid spans still render — the log failure did not blank the chart.
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     // The full-chart error block is NOT shown.
     expect(
       screen.queryByText('An error occurred while fetching trace data:'),
@@ -1082,7 +1083,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Spans still render (unfiltered fallback) — chart is not blanked.
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     expect(
       screen.queryByText('An error occurred while fetching trace data:'),
     ).not.toBeInTheDocument();
@@ -1223,7 +1224,7 @@ describe('DBTraceWaterfallChartContainer', () => {
       renderComponent();
       await waitForLoading();
 
-      expect(MockTimelineChart.latestProps.rows).toHaveLength(1);
+      expect(mockTimelineChartProps.latest.rows).toHaveLength(1);
       expect(screen.getByText('1 span,')).toBeInTheDocument();
     });
 
@@ -1350,7 +1351,7 @@ describe('DBTraceWaterfallChartContainer', () => {
           triggerRow,
         }));
       const rowTypes = () =>
-        MockTimelineChart.latestProps.rows.map(
+        mockTimelineChartProps.latest.rows.map(
           (row: { id: string; type?: string }) => `${row.type}:${row.id}`,
         );
 
@@ -1366,7 +1367,7 @@ describe('DBTraceWaterfallChartContainer', () => {
           'trace:row-id',
           'log:row-id',
         ]);
-        const [row] = MockTimelineChart.latestProps.rows;
+        const [row] = mockTimelineChartProps.latest.rows;
         expect(row.events[0].tooltip).toBe(
           `${triggeredBy} | Started at Jan 1 1:00:00.000 AM`,
         );
