@@ -11,7 +11,6 @@ import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
@@ -27,6 +26,7 @@ import {
   mcpUserError,
   sanitizeFetchError,
 } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_TOOL_TIMEOUT_MS, runWithTimeout } from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
 import { trimToolResponse } from '@/utils/trimToolResponse';
@@ -475,8 +475,7 @@ async function describeMetricImpl(
   input: z.infer<typeof describeMetricSchema>,
   signal: AbortSignal,
 ) {
-  const { teamId } = context;
-  const source = await getSource(teamId, input.sourceId);
+  const source = await getMcpSource(context, input.sourceId);
   if (!source) {
     return mcpUserError(
       `Source "${input.sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,

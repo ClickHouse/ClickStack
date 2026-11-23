@@ -92,8 +92,6 @@ const SQL_OR_QUERIES_ERROR =
 // ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerSql({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_sql',
     {
@@ -158,7 +156,7 @@ export function registerSql({ context, registerTool }: ToolRegistrar) {
           connectionId: input.connectionId,
           sourceId: input.sourceId,
         },
-        createSourceLookup(teamId.toString()),
+        createSourceLookup(context),
       );
       if ('error' in prepared) {
         return prepared.error;

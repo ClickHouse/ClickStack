@@ -13,7 +13,6 @@ import SqlString from 'sqlstring';
 import { z } from 'zod';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { McpContext, ToolRegistrar, ToolResult } from '@/mcp/tools/types';
 import {
@@ -21,7 +20,7 @@ import {
   McpConnectionNotFoundError,
 } from '@/mcp/utils/clickhouse';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
-import { isHiddenSource } from '@/mcp/utils/promql';
+import { getVisibleMcpSource } from '@/mcp/utils/sources';
 import {
   MCP_QUERY_MAX_EXECUTION_SEC,
   MCP_TIMEOUT_GRACE_MS,
@@ -101,8 +100,8 @@ async function describeSourceSchema(
   progress: DescribeProgress,
 ): Promise<ToolResult> {
   const { teamId } = context;
-  const source = await getSource(teamId, sourceId);
-  if (!source || isHiddenSource(context, source)) {
+  const source = await getVisibleMcpSource(context, sourceId);
+  if (!source) {
     return mcpUserError(
       `Source "${sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,
     );

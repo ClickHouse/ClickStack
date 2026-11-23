@@ -12,7 +12,6 @@ import {
 import { z } from 'zod';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import {
@@ -20,6 +19,7 @@ import {
   McpConnectionNotFoundError,
 } from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 
@@ -161,8 +161,6 @@ function topDeltasForProperty(
 // ─── Tool definition ─────────────────────────────────────────────────────────
 
 export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_event_deltas',
     {
@@ -242,7 +240,7 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
         );
       }
 
-      const source = await getSource(teamId.toString(), input.sourceId);
+      const source = await getMcpSource(context, input.sourceId);
       if (!source) {
         return mcpUserError(
           `Source not found: ${input.sourceId}. Call clickstack_list_sources to find available source IDs.`,

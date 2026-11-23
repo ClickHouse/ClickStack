@@ -1,10 +1,10 @@
 import { z } from 'zod';
 
-import { deleteSource, getSource } from '@/controllers/sources';
+import { deleteSource } from '@/controllers/sources';
 import { IDEMPOTENT_DESTRUCTIVE_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
-import { isHiddenSource } from '@/mcp/utils/promql';
+import { getVisibleMcpSource } from '@/mcp/utils/sources';
 import { objectIdSchema } from '@/utils/zod';
 
 export function registerDeleteSource({
@@ -30,8 +30,7 @@ export function registerDeleteSource({
       }),
     },
     async ({ id: sourceId }) => {
-      const source = await getSource(teamId, sourceId);
-      if (source && isHiddenSource(context, source)) {
+      if (!(await getVisibleMcpSource(context, sourceId))) {
         return mcpUserError('Source not found');
       }
 

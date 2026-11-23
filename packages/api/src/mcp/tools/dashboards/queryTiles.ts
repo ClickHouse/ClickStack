@@ -235,7 +235,7 @@ export function registerQueryTiles({
         .slice(MAX_TILES_PER_CALL)
         .map(t => t.id);
 
-      const referenceTargets = await getReferenceTargets(teamId.toString());
+      const referenceTargets = await getReferenceTargets(context);
 
       // Fix one shared deadline for the whole batch that every tile races.
       const deadlineAt = Date.now() + BATCH_DEADLINE_MS;

@@ -20,7 +20,6 @@ import { DisplayType, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import type { McpContext } from '@/mcp/tools/types';
 import {
   getMcpClickhouseClient,
@@ -31,6 +30,7 @@ import {
   mcpServerError,
   mcpUserError,
 } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
@@ -104,7 +104,7 @@ export async function mineWindowPatterns(
   const sampleSize = options?.sampleSize ?? 10_000;
   const trendBuckets = options?.trendBuckets ?? 0;
 
-  const source = await getSource(teamId, sourceId);
+  const source = await getMcpSource(context, sourceId);
   if (!source) {
     return {
       error: mcpUserError(
