@@ -3,4 +3,4 @@
 '@hyperdx/app': patch
 ---
 
-fix: limit failed password logins to 10 per email every 15 minutes
+fix: limit failed password logins to 10 per email every 2 minutes

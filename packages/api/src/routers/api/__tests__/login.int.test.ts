@@ -1,11 +1,15 @@
 import { getAgent, getLoggedInAgent, getServer } from '@/fixtures';
+import {
+  LOGIN_MAX_FAILED_ATTEMPTS,
+  loginRateLimiter,
+} from '@/middleware/loginRateLimiter';
 import User from '@/models/user';
-import { LOGIN_MAX_FAILED_ATTEMPTS } from '@/routers/api/root';
 
 const MOCK_USER = {
   email: 'login-limit@example.com',
   password: 'TacoCat!2#4X',
 };
+const OTHER_EMAIL = 'someone-else@example.com';
 
 describe('POST /login/password rate limit', () => {
   const server = getServer();
@@ -14,6 +18,12 @@ describe('POST /login/password rate limit', () => {
   beforeAll(async () => {
     await server.start();
     ({ agent: signedInAgent } = await getLoggedInAgent(server, MOCK_USER));
+  });
+
+  afterEach(() => {
+    for (const email of [MOCK_USER.email, OTHER_EMAIL]) {
+      loginRateLimiter.resetKey(email);
+    }
   });
 
   afterAll(async () => {
@@ -26,6 +36,13 @@ describe('POST /login/password rate limit', () => {
       .type('form')
       .send({ email, password });
 
+  const failLogins = async (email: string) => {
+    for (let i = 0; i < LOGIN_MAX_FAILED_ATTEMPTS; i++) {
+      const res = await login(email, 'wrong-password');
+      expect(res.headers.location).toContain('/login?err=authFail');
+    }
+  };
+
   it('does not count successful logins', async () => {
     for (let i = 0; i <= LOGIN_MAX_FAILED_ATTEMPTS; i++) {
       const res = await login(MOCK_USER.email, MOCK_USER.password);
@@ -35,10 +52,7 @@ describe('POST /login/password rate limit', () => {
   });
 
   it('blocks an email after too many failed attempts, even with the right password', async () => {
-    for (let i = 0; i < LOGIN_MAX_FAILED_ATTEMPTS; i++) {
-      const res = await login(MOCK_USER.email, 'wrong-password');
-      expect(res.headers.location).toContain('/login?err=authFail');
-    }
+    await failLogins(MOCK_USER.email);
 
     const blocked = await login(MOCK_USER.email, MOCK_USER.password);
     expect(blocked.status).toBe(303);
@@ -50,25 +64,28 @@ describe('POST /login/password rate limit', () => {
   });
 
   it('keeps a separate limit for each email', async () => {
-    const res = await login('someone-else@example.com', 'wrong-password');
-    expect(res.headers.location).toContain('/login?err=authFail');
+    await failLogins(MOCK_USER.email);
+    const blocked = await login(MOCK_USER.email, 'wrong-password');
+    expect(blocked.headers.location).toContain('/login?err=tooManyAttempts');
+
+    const other = await login(OTHER_EMAIL, 'wrong-password');
+    expect(other.headers.location).toContain('/login?err=authFail');
   });
 
   it('counts failed attempts made from a signed-in session', async () => {
-    const email = 'signed-in-target@example.com';
     for (let i = 0; i < LOGIN_MAX_FAILED_ATTEMPTS; i++) {
       await signedInAgent
         .post('/login/password')
         .type('form')
-        .send({ email, password: 'wrong-password' });
+        .send({ email: OTHER_EMAIL, password: 'wrong-password' });
     }
 
-    const res = await login(email, 'wrong-password');
+    const res = await login(OTHER_EMAIL, 'wrong-password');
     expect(res.headers.location).toContain('/login?err=tooManyAttempts');
   });
 
   it('limits an email sent in the query string, as passport accepts it there', async () => {
-    const query = { email: 'query-target@example.com', password: 'wrong' };
+    const query = { email: OTHER_EMAIL, password: 'wrong-password' };
     // A new X-Forwarded-For each time, so falling back to req.ip can't limit it.
     const attempt = (i: number) =>
       getAgent(server)
@@ -84,7 +101,6 @@ describe('POST /login/password rate limit', () => {
   });
 
   it('does not count server errors, such as the database being down', async () => {
-    const email = 'outage@example.com';
     const findByUsername = jest
       .spyOn(User, 'findByUsername')
       .mockImplementation(() => {
@@ -92,14 +108,14 @@ describe('POST /login/password rate limit', () => {
       });
     try {
       for (let i = 0; i <= LOGIN_MAX_FAILED_ATTEMPTS; i++) {
-        const res = await login(email, 'wrong-password');
+        const res = await login(OTHER_EMAIL, 'wrong-password');
         expect(res.headers.location).toContain('/login?err=unknown');
       }
     } finally {
       findByUsername.mockRestore();
     }
 
-    const res = await login(email, 'wrong-password');
+    const res = await login(OTHER_EMAIL, 'wrong-password');
     expect(res.headers.location).toContain('/login?err=authFail');
   });
 
@@ -107,7 +123,7 @@ describe('POST /login/password rate limit', () => {
     const attempt = () =>
       getAgent(server)
         .post('/login/password')
-        .send({ email: 'json-client@example.com', password: 'wrong-password' });
+        .send({ email: OTHER_EMAIL, password: 'wrong-password' });
     for (let i = 0; i < LOGIN_MAX_FAILED_ATTEMPTS; i++) {
       await attempt();
     }

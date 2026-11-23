@@ -7,60 +7,17 @@ import { validateRequest } from 'zod-express-middleware';
 import * as config from '@/config';
 import { createTeam, isTeamExisting } from '@/controllers/team';
 import { handleAuthError, redirectToDashboard } from '@/middleware/auth';
+import {
+  loginRateLimiter,
+  markRejectedLogin,
+} from '@/middleware/loginRateLimiter';
 import TeamInvite from '@/models/teamInvite';
 import User from '@/models/user'; // TODO -> do not import model directly
 import { setupTeamDefaults } from '@/setupDefaults';
-import { getCounter, getServerSpan } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import passport from '@/utils/passport';
-import rateLimiter from '@/utils/rateLimiter';
 import { isMongoConnected, mongoReadyStateName } from '@/utils/readiness';
 import { passwordSchema } from '@/utils/validators';
-
-export const LOGIN_MAX_FAILED_ATTEMPTS = 10;
-
-const loginRateLimitedCounter = getCounter('hyperdx.api.login.rate_limited', {
-  description:
-    'Count of password logins refused because the email had too many recent failed attempts.',
-});
-
-// passport-local reads the email from the body, then the query string.
-const getLoginEmail = (req: express.Request) => {
-  const email = req.body?.email || req.query.email;
-  return typeof email === 'string' ? email.trim().toLowerCase() : '';
-};
-
-// Only rejected credentials count, not server errors such as the database being
-// down. Every outcome answers 303, and req.user is already set for a signed-in
-// session, so the rejection is marked on the route instead. The key is the
-// email, not the IP: behind the app's /api proxy, req.ip is the proxy or
-// whatever X-Forwarded-For the client sends.
-const loginRateLimiter = rateLimiter({
-  windowMs: 15 * 60 * 1000,
-  max: LOGIN_MAX_FAILED_ATTEMPTS,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  requestWasSuccessful: (_req, res) => res.locals.loginRejected !== true,
-  keyGenerator: req => getLoginEmail(req) || req.ip || 'unknown',
-  handler: (req, res) => {
-    loginRateLimitedCounter.add(1);
-    getServerSpan()?.setAttribute('hyperdx.login.rate_limited', true);
-    // The app's login page submits a form; the CLI posts JSON.
-    if (req.is('application/json')) {
-      res.status(429).json({
-        error: 'tooManyAttempts',
-        message:
-          'Too many failed login attempts. Please wait a few minutes and try again.',
-      });
-      return;
-    }
-    res.redirect(
-      303,
-      `${config.FRONTEND_REDIRECT_BASE}/login?err=tooManyAttempts`,
-    );
-  },
-});
 
 const registrationSchema = z
   .object({
@@ -123,17 +80,7 @@ router.post(
     failureMessage: true,
   }),
   redirectToDashboard,
-  // passport passes on wrong credentials as an AuthenticationError and server
-  // errors as they are.
-  (
-    err: Error,
-    _req: express.Request,
-    res: express.Response,
-    next: express.NextFunction,
-  ) => {
-    res.locals.loginRejected = err.name === 'AuthenticationError';
-    next(err);
-  },
+  markRejectedLogin,
   handleAuthError,
 );
 
