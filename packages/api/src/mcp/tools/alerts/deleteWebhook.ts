@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { deleteWebhook } from '@/controllers/webhook';
 import { IDEMPOTENT_DESTRUCTIVE_TOOL } from '@/mcp/tools/annotations';

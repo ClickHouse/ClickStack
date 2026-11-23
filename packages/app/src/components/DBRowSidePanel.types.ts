@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { SourceKind, WithClauseSchema } from '@hyperdx/common-utils/dist/types';
 
 export enum Tab {

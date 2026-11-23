@@ -1,5 +1,5 @@
 import PQueue from '@esm2cjs/p-queue';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { parseTimeRange, runConfigTile } from '@/mcp/tools/query/helpers';

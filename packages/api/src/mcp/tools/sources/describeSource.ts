@@ -10,7 +10,7 @@ import {
 import { type MetricTable, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import SqlString from 'sqlstring';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';

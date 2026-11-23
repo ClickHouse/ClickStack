@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { deleteSource } from '@/controllers/sources';
 import { IDEMPOTENT_DESTRUCTIVE_TOOL } from '@/mcp/tools/annotations';

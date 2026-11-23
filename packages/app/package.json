@@ -38,7 +38,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@hookform/resolvers": "^3.9.0",
+    "@hookform/resolvers": "patch:@hookform/resolvers@npm%3A3.9.0#~/.yarn/patches/@hookform-resolvers-npm-3.9.0-6238a72f77.patch",
     "@hyperdx/api": "workspace:*",
     "@hyperdx/common-utils": "^0.36.1",
     "@mantine/core": "^9.0.0",
@@ -102,7 +102,7 @@
     "timestamp-nano": "^1.0.1",
     "uplot": "patch:uplot@npm%3A1.6.32#~/.yarn/patches/uplot-npm-1.6.32-350d2da00d.patch",
     "uplot-react": "^1.2.2",
-    "zod": "3.25"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@chromatic-com/storybook": "^4.1.3",

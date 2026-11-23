@@ -3,7 +3,7 @@ import type { ClickHouseSettings } from '@clickhouse/client-common';
 import { add as fnsAdd, format as fnsFormat } from 'date-fns';
 import { formatInTimeZone, zonedTimeToUtc } from 'date-fns-tz';
 import { omit } from 'lodash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export { default as objectHash } from 'object-hash';
 

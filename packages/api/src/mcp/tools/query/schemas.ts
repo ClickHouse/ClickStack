@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { QUERYABLE_METRIC_KINDS } from '@/mcp/tools/sources/metricKinds';
 import type { McpErrorResult } from '@/mcp/utils/errors';
