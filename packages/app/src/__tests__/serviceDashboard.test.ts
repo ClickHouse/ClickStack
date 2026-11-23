@@ -4,6 +4,7 @@ import { parseQuery } from '@hyperdx/common-utils/dist/filters';
 import type { TTraceSource } from '@hyperdx/common-utils/dist/types';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import * as metadataModule from '@/hooks/useMetadata';
 import {
@@ -304,14 +305,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should return loading state when source is undefined', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: undefined,
-        isLoading: false,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: undefined,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: false,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: undefined }),
@@ -322,14 +327,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should return loading state when columns are loading', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: undefined,
-        isLoading: true,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: undefined,
-        isLoading: true,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: true,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: true,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),
@@ -340,14 +349,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should return loading state when jsonColumns are loading', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: undefined,
-        isLoading: true,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: mockColumns,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: true,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: mockColumns,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),
@@ -358,14 +371,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should return expressions when data is loaded with non-JSON columns', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: mockJsonColumns,
-        isLoading: false,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: mockColumns,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: mockJsonColumns,
+          isLoading: false,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: mockColumns,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),
@@ -383,14 +400,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should return expressions when data is loaded with JSON columns', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: ['SpanAttributes'],
-        isLoading: false,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: mockColumns,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: ['SpanAttributes'],
+          isLoading: false,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: mockColumns,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),
@@ -409,14 +430,18 @@ describe('Service Dashboard', () => {
         { name: 'endpoint', type: 'String' },
       ] as ColumnMeta[];
 
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: mockJsonColumns,
-        isLoading: false,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: columnsWithEndpoint,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: mockJsonColumns,
+          isLoading: false,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: columnsWithEndpoint,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),
@@ -427,14 +452,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should fallback to spanName when materialized endpoint column is not available', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: mockJsonColumns,
-        isLoading: false,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: mockColumns,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: mockJsonColumns,
+          isLoading: false,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: mockColumns,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),
@@ -445,14 +474,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should include filter expressions', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: mockJsonColumns,
-        isLoading: false,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: mockColumns,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: mockJsonColumns,
+          isLoading: false,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: mockColumns,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),
@@ -471,14 +504,18 @@ describe('Service Dashboard', () => {
     });
 
     it('should include auxiliary expressions', () => {
-      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue({
-        data: mockJsonColumns,
-        isLoading: false,
-      } as any);
-      jest.spyOn(metadataModule, 'useColumns').mockReturnValue({
-        data: mockColumns,
-        isLoading: false,
-      } as any);
+      jest.spyOn(metadataModule, 'useJsonColumns').mockReturnValue(
+        fromPartial({
+          data: mockJsonColumns,
+          isLoading: false,
+        }),
+      );
+      jest.spyOn(metadataModule, 'useColumns').mockReturnValue(
+        fromPartial({
+          data: mockColumns,
+          isLoading: false,
+        }),
+      );
 
       const { result } = renderHook(() =>
         useServiceDashboardExpressions({ source: mockSource }),

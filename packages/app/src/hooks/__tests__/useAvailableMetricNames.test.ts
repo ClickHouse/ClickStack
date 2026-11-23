@@ -3,6 +3,7 @@ import {
   TMetricSource,
 } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { useAvailableMetricNames } from '@/hooks/useAvailableMetricNames';
 import { useGetKeyValues } from '@/hooks/useMetadata';
@@ -29,15 +30,6 @@ const DATE_RANGE: [Date, Date] = [
 
 const METRIC_NAMES = ['hw.gpu.utilization', 'hw.gpu.memory.utilization'];
 
-function mockQuery(overrides: Record<string, unknown>) {
-  mockUseGetKeyValues.mockReturnValue({
-    data: undefined,
-    isLoading: false,
-    isPlaceholderData: false,
-    ...overrides,
-  } as unknown as ReturnType<typeof useGetKeyValues>);
-}
-
 function render() {
   return renderHook(() =>
     useAvailableMetricNames({
@@ -53,7 +45,13 @@ describe('useAvailableMetricNames', () => {
   afterEach(() => jest.resetAllMocks());
 
   it('reports the metric names the query returned', () => {
-    mockQuery({ data: [{ key: 'MetricName', value: METRIC_NAMES }] });
+    mockUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: [{ key: 'MetricName', value: METRIC_NAMES }],
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
     const { result } = render();
     expect([...result.current.availableMetrics].sort()).toEqual(
       [...METRIC_NAMES].sort(),
@@ -62,7 +60,13 @@ describe('useAvailableMetricNames', () => {
   });
 
   it('reports loading while the first query is in flight', () => {
-    mockQuery({ isLoading: true });
+    mockUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: true,
+        isPlaceholderData: false,
+      }),
+    );
     expect(render().result.current.isLoading).toBe(true);
   });
 
@@ -71,17 +75,25 @@ describe('useAvailableMetricNames', () => {
   // `isLoading` false. Reporting that as settled would leak one host's chart
   // set onto the next.
   it('reports loading while showing another resource placeholder data', () => {
-    mockQuery({
-      data: [{ key: 'MetricName', value: METRIC_NAMES }],
-      isLoading: false,
-      isPlaceholderData: true,
-    });
+    mockUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: [{ key: 'MetricName', value: METRIC_NAMES }],
+        isLoading: false,
+        isPlaceholderData: true,
+      }),
+    );
     const { result } = render();
     expect(result.current.isLoading).toBe(true);
   });
 
   it('returns an empty set when the query has no data', () => {
-    mockQuery({ data: undefined });
+    mockUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
     expect(render().result.current.availableMetrics.size).toBe(0);
   });
 });
