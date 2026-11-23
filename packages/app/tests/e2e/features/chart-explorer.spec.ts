@@ -2,7 +2,11 @@ import { DisplayType } from '@hyperdx/common-utils/dist/types';
 
 import { ChartExplorerPage } from '../page-objects/ChartExplorerPage';
 import { expect, test } from '../utils/base-test';
-import { DEFAULT_LOGS_SOURCE_NAME, E2E_LOGS_TABLE } from '../utils/constants';
+import {
+  DEFAULT_LOGS_SOURCE_NAME,
+  DEFAULT_METRICS_SOURCE_NAME,
+  E2E_LOGS_TABLE,
+} from '../utils/constants';
 
 test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
   let chartExplorerPage: ChartExplorerPage;
@@ -229,6 +233,48 @@ test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
       expect(await chartExplorerPage.getOrderByText()).toBe('');
     });
   });
+
+  test(
+    'should sort a metric table by a formula column whose alias has a space',
+    { tag: ['@full-stack'] },
+    async ({ page }) => {
+      const { chartEditor } = chartExplorerPage;
+
+      await test.step('Query a metric table with a formula aliased "duration min"', async () => {
+        await expect(chartExplorerPage.form).toBeVisible();
+        await chartEditor.setChartType(DisplayType.Table);
+        await chartEditor.selectSource(DEFAULT_METRICS_SOURCE_NAME);
+        await chartEditor.selectMetricForSeries(
+          0,
+          'container.cpu.utilization',
+          'container.cpu.utilization:::::::gauge',
+        );
+        await chartEditor.addFormula('A * 100', 'duration min');
+        await chartEditor.runQuery(false);
+        await expect(
+          chartExplorerPage.getTableSortButton('duration min'),
+        ).toBeVisible({ timeout: 15000 });
+      });
+
+      await test.step('Sort by the formula column and verify the query succeeds', async () => {
+        await chartExplorerPage.getTableSortButton('duration min').click();
+
+        await expect
+          .poll(() => chartExplorerPage.getOrderByText(), { timeout: 10000 })
+          .toMatch(/^"duration min" (ASC|DESC)$/);
+        await expect(
+          chartExplorerPage
+            .getTableSortButton('duration min')
+            .getByTestId('raw-log-table-sort-indicator'),
+        ).toBeVisible({ timeout: 15000 });
+        await page.waitForLoadState('networkidle');
+        await expect(page.getByTestId('chart-error-state')).toHaveCount(0);
+        await expect(
+          page.locator('table tbody tr[data-index]').first(),
+        ).toBeVisible();
+      });
+    },
+  );
 
   test('should apply a custom ORDER BY on a categorical pie chart', async () => {
     let ascendingLabels: string[] = [];
