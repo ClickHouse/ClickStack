@@ -8,6 +8,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   getSourcesWithKey,
@@ -193,13 +194,15 @@ describe('useAdhocFilterOptions', () => {
     columnsBySource: ColumnMeta[][],
     { isLoading = false } = {},
   ) =>
-    jest.mocked(useMultipleAllFields).mockReturnValue({
-      fieldsByTableConnection: new Map(),
-      columnsByTableConnection: new Map(columnsBySource.entries()),
-      isFieldMetadataDisabled: true,
-      isLoading,
-      isError: false,
-    } as unknown as ReturnType<typeof useMultipleAllFields>);
+    jest.mocked(useMultipleAllFields).mockReturnValue(
+      fromPartial({
+        fieldsByTableConnection: new Map(),
+        columnsByTableConnection: new Map(columnsBySource.entries()),
+        isFieldMetadataDisabled: true,
+        isLoading,
+        isError: false,
+      }),
+    );
 
   const renderOptions = (
     adhocFilter: AdhocDashboardFilter,

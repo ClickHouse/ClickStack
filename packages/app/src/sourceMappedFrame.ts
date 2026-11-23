@@ -1,4 +1,4 @@
-export const useSourceMappedFrame = () => {
+export const getSourceMappedFrame = () => {
   return {
     isLoading: false,
     error: null,

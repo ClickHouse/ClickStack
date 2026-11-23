@@ -1484,8 +1484,8 @@ export const MemoChart = memo(function MemoChart({
    */
   yAxisMaxDomain?: number;
 }) {
-  const _id = useId();
-  const id = _id.replace(/:/g, '');
+  const reactId = useId();
+  const id = reactId.replace(/:/g, '');
 
   // The y-axis width budget is expressed in characters (see MAX_AXIS_MANTISSA),
   // so it has to grow with the tick font or the widest labels clip.

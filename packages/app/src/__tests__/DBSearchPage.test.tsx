@@ -1,5 +1,6 @@
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   buildSavedSearchNavigationUrl,
@@ -212,17 +213,21 @@ describe('useDefaultOrderBy', () => {
             sorting_key: testCase.sortingKey,
           };
 
-          jest.spyOn(sourceModule, 'useSource').mockReturnValue({
-            data: mockSource,
-            isLoading: false,
-            error: null,
-          } as any);
+          jest.spyOn(sourceModule, 'useSource').mockReturnValue(
+            fromPartial({
+              data: mockSource,
+              isLoading: false,
+              error: null,
+            }),
+          );
 
-          jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-            data: mockTableMetadata,
-            isLoading: false,
-            error: null,
-          } as any);
+          jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+            fromPartial({
+              data: mockTableMetadata,
+              isLoading: false,
+              error: null,
+            }),
+          );
 
           const { result } = renderHook(() => useDefaultOrderBy('source-id'));
 
@@ -232,17 +237,21 @@ describe('useDefaultOrderBy', () => {
     });
 
     it('should handle null source ungracefully', () => {
-      jest.spyOn(sourceModule, 'useSource').mockReturnValue({
-        data: null,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(sourceModule, 'useSource').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
-      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-        data: null,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
       const { result } = renderHook(() => useDefaultOrderBy(null));
 
@@ -250,17 +259,21 @@ describe('useDefaultOrderBy', () => {
     });
 
     it('should handle undefined sourceID ungracefully', () => {
-      jest.spyOn(sourceModule, 'useSource').mockReturnValue({
-        data: null,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(sourceModule, 'useSource').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
-      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-        data: null,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
       const { result } = renderHook(() => useDefaultOrderBy(undefined));
 
@@ -278,17 +291,21 @@ describe('useDefaultOrderBy', () => {
         sorting_key: 'toStartOfMinute(Timestamp), Timestamp',
       };
 
-      jest.spyOn(sourceModule, 'useSource').mockReturnValue({
-        data: mockSource,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(sourceModule, 'useSource').mockReturnValue(
+        fromPartial({
+          data: mockSource,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
-      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-        data: mockTableMetadata,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+        fromPartial({
+          data: mockTableMetadata,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
       const { result } = renderHook(() => useDefaultOrderBy('source-id'));
 
@@ -306,17 +323,21 @@ describe('useDefaultOrderBy', () => {
         sorting_key: 'toStartOfHour(Timestamp), Timestamp',
       };
 
-      jest.spyOn(sourceModule, 'useSource').mockReturnValue({
-        data: mockSource,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(sourceModule, 'useSource').mockReturnValue(
+        fromPartial({
+          data: mockSource,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
-      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-        data: mockTableMetadata,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+        fromPartial({
+          data: mockTableMetadata,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
       const { result } = renderHook(() => useDefaultOrderBy('source-id'));
 
@@ -333,17 +354,21 @@ describe('useDefaultOrderBy', () => {
         sorting_key: 'toStartOfHour(Timestamp), Timestamp',
       };
 
-      jest.spyOn(sourceModule, 'useSource').mockReturnValue({
-        data: mockSource,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(sourceModule, 'useSource').mockReturnValue(
+        fromPartial({
+          data: mockSource,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
-      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-        data: mockTableMetadata,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+        fromPartial({
+          data: mockTableMetadata,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
       const { result } = renderHook(() => useDefaultOrderBy('source-id'));
 
@@ -361,17 +386,21 @@ describe('useDefaultOrderBy', () => {
           'toStartOfHour(toDateTime(timestamp_ms / 1000)), toDateTime(timestamp_ms / 1000)',
       };
 
-      jest.spyOn(sourceModule, 'useSource').mockReturnValue({
-        data: mockSource,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(sourceModule, 'useSource').mockReturnValue(
+        fromPartial({
+          data: mockSource,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
-      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-        data: mockTableMetadata,
-        isLoading: false,
-        error: null,
-      } as any);
+      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+        fromPartial({
+          data: mockTableMetadata,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
       const { result } = renderHook(() => useDefaultOrderBy('source-id'));
 
@@ -391,17 +420,21 @@ describe('useDefaultOrderBy', () => {
 
       const useSourceSpy = jest
         .spyOn(sourceModule, 'useSource')
-        .mockReturnValue({
-          data: mockSource1,
+        .mockReturnValue(
+          fromPartial({
+            data: mockSource1,
+            isLoading: false,
+            error: null,
+          }),
+        );
+
+      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue(
+        fromPartial({
+          data: undefined,
           isLoading: false,
           error: null,
-        } as any);
-
-      jest.spyOn(metadataModule, 'useTableMetadata').mockReturnValue({
-        data: undefined,
-        isLoading: false,
-        error: null,
-      } as any);
+        }),
+      );
 
       const { result, rerender } = renderHook(() =>
         useDefaultOrderBy('source-id'),
@@ -410,11 +443,13 @@ describe('useDefaultOrderBy', () => {
       expect(result.current).toBe('timestamp1 DESC');
 
       // Update the mock to return different data
-      useSourceSpy.mockReturnValue({
-        data: mockSource2,
-        isLoading: false,
-        error: null,
-      } as any);
+      useSourceSpy.mockReturnValue(
+        fromPartial({
+          data: mockSource2,
+          isLoading: false,
+          error: null,
+        }),
+      );
 
       rerender();
 

@@ -1,13 +1,14 @@
 import type { MeApiResponse } from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { useMarkOnboardingTaskComplete } from '@/api';
 
 function makeMe(
   completedTasks: MeApiResponse['onboardingData']['completedTasks'],
-) {
-  return {
+): MeApiResponse {
+  return fromPartial({
     id: 'u1',
     email: 'a@b.com',
     accessKey: 'k',
@@ -17,7 +18,7 @@ function makeMe(
     team: { id: 't1', name: 'Team' },
     usageStatsEnabled: false,
     aiAssistantEnabled: false,
-  } as unknown as MeApiResponse;
+  });
 }
 
 function setup(initialMe: MeApiResponse | null) {

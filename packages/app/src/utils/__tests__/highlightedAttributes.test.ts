@@ -305,7 +305,7 @@ describe('getHighlightedAttributesFromData', () => {
 
   it('uses sqlExpression as displayedKey when alias is not provided', () => {
     const source = createBasicSource([
-      { sqlExpression: 'ServiceName' } as any, // No alias
+      { sqlExpression: 'ServiceName' }, // No alias
     ]);
     const data = [{ ServiceName: 'api-service' }];
     const meta = [{ name: 'ServiceName', type: 'String' }];
