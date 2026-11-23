@@ -247,6 +247,21 @@ describe('ColumnsPopover', () => {
       );
     });
 
+    it('edits in a wrapping field and drops pasted line breaks', async () => {
+      const { onApply, input } = await openWithTz();
+      expect(input.tagName).toBe('TEXTAREA');
+      fireEvent.change(input, {
+        target: { value: `LogAttributes['tz']\n  AS "timezone"` },
+      });
+      expect(input).toHaveValue(`LogAttributes['tz'] AS "timezone"`);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.click(screen.getByTestId('search-columns-button-apply'));
+      expect(onApply).toHaveBeenCalledWith(
+        `Timestamp, LogAttributes['tz'] AS "timezone"`,
+        [tz],
+      );
+    });
+
     it('commits on blur', async () => {
       const { input } = await openWithTz();
       fireEvent.change(input, {

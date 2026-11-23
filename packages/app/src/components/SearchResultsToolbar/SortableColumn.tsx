@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ActionIcon, Box, Group, Text, TextInput } from '@mantine/core';
+import { ActionIcon, Box, Group, Text, Textarea } from '@mantine/core';
 import { IconGripVertical, IconPencil, IconX } from '@tabler/icons-react';
 
 export function SortableColumn({
@@ -79,11 +79,19 @@ export function SortableColumn({
           <IconGripVertical size={14} />
         </ActionIcon>
         {editing ? (
-          <TextInput
+          <Textarea
             size="xs"
             aria-label={`Edit ${label}`}
             value={draft}
-            onChange={e => setDraft(e.currentTarget.value)}
+            // A column is one expression. Pasted line breaks would otherwise
+            // be stored as part of it.
+            onChange={e =>
+              setDraft(e.currentTarget.value.replace(/\s*\r?\n\s*/g, ' '))
+            }
+            onFocus={e => {
+              const end = e.currentTarget.value.length;
+              e.currentTarget.setSelectionRange(end, end);
+            }}
             onBlur={() => finishEdit(true)}
             onKeyDown={e => {
               if (e.key === 'Enter') {
@@ -97,7 +105,18 @@ export function SortableColumn({
               }
             }}
             autoFocus
-            ff="monospace"
+            // Wrap and grow like the row text, so a long expression stays
+            // readable instead of scrolling sideways.
+            autosize
+            minRows={1}
+            maxRows={8}
+            styles={{
+              input: {
+                fontFamily: 'var(--mantine-font-family-monospace)',
+                lineHeight: 1.5,
+                overflowWrap: 'anywhere',
+              },
+            }}
             style={{ flex: 1, minWidth: 0 }}
             // Lets ClausePopover pass Escape through instead of discarding.
             data-handles-escape
