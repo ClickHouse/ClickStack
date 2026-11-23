@@ -4,6 +4,7 @@ import { ClickHouseClient } from '@clickhouse/client';
 import { convertCHDataTypeToJSType, JSDataType } from '@/clickhouse';
 import { ClickhouseClient as HdxClickhouseClient } from '@/clickhouse/node';
 import { Metadata, MetadataCache } from '@/core/metadata';
+import { renderMetricExemplarsChartConfig } from '@/core/renderChartConfig';
 import { convertToCategoricalChartConfig } from '@/core/utils';
 import {
   ChartConfigWithOptDateRange,
@@ -2785,6 +2786,50 @@ describe('queryChartConfig Integration Tests', () => {
           ),
         ).rejects.toThrow();
       });
+    });
+    // HIST_TABLE mirrors the seed schema, where Exemplars.TimeUnix is
+    // Array(DateTime). toUnixTimestamp64Milli only accepts DateTime64, so the
+    // scan must cast it; this runs the generated SQL against that column type.
+    it('reads exemplars from an Array(DateTime) Exemplars.TimeUnix column', async () => {
+      const traceId = '0af7651916cd43dd8448eb211c80319c';
+      await client.insert({
+        table: `${DATABASE}.${HIST_TABLE}`,
+        values: [
+          {
+            ...histRow('exemplar.latency', insertTs(1), 'svc-a', [3, 1], [1]),
+            'Exemplars.FilteredAttributes': [{}],
+            'Exemplars.TimeUnix': [insertTs(1)],
+            'Exemplars.Value': [2.5],
+            'Exemplars.SpanId': ['b7ad6b7169203331'],
+            'Exemplars.TraceId': [traceId],
+          },
+        ],
+        format: 'JSONEachRow',
+      });
+
+      const exemplarSql = await renderMetricExemplarsChartConfig(
+        baseConfig({ select: [histQuantileSelect('exemplar.latency', 0.99)] }),
+        metadata,
+      );
+      expect(exemplarSql).not.toBeNull();
+
+      const resp = await hdxClient.query({
+        query: exemplarSql!.sql,
+        query_params: exemplarSql!.params,
+        format: 'JSON',
+      });
+      const { data } = await resp.json<{
+        timestamp: string;
+        value: number;
+        traceId: string;
+      }>();
+
+      expect(data).toHaveLength(1);
+      expect(Number(data[0].timestamp)).toBe(
+        Date.parse(`${insertTs(1).replace(' ', 'T')}Z`),
+      );
+      expect(data[0].value).toBe(2.5);
+      expect(data[0].traceId).toBe(traceId);
     });
   });
 

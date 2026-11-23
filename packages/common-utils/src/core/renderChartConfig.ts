@@ -3688,6 +3688,9 @@ export async function renderMetricExemplarsChartConfig(
     alias: 'bucket',
   });
 
+  // Exemplars.TimeUnix is Array(DateTime) in the seed schema and the OTel
+  // exporter's, Array(DateTime64(9)) elsewhere. toUnixTimestamp64Milli only
+  // accepts DateTime64, so the cast is required (and lossless for both).
   return concatChSql(' ', [
     chSql`SELECT
       toUnixTimestamp64Milli(toDateTime64(ex_TimeUnix, 9)) AS timestamp,
