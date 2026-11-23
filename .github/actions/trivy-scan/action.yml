@@ -1,0 +1,45 @@
+name: Trivy image scan
+description:
+  Report fixable HIGH and CRITICAL CVEs in a locally loaded image to the job
+  summary and GitHub code scanning. Report-only; never fails on findings.
+inputs:
+  image:
+    description: Image reference already loaded into the local Docker daemon
+    required: true
+  category:
+    description: Code scanning category, unique per image
+    required: true
+runs:
+  using: composite
+  steps:
+    # Pinned by SHA: trivy-action's tags were rewritten by an attacker in 2026.
+    - name: Scan image
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        image-ref: ${{ inputs.image }}
+        scanners: vuln
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        format: json
+        output: trivy.json
+        exit-code: '0'
+        version: v0.76.2
+    - name: Write summary and SARIF
+      shell: bash
+      env:
+        CATEGORY: ${{ inputs.category }}
+      run: |
+        {
+          echo "### Trivy: ${CATEGORY} (fixable high and critical)"
+          echo '```'
+          trivy convert --format table trivy.json
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        trivy convert --format sarif --output trivy.sarif trivy.json
+    # PR uploads would add a code scanning check that fails on new alerts.
+    - name: Upload to code scanning
+      if: github.event_name != 'pull_request'
+      uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      with:
+        sarif_file: trivy.sarif
+        category: trivy-${{ inputs.category }}
