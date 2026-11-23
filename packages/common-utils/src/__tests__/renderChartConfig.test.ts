@@ -5971,7 +5971,7 @@ describe('renderMetricExemplarsChartConfig', () => {
     // Surfaces the exemplar columns
     expect(sql).toContain('ARRAY JOIN');
     expect(sql).toContain('`Exemplars.TraceId` AS ex_TraceId');
-    expect(sql).toContain('toUnixTimestamp64Milli(ex_TimeUnix)');
+    expect(sql).toContain('toUnixTimestamp64Milli(toDateTime64(ex_TimeUnix, 9))');
     // Points at the histogram table and filters by metric name + time
     expect(sql).toContain('otel_metrics_histogram');
     expect(sql).toContain("MetricName = 'http.server.duration'");
