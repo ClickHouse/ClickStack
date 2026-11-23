@@ -7,6 +7,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import {
   SourceManagementMenu,
@@ -22,22 +23,19 @@ jest.mock('@/source', () => ({
 // Mantine's Combobox calls scrollIntoView when its dropdown opens; jsdom lacks it.
 window.HTMLElement.prototype.scrollIntoView = jest.fn();
 
-// useSources returns a large UseQueryResult; the selector reads only `data`.
-const asMock = (fn: unknown) => fn as jest.Mock;
-
 const makeSource = (
   id: string,
   name: string,
   kind: SourceKind,
   overrides: Partial<TSource> = {},
 ): TSource =>
-  ({
+  fromAny<TSource, Record<string, unknown>>({
     id,
     name,
     kind,
     connection: 'conn-a',
     ...overrides,
-  }) as unknown as TSource;
+  });
 
 describe('SourceManagementMenu', () => {
   it('does not render the kebab trigger when no actions are wired', () => {
@@ -213,7 +211,9 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   };
 
   it('renders sources grouped under their section headers', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(<SelectHarness />);
     await openSelect();
 
@@ -227,7 +227,9 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   });
 
   it('treats the section as a tag: "billing logs" keeps section-mates whose name lacks "billing" and drops other sections', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(<SelectHarness />);
     const input = await openSelect();
     await userEvent.type(input, 'billing logs');
@@ -243,7 +245,9 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   });
 
   it('selects the current label on a focusing click so typing replaces it', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
     const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
     expect(input).toHaveValue('Billing Logs');
@@ -259,7 +263,9 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   });
 
   it('places the caret normally on a click into an already focused input', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
     const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
 
@@ -269,7 +275,9 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   });
 
   it('hides sources rejected by isSourceAllowed, along with sections left empty', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(
       <SelectHarness
         isSourceAllowed={source => source.section === 'Billing'}
@@ -284,12 +292,14 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   });
 
   it('stays flat with no catch-all header until a source has a section', async () => {
-    asMock(useSources).mockReturnValue({
-      data: [
-        makeSource('a', 'Apple Traces', SourceKind.Trace),
-        makeSource('z', 'Zebra Logs', SourceKind.Log),
-      ],
-    });
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [
+          makeSource('a', 'Apple Traces', SourceKind.Trace),
+          makeSource('z', 'Zebra Logs', SourceKind.Log),
+        ],
+      }),
+    );
     renderWithMantine(<SelectHarness />);
     await openSelect();
 
@@ -344,7 +354,7 @@ describe('SourceSelectControlled (data source variables)', () => {
   }
 
   it('offers only variables with at least one kind the picker allows', async () => {
-    asMock(useSources).mockReturnValue({ data: SOURCES });
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
     renderWithMantine(<VariableHarness allowSourceVariables />);
     await userEvent.click(screen.getByPlaceholderText('Data Source'));
 
@@ -355,7 +365,7 @@ describe('SourceSelectControlled (data source variables)', () => {
   });
 
   it('puts unsectioned sources under their own header after the variables', async () => {
-    asMock(useSources).mockReturnValue({ data: SOURCES });
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
     renderWithMantine(<VariableHarness allowSourceVariables />);
     await userEvent.click(screen.getByPlaceholderText('Data Source'));
 
@@ -364,7 +374,7 @@ describe('SourceSelectControlled (data source variables)', () => {
   });
 
   it('offers only variables unlimited or limited to its connection', async () => {
-    asMock(useSources).mockReturnValue({ data: SOURCES });
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
     function ConnectionHarness() {
       const { control } = useForm();
       return (
@@ -394,7 +404,7 @@ describe('SourceSelectControlled (data source variables)', () => {
   });
 
   it('offers no variables unless the picker opts in', async () => {
-    asMock(useSources).mockReturnValue({ data: SOURCES });
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
     renderWithMantine(<VariableHarness />);
     await userEvent.click(screen.getByPlaceholderText('Data Source'));
 

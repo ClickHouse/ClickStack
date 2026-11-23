@@ -118,10 +118,10 @@ test.describe('JSON Viewer WhiteSpace Toggle', { tag: ['@search'] }, () => {
     });
 
     // In pre-wrap mode (default): element should wrap, so scrollWidth <= clientWidth of container
-    const preWrapDimensions = await stringEl.evaluate(el => ({
+    const preWrapDimensions = await stringEl.evaluate((el: HTMLElement) => ({
       scrollWidth: el.scrollWidth,
       clientWidth: el.clientWidth,
-      offsetHeight: (el as HTMLElement).offsetHeight,
+      offsetHeight: el.offsetHeight,
     }));
 
     // Toggle to pre mode (no wrap)
@@ -135,10 +135,10 @@ test.describe('JSON Viewer WhiteSpace Toggle', { tag: ['@search'] }, () => {
       }
     });
 
-    const preDimensions = await stringEl.evaluate(el => ({
+    const preDimensions = await stringEl.evaluate((el: HTMLElement) => ({
       scrollWidth: el.scrollWidth,
       clientWidth: el.clientWidth,
-      offsetHeight: (el as HTMLElement).offsetHeight,
+      offsetHeight: el.offsetHeight,
     }));
 
     // In pre-wrap mode: text should wrap, making the element taller

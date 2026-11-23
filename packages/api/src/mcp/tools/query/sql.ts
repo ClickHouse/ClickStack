@@ -137,7 +137,7 @@ export function registerSql({ context, registerTool }: ToolRegistrar) {
         }
         trace.getActiveSpan()?.setAttribute('mcp.sql.mode', 'batch');
         return runSqlBatch({
-          teamId: teamId.toString(),
+          context,
           queries,
           defaults: {
             connectionId: input.connectionId,
@@ -164,12 +164,7 @@ export function registerSql({ context, registerTool }: ToolRegistrar) {
         return prepared.error;
       }
 
-      return runConfigTile(
-        teamId.toString(),
-        prepared.tile,
-        startDate,
-        endDate,
-      );
+      return runConfigTile(context, prepared.tile, startDate, endDate);
     },
   );
 }

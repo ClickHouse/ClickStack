@@ -19,8 +19,10 @@ type ExternalSavedSearch = {
   updatedAt?: string;
 };
 
-export interface ISavedSearch
-  extends Omit<z.infer<typeof SavedSearchSchema>, 'source'> {
+export interface ISavedSearch extends Omit<
+  z.infer<typeof SavedSearchSchema>,
+  'source'
+> {
   _id: ObjectId;
   team: ObjectId;
   source: ObjectId;

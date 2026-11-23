@@ -6,10 +6,12 @@ import {
   Filter,
   PromqlConditionFilter,
   PromqlExpressionList,
+  RawSqlConfigWithDateRange,
   SavedChartConfig,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
 import {
@@ -21,9 +23,11 @@ import {
   displayTypeToActiveTab,
   getPreviewBlockingFilters,
   isQueryReady,
+  orderByToTableSortState,
   resolvePreviewVariables,
   resolveTilePreviewFilters,
   seriesToFilters,
+  tableSortStateToOrderBy,
   tabQueriesData,
   TABS_WITH_GENERATED_SQL,
   withBroadcastFilters,
@@ -55,12 +59,12 @@ const builderConfig: ChartConfigWithDateRange = {
   granularity: 'auto',
 } as ChartConfigWithDateRange;
 
-const rawSqlConfig = {
-  configType: 'sql' as const,
+const rawSqlConfig: RawSqlConfigWithDateRange = {
+  configType: 'sql',
   sqlTemplate: 'SELECT count() FROM logs',
   connection: 'clickhouse',
   dateRange,
-} as ChartConfigWithDateRange;
+};
 
 const logSource = {
   kind: SourceKind.Log,
@@ -144,11 +148,13 @@ describe('isQueryReady', () => {
 
   it('returns truthy for metric sources with metricTables but empty tableName', () => {
     expect(
-      isQueryReady({
-        ...builderConfig,
-        from: { databaseName: 'default', tableName: '' },
-        metricTables: { gauge: 'metrics.gauge' },
-      } as ChartConfigWithDateRange),
+      isQueryReady(
+        fromPartial({
+          ...builderConfig,
+          from: { databaseName: 'default', tableName: '' },
+          metricTables: { gauge: 'metrics.gauge' },
+        }),
+      ),
     ).toBeTruthy();
   });
 
@@ -161,7 +167,7 @@ describe('isQueryReady', () => {
       isQueryReady({
         ...rawSqlConfig,
         sqlTemplate: '',
-      } as ChartConfigWithDateRange),
+      }),
     ).toBe(false);
   });
 
@@ -1351,5 +1357,51 @@ describe('buildGroupByConnectionProps', () => {
     });
 
     expect(result).toEqual({ tableConnection });
+  });
+});
+
+describe('table sort state <-> Order By', () => {
+  it.each([
+    ['"duration min" ASC', { id: '"duration min"', desc: false }],
+    [
+      'round(Duration / 1e6, 2) DESC',
+      { id: 'round(Duration / 1e6, 2)', desc: true },
+    ],
+    ['Duration desc', { id: 'Duration', desc: true }],
+    [
+      '(TimestampTime, Timestamp) DESC',
+      { id: '(TimestampTime, Timestamp)', desc: true },
+    ],
+    ['"a, b" ASC', { id: '"a, b"', desc: false }],
+    [
+      "arrayElement(Attributes, 'k') DESC",
+      { id: "arrayElement(Attributes, 'k')", desc: true },
+    ],
+  ])('parses %s and serializes it back', (orderBy, expected) => {
+    const sort = orderByToTableSortState(orderBy);
+    expect(sort).toEqual([expected]);
+    expect(tableSortStateToOrderBy(sort)).toBe(
+      orderBy.replace(/desc$/, 'DESC'),
+    );
+  });
+
+  it.each([
+    '',
+    '   ',
+    'Duration',
+    '(TimestampTime, Timestamp)',
+    'Duration DESC NULLS LAST',
+    'Timestamp DESC, ServiceName ASC',
+    'TimestampTime ASC, Timestamp DESC',
+  ])(
+    'returns an empty sort for an Order By that is not a single key with a trailing direction (%p)',
+    orderBy => {
+      expect(orderByToTableSortState(orderBy)).toEqual([]);
+    },
+  );
+
+  it('serializes an empty or null sort as an empty Order By', () => {
+    expect(tableSortStateToOrderBy([])).toBe('');
+    expect(tableSortStateToOrderBy(null)).toBe('');
   });
 });

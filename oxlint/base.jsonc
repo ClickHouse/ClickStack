@@ -1,0 +1,143 @@
+// Rules every package shares. Mirrors what ESLint got from
+// `@eslint/js` recommended + `typescript-eslint` recommended (as applied to
+// .ts/.tsx files, i.e. after typescript-eslint's `eslint-recommended`
+// disables the checks tsc already does) minus the formatting rules
+// `eslint-config-prettier` turned off, plus the overrides every package set.
+// Packages extend this and add their own plugins and rules.
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  // Start from nothing so the enabled set is exactly the list below.
+  // Also set in the repo-root .oxlintrc.json: oxlint reads options only from
+  // the top-level config, which is this file (via extends) when run from a
+  // package and the root one when run from the repo root.
+  "options": { "typeAware": true, "reportUnusedDisableDirectives": "warn" },
+  "plugins": ["eslint", "typescript"],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off",
+  },
+  "rules": {
+    // @eslint/js recommended
+    "for-direction": "error",
+    "no-async-promise-executor": "error",
+    "no-case-declarations": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": ["error", "except-parens"],
+    "no-constant-binary-expression": "error",
+    "no-constant-condition": ["error", { "checkLoops": "allExceptWhileTrue" }],
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-delete-var": "error",
+    "no-dupe-else-if": "error",
+    "no-duplicate-case": "error",
+    "no-empty": ["error", { "allowEmptyCatch": false }],
+    "no-empty-character-class": "error",
+    "no-empty-pattern": "error",
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-fallthrough": "error",
+    "no-global-assign": "error",
+    "no-invalid-regexp": "error",
+    "no-irregular-whitespace": "error",
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-prototype-builtins": "error",
+    "no-regex-spaces": "error",
+    "no-self-assign": ["error", { "props": true }],
+    "no-shadow-restricted-names": "error",
+    "no-sparse-arrays": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    "no-useless-backreference": "error",
+    "no-useless-catch": "error",
+    "no-useless-escape": "error",
+    "require-yield": "error",
+    "use-isnan": "error",
+    "valid-typeof": "error",
+    // typescript-eslint eslint-recommended (turned on for .ts files)
+    "no-var": "error",
+    "prefer-const": ["error", { "destructuring": "any" }],
+    "prefer-rest-params": "error",
+    "prefer-spread": "error",
+    // typescript-eslint recommended
+    "typescript/ban-ts-comment": "error",
+    "no-array-constructor": "error",
+    "typescript/no-duplicate-enum-values": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-misused-new": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-require-imports": "error",
+    "typescript/no-this-alias": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "no-unused-expressions": "error",
+    "typescript/no-wrapper-object-types": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/prefer-namespace-keyword": "error",
+    "typescript/triple-slash-reference": "error",
+    // Shared overrides
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        // typescript-eslint reports a value only referenced in `typeof`.
+        "reportVarsOnlyUsedAsTypes": true,
+      },
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "regex": "^\\.\\.(/|$)",
+            "message": "Use the @/ path alias instead of parent-relative imports (../).",
+          },
+        ],
+      },
+    ],
+  },
+  "overrides": [
+    {
+      // typescript-eslint's `eslint-recommended` turns these off for TS files
+      // because tsc reports them, and turns no-var/prefer-* on. Plain JS files
+      // keep the @eslint/js defaults.
+      "files": ["**/*.{js,jsx,mjs,cjs}"],
+      "rules": {
+        "constructor-super": "error",
+        "getter-return": "error",
+        "no-class-assign": "error",
+        "no-const-assign": "error",
+        "no-dupe-class-members": "error",
+        "no-dupe-keys": "error",
+        "no-func-assign": "error",
+        "no-import-assign": "error",
+        "no-new-native-nonconstructor": "error",
+        "no-obj-calls": "error",
+        "no-redeclare": ["error", { "builtinGlobals": true }],
+        "no-setter-return": "error",
+        "no-this-before-super": "error",
+        "no-undef": "error",
+        "no-unreachable": "error",
+        "no-unsafe-negation": "error",
+        "no-with": "error",
+        "no-var": "off",
+        "prefer-const": "off",
+        "prefer-rest-params": "off",
+        "prefer-spread": "off",
+      },
+    },
+  ],
+}

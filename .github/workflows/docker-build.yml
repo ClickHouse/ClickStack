@@ -123,8 +123,7 @@ jobs:
             yarn.lock
             .yarn/**
             .yarnrc.yml
-            .prettierrc
-            .prettierignore
+            .oxfmtrc.json
             tsconfig.base.json
             nx.json
       - name: Setup Docker Buildx

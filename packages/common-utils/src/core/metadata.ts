@@ -36,6 +36,7 @@ import type {
   BuilderChartConfig,
   BuilderChartConfigWithDateRange,
   MetadataMaterializedViews,
+  QuerySettings,
   TSource,
 } from '@/types';
 import {
@@ -62,6 +63,7 @@ import {
   getTextIndexDictionaryBlockSize,
   MetadataMVQueryOptions,
   objectHash,
+  querySettingsToClickHouseSettings,
   splitAndTrimWithBracket,
   TextIndexColumnQueryOptions,
   TextIndexMapColumnQueryOptions,
@@ -1106,6 +1108,7 @@ export class Metadata {
     dateRange,
     timestampValueExpression,
     limit = DEFAULT_MAX_INDEX_VALUES,
+    querySettings,
     signal,
   }: {
     databaseName: string;
@@ -1117,6 +1120,7 @@ export class Metadata {
     dateRange?: [Date, Date];
     timestampValueExpression?: string;
     limit?: number;
+    querySettings?: QuerySettings;
     signal?: AbortSignal;
   }): AsyncGenerator<string[], void, undefined> {
     const tableMetadata = await this.assertIndexReadable({
@@ -1163,7 +1167,10 @@ export class Metadata {
       query_params: sql.params,
       format: 'JSONEachRow',
       connectionId,
-      clickhouse_settings: this.getClickHouseSettings(),
+      clickhouse_settings: {
+        ...this.getClickHouseSettings(),
+        ...querySettingsToClickHouseSettings(querySettings),
+      },
       abort_signal: signal,
     });
 
@@ -3477,9 +3484,10 @@ export class Metadata {
         return Object.entries(json?.data?.[0]).map(([key, value]) => ({
           key: keys[parseInt(key.replace('param', ''))],
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          value: value?.filter(v => v != null && v !== '') as  // remove nulls and empty strings
-            | string[]
-            | number[],
+          value: value?.filter(
+            v => v != null && v !== '',
+          ) as // remove nulls and empty strings
+            string[] | number[],
         }));
       },
     );
@@ -3511,6 +3519,7 @@ export class Metadata {
     timestampValueExpression,
     namePattern,
     limit = DEFAULT_METRIC_NAMES_LIMIT,
+    querySettings,
     signal,
   }: {
     databaseName: string;
@@ -3520,6 +3529,7 @@ export class Metadata {
     timestampValueExpression: string;
     namePattern?: string;
     limit?: number;
+    querySettings?: QuerySettings;
     signal?: AbortSignal;
   }): Promise<MetricNames> {
     if (!Number.isInteger(limit) || limit < 1) {
@@ -3581,6 +3591,7 @@ export class Metadata {
         connectionId,
         clickhouse_settings: {
           ...this.getClickHouseSettings(),
+          ...querySettingsToClickHouseSettings(querySettings),
           // Bounded by wall clock, not rows: a row cap under `ORDER BY ... LIMIT`
           // is what made the old result an arbitrary subset, so capping rows here
           // would reintroduce the bug this method removes. `max_execution_time`

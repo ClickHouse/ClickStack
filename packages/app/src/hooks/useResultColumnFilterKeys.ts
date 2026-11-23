@@ -36,55 +36,75 @@ type FilterKeys = ReadonlyMap<string, string>;
 
 const EMPTY_FILTER_KEYS: FilterKeys = new Map();
 
-/** The expression of a select item, without any `AS alias`. */
-const stripAlias = (item: string): string =>
-  Object.values(
+/** Splits a select item into its expression and its `AS alias`, if any. */
+const parseSelectItem = (
+  item: string,
+): { expression: string; alias?: string } => {
+  const [entry] = Object.entries(
     chSqlToAliasMap({ sql: `SELECT ${item} FROM t`, params: {} }),
-  )[0] ?? item;
+  );
+  return entry
+    ? { expression: entry[1], alias: entry[0] }
+    : { expression: item };
+};
+
+export type BuilderGroupByColumn = {
+  column: ColumnMetaType;
+  expression: string;
+  alias?: string;
+};
 
 /**
- * Builder group-by columns follow the value columns (see `renderSelect`). They
- * are matched by position because ClickHouse renames unaliased expressions.
+ * The result columns of a builder query that hold its group-by values, with
+ * the group-by entry behind each. They follow the value columns (see
+ * `renderSelect`) and are matched by position, because ClickHouse renames
+ * unaliased expressions.
  */
-export function getBuilderFilterKeys(
+export function getBuilderGroupByColumns(
   config: BuilderChartConfig,
   meta: ColumnMetaType[],
-): FilterKeys {
+): BuilderGroupByColumn[] {
   if (!config.groupBy || config.selectGroupBy === false) {
-    return EMPTY_FILTER_KEYS;
+    return [];
   }
-  // Histograms pack their group-by values into one array column, which can't
-  // be filtered on. A mix with other metric types still has a column per
-  // group-by, for the other types' rows.
+  // Histograms pack their group-by values into one array column, so there
+  // are no individual group-by columns. A mix with other metric types still
+  // has a column per group-by, for the other types' rows.
   if (
     Array.isArray(config.select) &&
     config.select.every(isHistogramClassSelect)
   ) {
-    return EMPTY_FILTER_KEYS;
+    return [];
   }
   const expanded = tryExpandConfigVariables(config);
   const groupBy = expanded.groupBy ?? [];
-  const groupByExpressions =
+  const entries =
     typeof groupBy === 'string'
-      ? splitAndTrimWithBracket(groupBy).map(stripAlias)
-      : groupBy.map(entry => entry.valueExpression);
-  const selectExpressionCount =
+      ? splitAndTrimWithBracket(groupBy).map(parseSelectItem)
+      : groupBy.map(entry => ({
+          expression: entry.valueExpression,
+          alias: entry.alias?.trim() ? entry.alias : undefined,
+        }));
+  const valueColumnCount =
     typeof expanded.select === 'string'
       ? splitAndTrimWithBracket(expanded.select).length
       : getBuilderValueColumnCount(expanded);
 
+  return meta
+    .slice(valueColumnCount, valueColumnCount + entries.length)
+    .map((column, index) => ({ column, ...entries[index] }));
+}
+
+export function getBuilderFilterKeys(
+  config: BuilderChartConfig,
+  meta: ColumnMetaType[],
+): FilterKeys {
   const keys = new Map<string, string>();
-  meta
-    .slice(
-      // Skip the expressions corresponding to the select columns
-      selectExpressionCount,
-      // Group by expressions come right after them.
-      selectExpressionCount + groupByExpressions.length,
-    )
-    .forEach((column, index) => {
-      if (isAdhocComparableDataType(column.type))
-        keys.set(column.name, groupByExpressions[index]);
-    });
+  for (const { column, expression } of getBuilderGroupByColumns(config, meta)) {
+    if (isAdhocComparableDataType(column.type)) {
+      keys.set(column.name, expression);
+    }
+  }
   return keys;
 }
 

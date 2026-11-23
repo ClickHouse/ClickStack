@@ -1,4 +1,5 @@
 import type uPlot from 'uplot';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import {
   gridToPlotData,
@@ -44,7 +45,8 @@ class StubPath2D {}
 
 function paint(grid: HeatmapGrid, fills: number[]) {
   const u = {
-    data: [[], gridToPlotData(grid)],
+    // uPlot's AlignedData typing doesn't model the heatmap's nested series.
+    data: fromAny<uPlot['data'], unknown[]>([[], gridToPlotData(grid)]),
     bbox: { left: 0, top: 0, width: 100, height: 100 },
     ctx: {
       save: jest.fn(),
@@ -57,7 +59,7 @@ function paint(grid: HeatmapGrid, fills: number[]) {
   const paths = heatmapPaths({
     disp: { fill: { lookup: ['#000', '#fff'], values: () => fills } },
   });
-  paths(u as unknown as uPlot, 1, 0, 0);
+  paths(fromPartial(u), 1, 0, 0);
   return u;
 }
 

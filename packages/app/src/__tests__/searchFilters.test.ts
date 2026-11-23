@@ -1,5 +1,6 @@
 import { enableMapSet } from 'immer';
 import { filtersToQuery } from '@hyperdx/common-utils/dist/filters';
+import type { Filter } from '@hyperdx/common-utils/dist/types';
 import { act, renderHook } from '@testing-library/react';
 
 import {
@@ -962,7 +963,7 @@ describe('searchFilters', () => {
   });
 
   describe('useSearchPageFilterState', () => {
-    const onFilterChange = jest.fn();
+    const onFilterChange = jest.fn<void, [Filter[]]>();
 
     it('adding filter to empty query', () => {
       const { result } = renderHook(() =>
@@ -1013,9 +1014,9 @@ describe('searchFilters', () => {
         result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
       });
 
-      const conditions = (
-        onFilterChange.mock.lastCall![0] as ConditionFilter[]
-      ).map(f => f.condition);
+      const conditions = onFilterChange.mock.lastCall![0].flatMap(f =>
+        f.type === 'sql_ast' ? [] : [f.condition],
+      );
       // Re-persisting must not rewrite the existing key into Map bracket form
       // (`message['email']`), which ClickHouse rejects for a JSON column.
       expect(conditions).toContain(
@@ -1041,9 +1042,9 @@ describe('searchFilters', () => {
         result.current.setFilterValue('source_name', 'EMAIL_SERVICE');
       });
 
-      const conditions = (
-        onFilterChange.mock.lastCall![0] as ConditionFilter[]
-      ).map(f => f.condition);
+      const conditions = onFilterChange.mock.lastCall![0].flatMap(f =>
+        f.type === 'sql_ast' ? [] : [f.condition],
+      );
       expect(conditions).toContain(arrayPathCondition);
     });
 

@@ -11,11 +11,14 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { z } from 'zod';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 import { trimToolResponse } from '@/utils/trimToolResponse';
@@ -251,22 +254,18 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
         );
       }
 
-      const connection = await getConnectionById(
-        teamId.toString(),
-        source.connection.toString(),
-        true,
-      );
-      if (!connection) {
+      let clickhouseClient: ClickhouseClient;
+      try {
+        clickhouseClient = await getMcpClickhouseClient(
+          context,
+          source.connection.toString(),
+        );
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection not found for source: ${input.sourceId}`,
         );
       }
-
-      const clickhouseClient = new ClickhouseClient({
-        host: connection.host,
-        username: connection.username,
-        password: connection.password,
-      });
       const metadata = getMetadata(clickhouseClient);
 
       // Build a stable per-source ORDER BY for sampling (matches what the

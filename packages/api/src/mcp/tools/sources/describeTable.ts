@@ -2,8 +2,7 @@ import { quoteIdentifierIfNeeded } from '@hyperdx/common-utils/dist/core/metadat
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
@@ -12,6 +11,10 @@ import {
   MCP_REQUEST_TIMEOUT,
 } from '@/mcp/tools/query/helpers';
 import type { ToolRegistrar, ToolResult } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import {
   mcpServerError,
   mcpUserError,
@@ -335,23 +338,19 @@ export function registerDescribeTable({
         ...(input.table && { 'mcp.describe_table.table': input.table }),
       });
 
-      const connection = await getConnectionById(
-        teamId,
-        input.connectionId,
-        true,
-      );
-      if (!connection) {
+      let clickhouseClient: ClickhouseClient;
+      try {
+        clickhouseClient = await getMcpClickhouseClient(
+          context,
+          input.connectionId,
+          { requestTimeout: MCP_REQUEST_TIMEOUT },
+        );
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection "${input.connectionId}" not found. Call clickstack_list_sources to see available connections.`,
         );
       }
-
-      const clickhouseClient = new ClickhouseClient({
-        host: connection.host,
-        username: connection.username,
-        password: connection.password,
-        requestTimeout: MCP_REQUEST_TIMEOUT,
-      });
 
       const outcome = await runWithTimeout(
         signal => {

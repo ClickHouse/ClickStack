@@ -445,7 +445,7 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
 
     // Snapshot the raw tiles from the DB before patching
     const beforePatch = await Dashboard.findById(dashboardId).lean();
-    const tilesBeforePatch = (beforePatch as any).tiles;
+    const tilesBeforePatch = beforePatch!.tiles;
     const tileBBefore = tilesBeforePatch[1];
     const tileCBefore = tilesBeforePatch[2];
 
@@ -470,7 +470,7 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
 
     // Read raw DB tiles again; tiles B and C should be byte-identical
     const afterPatch = await Dashboard.findById(dashboardId).lean();
-    const tilesAfterPatch = (afterPatch as any).tiles;
+    const tilesAfterPatch = afterPatch!.tiles;
 
     expect(tilesAfterPatch).toHaveLength(3);
     // Tile B (index 1) and Tile C (index 2) should be untouched
@@ -943,10 +943,10 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
       const output = JSON.parse(getFirstText(patchResult));
       expect(output.patchedTile.name).toBe('Static SQL');
       const dashboard = await Dashboard.findById(created.id);
-      const persistedConfig = dashboard?.tiles?.[0]?.config as {
-        sqlTemplate?: string;
-      };
-      expect(persistedConfig?.sqlTemplate).toBe('SELECT 1 AS value LIMIT 1');
+      expect(dashboard?.tiles?.[0]?.config).toHaveProperty(
+        'sqlTemplate',
+        'SELECT 1 AS value LIMIT 1',
+      );
 
       expect(Array.isArray(output.warnings)).toBe(true);
       expect(output.warnings).toHaveLength(1);

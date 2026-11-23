@@ -1,0 +1,26 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "extends": ["../../oxlint/base.jsonc"],
+  "jsPlugins": ["eslint-plugin-simple-import-sort"],
+  "globals": {
+    "console": "readonly",
+    "process": "readonly",
+    "setTimeout": "readonly",
+    "clearTimeout": "readonly",
+    "Buffer": "readonly",
+    "URL": "readonly"
+  },
+  "ignorePatterns": [
+    "node_modules/**",
+    "dist/**",
+    "coverage/**",
+    "**/*.config.mjs",
+    "**/*.config.js",
+    "jest.config.js",
+    "scripts/viewer/**"
+  ],
+  "rules": {
+    "simple-import-sort/imports": "error",
+    "simple-import-sort/exports": "error"
+  }
+}

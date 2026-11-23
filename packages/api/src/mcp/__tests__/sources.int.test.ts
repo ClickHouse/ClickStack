@@ -962,10 +962,10 @@ describe('MCP Source Tools', () => {
       expect(second.isError).toBeFalsy();
       const secondOutput = JSON.parse(getFirstText(second));
       // The second page must not repeat the first page's last name.
-      const firstNames = new Set(
-        (firstOutput.metrics as { name: string }[]).map(m => m.name),
-      );
-      for (const entry of secondOutput.metrics as { name: string }[]) {
+      const firstMetrics: { name: string }[] = firstOutput.metrics;
+      const secondMetrics: { name: string }[] = secondOutput.metrics;
+      const firstNames = new Set(firstMetrics.map(m => m.name));
+      for (const entry of secondMetrics) {
         expect(firstNames.has(entry.name)).toBe(false);
       }
     });

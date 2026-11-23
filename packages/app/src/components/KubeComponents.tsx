@@ -176,12 +176,12 @@ export const KubeTimeline = ({
   anchorEvent?: AnchorEvent;
 }) => {
   const startDate = React.useMemo(
-    // eslint-disable-next-line no-restricted-syntax
+    // eslint-disable-next-line react-hooks/purity
     () => dateRange?.[0] ?? sub(new Date(), { days: 1 }),
     [dateRange],
   );
   const endDate = React.useMemo(
-    // eslint-disable-next-line no-restricted-syntax
+    // eslint-disable-next-line react-hooks/purity
     () => dateRange?.[1] ?? new Date(),
     [dateRange],
   );

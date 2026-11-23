@@ -27,7 +27,6 @@ export function downloadCsv(
 
 /** Timestamped export filename, without an extension. */
 export function csvExportFilename(prefix: string): string {
-  // eslint-disable-next-line no-restricted-syntax
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return `${prefix}_${timestamp}`;
 }

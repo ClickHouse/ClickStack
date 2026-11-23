@@ -1,12 +1,13 @@
+import { fromPartial } from '@total-typescript/shoehorn';
 import type { LanguageModel } from 'ai';
 
-const mockAnthropicModel = {
+const mockAnthropicModel: LanguageModel = fromPartial({
   modelId: 'claude-sonnet-4-5-20250929',
-} as unknown as LanguageModel;
+});
 
-const mockOpenAIModel = {
+const mockOpenAIModel: LanguageModel = fromPartial({
   modelId: 'gpt-4o',
-} as unknown as LanguageModel;
+});
 
 const mockAnthropicFactory = jest.fn((_model?: string) => mockAnthropicModel);
 const mockCreateAnthropic = jest.fn(

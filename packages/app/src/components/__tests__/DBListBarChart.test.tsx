@@ -1,5 +1,6 @@
 import React from 'react';
 import { screen } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import DBListBarChart from '@/components/DBListBarChart';
@@ -35,7 +36,7 @@ jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
 jest.mock('../charts/DateRangeIndicator', () => jest.fn(() => null));
 
 describe('DBListBarChart', () => {
-  const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
+  const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
 
   const baseTestConfig = {
     dateRange: [new Date(), new Date()] as [Date, Date],
@@ -49,18 +50,22 @@ describe('DBListBarChart', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: { data: [{ group: 'test', value: 100 }] },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: { data: [{ group: 'test', value: 100 }] },
+        isLoading: false,
+        isError: false,
+      }),
+    );
   });
 
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial({
+        data: { id: 'test-source', name: 'Test Source' },
+      }),
+    );
 
     renderWithMantine(
       <DBListBarChart
@@ -103,25 +108,27 @@ describe('DBListBarChart', () => {
     };
 
     // Mock useMVOptimizationExplanation to return an optimized config with aligned date range
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: {
-          ...config,
-          dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
-        },
-        explanations: [
-          {
-            success: true,
-            mvConfig: {
-              minGranularity: '1 minute',
-              tableName: 'metrics_rollup_1m',
-            },
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: {
+            ...config,
+            dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
           },
-        ],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+          explanations: [
+            {
+              success: true,
+              mvConfig: {
+                minGranularity: '1 minute',
+                tableName: 'metrics_rollup_1m',
+              },
+            },
+          ],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(
       <DBListBarChart
@@ -150,14 +157,16 @@ describe('DBListBarChart', () => {
 
   it('does not render DateRangeIndicator when MV optimization has no optimized date range', () => {
     // Mock useMVOptimizationExplanation to return data without an optimized config
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: undefined,
-        explanations: [],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: undefined,
+          explanations: [],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(
       <DBListBarChart
@@ -182,12 +191,14 @@ describe('DBListBarChart', () => {
       );
 
     it('pulses the previous bars while a refresh loads', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [{ group: 'checkout', value: 100 }] },
-        isLoading: false,
-        isPlaceholderData: true,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [{ group: 'checkout', value: 100 }] },
+          isLoading: false,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderChart();
 
@@ -197,12 +208,14 @@ describe('DBListBarChart', () => {
     });
 
     it('does not pulse once fresh bars load', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [{ group: 'checkout', value: 100 }] },
-        isLoading: false,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [{ group: 'checkout', value: 100 }] },
+          isLoading: false,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderChart();
 
@@ -210,12 +223,14 @@ describe('DBListBarChart', () => {
     });
 
     it('shows loading instead of the stale empty result during a refetch', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [] },
-        isLoading: false,
-        isPlaceholderData: true,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [] },
+          isLoading: false,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderChart();
 
@@ -224,12 +239,14 @@ describe('DBListBarChart', () => {
     });
 
     it('does not pulse a fresh empty result', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [] },
-        isLoading: false,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [] },
+          isLoading: false,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderChart();
 
