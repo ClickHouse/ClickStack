@@ -19,7 +19,7 @@ import type {
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { McpContext } from '@/mcp/tools/types';
 import { getMcpConnections } from '@/mcp/utils/connections';

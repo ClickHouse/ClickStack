@@ -1,7 +1,7 @@
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';

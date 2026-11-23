@@ -6,7 +6,7 @@ import { isPromqlSavedChartConfig } from '@hyperdx/common-utils/dist/guards';
 import type { DashboardContainer } from '@hyperdx/common-utils/dist/types';
 import { uniq } from 'lodash';
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import { recordDashboardOnboardingIfHasTiles } from '@/controllers/dashboard';

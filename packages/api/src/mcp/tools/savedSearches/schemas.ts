@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { mcpUnion } from '@/mcp/utils/errors';
 import { objectIdSchema, tagsSchema } from '@/utils/zod';

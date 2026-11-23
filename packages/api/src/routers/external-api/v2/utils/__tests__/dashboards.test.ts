@@ -12,7 +12,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { DashboardDocument } from '@/models/dashboard';
 import {

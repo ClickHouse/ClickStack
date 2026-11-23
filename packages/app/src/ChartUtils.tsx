@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { add, differenceInSeconds } from 'date-fns';
 import SqlString from 'sqlstring';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {
   ColumnMetaType,
   filterColumnMetaByType,

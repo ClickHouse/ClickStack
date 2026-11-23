@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { PromptDefinition } from '@/mcp/tools/types';
 import { getMcpConnections } from '@/mcp/utils/connections';

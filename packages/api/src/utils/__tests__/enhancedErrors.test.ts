@@ -1,6 +1,6 @@
 import express, { Express } from 'express';
 import request from 'supertest';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { validateRequestWithEnhancedErrors as validateRequest } from '@/utils/enhancedErrors';
 import {

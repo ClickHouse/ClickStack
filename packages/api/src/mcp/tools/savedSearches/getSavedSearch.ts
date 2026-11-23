@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import { getSavedSearch } from '@/controllers/savedSearch';

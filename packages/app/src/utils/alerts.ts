@@ -4,7 +4,7 @@ import {
   differenceInMinutes,
   sub,
 } from 'date-fns';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { formatTileAlertDisplayName } from '@hyperdx/common-utils/dist/alerts';
 import { Granularity } from '@hyperdx/common-utils/dist/core/utils';
 import { isPromqlSavedChartConfig } from '@hyperdx/common-utils/dist/guards';

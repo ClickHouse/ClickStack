@@ -8,7 +8,7 @@ import { omit } from 'lodash';
 import { performance } from 'perf_hooks';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
-import z from 'zod';
+import z from 'zod/v3';
 
 import {
   buildPrometheusRequest,

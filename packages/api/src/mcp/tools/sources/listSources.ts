@@ -10,7 +10,7 @@ import {
   quoteIdentifierIfNeeded,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
