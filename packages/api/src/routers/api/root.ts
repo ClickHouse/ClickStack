@@ -7,6 +7,10 @@ import { validateRequest } from 'zod-express-middleware';
 import * as config from '@/config';
 import { createTeam, isTeamExisting } from '@/controllers/team';
 import { handleAuthError, redirectToDashboard } from '@/middleware/auth';
+import {
+  loginRateLimiter,
+  markRejectedLogin,
+} from '@/middleware/loginRateLimiter';
 import TeamInvite from '@/models/teamInvite';
 import User from '@/models/user'; // TODO -> do not import model directly
 import { setupTeamDefaults } from '@/setupDefaults';
@@ -70,11 +74,13 @@ router.get('/installation', async (_, res: InstallationEspRes, next) => {
 
 router.post(
   '/login/password',
+  loginRateLimiter,
   passport.authenticate('local', {
     failWithError: true,
     failureMessage: true,
   }),
   redirectToDashboard,
+  markRejectedLogin,
   handleAuthError,
 );
 
