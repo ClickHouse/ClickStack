@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { lintSection, sizeSection } from '../quality-report.mjs';
+import { commentBody, lintSection, sizeSection } from '../quality-report.mjs';
 
 test('file size section lists the largest files first', () => {
   const out = sizeSection({ 'a.ts': 400, 'b.ts': 900 });
@@ -20,4 +20,22 @@ test('lint section totals each rule across packages, most common first', () => {
   assert.match(out, /api 5\/5, app 4\/9 \(count\/limit\)/);
   assert.match(out, /\| \*\*Total\*\* \| 5 \| 4 \|/);
   assert.match(out, /\| \*\*Limit\*\* \| 5 \| 9 \|/);
+});
+
+test('the PR comment is the totals and a link to the full report', () => {
+  const out = commentBody(
+    { 'a.ts': 400, 'b.ts': 900 },
+    { api: { limit: 5, rules: { complexity: 2, 'max-depth': 3 } } },
+    'https://example.test/runs/1',
+  );
+  assert.equal(
+    out,
+    [
+      '## Code quality report',
+      '- 2 source files over 300 lines, 700 lines over the limit in total',
+      '- oxlint warnings (count/limit): api 5/5',
+      '',
+      '[Full report](https://example.test/runs/1)',
+    ].join('\n'),
+  );
 });

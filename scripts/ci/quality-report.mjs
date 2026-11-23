@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Markdown summary of file sizes and oxlint warnings, for the CI job summary.
 // Advisory: the ratchet and each package's --max-warnings do the gating.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -68,6 +68,24 @@ export function lintSection(byPackage) {
   ].join('\n\n');
 }
 
+/** The short version posted on the PR; the full report is on the run page. */
+export function commentBody(large, byPackage, runUrl) {
+  const sizes = Object.values(large);
+  const excess = sizes.reduce((sum, n) => sum + n - MAX_FILE_LINES, 0);
+  const lint = Object.entries(byPackage)
+    .map(([pkg, { limit, rules }]) => {
+      const total = Object.values(rules).reduce((a, b) => a + b, 0);
+      return `${pkg} ${total}/${limit ?? '?'}`;
+    })
+    .join(', ');
+  return [
+    '## Code quality report',
+    `- ${sizes.length} source files over ${MAX_FILE_LINES} lines, ${excess} lines over the limit in total`,
+    `- oxlint warnings (count/limit): ${lint}`,
+    ...(runUrl ? ['', `[Full report](${runUrl})`] : []),
+  ].join('\n');
+}
+
 function lintPackage(dir) {
   const { scripts = {} } = JSON.parse(
     readFileSync(path.join(dir, 'package.json'), 'utf8'),
@@ -91,13 +109,21 @@ function main() {
       byPackage[name] = lintPackage(dir);
     }
   }
+  const large = collectLargeFiles(root);
   console.log(
-    [
-      '## Code quality report',
-      sizeSection(collectLargeFiles(root)),
-      lintSection(byPackage),
-    ].join('\n\n'),
+    ['## Code quality report', sizeSection(large), lintSection(byPackage)].join(
+      '\n\n',
+    ),
   );
+
+  const commentPath = process.argv[process.argv.indexOf('--comment') + 1];
+  if (process.argv.includes('--comment') && commentPath) {
+    const { GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID } = process.env;
+    const runUrl =
+      GITHUB_RUN_ID &&
+      `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`;
+    writeFileSync(commentPath, commentBody(large, byPackage, runUrl) + '\n');
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

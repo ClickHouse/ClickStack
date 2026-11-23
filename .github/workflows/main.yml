@@ -80,9 +80,9 @@ jobs:
         if: always()
         continue-on-error: true
         timeout-minutes: 2
-        run: |
-          node scripts/ci/quality-report.mjs > "$RUNNER_TEMP/quality-report.md"
-          cat "$RUNNER_TEMP/quality-report.md" >> "$GITHUB_STEP_SUMMARY"
+        run:
+          node scripts/ci/quality-report.mjs --comment
+          "$RUNNER_TEMP/quality-comment.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Comment PR with code quality report
         # Skip fork and Dependabot PRs: their GITHUB_TOKEN is read-only
         if:
@@ -92,7 +92,7 @@ jobs:
         continue-on-error: true
         uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3.12.0
         with:
-          message-path: ${{ runner.temp }}/quality-report.md
+          message-path: ${{ runner.temp }}/quality-comment.md
           message-id: code-quality-report
       # Also unconditional: the api's own `ci:lint` regenerates the spec but
       # never asserts on it, and nx can skip or cache-replay that task.
