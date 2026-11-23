@@ -68,8 +68,6 @@ export function registerServiceHealth({
   context,
   registerTool,
 }: ToolRegistrar) {
-  const teamId = context.teamId.toString();
-
   registerTool(
     TOOL_NAME,
     {
@@ -95,7 +93,7 @@ export function registerServiceHealth({
         );
       }
 
-      const source = await loadHealthSource(teamId, input.sourceId, TOOL_NAME);
+      const source = await loadHealthSource(context, input.sourceId, TOOL_NAME);
       if ('isError' in source) return source;
       let client: ClickhouseClient;
       try {

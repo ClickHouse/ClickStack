@@ -4,7 +4,6 @@ import { trace } from '@opentelemetry/api';
 import { z } from 'zod';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { parseTimeRange } from '@/mcp/tools/query/helpers';
 import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
@@ -13,6 +12,7 @@ import {
   McpConnectionNotFoundError,
 } from '@/mcp/utils/clickhouse';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_TOOL_TIMEOUT_MS, runWithTimeout } from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
 
@@ -104,8 +104,7 @@ async function listMetricsImpl(
   deadlineAt: number,
   signal: AbortSignal,
 ) {
-  const { teamId } = context;
-  const source = await getSource(teamId, input.sourceId);
+  const source = await getMcpSource(context, input.sourceId);
   if (!source) {
     return mcpUserError(
       `Source "${input.sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,

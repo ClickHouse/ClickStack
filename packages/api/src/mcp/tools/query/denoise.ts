@@ -10,12 +10,12 @@ import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types'
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import type { McpContext } from '@/mcp/tools/types';
 import {
   getMcpClickhouseClient,
   McpConnectionNotFoundError,
 } from '@/mcp/utils/clickhouse';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 
 import { resolveBodyExpression } from './helpers';
@@ -65,7 +65,7 @@ export async function denoiseSearchResults(
   }
 
   // ── Resolve source & connection ──
-  const source = await getSource(context.teamId, sourceId);
+  const source = await getMcpSource(context, sourceId);
   if (!source) {
     return { rows, removedPatterns: [], skipped: 'source_not_found' };
   }

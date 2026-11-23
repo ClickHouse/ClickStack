@@ -185,7 +185,7 @@ export async function runSqlBatch({
     SQL_SINGLE_RESPONSE_LIMIT,
     Math.floor(SQL_BATCH_RESPONSE_BUDGET / queries.length),
   );
-  const lookupSource = createSourceLookup(context.teamId);
+  const lookupSource = createSourceLookup(context);
   const queue = new PQueue({ concurrency: SQL_BATCH_CONCURRENCY });
   // Fixed before anything is queued so every query races the same budget.
   const deadlineAt = Date.now() + SQL_BATCH_DEADLINE_MS;

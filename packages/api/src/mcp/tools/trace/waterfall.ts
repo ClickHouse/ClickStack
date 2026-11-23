@@ -11,7 +11,6 @@ import {
 import { z } from 'zod';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
@@ -31,6 +30,7 @@ import {
   McpConnectionNotFoundError,
 } from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import logger from '@/utils/logger';
 
 // ─── Schema ──────────────────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ export function registerTraceWaterfall({
       }
       const { startDate, endDate } = timeRange;
 
-      const source = await getSource(teamId.toString(), input.sourceId);
+      const source = await getMcpSource(context, input.sourceId);
       if (!source) {
         return mcpUserError(
           `Source not found: ${input.sourceId}. Call clickstack_list_sources to find available source IDs.`,
@@ -674,10 +674,7 @@ export function registerTraceWaterfall({
       let logsTruncated = false;
       let logsNote: string | undefined;
       if (input.includeLogs && source.logSourceId) {
-        const logSource = await getSource(
-          teamId.toString(),
-          source.logSourceId,
-        );
+        const logSource = await getMcpSource(context, source.logSourceId);
         if (!logSource) {
           logsNote = `logSourceId ${source.logSourceId} configured but source not found`;
         } else if (logSource.kind !== SourceKind.Log) {

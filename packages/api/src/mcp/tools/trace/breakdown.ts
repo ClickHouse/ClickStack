@@ -20,7 +20,6 @@ import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
@@ -45,6 +44,7 @@ import {
   McpConnectionNotFoundError,
 } from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 
 // The child stage looks spans up by TraceId, which is not in the sort key, so
 // it reads every span in the window regardless of how few parents matched.
@@ -64,8 +64,6 @@ export function registerTraceBreakdown({
   context,
   registerTool,
 }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_trace_top_time_consuming_ops',
     {
@@ -83,7 +81,7 @@ export function registerTraceBreakdown({
       }
       const { startDate, endDate } = timeRange;
 
-      const source = await getSource(teamId.toString(), input.sourceId);
+      const source = await getMcpSource(context, input.sourceId);
       if (!source) {
         return mcpUserError(
           `Source not found: ${input.sourceId}. Call clickstack_list_sources to find available source IDs.`,

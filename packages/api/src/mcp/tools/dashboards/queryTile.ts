@@ -104,7 +104,7 @@ export function registerQueryTile({
         externalDashboard.filters,
         variableValues,
         externalDashboard.savedFilterValues,
-        await getReferenceTargets(teamId.toString()),
+        await getReferenceTargets(context),
       );
       if ('error' in resolvedTile) {
         return mcpUserError(resolvedTile.error);

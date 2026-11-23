@@ -16,10 +16,10 @@ import {
   getConnectionById,
   getConnectionsByTeam,
 } from '@/controllers/connection';
-import { getSources } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
-import { isHiddenSource, PROMQL_SOURCE_USAGE } from '@/mcp/utils/promql';
+import { PROMQL_SOURCE_USAGE } from '@/mcp/utils/promql';
+import { getVisibleMcpSources } from '@/mcp/utils/sources';
 import { runWithTimeout } from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
 
@@ -225,8 +225,8 @@ export function registerListSources({
       inputSchema: z.object({}),
     },
     async () => {
-      const [sources, connections] = await Promise.all([
-        getSources(teamId.toString()),
+      const [visibleSources, connections] = await Promise.all([
+        getVisibleMcpSources(context),
         getConnectionsByTeam(teamId.toString()),
       ]);
 
@@ -244,7 +244,6 @@ export function registerListSources({
           .map(c => c._id.toString()),
       );
 
-      const visibleSources = sources.filter(s => !isHiddenSource(context, s));
       const sourceSummaries = visibleSources.map(s => {
         const meta: Record<string, unknown> = {
           id: s._id.toString(),

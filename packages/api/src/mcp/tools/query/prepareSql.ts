@@ -1,25 +1,28 @@
 import { hasMacro } from '@hyperdx/common-utils/dist/macros';
 import { hasVariableMacro } from '@hyperdx/common-utils/dist/variables';
 
-import { getSource } from '@/controllers/sources';
+import type { McpContext } from '@/mcp/tools/types';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 
 import { buildTile } from './helpers';
 
-export type SourceLookup = (sourceId: string) => ReturnType<typeof getSource>;
+export type SourceLookup = (
+  sourceId: string,
+) => ReturnType<typeof getMcpSource>;
 
 /**
  * Source lookup memoized for one tool call, so a batch of queries against the
  * same source reads it from Mongo once.
  */
-export function createSourceLookup(teamId: string): SourceLookup {
-  const cache = new Map<string, ReturnType<typeof getSource>>();
+export function createSourceLookup(context: McpContext): SourceLookup {
+  const cache = new Map<string, ReturnType<typeof getMcpSource>>();
   return sourceId => {
     let pending = cache.get(sourceId);
     if (!pending) {
-      pending = getSource(teamId, sourceId);
+      pending = getMcpSource(context, sourceId);
       cache.set(sourceId, pending);
     }
     return pending;
