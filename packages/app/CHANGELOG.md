@@ -1,5 +1,250 @@
 # @hyperdx/app
 
+## 2.47.0
+
+### Minor Changes
+
+- c6657aa0c: Show RED metrics (Throughput, Errors, Duration) above the trace search results instead of the single count histogram. The three charts share a synced hover cursor, Errors toggles between rate and volume, and clicking a status series on the volume chart filters the results. Logs and other sources keep the existing histogram.
+- 81000d0ce: Add a RED/Heatmap switch to the trace search results view. Heatmap shows the duration distribution over time as the same tile the dashboard renders, and the choice is kept in the URL so a reload or a shared link reopens the same view.
+
+### Patch Changes
+
+- 6e7ee8366: feat: Removing the NEXT_PUBLIC_ENABLE_ADHOC_FILTERS flag
+- 6e7c77247: fix: run an edited Order By on a chart table instead of the last column header sort
+- 1a4c116b2: perf: load search filter values faster in exact mode by reading several keys on
+  one Map column with a single `groupUniqArrayMap`, and by querying plain columns
+  and each Map or JSON column separately so slow attribute maps don't hold up the
+  rest
+- 351f19400: feat: allow up to 10,000 in the team "Filter Keys Fetch Limit" setting
+
+  The setting's input in Team settings stopped at 1,000 keys per column; it now
+  accepts up to 10,000. Map key discovery returns up to the setting's value per
+  Map column, and never fewer than 1,000.
+
+- 0c77d52a3: fix: stop the previous filter type's validation from blocking a save after switching types
+
+  Switching a dashboard filter from "PromQL label values" to another type no longer fails with "Select a PromQL source".
+
+- 661a5a139: fix: address JSON array elements by index in row-panel filters
+
+  "Add to Filters" on a value inside an array in a native JSON column now uses
+  1-based array subscripts, for example `events[1]`, instead of quoted keys such
+  as `events.0`, so the filter matches rows instead of silently returning none.
+
+  The same applies to arrays inside a JSON string (for example a String `Body`
+  column), which now pass 1-based integer indexes to `JSONExtract*`. JSON strings
+  stored in a native JSON column are wrapped in `toString()` so `JSONExtract*`
+  accepts them.
+
+- 3d12509ef: fix: keep JSON-column filter keys in JSON form when another filter is added
+
+  Adding a second filter, or clicking "Load more" on a filter, no longer rewrites
+  an earlier filter on a key inside a native JSON column to `col['key']`, which
+  ClickHouse rejects (`Illegal type Dynamic of argument of function in`, or
+  `First argument for function 'arrayElement' must be array, got 'JSON'` on older
+  versions).
+
+- 86acf27c0: perf: read only 20 median-sized parts for text index key and value lookups
+
+  Map key discovery and "all values" lookups on text indexes read the index
+  dictionary of every part in the time range, which is slow on tables with many
+  parts. They now read the 20 parts closest to the median size. Log and trace
+  sources can change the count with the new "Map key index parts" setting
+  (`mapKeyIndexMaxParts`), and which parts are read with "Map key index part size"
+  (`mapKeyIndexPartSelection`: median, smallest, or largest). "Load more" on a
+  single filter key still reads every part in the time range.
+
+- 2f61137e2: fix: return partial rows from `clickstack_search` instead of timing out
+
+  The MCP search tool now scans newest-first over the same progressive time
+  windows as the app's search page, under a 25s budget. When time runs out it
+  returns the rows found so far with a `partial` block (requested range, the range
+  fully covered, and the window that was cut off) and a hint for the next call,
+  instead of failing after 30s. The time-window helpers moved from the app to
+  `@hyperdx/common-utils/core/searchWindows`; the app's behavior is unchanged.
+
+- 64a55d5b7: fix: allow grouping gauge and sum metric charts by an expression over the time column
+
+  A table, pie or bar chart on a gauge or sum metric grouped by a time expression
+  such as `toStartOfHour(TimeUnix)` or `toDate(TimeUnix)` failed with
+  `Unknown identifier TimeUnix`, because the bucketed CTE the outer query reads
+  did not carry the time column. When the group-by references it, `TimeUnix` now
+  resolves to each metric bucket's start, so values are the same as the chart
+  without the time group-by.
+
+- e8d1d9add: fix: return the actual earliest/latest time for min/max on a date or time column
+
+  `min` and `max` on a Date, DateTime, or DateTime64 column (for example
+  `Timestamp`) returned 0, because every aggregation cast its value to Float64
+  first. Tables, number tiles, and the MCP `clickstack_table` tool now return the
+  timestamp itself. Line, bar, pie, and other charts, ratios, formulas, and number
+  tiles with several series keep the numeric cast.
+
+- 0c77d52a3: feat: rename the "Queried values" dashboard filter type to "SQL expression values"
+
+  The new name separates it from "SQL query values" and "PromQL label values".
+
+- e58329c87: fix: require the password when changing a connection's host
+
+  Updating a connection's host without sending its password used to keep the stored password, so it would be sent to the new host on the next query. Both `PUT /connections/:id` and `PUT /api/v2/connections/:id` now return 400 in that case. Prometheus endpoints never use the stored password, so it is cleared instead. The connection form asks for the password when the host is edited and shows the API's error message.
+
+- a0732b175: feat: save a temporary dashboard with its content intact
+- 67e2eb36e: Use the sidebar layout icons for showing and hiding search filters
+- 2cec94f7d: feat: let SQL query dashboard filters use an optional source
+
+  A SQL query filter can now pick a source on its connection, or a data source variable, and can do so on a connection variable too. With one, its SQL can use `$__sourceTable` and `$__filters`, which applies the dashboard's filter selections for that source, the same way raw SQL tiles do. The external API and MCP read and write it as `sourceId`.
+
+- 0c77d52a3: feat: autocomplete table and column names in the SQL query filter editor
+
+  The SQL query dashboard filter's editor now suggests the tables and columns of
+  the selected connection's sources, like the Raw SQL tile editor.
+
+- 7afa31c71: feat: Add a team-wide default (All or Exact) for the search filters "Show All Values" setting
+- 6a5fd1127: In dark mode, the field background now has opacity so it works on different
+  backgrounds, such as popovers. It is set directly in the theme tokens instead of
+  through a Click UI token that resolved to a solid color.
+- Updated dependencies [22377dfcf]
+- Updated dependencies [ef81fe6d8]
+- Updated dependencies [b129ec1ac]
+- Updated dependencies [e36cec3a2]
+- Updated dependencies [1a4c116b2]
+- Updated dependencies [351f19400]
+- Updated dependencies [86acf27c0]
+- Updated dependencies [e80fc1ba2]
+- Updated dependencies [2f61137e2]
+- Updated dependencies [64a55d5b7]
+- Updated dependencies [e8d1d9add]
+- Updated dependencies [d99be7650]
+- Updated dependencies [e58329c87]
+- Updated dependencies [2cec94f7d]
+- Updated dependencies [7afa31c71]
+- Updated dependencies [f11b9f58b]
+- Updated dependencies [7905721bc]
+  - @hyperdx/api@2.47.0
+  - @hyperdx/common-utils@0.36.1
+
+## 2.46.0
+
+### Minor Changes
+
+- ca4855d97: feat: filter for or exclude a pattern from Event Patterns
+
+  Each row in Event Patterns now has "Filter for this pattern" and "Exclude this
+  pattern" buttons on hover. Each adds a filter for every event that fits the
+  pattern in the time range, not only the sampled rows, so the results table,
+  histogram and counts all update. Exclusions stack, show as pills next to the
+  other filters, survive sidebar filter changes, and are kept in the URL and in
+  saved searches. A new include replaces the previous one, and switching source
+  removes pattern filters.
+
+- 743c3c1a6: feat: add an optional "Row key expression" to log and trace sources. When set,
+  the side panel's row lookup selects and filters on only those columns instead of
+  detecting keys from table metadata.
+- a7744e82a: feat: add data source variables to dashboard filters and tiles
+- a7744e82a: feat: let tiles and filters use a data source variable as their source
+- a7744e82a: feat: add connection variables for raw SQL tiles, SQL query filters, and
+  connection-scoped data source variables
+
+### Patch Changes
+
+- f15b849da: feat: Ad hoc dashboard filter finishing touches
+
+  - Add an `IN` operator. `IN` conditions on the same key are OR'd into one
+    `IN (...)` condition for SQL, or one `=~"a|b"` matcher for PromQL.
+  - Ad hoc filters always broadcast (`isBroadcastEnabled: true`), and their
+    variable name is only a unique identifier. It is no longer declared as a
+    `$variable`.
+  - Warn when another ad hoc filter already applies to the same sources.
+  - Collapse the filter input to three conditions behind a "+N more" toggle.
+
+- 3a196eb56: Fix blank search panel when switching from a trace source in Event Deltas mode
+  to a source that doesn't support deltas (e.g. a log source). The view now falls
+  back to the results table and shows a notification.
+- 61999b48f: fix: clear the critical CVEs from the app and collector images by moving the
+  collector to Alpine 3.24, upgrading gomplate to v5 and dropping the unused goose
+  and esbuild binaries. Custom entrypoints that called `goose` directly should
+  call `migrate` with the same schema directory instead.
+- 832c11ca2: Bring back the Claude Code and Codex CLI commands in the MCP setup panel, next to the `hdx mcp install` command, so connecting an agent no longer needs another CLI installed.
+- 3419ab0ae: fix: keep the team switcher and user preferences reachable in the mobile app
+  nav. The app shell and nav were sized with `100vh`, which on mobile browsers
+  includes the area behind the retractable toolbar, so the bottom of the nav sat
+  off screen with no way to scroll to it. They now size to the small viewport.
+- cf4b70bec: fix: update the Node dependencies flagged as vulnerable in the app image (axios,
+  MCP SDK, express, js-yaml, brace-expansion and others). MCP tool validation
+  errors still name the field that failed under the new MCP SDK, and list the
+  accepted values when a tile's `displayType` is wrong.
+- 272c51486: fix: support numeric range searches on String attributes
+
+  Range searches with numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, failed with "no supertype for types
+  String, UInt8". They now compare with `toFloat64OrNull`; values that aren't
+  numbers don't match. `>`, `<`, `>=` and `<=` still compare String fields as
+  text; use a range such as `:[1000 TO *]` for a numeric comparison.
+
+- ca4ceae90: fix: make the "No organization API keys yet" empty state span the full width of
+  the team settings section.
+- cac14ebc8: feat: Name PromQL sources "Time Series" or "Prometheus" by their connection
+
+  The source type for a PromQL source now reads "Time Series" when it queries a
+  ClickHouse TimeSeries table and "Prometheus" when it queries an external
+  Prometheus API. Where no connection is known yet, such as the source form before
+  a connection is picked or a data source variable's kinds, it reads "Time Series
+  / Prometheus". The stored kind is still `promql`.
+
+  The PromQL source created by onboarding auto-detection and the local dev default
+  sources is now named "Time Series" instead of "PromQL".
+
+- 3a10f625f: fix: clicking the source selector selects its current label so typing replaces
+  it instead of inserting into the middle of the old name
+- 2ee64d8f4: feat: accept source and connection names for dashboard source and connection variables
+- a7744e82a: feat: add data source and connection variable types to dashboards
+- 0e9fb1bf1: feat: Find settings and preferences from the Cmd+K menu
+
+  - Team settings sections (sources, connections, team members, API keys, MCP
+    server, webhooks, query settings, and more) open the right tab and scroll to
+    the section.
+  - "Preferences" opens the preferences modal, and "Use light mode", "Use dark
+    mode", and "Use system color mode" switch the theme directly.
+
+- 3acd5ba1a: feat: create SQL query dashboard filters and fill their dropdowns
+
+  Dashboard filters can now take their values from a ClickHouse SQL query. The filter editor offers a "SQL query values" type with a connection, a SQL editor, and a preview of the values. The dropdown lists the query's first column in the order it returns, up to 10,000 values, and the query can use the time macros and other filters' variables.
+
+- 5b50c31c9: feat: add the SQL query dashboard filter type to the dashboard schema
+
+  A `SQL_QUERY` filter stores a ClickHouse connection and a SQL template whose first column fills the filter's dropdown. It is variable-only. Validation flags templates that use `$__sourceTable` or `$__filters`, or whose macros and variable references can't expand. The filter is not yet exposed through the external API or MCP, and has no editor or values lookup yet.
+
+- 50129d13d: fix: time chart series keep the same color across refreshes; series are now
+  ordered by name instead of by the order ClickHouse returned them
+- 3c8794f2c: fix: stacked bar and stacked line charts no longer show duplicate Y-axis labels
+  (e.g. "0, 500, 1k, 2k, 2k" when 1.5k rounds to 2k)
+- a4f68568e: feat: dashboard tile alerts can use a 1 minute interval outside development
+- 1556317ea: feat: small addition to user preferences
+- Updated dependencies [f15b849da]
+- Updated dependencies [6705e505d]
+- Updated dependencies [b681cec85]
+- Updated dependencies [8952972c9]
+- Updated dependencies [f42c68a9c]
+- Updated dependencies [fe96b722b]
+- Updated dependencies [61999b48f]
+- Updated dependencies [bfb5c834f]
+- Updated dependencies [02a40929d]
+- Updated dependencies [8dc1aa791]
+- Updated dependencies [6256667e1]
+- Updated dependencies [cf4b70bec]
+- Updated dependencies [272c51486]
+- Updated dependencies [cac14ebc8]
+- Updated dependencies [d311d82e2]
+- Updated dependencies [743c3c1a6]
+- Updated dependencies [a7744e82a]
+- Updated dependencies [a7744e82a]
+- Updated dependencies [a7744e82a]
+- Updated dependencies [fa3a5649e]
+- Updated dependencies [3acd5ba1a]
+- Updated dependencies [5b50c31c9]
+  - @hyperdx/common-utils@0.36.0
+  - @hyperdx/api@2.46.0
+
 ## 2.45.0
 
 ### Minor Changes

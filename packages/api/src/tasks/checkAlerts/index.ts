@@ -39,6 +39,7 @@ import {
 import {
   ALERT_NOTIFICATION_TARGETS_LIMIT,
   AlertErrorType,
+  AlertInterval,
   AlertNotificationTargetTiming,
   AlertThresholdType,
   BuilderChartConfigWithOptDateRange,
@@ -51,7 +52,6 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import * as fns from 'date-fns';
 import { isString, pick } from 'lodash';
-import { ObjectId } from 'mongoose';
 import mongoose from 'mongoose';
 import ms from 'ms';
 import { performance } from 'perf_hooks';
@@ -103,9 +103,10 @@ import {
 } from '@/tasks/checkAlerts/template';
 import { handleSendGenericWebhook } from '@/tasks/checkAlerts/transports';
 import { tasksTracer } from '@/tasks/tracer';
-import { CheckAlertsTaskArgs, HdxTask } from '@/tasks/types';
+import { CheckAlertsTaskArgs, HdxTask, MappedOmit } from '@/tasks/types';
 import {
   calcAlertDateRange,
+  MAX_NUM_WINDOWS,
   roundDownToXMinutes,
   unflattenObject,
 } from '@/tasks/util';
@@ -148,7 +149,9 @@ const alertBatchFailuresCounter = getCounter('hyperdx.alerts.batch_failures', {
  * For saved search alerts, groupBy is on alert.groupBy.
  * For tile and inline alerts, groupBy is on the chart config.
  */
-export const alertHasGroupBy = (details: AlertDetails): boolean => {
+export const alertHasGroupBy = (
+  details: MappedOmit<AlertDetails, 'previousMap'>,
+): boolean => {
   // AlertChartConfig members are the tile config types minus the embedded
   // alert field, so they're assignable to SavedChartConfig (which the
   // chart-config guards narrow on).
@@ -187,6 +190,8 @@ export async function computeAliasWithClauses(
       source.kind === SourceKind.Log || source.kind === SourceKind.Trace
         ? source.implicitColumnExpression
         : undefined,
+    bodyExpression:
+      source.kind === SourceKind.Log ? source.bodyExpression : undefined,
     useTextIndexForImplicitColumn:
       source.kind === SourceKind.Log || source.kind === SourceKind.Trace
         ? source.useTextIndexForImplicitColumn
@@ -612,7 +617,10 @@ const getAlertKeyPrefix = (alertId: string): string => {
  * Uses || as delimiter since it's unlikely to appear in alert IDs (MongoDB ObjectIds)
  * or in typical group key values.
  */
-const computeHistoryMapKey = (alertId: string, groupKey: string): string => {
+export const computeHistoryMapKey = (
+  alertId: string,
+  groupKey: string,
+): string => {
   return groupKey ? `${getAlertKeyPrefix(alertId)}${groupKey}` : alertId;
 };
 
@@ -1946,7 +1954,8 @@ export const processAlert = async (
 export { handleSendGenericWebhook };
 
 export interface AggregatedAlertHistory {
-  _id: ObjectId;
+  /** The alert's ObjectId (not the history document's own _id). */
+  _id: mongoose.Types.ObjectId;
   createdAt: Date;
   state: AlertState;
   group?: string;
@@ -1954,96 +1963,218 @@ export interface AggregatedAlertHistory {
   groupValues?: GroupValue[] | null;
 }
 
+// Floor/cap for the previous-history lookback window. The lookback only needs
+// to cover (a) the catch-up horizon (capped at MAX_NUM_WINDOWS windows — see
+// calcAlertDateRange) and (b) enough slack to auto-resolve groups whose last
+// history row predates a task outage. History rows are written every window
+// for every group present in the data, so anything beyond a couple of windows
+// exists purely for outage/stale-group coverage.
+const ALERT_HISTORY_MIN_LOOKBACK_MS = ms('1d');
+const ALERT_HISTORY_MAX_LOOKBACK_MS = ms('7d');
+// +2 windows of slack over the catch-up cap so a boundary window is never
+// clipped by the history lookback.
+const ALERT_HISTORY_LOOKBACK_WINDOWS = MAX_NUM_WINDOWS + 2;
+
 /**
- * Fetch the most recent AlertHistory value for each of the given alert IDs.
- * For group-by alerts, returns the latest history for each group within each alert.
+ * Compute how far back to scan AlertHistory when loading previous per-group
+ * state for an alert, derived from the alert's evaluation interval.
  *
- * Uses per-alert queries instead of batched $in to leverage the compound index
- * {alert: 1, group: 1, createdAt: -1} for index-backed sorting. With a single
- * alert value, the index delivers results already sorted by {group, createdAt desc},
- * so the $sort is a no-op and $group + $first can short-circuit per group.
- *
- * @param alertIds The list of alert IDs to query the latest history for.
- * @param now The current date and time. AlertHistory documents that have a createdAt > now are ignored.
- * @returns A map from Alert IDs (or Alert ID + group) to their most recent AlertHistory.
- *  For non-grouped alerts, the key is just the alert ID.
- *  For grouped alerts, the key is "alertId||group" to track per-group state.
+ * Bounding the scan matters on DocumentDB: the previous-history query is a
+ * range scan on {alert: 1, createdAt: -1}, so the lookback directly bounds the
+ * index entries examined and documents fetched on the (read-preferring)
+ * secondary instances.
  */
-export const getPreviousAlertHistories = async (
+export const getAlertHistoryLookbackMs = (interval: AlertInterval): number => {
+  const windowMs = ms(interval);
+  return Math.min(
+    ALERT_HISTORY_MAX_LOOKBACK_MS,
+    Math.max(
+      ALERT_HISTORY_MIN_LOOKBACK_MS,
+      ALERT_HISTORY_LOOKBACK_WINDOWS * windowMs,
+    ),
+  );
+};
+
+/** Latest AlertHistory row per alert, minus the fat `lastValues` array. */
+export type LatestAlertHistory = Pick<
+  AggregatedAlertHistory,
+  'createdAt' | 'state' | 'group' | 'fired'
+>;
+
+/**
+ * Fetch the single most recent AlertHistory row for each of the given alert
+ * IDs.
+ *
+ * Each lookup is a one-key index seek on {alert: 1, createdAt: -1}, so this is
+ * cheap enough to run for every alert on every task tick. loadAlerts uses the
+ * result to decide whether an alert was already evaluated in the current
+ * window — gating the much heavier per-group fetch (getPreviousAlertHistories)
+ * to grouped alerts that are due; for non-grouped alerts this row is the
+ * previous state itself.
+ *
+ * @returns A map from alert ID to its latest history row, or null when the
+ *  alert has no history at all.
+ */
+export const getLatestAlertHistories = async (
   alertIds: string[],
   now: Date,
   sharedQueue?: PQueue,
-) => {
-  const lookbackDate = new Date(now.getTime() - ms('7d'));
-
-  // Concurrency-limited per-alert queries to avoid overwhelming the connection
-  // pool when there are many alerts (e.g., 200+ alert IDs).
+): Promise<Map<string, LatestAlertHistory | null>> => {
   const queue =
     sharedQueue ?? new PQueue({ concurrency: ALERT_HISTORY_QUERY_CONCURRENCY });
 
   const results = await Promise.all(
     alertIds.map(alertId =>
       queue.add(async () => {
-        const id = new mongoose.Types.ObjectId(alertId);
-        return AlertHistory.aggregate<AggregatedAlertHistory>([
+        const latest = await AlertHistory.findOne(
           {
-            $match: {
-              alert: id,
-              createdAt: { $lte: now, $gte: lookbackDate },
-              // ERROR rows record failed evaluations; they must not count as
-              // "window evaluated" or the failed window would never be
-              // retried/backfilled.
-              state: { $ne: AlertState.ERROR },
+            alert: new mongoose.Types.ObjectId(alertId),
+            // Caps the walk past ERROR rows, which the index can't skip.
+            createdAt: {
+              $lte: now,
+              $gte: new Date(now.getTime() - ALERT_HISTORY_MAX_LOOKBACK_MS),
             },
-          },
-          // With a single alert value, the compound index {alert: 1, group: 1, createdAt: -1}
-          // delivers results already in this sort order — this is an index-backed no-op sort.
-          {
-            $sort: { alert: 1, group: 1, createdAt: -1 },
-          },
-          // Group by {alert, group}, taking the first (latest) document's fields.
-          // Using $first on individual fields instead of $first: '$$ROOT' allows
-          // DocumentDB to avoid fetching full documents when not needed.
-          {
-            $group: {
-              _id: {
-                alert: '$alert',
-                group: '$group',
-              },
-              createdAt: { $first: '$createdAt' },
-              state: { $first: '$state' },
-              fired: { $first: '$fired' },
-              groupValues: { $first: '$groupValues' },
-            },
+            // ERROR rows record failed evaluations; they must not count as
+            // "window evaluated" or the failed window would never be
+            // retried/backfilled.
+            state: { $ne: AlertState.ERROR },
           },
           {
-            $project: {
-              _id: '$_id.alert',
-              createdAt: 1,
-              state: 1,
-              group: '$_id.group',
-              fired: 1,
-              groupValues: 1,
-            },
+            createdAt: 1,
+            state: 1,
+            group: 1,
+            fired: 1,
           },
-        ]);
+        )
+          .sort({ createdAt: -1 })
+          .lean();
+        return [alertId, latest] as const;
       }),
     ),
   );
 
-  // Create a map with composite keys for grouped alerts (alertId||group) or simple keys for non-grouped alerts
-  return new Map<string, AggregatedAlertHistory>(
+  return new Map(
     results
-      .flat()
-      .filter((h): h is AggregatedAlertHistory => h !== undefined)
-      .map(history => {
-        const key = computeHistoryMapKey(
-          history._id.toString(),
-          history.group || '',
-        );
-        return [key, history];
-      }),
+      .filter((r): r is NonNullable<typeof r> => r !== undefined)
+      .map(([alertId, latest]) => [
+        alertId,
+        latest
+          ? {
+              createdAt: latest.createdAt,
+              state: latest.state,
+              group: latest.group,
+              fired: latest.fired,
+            }
+          : null,
+      ]),
   );
+};
+
+/**
+ * Fetch the most recent AlertHistory value for each of the given alerts.
+ * For group-by alerts, returns the latest history for each group within each alert.
+ *
+ * Implemented as a per-alert range `find()` on the {alert: 1, createdAt: -1}
+ * index with the latest-per-group reduce done in application code. An
+ * aggregation with $sort {alert, group, createdAt} + $group/$first is NOT used
+ * on purpose: DocumentDB has no DISTINCT_SCAN optimization, and no single
+ * B-tree index can serve both a tight createdAt range bound and a group-major
+ * sort — the aggregation either walks every index entry for the alert across
+ * the full TTL retention (loose createdAt bounds behind the unbounded `group`
+ * key) or performs a blocking in-memory sort. A plain tight-bounds range scan
+ * examines exactly the lookback window and keeps long-lived sort/group cursors
+ * off the DocumentDB secondaries (HDX-4791).
+ *
+ * The lookback window is derived from each alert's interval (see
+ * getAlertHistoryLookbackMs); the projection excludes the fat `lastValues`
+ * array so only the per-group state fields are transferred.
+ *
+ * @param alerts The alerts (id + interval) to query the latest history for.
+ * @param now The current date and time. AlertHistory documents that have a createdAt > now are ignored.
+ * @returns A map from Alert IDs (or Alert ID + group) to their most recent AlertHistory.
+ *  For non-grouped alerts, the key is just the alert ID.
+ *  For grouped alerts, the key is "alertId||group" to track per-group state.
+ */
+export const getPreviousAlertHistories = async (
+  alerts: Array<Pick<IAlert, 'id' | 'interval'>>,
+  now: Date,
+  sharedQueue?: PQueue,
+) => {
+  // Concurrency-limited per-alert queries to avoid overwhelming the connection
+  // pool when there are many alerts (e.g., 200+ alert IDs).
+  const queue =
+    sharedQueue ?? new PQueue({ concurrency: ALERT_HISTORY_QUERY_CONCURRENCY });
+
+  const results = await Promise.all(
+    alerts.map(alert =>
+      queue.add(async () => {
+        const alertObjectId = new mongoose.Types.ObjectId(alert.id);
+        const lookbackDate = new Date(
+          now.getTime() - getAlertHistoryLookbackMs(alert.interval),
+        );
+        // Stream the range scan instead of materializing it: the row count is
+        // O(groups × windows-in-lookback) — up to ~1,440 windows for a
+        // 1m-interval alert at the 1d lookback floor — while the reduce below
+        // only ever needs the latest row per group. Iterating a cursor bounds
+        // app memory at O(driver batch + groups) per alert instead of
+        // O(groups × windows), which matters with up to
+        // ALERT_HISTORY_QUERY_CONCURRENCY of these in flight when alerts
+        // sharing a window boundary all come due at once.
+        const cursor = AlertHistory.find(
+          {
+            alert: alertObjectId,
+            createdAt: { $lte: now, $gte: lookbackDate },
+            // ERROR rows record failed evaluations; they must not count as
+            // "window evaluated" or the failed window would never be
+            // retried/backfilled.
+            state: { $ne: AlertState.ERROR },
+          },
+          {
+            group: 1,
+            state: 1,
+            createdAt: 1,
+            fired: 1,
+            groupValues: 1,
+          },
+        )
+          .lean()
+          .cursor();
+
+        // Reduce to the latest row per group. Ties on createdAt are resolved
+        // arbitrarily (first row wins), matching the previous aggregation's
+        // unstable $sort + $first behavior.
+        const latestByKey = new Map<string, AggregatedAlertHistory>();
+        for await (const row of cursor) {
+          const key = computeHistoryMapKey(alert.id, row.group || '');
+          const existing = latestByKey.get(key);
+          if (!existing || row.createdAt > existing.createdAt) {
+            latestByKey.set(key, {
+              _id: alertObjectId,
+              createdAt: row.createdAt,
+              state: row.state,
+              group: row.group,
+              fired: row.fired,
+              groupValues: row.groupValues,
+            });
+          }
+        }
+        return latestByKey;
+      }),
+    ),
+  );
+
+  // Merge the per-alert maps. Keys are namespaced by alert ID, so there are no
+  // collisions across alerts.
+  const merged = new Map<string, AggregatedAlertHistory>();
+  for (const result of results) {
+    if (!result) {
+      continue;
+    }
+    for (const [key, history] of result) {
+      merged.set(key, history);
+    }
+  }
+  return merged;
 };
 
 /**
@@ -2102,27 +2233,35 @@ export const getConsecutiveWindowHistories = async (
             (numWindowsToLookBack - 1) * windowSizeInMins * 60_000,
         );
         const id = new mongoose.Types.ObjectId(alert.id);
-        const histories = await AlertHistory.aggregate<AggregatedAlertHistory>([
+        // Tight-bounds range scan on {alert: 1, createdAt: -1}; the
+        // newest-first ordering the consumer needs is applied in app code
+        // below. A DB-side $sort including `group` would force DocumentDB
+        // to walk the alert's full index range instead (see
+        // getPreviousAlertHistories).
+        //
+        // Unlike getPreviousAlertHistories, this deliberately materializes
+        // the result array: the consumer needs every row (sorted), so
+        // streaming saves nothing, and the row count is bounded by the small
+        // numConsecutiveWindows lookback rather than the full history window.
+        const rows = await AlertHistory.find(
           {
-            $match: {
-              alert: id,
-              createdAt: { $gte: earliestAllowedTime, $lt: windowStart },
-              // Failed evaluations (ERROR rows) are not evaluated windows and
-              // must not affect consecutive-window counting.
-              state: { $ne: AlertState.ERROR },
-            },
+            alert: id,
+            createdAt: { $gte: earliestAllowedTime, $lt: windowStart },
+            // Failed evaluations (ERROR rows) are not evaluated windows and
+            // must not affect consecutive-window counting.
+            state: { $ne: AlertState.ERROR },
           },
-          { $sort: { alert: 1, group: 1, createdAt: -1 } },
-          {
-            $project: {
-              _id: '$alert',
-              createdAt: 1,
-              state: 1,
-              group: 1,
-              fired: 1,
-            },
-          },
-        ]);
+          { group: 1, state: 1, createdAt: 1, fired: 1 },
+        ).lean();
+        const histories: AggregatedAlertHistory[] = rows
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+          .map(row => ({
+            _id: id,
+            createdAt: row.createdAt,
+            state: row.state,
+            group: row.group,
+            fired: row.fired,
+          }));
         return { alertId: alert.id, histories };
       }),
     ),

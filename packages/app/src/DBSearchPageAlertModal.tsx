@@ -14,6 +14,7 @@ import {
   type Alert,
   alertDisplayNameSchema,
   AlertIntervalSchema,
+  alertNumConsecutiveWindowsSchema,
   AlertSource,
   alertTagsSchema,
   AlertThresholdType,
@@ -92,9 +93,7 @@ const SavedSearchAlertFormSchema = z
     channels: zAlertChannels,
     displayName: alertDisplayNameSchema,
     tags: alertTagsSchema,
-    // nullish() (not optional()): persisted alerts store this as null, which
-    // optional() would reject.
-    numConsecutiveWindows: z.number().int().min(1).nullish(),
+    numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
   })
   .passthrough()
   .superRefine(validateAlertScheduleOffsetMinutes)

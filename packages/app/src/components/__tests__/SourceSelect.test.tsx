@@ -1,13 +1,19 @@
 import React from 'react';
 import { useForm } from 'react-hook-form';
-import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
+import {
+  DataSourceDashboardFilter,
+  SourceKind,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import {
   SourceManagementMenu,
   SourceSelectControlled,
 } from '@/components/SourceSelect';
+import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { useSources } from '@/source';
 
 jest.mock('@/source', () => ({
@@ -17,22 +23,19 @@ jest.mock('@/source', () => ({
 // Mantine's Combobox calls scrollIntoView when its dropdown opens; jsdom lacks it.
 window.HTMLElement.prototype.scrollIntoView = jest.fn();
 
-// useSources returns a large UseQueryResult; the selector reads only `data`.
-const asMock = (fn: unknown) => fn as jest.Mock;
-
 const makeSource = (
   id: string,
   name: string,
   kind: SourceKind,
   overrides: Partial<TSource> = {},
 ): TSource =>
-  ({
+  fromAny<TSource, Record<string, unknown>>({
     id,
     name,
     kind,
     connection: 'conn-a',
     ...overrides,
-  }) as unknown as TSource;
+  });
 
 describe('SourceManagementMenu', () => {
   it('does not render the kebab trigger when no actions are wired', () => {
@@ -183,10 +186,14 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
 
   function SelectHarness({
     isSourceAllowed,
+    defaultSource,
   }: {
     isSourceAllowed?: (source: TSource) => boolean;
+    defaultSource?: string;
   } = {}) {
-    const { control } = useForm();
+    const { control } = useForm({
+      defaultValues: { source: defaultSource },
+    });
     return (
       <SourceSelectControlled
         control={control}
@@ -204,7 +211,9 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   };
 
   it('renders sources grouped under their section headers', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(<SelectHarness />);
     await openSelect();
 
@@ -218,7 +227,9 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   });
 
   it('treats the section as a tag: "billing logs" keeps section-mates whose name lacks "billing" and drops other sections', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(<SelectHarness />);
     const input = await openSelect();
     await userEvent.type(input, 'billing logs');
@@ -233,8 +244,40 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
     expect(screen.queryByText('Control Plane Prod')).not.toBeInTheDocument();
   });
 
+  it('selects the current label on a focusing click so typing replaces it', async () => {
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
+    renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
+    const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
+    expect(input).toHaveValue('Billing Logs');
+
+    await userEvent.click(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe('Billing Logs'.length);
+
+    await userEvent.keyboard('prod');
+    expect(input).toHaveValue('prod');
+    expect(await screen.findByText('Prod Logs')).toBeInTheDocument();
+    expect(screen.queryByText('Billing Logs')).not.toBeInTheDocument();
+  });
+
+  it('places the caret normally on a click into an already focused input', async () => {
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
+    renderWithMantine(<SelectHarness defaultSource="billing-logs" />);
+    const input = screen.getByPlaceholderText<HTMLInputElement>('Data Source');
+
+    await userEvent.click(input);
+    await userEvent.click(input);
+    expect(input.selectionStart).toBe(input.selectionEnd);
+  });
+
   it('hides sources rejected by isSourceAllowed, along with sections left empty', async () => {
-    asMock(useSources).mockReturnValue({ data: SECTIONED_SOURCES });
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data: SECTIONED_SOURCES }));
     renderWithMantine(
       <SelectHarness
         isSourceAllowed={source => source.section === 'Billing'}
@@ -249,12 +292,14 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
   });
 
   it('stays flat with no catch-all header until a source has a section', async () => {
-    asMock(useSources).mockReturnValue({
-      data: [
-        makeSource('a', 'Apple Traces', SourceKind.Trace),
-        makeSource('z', 'Zebra Logs', SourceKind.Log),
-      ],
-    });
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [
+          makeSource('a', 'Apple Traces', SourceKind.Trace),
+          makeSource('z', 'Zebra Logs', SourceKind.Log),
+        ],
+      }),
+    );
     renderWithMantine(<SelectHarness />);
     await openSelect();
 
@@ -263,5 +308,107 @@ describe('SourceSelectControlled (grouped rendering + tag-style search)', () => 
     expect(await screen.findByText('Apple Traces')).toBeInTheDocument();
     expect(screen.getByText('Zebra Logs')).toBeInTheDocument();
     expect(screen.queryByText('Other')).not.toBeInTheDocument();
+  });
+});
+
+describe('SourceSelectControlled (data source variables)', () => {
+  const SOURCES = [makeSource('logs', 'Logs', SourceKind.Log)];
+  const sourceVariable = (
+    variableName: string,
+    allowedSourceKinds: SourceKind[],
+    connection?: string,
+  ): DataSourceDashboardFilter => ({
+    id: variableName,
+    type: 'DATA_SOURCE',
+    name: variableName,
+    variableName,
+    allowedSourceKinds,
+    connection,
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  });
+  const VARIABLES = [
+    sourceVariable('logs_source', [SourceKind.Log]),
+    sourceVariable('any_source', [SourceKind.Log, SourceKind.Promql]),
+    sourceVariable('prom_source', [SourceKind.Promql]),
+  ];
+
+  function VariableHarness({
+    allowSourceVariables,
+  }: {
+    allowSourceVariables?: boolean;
+  }) {
+    const { control } = useForm();
+    return (
+      <ReferenceVariablesProvider filters={VARIABLES} values={new Map()}>
+        <SourceSelectControlled
+          control={control}
+          name="source"
+          allowedSourceKinds={[SourceKind.Log, SourceKind.Trace]}
+          allowSourceVariables={allowSourceVariables}
+        />
+      </ReferenceVariablesProvider>
+    );
+  }
+
+  it('offers only variables with at least one kind the picker allows', async () => {
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
+    renderWithMantine(<VariableHarness allowSourceVariables />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Variables')).toBeInTheDocument();
+    expect(screen.getByText('$logs_source')).toBeInTheDocument();
+    expect(screen.getByText('$any_source')).toBeInTheDocument();
+    expect(screen.queryByText('$prom_source')).not.toBeInTheDocument();
+  });
+
+  it('puts unsectioned sources under their own header after the variables', async () => {
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
+    renderWithMantine(<VariableHarness allowSourceVariables />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Variables')).toBeInTheDocument();
+    expect(screen.getByText('Sources')).toBeInTheDocument();
+  });
+
+  it('offers only variables unlimited or limited to its connection', async () => {
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
+    function ConnectionHarness() {
+      const { control } = useForm();
+      return (
+        <ReferenceVariablesProvider
+          filters={[
+            sourceVariable('any', [SourceKind.Log]),
+            sourceVariable('mine', [SourceKind.Log], '$conn'),
+            sourceVariable('other', [SourceKind.Log], 'conn-b'),
+          ]}
+          values={new Map()}
+        >
+          <SourceSelectControlled
+            control={control}
+            name="source"
+            allowSourceVariables
+            variableConnection="$conn"
+          />
+        </ReferenceVariablesProvider>
+      );
+    }
+    renderWithMantine(<ConnectionHarness />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('$any')).toBeInTheDocument();
+    expect(screen.getByText('$mine')).toBeInTheDocument();
+    expect(screen.queryByText('$other')).not.toBeInTheDocument();
+  });
+
+  it('offers no variables unless the picker opts in', async () => {
+    jest.mocked(useSources).mockReturnValue(fromPartial({ data: SOURCES }));
+    renderWithMantine(<VariableHarness />);
+    await userEvent.click(screen.getByPlaceholderText('Data Source'));
+
+    expect(await screen.findByText('Logs')).toBeInTheDocument();
+    expect(screen.queryByText('$logs_source')).not.toBeInTheDocument();
   });
 });

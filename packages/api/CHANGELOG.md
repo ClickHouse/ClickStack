@@ -1,5 +1,218 @@
 # @hyperdx/api
 
+## 2.47.0
+
+### Minor Changes
+
+- 7905721bc: feat: Silence and unsilence alerts through the external API with POST and DELETE /api/v2/alerts/{id}/silenced
+
+### Patch Changes
+
+- 22377dfcf: perf: bound the check-alerts previous-history lookup by the alert interval
+
+  The check-alerts task no longer scans 7 days of alert history per alert on
+  every tick. A one-row lookup per alert skips alerts already evaluated in the
+  current window. Non-grouped alerts take their previous state from that row,
+  and grouped alerts scan a window sized to their interval (1 to 7 days).
+
+- ef81fe6d8: feat: add `ENABLE_INGESTION_API_KEY` to honor `INGESTION_API_KEY` on the app image
+
+  The app image ignores `INGESTION_API_KEY`, so an external collector has to use
+  the team's generated key, which changes whenever the team is recreated. Set
+  `ENABLE_INGESTION_API_KEY=true` on the API to accept a preset key alongside the
+  team key. Behavior is unchanged when unset.
+
+- b129ec1ac: feat: Classify failed ClickHouse proxy requests on the server span and the
+  `clickhouse_proxy.query` SLI (`error_category`), including errors ClickHouse
+  writes after a 200 response. The span also records the upstream status, the
+  ClickHouse error code and type, and the body of upstream errors that carry no
+  ClickHouse code.
+- 86acf27c0: perf: read only 20 median-sized parts for text index key and value lookups
+
+  Map key discovery and "all values" lookups on text indexes read the index
+  dictionary of every part in the time range, which is slow on tables with many
+  parts. They now read the 20 parts closest to the median size. Log and trace
+  sources can change the count with the new "Map key index parts" setting
+  (`mapKeyIndexMaxParts`), and which parts are read with "Map key index part size"
+  (`mapKeyIndexPartSelection`: median, smallest, or largest). "Load more" on a
+  single filter key still reads every part in the time range.
+
+- e80fc1ba2: fix(mcp): explain hasToken() separator errors in query tools
+
+  When a SQL filter calls `hasToken()` with a needle that contains `_`, `-`, `.`,
+  `@`, `:` or spaces, ClickHouse fails with "Needle must not contain whitespace or
+  separator characters". MCP query tools now append a hint pointing to a Lucene
+  term, or in SQL to `position()` for the exact term (with `hasAllTokens()` as an
+  optional text-index speed-up), and the `whereLanguage` description warns about
+  it.
+
+- 2f61137e2: fix: return partial rows from `clickstack_search` instead of timing out
+
+  The MCP search tool now scans newest-first over the same progressive time
+  windows as the app's search page, under a 25s budget. When time runs out it
+  returns the rows found so far with a `partial` block (requested range, the range
+  fully covered, and the window that was cut off) and a hint for the next call,
+  instead of failing after 30s. The time-window helpers moved from the app to
+  `@hyperdx/common-utils/core/searchWindows`; the app's behavior is unchanged.
+
+- 64a55d5b7: fix: allow grouping gauge and sum metric charts by an expression over the time column
+
+  A table, pie or bar chart on a gauge or sum metric grouped by a time expression
+  such as `toStartOfHour(TimeUnix)` or `toDate(TimeUnix)` failed with
+  `Unknown identifier TimeUnix`, because the bucketed CTE the outer query reads
+  did not carry the time column. When the group-by references it, `TimeUnix` now
+  resolves to each metric bucket's start, so values are the same as the chart
+  without the time group-by.
+
+- e8d1d9add: fix: return the actual earliest/latest time for min/max on a date or time column
+
+  `min` and `max` on a Date, DateTime, or DateTime64 column (for example
+  `Timestamp`) returned 0, because every aggregation cast its value to Float64
+  first. Tables, number tiles, and the MCP `clickstack_table` tool now return the
+  timestamp itself. Line, bar, pie, and other charts, ratios, formulas, and number
+  tiles with several series keep the numeric cast.
+
+- d99be7650: fix: MCP `event_patterns`, `emerging_signals` and search denoise, and the CLI,
+  no longer split the same log line by its date. Before mining, the Drain miner
+  masks the date of a timestamp (weekday, day, month, year) to `<DATE>`, so dated
+  lines from different days, months or years get the same template instead of one
+  "new" and one "gone". Times and ids are not masked. Within one day lines group
+  as before, except that klog lines with different severity letters are no longer
+  merged. No mask changes a line's token count: the `event_patterns` drill-down
+  predicate matches `<DATE>` as one or more non-whitespace characters, also inside
+  a token (the new `masks` option of the pattern predicate builders, which only
+  the MCP drill-down sets), and search denoise masks bodies the same way before
+  matching. Masking instructions get an optional `perWord` flag (default off, as
+  in drain3). The web app's Event patterns view uses its own drain3 config and is
+  unchanged.
+- e58329c87: fix: require the password when changing a connection's host
+
+  Updating a connection's host without sending its password used to keep the stored password, so it would be sent to the new host on the next query. Both `PUT /connections/:id` and `PUT /api/v2/connections/:id` now return 400 in that case. Prometheus endpoints never use the stored password, so it is cleared instead. The connection form asks for the password when the host is edited and shows the API's error message.
+
+- 2cec94f7d: feat: let SQL query dashboard filters use an optional source
+
+  A SQL query filter can now pick a source on its connection, or a data source variable, and can do so on a connection variable too. With one, its SQL can use `$__sourceTable` and `$__filters`, which applies the dashboard's filter selections for that source, the same way raw SQL tiles do. The external API and MCP read and write it as `sourceId`.
+
+- 7afa31c71: feat: Add a team-wide default (All or Exact) for the search filters "Show All Values" setting
+- Updated dependencies [e36cec3a2]
+- Updated dependencies [1a4c116b2]
+- Updated dependencies [351f19400]
+- Updated dependencies [86acf27c0]
+- Updated dependencies [2f61137e2]
+- Updated dependencies [64a55d5b7]
+- Updated dependencies [e8d1d9add]
+- Updated dependencies [d99be7650]
+- Updated dependencies [2cec94f7d]
+- Updated dependencies [7afa31c71]
+- Updated dependencies [f11b9f58b]
+  - @hyperdx/common-utils@0.36.1
+
+## 2.46.0
+
+### Minor Changes
+
+- 6705e505d: feat: Create, read, and update ad hoc dashboard filters through the external API
+
+  `/api/v2/dashboards` now accepts and returns `ADHOC` filters, with SQL and
+  PromQL source types, and their `adhoc` entries in `savedFilterValues`. Each
+  filter's sources must exist and be a kind its `sourceType` supports. MCP still
+  hides ad hoc filters.
+
+- b681cec85: feat(mcp): Create, read, and update ad hoc dashboard filters through the MCP dashboard tools
+
+  `clickstack_save_dashboard`, `clickstack_get_dashboard`, and
+  `clickstack_patch_dashboard` now handle `ADHOC` filters and their `adhoc`
+  saved conditions. PromQL ad hoc filters are offered only while PromQL is
+  enabled, and are hidden and kept on update otherwise. Saved conditions that
+  name no ad hoc filter, or use an operator their filter can't apply, produce a
+  warning.
+
+- 743c3c1a6: feat: add an optional "Row key expression" to log and trace sources. When set,
+  the side panel's row lookup selects and filters on only those columns instead of
+  detecting keys from table metadata.
+- a7744e82a: feat: add data source and connection variable types to dashboards
+- a7744e82a: feat: support data source and connection variables in the external API and MCP
+- a7744e82a: feat: add connection variables for raw SQL tiles, SQL query filters, and
+  connection-scoped data source variables
+
+### Patch Changes
+
+- f15b849da: feat: Ad hoc dashboard filter finishing touches
+
+  - Add an `IN` operator. `IN` conditions on the same key are OR'd into one
+    `IN (...)` condition for SQL, or one `=~"a|b"` matcher for PromQL.
+  - Ad hoc filters always broadcast (`isBroadcastEnabled: true`), and their
+    variable name is only a unique identifier. It is no longer declared as a
+    `$variable`.
+  - Warn when another ad hoc filter already applies to the same sources.
+  - Collapse the filter input to three conditions behind a "+N more" toggle.
+
+- 8952972c9: perf: check-alerts gives each alert only its own previous history, so a tick
+  no longer scans every alert's group history once per alert
+- f42c68a9c: chore: bump `uuid` to 11.1.1 (fixes GHSA-w5hq-g745-h8pq) and drop `@types/uuid`
+- 61999b48f: fix: clear the critical CVEs from the app and collector images by moving the
+  collector to Alpine 3.24, upgrading gomplate to v5 and dropping the unused goose
+  and esbuild binaries. Custom entrypoints that called `goose` directly should
+  call `migrate` with the same schema directory instead.
+- bfb5c834f: Use the log source body expression for bare-text MCP searches, pattern filters,
+  event deltas, and alert alias queries when no implicit search column is set.
+- 02a40929d: feat: `clickstack_save_alert` accepts `note` and `numConsecutiveWindows`
+
+  Updates that omit either field now keep the stored value instead of clearing it;
+  send `null` to clear.
+
+- 8dc1aa791: refactor: the MCP `clickstack_event_patterns` tool builds its drill-down
+  `whereSnippet` with the shared pattern predicate from `@hyperdx/common-utils`
+  instead of its own copy. The snippet is unchanged.
+- 6256667e1: fix(mcp): Rename `clickstack_trace_top_time_consuming_operations` to `clickstack_trace_top_time_consuming_ops`
+
+  The old name was the longest MCP tool name and exceeded the tool-name length
+  limit some MCP clients enforce. Clients that call the tool by its old name
+  need to switch to the new one.
+
+- cf4b70bec: fix: update the Node dependencies flagged as vulnerable in the app image (axios,
+  MCP SDK, express, js-yaml, brace-expansion and others). MCP tool validation
+  errors still name the field that failed under the new MCP SDK, and list the
+  accepted values when a tile's `displayType` is wrong.
+- 272c51486: fix: support numeric range searches on String attributes
+
+  Range searches with numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, failed with "no supertype for types
+  String, UInt8". They now compare with `toFloat64OrNull`; values that aren't
+  numbers don't match. `>`, `<`, `>=` and `<=` still compare String fields as
+  text; use a range such as `:[1000 TO *]` for a numeric comparison.
+
+- cac14ebc8: feat: Name PromQL sources "Time Series" or "Prometheus" by their connection
+
+  The source type for a PromQL source now reads "Time Series" when it queries a
+  ClickHouse TimeSeries table and "Prometheus" when it queries an external
+  Prometheus API. Where no connection is known yet, such as the source form before
+  a connection is picked or a data source variable's kinds, it reads "Time Series
+  / Prometheus". The stored kind is still `promql`.
+
+  The PromQL source created by onboarding auto-detection and the local dev default
+  sources is now named "Time Series" instead of "PromQL".
+
+- fa3a5649e: feat: accept SQL query dashboard filters in the API, external API, and MCP
+
+  Saving a dashboard now rejects a `SQL_QUERY` filter whose connection doesn't belong to the team. The external API and MCP read and write the filter with a `connectionId`, and MCP warns about unknown variables and source-only macros in its SQL.
+
+- 5b50c31c9: feat: add the SQL query dashboard filter type to the dashboard schema
+
+  A `SQL_QUERY` filter stores a ClickHouse connection and a SQL template whose first column fills the filter's dropdown. It is variable-only. Validation flags templates that use `$__sourceTable` or `$__filters`, or whose macros and variable references can't expand. The filter is not yet exposed through the external API or MCP, and has no editor or values lookup yet.
+
+- Updated dependencies [f15b849da]
+- Updated dependencies [fe96b722b]
+- Updated dependencies [02a40929d]
+- Updated dependencies [272c51486]
+- Updated dependencies [d311d82e2]
+- Updated dependencies [743c3c1a6]
+- Updated dependencies [a7744e82a]
+- Updated dependencies [a7744e82a]
+- Updated dependencies [3acd5ba1a]
+- Updated dependencies [5b50c31c9]
+  - @hyperdx/common-utils@0.36.0
+
 ## 2.45.0
 
 ### Minor Changes

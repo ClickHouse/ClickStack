@@ -1,4 +1,4 @@
-import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
+import { DashboardFilter, SourceKind } from '@hyperdx/common-utils/dist/types';
 
 import {
   FilterFormValues,
@@ -89,7 +89,7 @@ describe('toFormValues', () => {
       sourceType: 'promql',
       sources: ['prom'],
       appliesToSourceIds: ['prom-2'],
-      isBroadcastEnabled: false,
+      isBroadcastEnabled: true,
       isVariableEnabled: true,
       variableName: 'conds',
     });
@@ -100,7 +100,7 @@ describe('toFormValues', () => {
       sources: ['prom'],
       appliesToSourceIds: ['prom-2'],
       variableName: 'conds',
-      isBroadcastEnabled: false,
+      isBroadcastEnabled: true,
     });
   });
 
@@ -117,6 +117,7 @@ describe('toFormValues', () => {
       sources: ['logs'],
       where: 'Namespace:$namespace',
       whereLanguage: 'lucene',
+      isBroadcastEnabled: true,
       isVariableEnabled: true,
     });
 
@@ -294,7 +295,7 @@ describe('toSavedFilter', () => {
     expect(saved).not.toHaveProperty('whereLanguage');
   });
 
-  it('drops the ad hoc broadcast scope when broadcast is off', () => {
+  it('always broadcasts an ad hoc filter, even when switched from a non-broadcasting type', () => {
     const saved = toSavedFilter(
       formValues({
         type: 'ADHOC',
@@ -306,14 +307,142 @@ describe('toSavedFilter', () => {
     );
 
     expect(saved).toMatchObject({
-      isBroadcastEnabled: false,
-      appliesToSourceIds: undefined,
+      isBroadcastEnabled: true,
+      appliesToSourceIds: ['logs'],
     });
   });
 
   it('rejects an ad hoc filter without sources', () => {
     expect(() =>
       toSavedFilter(formValues({ type: 'ADHOC', name: 'Conditions' })),
+    ).toThrow();
+  });
+
+  it('saves a data source filter as single-select and required', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'DATA_SOURCE',
+        name: 'Logs source',
+        allowedSourceKinds: [SourceKind.Log],
+        isRequired: false,
+        isSingleSelect: false,
+        expression: 'ignored',
+        source: 'ignored',
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: expect.any(String),
+      type: 'DATA_SOURCE',
+      name: 'Logs source',
+      variableName: 'Logs_source',
+      allowedSourceKinds: [SourceKind.Log],
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    });
+    expect(toFormValues(saved).allowedSourceKinds).toEqual([SourceKind.Log]);
+  });
+
+  it('saves a data source filter limited to a connection variable', () => {
+    expect(
+      toSavedFilter(
+        formValues({
+          type: 'DATA_SOURCE',
+          name: 'Logs source',
+          allowedSourceKinds: [SourceKind.Log],
+          connection: '$conn',
+        }),
+      ),
+    ).toMatchObject({ connection: '$conn' });
+  });
+
+  it('saves a connection filter as single-select and required', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'CONNECTION',
+        name: 'Cluster',
+        isSingleSelect: false,
+        source: 'ignored',
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: expect.any(String),
+      type: 'CONNECTION',
+      name: 'Cluster',
+      variableName: 'Cluster',
+      minSelections: 1,
+      maxSelections: 1,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+    });
+  });
+
+  it('rejects a data source filter without source kinds', () => {
+    expect(() =>
+      toSavedFilter(formValues({ type: 'DATA_SOURCE', name: 'Source' })),
+    ).toThrow();
+  });
+
+  it('keeps only the SQL query fields on a SQL query filter', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'SQL_QUERY',
+        name: 'Region',
+        connection: 'conn1',
+        sqlTemplate: '  SELECT region FROM regions  ',
+        source: 'logs',
+        // Left behind by the other editors before the type was switched.
+        expression: 'Env',
+        where: 'x = 1',
+        options: ['prod'],
+      }),
+    );
+
+    expect(saved).toEqual({
+      id: 'a',
+      type: 'SQL_QUERY',
+      name: 'Region',
+      connection: 'conn1',
+      source: 'logs',
+      sqlTemplate: 'SELECT region FROM regions',
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'Region',
+    });
+    expect(toFormValues(saved)).toMatchObject({
+      connection: 'conn1',
+      source: 'logs',
+      sqlTemplate: 'SELECT region FROM regions',
+    });
+  });
+
+  it('saves a SQL query filter without a source when none is picked', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'SQL_QUERY',
+        name: 'Region',
+        connection: 'conn1',
+        source: '',
+        sqlTemplate: 'SELECT region FROM regions',
+      }),
+    );
+
+    // The schema requires a non-empty source when one is set.
+    expect(saved).toMatchObject({ source: undefined });
+  });
+
+  it('rejects a SQL query filter without a connection', () => {
+    expect(() =>
+      toSavedFilter(
+        formValues({
+          type: 'SQL_QUERY',
+          name: 'Region',
+          sqlTemplate: 'SELECT region FROM regions',
+        }),
+      ),
     ).toThrow();
   });
 
@@ -324,9 +453,12 @@ describe('toSavedFilter', () => {
   });
 });
 
-/** The minimum a form needs to save, per filter type the form supports. */
+/**
+ * The minimum a form needs to save, per filter type with configurable
+ * selection limits.
+ */
 const byType: Record<
-  Exclude<DashboardFilter['type'], 'ADHOC' | 'SQL_QUERY'>,
+  Exclude<DashboardFilter['type'], 'ADHOC' | 'DATA_SOURCE' | 'CONNECTION'>,
   Partial<FilterFormValues>
 > = {
   QUERY_EXPRESSION: {
@@ -345,6 +477,12 @@ const byType: Record<
     name: 'Job',
     source: 'prom',
     label: 'job',
+  },
+  SQL_QUERY: {
+    type: 'SQL_QUERY',
+    name: 'Region',
+    connection: 'conn1',
+    sqlTemplate: 'SELECT region FROM regions',
   },
 };
 const variants = Object.entries(byType);
@@ -431,6 +569,36 @@ describe('isGlobalRequirement', () => {
       ).not.toHaveProperty('isGlobalRequirement');
     },
   );
+
+  // Reference variables are always required, so the form has no "Required"
+  // checkbox for them to gate the requirement's scope.
+  it('round-trips a dashboard-wide data source requirement without isRequired', () => {
+    const saved = toSavedFilter(
+      formValues({
+        type: 'DATA_SOURCE',
+        name: 'Source',
+        allowedSourceKinds: [SourceKind.Log],
+        isRequired: false,
+        isGlobalRequirement: true,
+      }),
+    );
+
+    expect(saved).toMatchObject({ isGlobalRequirement: true });
+    expect(toFormValues(saved).isGlobalRequirement).toBe(true);
+  });
+
+  it('emits no key for a data source filter that blocks only its own tiles', () => {
+    expect(
+      toSavedFilter(
+        formValues({
+          type: 'DATA_SOURCE',
+          name: 'Source',
+          allowedSourceKinds: [SourceKind.Log],
+          isGlobalRequirement: false,
+        }),
+      ),
+    ).not.toHaveProperty('isGlobalRequirement');
+  });
 });
 
 describe('maxSelections', () => {

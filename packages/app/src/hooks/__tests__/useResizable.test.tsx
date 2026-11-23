@@ -1,5 +1,7 @@
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { fireEvent } from '@testing-library/dom';
 import { act, render, renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import useResizable from '@/hooks/useResizable';
 
@@ -47,8 +49,11 @@ describe('useResizable', () => {
 
     act(() => {
       // Start resize at x=500
-      const startEvent = new MouseEvent('mousedown', { clientX: 500 });
-      result.current.startResize(startEvent as any);
+      const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+        clientX: 500,
+        preventDefault: jest.fn(),
+      });
+      result.current.startResize(startEvent);
 
       // Move mouse to x=600 (right)
       const moveEvent = new MouseEvent('mousemove', { clientX: 600 });
@@ -65,8 +70,11 @@ describe('useResizable', () => {
 
     act(() => {
       // Start resize at x=500
-      const startEvent = new MouseEvent('mousedown', { clientX: 500 });
-      result.current.startResize(startEvent as any);
+      const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+        clientX: 500,
+        preventDefault: jest.fn(),
+      });
+      result.current.startResize(startEvent);
 
       // Move mouse to x=600 (right)
       const moveEvent = new MouseEvent('mousemove', { clientX: 600 });
@@ -82,8 +90,11 @@ describe('useResizable', () => {
     const { result } = renderHook(() => useResizable(20, 'right'));
 
     act(() => {
-      const startEvent = new MouseEvent('mousedown', { clientX: 500 });
-      result.current.startResize(startEvent as any);
+      const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+        clientX: 500,
+        preventDefault: jest.fn(),
+      });
+      result.current.startResize(startEvent);
 
       // Try to resize smaller than minimum (10%)
       const moveEvent = new MouseEvent('mousemove', { clientX: 800 });
@@ -97,8 +108,11 @@ describe('useResizable', () => {
     const { result } = renderHook(() => useResizable(20, 'left'));
 
     act(() => {
-      const startEvent = new MouseEvent('mousedown', { clientX: 500 });
-      result.current.startResize(startEvent as any);
+      const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+        clientX: 500,
+        preventDefault: jest.fn(),
+      });
+      result.current.startResize(startEvent);
 
       // Try to resize larger than maximum
       const moveEvent = new MouseEvent('mousemove', { clientX: 1000 });
@@ -136,8 +150,11 @@ describe('useResizable', () => {
 
     act(() => {
       // Start resize
-      const startEvent = new MouseEvent('mousedown', { clientX: 500 });
-      result.current.startResize(startEvent as any);
+      const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+        clientX: 500,
+        preventDefault: jest.fn(),
+      });
+      result.current.startResize(startEvent);
     });
 
     unmount();
@@ -187,8 +204,11 @@ describe('useResizable', () => {
       const { result } = renderHook(() => useResizable(20, 'bottom'));
 
       act(() => {
-        const startEvent = new MouseEvent('mousedown', { clientY: 500 });
-        result.current.startResize(startEvent as any);
+        const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+          clientY: 500,
+          preventDefault: jest.fn(),
+        });
+        result.current.startResize(startEvent);
 
         // Move mouse down by 100px
         const moveEvent = new MouseEvent('mousemove', { clientY: 600 });
@@ -204,8 +224,11 @@ describe('useResizable', () => {
       const { result } = renderHook(() => useResizable(20, 'top'));
 
       act(() => {
-        const startEvent = new MouseEvent('mousedown', { clientY: 500 });
-        result.current.startResize(startEvent as any);
+        const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+          clientY: 500,
+          preventDefault: jest.fn(),
+        });
+        result.current.startResize(startEvent);
 
         // Move mouse down by 100px
         const moveEvent = new MouseEvent('mousemove', { clientY: 600 });
@@ -221,8 +244,11 @@ describe('useResizable', () => {
       const { result } = renderHook(() => useResizable(20, 'bottom'));
 
       act(() => {
-        const startEvent = new MouseEvent('mousedown', { clientY: 500 });
-        result.current.startResize(startEvent as any);
+        const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+          clientY: 500,
+          preventDefault: jest.fn(),
+        });
+        result.current.startResize(startEvent);
 
         // Try to resize smaller than minimum (10%)
         const moveEvent = new MouseEvent('mousemove', { clientY: 800 });
@@ -236,8 +262,11 @@ describe('useResizable', () => {
       const { result } = renderHook(() => useResizable(20, 'top'));
 
       act(() => {
-        const startEvent = new MouseEvent('mousedown', { clientY: 500 });
-        result.current.startResize(startEvent as any);
+        const startEvent = fromPartial<ReactMouseEvent<HTMLElement>>({
+          clientY: 500,
+          preventDefault: jest.fn(),
+        });
+        result.current.startResize(startEvent);
 
         // Try to resize larger than maximum
         const moveEvent = new MouseEvent('mousemove', { clientY: 1000 });

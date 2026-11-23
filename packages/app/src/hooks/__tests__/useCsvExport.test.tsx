@@ -1,4 +1,5 @@
 import { renderHook } from '@testing-library/react';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import { CsvColumn, useCsvExport } from '@/hooks/useCsvExport';
 
@@ -241,7 +242,7 @@ describe('useCsvExport', () => {
 
     it('handles non-array data', () => {
       const { result } = renderHook(() =>
-        useCsvExport('not an array' as any, mockColumns),
+        useCsvExport(fromAny('not an array'), mockColumns),
       );
 
       expect(result.current.csvData).toEqual([]);
@@ -256,10 +257,10 @@ describe('useCsvExport', () => {
     });
 
     it('handles invalid column structure', () => {
-      const invalidColumns = [
+      const invalidColumns: CsvColumn[] = [
         { dataKey: 'name', displayName: 'Name' },
         { dataKey: '', displayName: 'Invalid' }, // Empty dataKey
-        { dataKey: 'age' } as any, // Missing displayName
+        fromAny({ dataKey: 'age' }), // Missing displayName
       ];
 
       const { result } = renderHook(() =>

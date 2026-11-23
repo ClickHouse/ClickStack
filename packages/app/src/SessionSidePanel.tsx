@@ -191,7 +191,7 @@ export default function SessionSidePanel({
 
   const timeAgo = useMemo(() => {
     const maxTime =
-      // eslint-disable-next-line no-restricted-syntax
+      // eslint-disable-next-line react-hooks/purity
       session != null ? new Date(session?.maxTimestamp) : new Date();
     return formatDistanceToNowStrictShort(maxTime);
   }, [session]);

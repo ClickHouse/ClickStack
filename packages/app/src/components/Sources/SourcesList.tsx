@@ -30,7 +30,7 @@ import { IS_LOCAL_MODE } from '@/config';
 import { useConnections } from '@/connection';
 import { useSources } from '@/source';
 
-import { SOURCE_KIND_LABELS } from './SourceForm/constants';
+import { getSourceKindLabel } from './SourceForm/constants';
 import { TableSourceForm } from './SourceForm';
 
 import styles from './Sources.module.scss';
@@ -210,7 +210,10 @@ export function SourcesList({
                 </Group>
                 <Text size={subtextSize} c="dimmed" mt={4}>
                   <Group gap="xs">
-                    {SOURCE_KIND_LABELS[s.kind]}
+                    {getSourceKindLabel(
+                      s.kind,
+                      connections?.find(c => c.id === s.connection),
+                    )}
                     {s.section && (
                       <Group gap={4}>
                         <IconFolder size={iconSize} />

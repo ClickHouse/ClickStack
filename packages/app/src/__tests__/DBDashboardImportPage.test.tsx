@@ -2,23 +2,58 @@ import {
   type DashboardTemplate,
   DashboardTemplateSchema,
   DashboardWithoutIdSchema,
+  DisplayType,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 
-import { buildMappingFormSchema, Mapping } from '@/DBDashboardImportPage';
+import {
+  buildMappingFormSchema,
+  getTemplateVariableReferenceIssues,
+  Mapping,
+} from '@/DBDashboardImportPage';
 
 // Sources/connections the import maps the template's source *names* onto. The
 // auto-mapping effect in `Mapping` matches by name (case-insensitive), so a
 // template tile with `source: 'Metrics'` resolves to `src-metrics`, etc. The
-// mock objects only need the fields the import path touches (id/name/kind).
+// mock objects only need the fields the import path touches
+// (id/name/kind/connection).
 const mockSources = [
-  { id: 'src-metrics', name: 'Metrics', kind: SourceKind.Metric },
-  { id: 'src-traces', name: 'Traces', kind: SourceKind.Trace },
-  { id: 'src-logs', name: 'Logs', kind: SourceKind.Log },
-  { id: 'src-promql', name: 'Prom', kind: SourceKind.Promql },
+  {
+    id: 'src-metrics',
+    name: 'Metrics',
+    kind: SourceKind.Metric,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-traces',
+    name: 'Traces',
+    kind: SourceKind.Trace,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-logs',
+    name: 'Logs',
+    kind: SourceKind.Log,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-promql',
+    name: 'Prom',
+    kind: SourceKind.Promql,
+    connection: 'conn-default',
+  },
+  {
+    id: 'src-other-logs',
+    name: 'Other logs',
+    kind: SourceKind.Log,
+    connection: 'conn-other',
+  },
 ];
-const mockConnections = [{ id: 'conn-default', name: 'Default' }];
+const mockConnections = [
+  { id: 'conn-default', name: 'Default' },
+  { id: 'conn-other', name: 'Other' },
+];
 const mockMutateAsync = jest.fn().mockResolvedValue({ id: 'dash-new' });
 
 jest.mock('next/router', () => ({
@@ -61,7 +96,7 @@ jest.mock('../api', () => ({
 // satisfy the schema without a real query.
 const builderTile = (
   id: string,
-  displayType: string,
+  displayType: DisplayType,
   source: string,
   y: number,
 ) => ({
@@ -95,7 +130,7 @@ const allTileTypesTemplate: DashboardTemplate = {
       h: 1,
       config: {
         name: 'tile-markdown',
-        displayType: 'markdown',
+        displayType: DisplayType.Markdown,
         source: '',
         where: '',
         whereLanguage: 'sql',
@@ -103,13 +138,13 @@ const allTileTypesTemplate: DashboardTemplate = {
         markdown: '## Overview',
       },
     },
-    builderTile('tile-number', 'number', 'Metrics', 1),
-    builderTile('tile-line', 'line', 'Metrics', 4),
-    builderTile('tile-stacked_bar', 'stacked_bar', 'Metrics', 7),
-    builderTile('tile-table', 'table', 'Traces', 10),
-    builderTile('tile-pie', 'pie', 'Metrics', 13),
-    builderTile('tile-heatmap', 'heatmap', 'Traces', 16),
-    builderTile('tile-search', 'search', 'Logs', 19),
+    builderTile('tile-number', DisplayType.Number, 'Metrics', 1),
+    builderTile('tile-line', DisplayType.Line, 'Metrics', 4),
+    builderTile('tile-stacked_bar', DisplayType.StackedBar, 'Metrics', 7),
+    builderTile('tile-table', DisplayType.Table, 'Traces', 10),
+    builderTile('tile-pie', DisplayType.Pie, 'Metrics', 13),
+    builderTile('tile-heatmap', DisplayType.Heatmap, 'Traces', 16),
+    builderTile('tile-search', DisplayType.Search, 'Logs', 19),
     {
       id: 'tile-rawsql',
       x: 0,
@@ -118,7 +153,7 @@ const allTileTypesTemplate: DashboardTemplate = {
       h: 3,
       config: {
         name: 'tile-rawsql',
-        displayType: 'table',
+        displayType: DisplayType.Table,
         configType: 'sql',
         connection: 'Default',
         sqlTemplate: 'SELECT 1',
@@ -136,7 +171,7 @@ const allTileTypesTemplate: DashboardTemplate = {
       whereLanguage: 'sql',
     },
   ],
-} as DashboardTemplate;
+};
 
 // A template whose only filter names a source that doesn't exist in the
 // workspace, so the auto-mapping effect can't resolve it and the mapping select
@@ -144,7 +179,7 @@ const allTileTypesTemplate: DashboardTemplate = {
 const unresolvedFilterSourceTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Unresolved Filter Source',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-machine',
@@ -162,7 +197,7 @@ const unresolvedFilterSourceTemplate = DashboardTemplateSchema.parse({
 const promqlFilterTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'PromQL Label Filter',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-service',
@@ -183,7 +218,7 @@ const promqlFilterTemplate = DashboardTemplateSchema.parse({
 const promqlFilterOnLogSourceTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'PromQL Label Filter On Log Source',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-service',
@@ -203,7 +238,7 @@ const promqlFilterOnLogSourceTemplate = DashboardTemplateSchema.parse({
 const queriedFilterTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Queried Filter',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-service',
@@ -240,7 +275,7 @@ const MISSING = 'Does Not Exist In This Workspace';
 const unresolvedTileSourceTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Unresolved Tile Source',
-  tiles: [builderTile('tile-number', 'number', MISSING, 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, MISSING, 0)],
 });
 
 const unresolvedConnectionTemplate = DashboardTemplateSchema.parse({
@@ -265,17 +300,18 @@ const unresolvedConnectionTemplate = DashboardTemplateSchema.parse({
   ],
 });
 
-const sqlQueryFilterTemplate = (connection: string) =>
+const sqlQueryFilterTemplate = (connection: string, source?: string) =>
   DashboardTemplateSchema.parse({
     version: '0.1.0',
     name: 'SQL Query Filter',
-    tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+    tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
     filters: [
       {
         id: 'filter-env',
         type: 'SQL_QUERY',
         name: 'Environment',
         connection,
+        source,
         sqlTemplate: 'SELECT DISTINCT env FROM envs',
         isBroadcastEnabled: false,
         isVariableEnabled: true,
@@ -290,7 +326,7 @@ const markdownStaleSourceTemplate = DashboardTemplateSchema.parse({
   name: 'Markdown With Stale Source',
   tiles: [
     markdownTileWithSource('tile-markdown', MISSING, 0),
-    builderTile('tile-number', 'number', 'Metrics', 1),
+    builderTile('tile-number', DisplayType.Number, 'Metrics', 1),
   ],
 });
 
@@ -307,7 +343,7 @@ describe('Dashboard import - all tile types', () => {
     expect(parsed.success).toBe(true);
 
     const displayTypes = new Set(
-      allTileTypesTemplate.tiles.map(t => (t.config as any).displayType),
+      allTileTypesTemplate.tiles.map(t => t.config.displayType),
     );
     // markdown, number, line, stacked_bar, table, pie, heatmap, search
     expect(displayTypes.size).toBe(8);
@@ -425,6 +461,119 @@ describe('Dashboard import - SQL query filter connection', () => {
       type: 'SQL_QUERY',
       connection: 'conn-default',
     });
+    expect(payload.filters[0].source).toBeUndefined();
+  });
+
+  it('auto-maps an optional source by name and imports it as an id', async () => {
+    renderWithMantine(
+      <Mapping input={sqlQueryFilterTemplate('default', 'Logs')} />,
+    );
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    expect(screen.getByDisplayValue('Logs')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(DashboardWithoutIdSchema.safeParse(payload).success).toBe(true);
+    expect(payload.filters[0]).toMatchObject({
+      type: 'SQL_QUERY',
+      connection: 'conn-default',
+      source: 'src-logs',
+    });
+  });
+
+  const parseSqlQueryFilterMappings = (
+    template: ReturnType<typeof sqlQueryFilterTemplate>,
+    filterSourceMapping: string,
+    filterConnectionMapping: string,
+  ) =>
+    buildMappingFormSchema(template, mockSources).safeParse({
+      dashboardName: 'SQL Query Filter',
+      tags: [],
+      tileSourceMappings: ['src-metrics'],
+      connectionMappings: [''],
+      filterSourceMappings: [filterSourceMapping],
+      filterConnectionMappings: [filterConnectionMapping],
+    });
+
+  it('maps a source paired with a connection variable, on any connection', () => {
+    const template = sqlQueryFilterTemplate('$conn', 'Logs');
+
+    expect(parseSqlQueryFilterMappings(template, '', '').success).toBe(false);
+    expect(
+      parseSqlQueryFilterMappings(template, 'src-other-logs', '').success,
+    ).toBe(true);
+  });
+
+  it('maps neither connection nor source variables', () => {
+    expect(
+      parseSqlQueryFilterMappings(
+        sqlQueryFilterTemplate('$conn', '$logs'),
+        '',
+        '',
+      ).success,
+    ).toBe(true);
+  });
+
+  it('rejects a PromQL source for a filter with a source', () => {
+    const result = buildMappingFormSchema(
+      sqlQueryFilterTemplate('default', 'Logs'),
+      mockSources,
+    ).safeParse({
+      dashboardName: 'SQL Query Filter',
+      tags: [],
+      tileSourceMappings: ['src-metrics'],
+      connectionMappings: [''],
+      filterSourceMappings: ['src-promql'],
+      filterConnectionMappings: ['conn-default'],
+    });
+
+    expect(
+      result.error?.issues.map(issue => [issue.path.join('.'), issue.message]),
+    ).toEqual([
+      ['filterSourceMappings.0', 'Select a non-PromQL source for this filter'],
+    ]);
+  });
+
+  it("rejects a source on another connection than the filter's", () => {
+    const result = buildMappingFormSchema(
+      sqlQueryFilterTemplate('default', 'Logs'),
+      mockSources,
+    ).safeParse({
+      dashboardName: 'SQL Query Filter',
+      tags: [],
+      tileSourceMappings: ['src-metrics'],
+      connectionMappings: [''],
+      filterSourceMappings: ['src-other-logs'],
+      filterConnectionMappings: ['conn-default'],
+    });
+
+    expect(
+      result.error?.issues.map(issue => [issue.path.join('.'), issue.message]),
+    ).toEqual([
+      ['filterSourceMappings.0', "Select a source on this filter's connection"],
+    ]);
+  });
+
+  it("only lists sources on the filter's mapped connection", async () => {
+    renderWithMantine(
+      <Mapping input={sqlQueryFilterTemplate('default', 'Logs')} />,
+    );
+
+    await screen.findByRole('button', { name: /finish import/i });
+    fireEvent.click(screen.getByDisplayValue('Logs'));
+
+    expect(
+      await screen.findByRole('option', { name: 'Logs' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: 'Other logs' }),
+    ).not.toBeInTheDocument();
   });
 
   it('blocks the import and flags the filter row when its connection is unmapped', async () => {
@@ -613,11 +762,12 @@ describe('Dashboard import - filter source kind', () => {
 const adhocFilterTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Ad Hoc Filter',
-  tiles: [builderTile('tile-search', 'search', 'Logs', 0)],
+  tiles: [builderTile('tile-search', DisplayType.Search, 'Logs', 0)],
   filters: [
     {
       id: 'filter-adhoc',
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       name: 'Conditions',
       sourceType: 'sql',
       sources: ['Logs', 'Traces', MISSING],
@@ -649,6 +799,7 @@ describe('Dashboard import - ad hoc filter sources', () => {
     const payload = mockMutateAsync.mock.calls[0][0];
     expect(payload.filters[0]).toMatchObject({
       type: 'ADHOC',
+      isBroadcastEnabled: true,
       sources: ['src-logs', 'src-traces'],
       appliesToSourceIds: ['src-traces'],
     });
@@ -720,5 +871,152 @@ describe('Dashboard import - ad hoc filter sources', () => {
 
   it('accepts sources of the right kind with an empty applies-to', () => {
     expect(issuesFor(['src-logs'])).toBeUndefined();
+  });
+});
+
+describe('Dashboard import - data source variables', () => {
+  const sourceVariableTemplate = DashboardTemplateSchema.parse({
+    version: '0.1.0',
+    name: 'Source Variables',
+    tiles: [builderTile('tile-line', DisplayType.Line, '$logs', 0)],
+    filters: [
+      {
+        id: 'ds',
+        type: 'DATA_SOURCE',
+        name: 'Logs source',
+        variableName: 'logs',
+        allowedSourceKinds: [SourceKind.Log],
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+      {
+        id: 'svc',
+        type: 'QUERY_EXPRESSION',
+        name: 'Service',
+        expression: 'ServiceName',
+        source: '$logs',
+      },
+      {
+        id: 'adhoc',
+        type: 'ADHOC',
+        name: 'Conditions',
+        sourceType: 'sql',
+        sources: ['$logs', 'Traces'],
+        isBroadcastEnabled: true,
+        isVariableEnabled: true,
+      },
+    ],
+  });
+
+  it('keeps references as written without asking for a mapping', async () => {
+    renderWithMantine(<Mapping input={sourceVariableTemplate} />);
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    expect(screen.queryByText('$logs')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(payload.tiles[0].config.source).toBe('$logs');
+    expect(payload.filters[1].source).toBe('$logs');
+    expect(payload.filters[2].sources).toEqual(['$logs', 'src-traces']);
+  });
+
+  it('accepts references to the variables the template declares', () => {
+    expect(getTemplateVariableReferenceIssues(sourceVariableTemplate)).toEqual(
+      [],
+    );
+  });
+
+  it('reports references to variables the template does not declare', () => {
+    const template = DashboardTemplateSchema.parse({
+      version: '0.1.0',
+      name: 'Undeclared',
+      tiles: [builderTile('tile-line', DisplayType.Line, '$traces', 0)],
+      filters: [
+        {
+          id: 'svc',
+          type: 'QUERY_EXPRESSION',
+          name: 'Service',
+          expression: 'ServiceName',
+          source: '$traces',
+        },
+      ],
+    });
+
+    expect(getTemplateVariableReferenceIssues(template)).toEqual([
+      'Tile "tile-line": "$traces" does not name a data source variable on this dashboard',
+      'Filter "Service": "$traces" does not name a data source variable on this dashboard',
+    ]);
+  });
+});
+
+describe('Dashboard import - connection variables', () => {
+  const connectionVariableTemplate = DashboardTemplateSchema.parse({
+    version: '0.1.0',
+    name: 'Connection Variables',
+    tiles: [
+      {
+        id: 'tile-rawsql',
+        x: 0,
+        y: 0,
+        w: 6,
+        h: 3,
+        config: {
+          name: 'tile-rawsql',
+          displayType: 'table',
+          configType: 'sql',
+          connection: '$conn',
+          sqlTemplate: 'SELECT 1',
+        },
+      },
+    ],
+    filters: [
+      {
+        id: 'conn',
+        type: 'CONNECTION',
+        name: 'Cluster',
+        variableName: 'conn',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+      {
+        id: 'ds',
+        type: 'DATA_SOURCE',
+        name: 'Logs source',
+        variableName: 'logs',
+        allowedSourceKinds: [SourceKind.Log],
+        connection: 'Default',
+        minSelections: 1,
+        maxSelections: 1,
+        isBroadcastEnabled: false,
+        isVariableEnabled: true,
+      },
+    ],
+  });
+
+  it('keeps connection references and maps a data source variable connection', async () => {
+    renderWithMantine(<Mapping input={connectionVariableTemplate} />);
+
+    const finish = await screen.findByRole('button', {
+      name: /finish import/i,
+    });
+    expect(screen.queryByText('$conn')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(finish);
+    });
+
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mockMutateAsync.mock.calls[0][0];
+    expect(payload.tiles[0].config.connection).toBe('$conn');
+    expect(payload.filters[1].connection).toBe('conn-default');
   });
 });

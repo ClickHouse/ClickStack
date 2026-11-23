@@ -121,11 +121,7 @@ describe('uploadSourcemaps', () => {
     createFile('a.js.map');
     mockFetch
       .mockResolvedValueOnce(okJson({ user: { team: 'team-1' } }))
-      .mockResolvedValueOnce(
-        okJson({
-          /* missing data field */
-        }),
-      );
+      .mockResolvedValueOnce(okJson({/* missing data field */}));
 
     await expect(
       uploadSourcemaps({ serviceKey: 'key', path: tempDir }),

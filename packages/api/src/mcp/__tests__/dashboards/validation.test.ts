@@ -1,4 +1,5 @@
 import { DASHBOARD_VARIABLE_NAME_MAX_LENGTH } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import {
@@ -11,6 +12,7 @@ import {
   getRawSqlMissingSourceError,
   getRawSqlTileMacroWarnings,
   getRawSqlTilesMissingRequiredSource,
+  getSavedFilterValueWarnings,
   getTileVariableWarnings,
 } from '@/mcp/tools/dashboards/validation';
 import type {
@@ -63,7 +65,7 @@ function makeSqlTile(overrides: {
   sourceId?: string;
   displayType?: string;
 }): ExternalDashboardTileWithId {
-  return {
+  return fromAny({
     id: 'sql-tile',
     x: 0,
     y: 0,
@@ -77,7 +79,7 @@ function makeSqlTile(overrides: {
       sqlTemplate: overrides.sqlTemplate,
       ...(overrides.sourceId ? { sourceId: overrides.sourceId } : {}),
     },
-  } as ExternalDashboardTileWithId;
+  });
 }
 
 describe('tile-level where rejection (builder tiles)', () => {
@@ -250,7 +252,7 @@ describe('getRawSqlTilesMissingRequiredSource', () => {
   });
 
   it('ignores builder (non-SQL) tiles entirely', () => {
-    const builderTile = {
+    const builderTile: ExternalDashboardTileWithId = fromAny({
       id: 'builder',
       x: 0,
       y: 0,
@@ -262,7 +264,7 @@ describe('getRawSqlTilesMissingRequiredSource', () => {
         sourceId,
         select: [{ aggFn: 'count', valueExpression: '', where: '' }],
       },
-    } as unknown as ExternalDashboardTileWithId;
+    });
     expect(getRawSqlTilesMissingRequiredSource([builderTile])).toEqual([]);
   });
 
@@ -432,7 +434,7 @@ describe('getRawSqlTileMacroHints', () => {
   });
 
   it('ignores builder (non-SQL) tiles entirely', () => {
-    const builderTile = {
+    const builderTile: ExternalDashboardTileWithId = fromAny({
       id: 'builder',
       x: 0,
       y: 0,
@@ -444,7 +446,7 @@ describe('getRawSqlTileMacroHints', () => {
         sourceId,
         select: [{ aggFn: 'count', valueExpression: '', where: '' }],
       },
-    } as unknown as ExternalDashboardTileWithId;
+    });
     expect(getRawSqlTileMacroWarnings([builderTile])).toEqual([]);
   });
 
@@ -936,9 +938,10 @@ describe('getFilterVariableWarnings', () => {
   });
 
   describe('SQL query filters', () => {
-    const sqlFilter = (sqlTemplate: string) => ({
+    const sqlFilter = (sqlTemplate: string, sourceId?: string) => ({
       name: 'Environment',
       sqlTemplate,
+      sourceId,
       isVariableEnabled: true,
       variableName: 'env',
     });
@@ -968,8 +971,19 @@ describe('getFilterVariableWarnings', () => {
         sqlFilter('SELECT env FROM $__sourceTable'),
       ]);
       expect(warnings).toEqual([
-        'Filter "Environment": SQL query filters have no source, so $__sourceTable cannot be used',
+        'Filter "Environment": SQL uses $__sourceTable but no source is selected',
       ]);
+    });
+
+    it('accepts source macros when the filter has a source', () => {
+      expect(
+        getFilterVariableWarnings([
+          sqlFilter(
+            'SELECT env FROM $__sourceTable WHERE $__filters',
+            '65f5e4a3b9e77c001a345678',
+          ),
+        ]),
+      ).toEqual([]);
     });
 
     it.each([
@@ -980,5 +994,33 @@ describe('getFilterVariableWarnings', () => {
         'Filter "Environment": Failed to parse macro arguments',
       ]);
     });
+  });
+});
+
+describe('getSavedFilterValueWarnings', () => {
+  const filters = [
+    { type: 'DATA_SOURCE' as const, name: 'Traces', variableName: 'traces' },
+    { type: 'CONNECTION' as const, name: 'Cluster', variableName: 'conn' },
+  ];
+
+  it('accepts saved values for data source and connection variables', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [
+          { type: 'variable', name: 'traces', values: ['s1'] },
+          { type: 'variable', name: 'conn', values: ['c1'] },
+        ],
+        filters,
+      ),
+    ).toEqual([]);
+  });
+
+  it('warns about a saved value no filter declares', () => {
+    expect(
+      getSavedFilterValueWarnings(
+        [{ type: 'variable', name: 'nope', values: ['x'] }],
+        filters,
+      ),
+    ).toHaveLength(1);
   });
 });

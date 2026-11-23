@@ -278,7 +278,7 @@ function ServicesDashboardPage() {
   });
 
   // For future use if Live button is added
-  const [isLive, _setIsLive] = useState(false);
+  const isLive = false;
 
   const { manualRefreshCooloff, refresh } = useDashboardRefresh({
     searchedTimeRange,

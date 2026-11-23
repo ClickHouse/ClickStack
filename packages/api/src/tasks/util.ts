@@ -1,6 +1,11 @@
 import { set } from 'lodash';
 
+import { CODE_VERSION } from '@/config';
 import logger from '@/utils/logger';
+
+export const WEBHOOK_USER_AGENT = CODE_VERSION
+  ? `ClickStack-Alerts/${CODE_VERSION}`
+  : 'ClickStack-Alerts';
 
 // transfer keys of attributes with dot into nested object
 // ex: { 'a.b': 'c', 'd.e.f': 'g' } -> { a: { b: 'c' }, d: { e: { f: 'g' } } }
@@ -41,7 +46,7 @@ export const escapeJsonString = (str: string) => {
   return JSON.stringify(str).slice(1, -1);
 };
 
-const MAX_NUM_WINDOWS = 50;
+export const MAX_NUM_WINDOWS = 50;
 const maxLookbackTime = (windowSizeInMins: number) =>
   3600_000 * (windowSizeInMins < 15 ? 6 : 24);
 export function calcAlertDateRange(

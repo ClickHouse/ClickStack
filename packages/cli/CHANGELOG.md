@@ -1,5 +1,34 @@
 # @hyperdx/cli
 
+## 0.9.2
+
+### Patch Changes
+
+- d99be7650: fix: MCP `event_patterns`, `emerging_signals` and search denoise, and the CLI,
+  no longer split the same log line by its date. Before mining, the Drain miner
+  masks the date of a timestamp (weekday, day, month, year) to `<DATE>`, so dated
+  lines from different days, months or years get the same template instead of one
+  "new" and one "gone". Times and ids are not masked. Within one day lines group
+  as before, except that klog lines with different severity letters are no longer
+  merged. No mask changes a line's token count: the `event_patterns` drill-down
+  predicate matches `<DATE>` as one or more non-whitespace characters, also inside
+  a token (the new `masks` option of the pattern predicate builders, which only
+  the MCP drill-down sets), and search denoise masks bodies the same way before
+  matching. Masking instructions get an optional `perWord` flag (default off, as
+  in drain3). The web app's Event patterns view uses its own drain3 config and is
+  unchanged.
+
+## 0.9.1
+
+### Patch Changes
+
+- a25e945e7: feat(cli): `hdx mcp install` can keep several ClickStack servers side by side
+
+  `--name <server-name>` adds the MCP server under a name you choose, so a second
+  ClickStack instance no longer overwrites the first. When the key belongs to more
+  than one team, the installer asks which teams to add a server for and adds one
+  entry per team. When it finds more than one agent it asks which to set up.
+
 ## 0.9.0
 
 ### Minor Changes

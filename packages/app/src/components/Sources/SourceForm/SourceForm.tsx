@@ -62,6 +62,7 @@ import {
 
 import {
   DEFAULT_DATABASE,
+  getSourceKindLabel,
   PROMETHEUS_PLACEHOLDER,
   SOURCE_KIND_LABELS,
 } from './constants';
@@ -579,11 +580,9 @@ export function TableSourceForm({
 
   return (
     <div
-      style={
-        {
-          // maxWidth: 700
-        }
-      }
+      style={{
+        // maxWidth: 700
+      }}
     >
       <Stack gap="md" mb="md">
         <Flex justify="space-between" align="center" mb="lg">
@@ -653,7 +652,10 @@ export function TableSourceForm({
                   {IS_PROMQL_ENABLED && (
                     <Radio
                       value={SourceKind.Promql}
-                      label={SOURCE_KIND_LABELS[SourceKind.Promql]}
+                      label={getSourceKindLabel(
+                        SourceKind.Promql,
+                        selectedConnection,
+                      )}
                     />
                   )}
                 </Group>

@@ -431,7 +431,7 @@ export default function DBDeltaChart({
     isPriorityProperty,
   ]);
 
-  const [activePage, setPage] = useState(1);
+  const [activePage, setActivePage] = useState(1);
 
   const {
     ref: containerRef,
@@ -457,7 +457,7 @@ export default function DBDeltaChart({
     ),
   );
   useEffect(() => {
-    setPage(1);
+    setActivePage(1);
   }, [columns, rows, xMin, xMax, yMin, yMax]);
 
   if (error) {
@@ -686,7 +686,7 @@ export default function DBDeltaChart({
         <Pagination
           size="xs"
           value={activePage}
-          onChange={setPage}
+          onChange={setActivePage}
           total={totalPages}
         />
       </Flex>

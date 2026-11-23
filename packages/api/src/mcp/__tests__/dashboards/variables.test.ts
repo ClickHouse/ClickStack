@@ -1,17 +1,24 @@
+import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import {
+  type ReferenceTargets,
   resolveDashboardVariables,
+  resolveTileVariableReferences,
   withResolvedFilterVariableNames,
 } from '@/mcp/tools/dashboards/variables';
-import type { ExternalDashboardFilterWithId } from '@/utils/zod';
+import type {
+  ExternalDashboardFilterWithId,
+  ExternalDashboardTileWithId,
+} from '@/utils/zod';
 
 const sourceId = new mongoose.Types.ObjectId().toString();
 
 function filter(
   overrides: Partial<ExternalDashboardFilterWithId> = {},
 ): ExternalDashboardFilterWithId {
-  return {
+  return fromAny({
     id: new mongoose.Types.ObjectId().toString(),
     type: 'QUERY_EXPRESSION',
     name: 'Service',
@@ -19,7 +26,7 @@ function filter(
     sourceId,
     whereLanguage: 'sql',
     ...overrides,
-  } as ExternalDashboardFilterWithId;
+  });
 }
 
 const variableFilter = filter({
@@ -320,5 +327,284 @@ describe('withResolvedFilterVariableNames', () => {
     expect(withResolvedFilterVariableNames([noExplicitName])).toEqual([
       { ...noExplicitName, variableName: 'Deploy_Env' },
     ]);
+  });
+});
+
+describe('resolveTileVariableReferences', () => {
+  const objectId = () => new mongoose.Types.ObjectId().toString();
+  const connectionId = objectId();
+  const otherConnectionId = objectId();
+  const traceSourceId = objectId();
+  const logSourceId = objectId();
+  const metricSourceId = objectId();
+  const promqlSourceId = objectId();
+  const otherConnectionLogSourceId = objectId();
+  const targets: ReferenceTargets = {
+    sources: [
+      { id: traceSourceId, kind: SourceKind.Trace, connection: connectionId },
+      { id: logSourceId, kind: SourceKind.Log, connection: connectionId },
+      { id: metricSourceId, kind: SourceKind.Metric, connection: connectionId },
+      { id: promqlSourceId, kind: SourceKind.Promql, connection: connectionId },
+      {
+        id: otherConnectionLogSourceId,
+        kind: SourceKind.Log,
+        connection: otherConnectionId,
+      },
+    ],
+    connectionIds: new Set([connectionId, otherConnectionId]),
+  };
+
+  const referenceVariableFields = {
+    minSelections: 1,
+    maxSelections: 1,
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+  } as const;
+  const connectionVariable: ExternalDashboardFilterWithId = {
+    ...referenceVariableFields,
+    id: objectId(),
+    type: 'CONNECTION',
+    name: 'Connection',
+    variableName: 'conn',
+  };
+  const tracesVariable = (
+    connection?: string,
+  ): ExternalDashboardFilterWithId => ({
+    ...referenceVariableFields,
+    id: objectId(),
+    type: 'DATA_SOURCE',
+    name: 'Traces source',
+    variableName: 'traces',
+    allowedSourceKinds: [SourceKind.Trace],
+    connectionId: connection,
+  });
+
+  const sourceVariable = (
+    allowedSourceKinds: SourceKind[],
+  ): ExternalDashboardFilterWithId => ({
+    ...referenceVariableFields,
+    id: objectId(),
+    type: 'DATA_SOURCE',
+    name: 'Source',
+    variableName: 'src',
+    allowedSourceKinds,
+  });
+
+  const builderTile: ExternalDashboardTileWithId = {
+    id: 'builder',
+    name: 'Builder',
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 3,
+    config: {
+      displayType: 'number',
+      sourceId: '$traces',
+      select: [{ aggFn: 'count', where: '' }],
+    },
+  };
+  const rawSqlTile: ExternalDashboardTileWithId = {
+    id: 'raw-sql',
+    name: 'Raw SQL',
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 3,
+    config: {
+      configType: 'sql',
+      displayType: 'table',
+      connectionId: '$conn',
+      sqlTemplate: 'SELECT 1',
+    },
+  };
+
+  const promqlTile: ExternalDashboardTileWithId = {
+    id: 'promql',
+    name: 'PromQL',
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 3,
+    config: {
+      configType: 'promql',
+      displayType: 'line',
+      sourceId: '$src',
+      expressions: [{ expression: 'up' }],
+    },
+  } as ExternalDashboardTileWithId;
+  const searchTile: ExternalDashboardTileWithId = {
+    id: 'search',
+    name: 'Search',
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 3,
+    config: {
+      displayType: 'search',
+      sourceId: '$src',
+      select: '',
+      where: '',
+      whereLanguage: 'sql',
+    },
+  };
+  const rawSqlSourceTile: ExternalDashboardTileWithId = {
+    ...rawSqlTile,
+    id: 'raw-sql-source',
+    config: {
+      configType: 'sql',
+      displayType: 'table',
+      connectionId: '$conn',
+      sourceId: '$src',
+      sqlTemplate: 'SELECT 1',
+    },
+  };
+
+  const resolve = (
+    tile: ExternalDashboardTileWithId,
+    filters: ExternalDashboardFilterWithId[],
+    selections: Record<string, string[]>,
+  ) =>
+    resolveTileVariableReferences(
+      tile,
+      filters,
+      Object.entries(selections).map(([name, values]) => ({ name, values })),
+      [],
+      targets,
+    );
+
+  it("resolves a connection reference to the variable's selection", () => {
+    const result = resolve(rawSqlTile, [connectionVariable], {
+      conn: [connectionId],
+    });
+
+    expect(result).toEqual({
+      tile: {
+        ...rawSqlTile,
+        config: { ...rawSqlTile.config, connectionId },
+      },
+    });
+  });
+
+  it('resolves a source on the connection its connection variable selects', () => {
+    const result = resolve(
+      builderTile,
+      [connectionVariable, tracesVariable('$conn')],
+      { conn: [connectionId], traces: [traceSourceId] },
+    );
+
+    expect(result).toEqual({
+      tile: {
+        ...builderTile,
+        config: { ...builderTile.config, sourceId: traceSourceId },
+      },
+    });
+  });
+
+  it('resolves a source of a kind the tile accepts', () => {
+    const result = resolve(
+      promqlTile,
+      [sourceVariable([SourceKind.Log, SourceKind.Promql])],
+      { src: [promqlSourceId] },
+    );
+
+    expect(result).toEqual({
+      tile: {
+        ...promqlTile,
+        config: { ...promqlTile.config, sourceId: promqlSourceId },
+      },
+    });
+  });
+
+  it.each<{
+    case: string;
+    tile: ExternalDashboardTileWithId;
+    selection: string;
+    kinds: SourceKind[];
+  }>([
+    {
+      case: 'a log source on a PromQL tile',
+      tile: promqlTile,
+      selection: logSourceId,
+      kinds: [SourceKind.Log, SourceKind.Promql],
+    },
+    {
+      case: 'a metric source on a search tile',
+      tile: searchTile,
+      selection: metricSourceId,
+      kinds: [SourceKind.Log, SourceKind.Metric],
+    },
+  ])('rejects $case', ({ tile, selection, kinds }) => {
+    expect(
+      resolve(tile, [sourceVariable(kinds)], { src: [selection] }),
+    ).toEqual({
+      error: expect.stringContaining('this tile only accepts'),
+    });
+  });
+
+  it('resolves a raw SQL source on the connection the query runs on', () => {
+    const result = resolve(
+      rawSqlSourceTile,
+      [connectionVariable, sourceVariable([SourceKind.Log])],
+      { conn: [connectionId], src: [logSourceId] },
+    );
+
+    expect(result).toEqual({
+      tile: {
+        ...rawSqlSourceTile,
+        config: {
+          ...rawSqlSourceTile.config,
+          connectionId,
+          sourceId: logSourceId,
+        },
+      },
+    });
+  });
+
+  it('rejects a raw SQL source on another connection than the query', () => {
+    const result = resolve(
+      rawSqlSourceTile,
+      [connectionVariable, sourceVariable([SourceKind.Log])],
+      { conn: [connectionId], src: [otherConnectionLogSourceId] },
+    );
+
+    expect(result).toEqual({
+      error: expect.stringContaining(
+        `the source is on connection "${otherConnectionId}"`,
+      ),
+    });
+  });
+
+  it.each<{
+    case: string;
+    tile: ExternalDashboardTileWithId;
+    filters: ExternalDashboardFilterWithId[];
+    selections: Record<string, string[]>;
+    variable: string;
+  }>([
+    {
+      case: 'a source selection that is not a source',
+      tile: builderTile,
+      filters: [tracesVariable()],
+      selections: { traces: [connectionId] },
+      variable: '$traces',
+    },
+    {
+      case: 'a source variable whose connection variable has no selection',
+      tile: builderTile,
+      filters: [connectionVariable, tracesVariable('$conn')],
+      selections: { traces: [traceSourceId] },
+      variable: '$conn',
+    },
+    {
+      case: 'a connection selection that is not a connection',
+      tile: rawSqlTile,
+      filters: [connectionVariable],
+      selections: { conn: [traceSourceId] },
+      variable: '$conn',
+    },
+  ])('rejects $case', ({ tile, filters, selections, variable }) => {
+    expect(resolve(tile, filters, selections)).toEqual({
+      error: expect.stringContaining(`${variable} variable`),
+    });
   });
 });

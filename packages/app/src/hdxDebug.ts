@@ -5,7 +5,6 @@ import {
   APP_VERSION,
   BASE_PATH,
   INSTANCE_LABEL,
-  IS_ADHOC_FILTERS_ENABLED,
   IS_ALERT_DETAILS_ENABLED,
   IS_CLICKHOUSE_BUILD,
   IS_DEV,
@@ -86,7 +85,6 @@ const staticFeatures: Record<string, boolean> = {
   promql: IS_PROMQL_ENABLED,
   llmCost: IS_LLM_COST_ENABLED,
   alertDetails: IS_ALERT_DETAILS_ENABLED,
-  adhocFilters: IS_ADHOC_FILTERS_ENABLED,
   instanceLabel: Boolean(INSTANCE_LABEL),
 };
 

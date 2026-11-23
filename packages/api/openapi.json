@@ -862,7 +862,7 @@
           "password": {
             "type": "string",
             "writeOnly": true,
-            "description": "ClickHouse password. If omitted or empty, the existing password is kept.",
+            "description": "ClickHouse password. If omitted or empty, the existing password is kept. Required when changing `host` on a connection that has a stored password.",
             "example": "my-new-secret-password"
           },
           "hyperdxSettingPrefix": {
@@ -959,13 +959,16 @@
         "description": "Query language for the where clause."
       },
       "SavedFilterValue": {
-        "description": "A single saved dashboard filter selection. Either a rendered SQL condition, or a selection addressed by the name of the dashboard variable it belongs to.\n",
+        "description": "A single saved dashboard filter selection. Either a rendered SQL condition, a selection addressed by the name of the dashboard variable it belongs to, or the conditions of an ADHOC filter.\n",
         "oneOf": [
           {
             "$ref": "#/components/schemas/SqlSavedFilterValue"
           },
           {
             "$ref": "#/components/schemas/VariableSavedFilterValue"
+          },
+          {
+            "$ref": "#/components/schemas/AdhocSavedFilterValue"
           }
         ]
       },
@@ -1026,6 +1029,77 @@
             "example": [
               "hdx-oss-dev-api"
             ]
+          }
+        }
+      },
+      "AdhocSavedFilterValue": {
+        "type": "object",
+        "required": [
+          "type",
+          "name",
+          "conditions"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "adhoc"
+            ],
+            "description": "Filter type.",
+            "example": "adhoc"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "The variableName of the ADHOC filter these conditions belong to.",
+            "example": "conditions"
+          },
+          "conditions": {
+            "type": "array",
+            "maxItems": 100,
+            "description": "The filter's conditions.",
+            "items": {
+              "$ref": "#/components/schemas/AdhocFilterCondition"
+            }
+          }
+        }
+      },
+      "AdhocFilterCondition": {
+        "type": "object",
+        "description": "One \"key operator value\" condition. Conditions are AND'd, except that IN conditions sharing a key are OR'd into one: IN (...) for sql filters, a =~\"a|b\" matcher for promql filters.\n",
+        "required": [
+          "key",
+          "operator",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000,
+            "description": "A SQL expression (column or map access) for sql filters, or a label name for promql filters.",
+            "example": "ServiceName"
+          },
+          "operator": {
+            "type": "string",
+            "enum": [
+              "=",
+              "!=",
+              "=~",
+              "!~",
+              "LIKE",
+              "NOT LIKE",
+              "IN"
+            ],
+            "description": "Comparison operator. =~ and !~ match a regular expression. IN takes one value per condition. LIKE and NOT LIKE apply to sql filters only; a condition its filter's sourceType can't express is not applied.\n",
+            "example": "="
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "Value, pattern, or regular expression to compare against.",
+            "example": "api"
           }
         }
       },
@@ -1809,7 +1883,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -1906,7 +1980,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -1983,7 +2057,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2070,7 +2144,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2153,7 +2227,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2214,7 +2288,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2269,7 +2343,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2363,7 +2437,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2421,7 +2495,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2485,7 +2559,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to query.",
+            "description": "ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2525,7 +2599,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "ID of the data source to mine patterns from.",
+            "description": "ID of the data source to mine patterns from, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "select": {
@@ -2590,7 +2664,7 @@
           },
           "connectionId": {
             "type": "string",
-            "description": "ID of the ClickHouse connection to execute the query against.",
+            "description": "ID of the ClickHouse connection to execute the query against, or\n`$connectionVariable` of a CONNECTION filter on the dashboard.\n",
             "example": "65f5e4a3b9e77c001a567890"
           },
           "sqlTemplate": {
@@ -2601,7 +2675,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "Optional ID of the data source associated with this Raw SQL chart. Used for applying dashboard filters.",
+            "description": "Optional ID of the data source associated with this Raw SQL chart, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard. Used for applying dashboard filters.",
             "example": "65f5e4a3b9e77c001a567890"
           },
           "numberFormat": {
@@ -3954,6 +4028,15 @@
           },
           {
             "$ref": "#/components/schemas/SqlQueryFilterInput"
+          },
+          {
+            "$ref": "#/components/schemas/AdhocFilterInput"
+          },
+          {
+            "$ref": "#/components/schemas/DataSourceFilterInput"
+          },
+          {
+            "$ref": "#/components/schemas/ConnectionFilterInput"
           }
         ],
         "discriminator": {
@@ -3962,7 +4045,180 @@
             "QUERY_EXPRESSION": "#/components/schemas/QueryExpressionFilterInput",
             "STATIC_LIST": "#/components/schemas/StaticListFilterInput",
             "PROMETHEUS_LABEL": "#/components/schemas/PrometheusLabelFilterInput",
-            "SQL_QUERY": "#/components/schemas/SqlQueryFilterInput"
+            "SQL_QUERY": "#/components/schemas/SqlQueryFilterInput",
+            "ADHOC": "#/components/schemas/AdhocFilterInput",
+            "DATA_SOURCE": "#/components/schemas/DataSourceFilterInput",
+            "CONNECTION": "#/components/schemas/ConnectionFilterInput"
+          }
+        }
+      },
+      "DataSourceFilterInput": {
+        "type": "object",
+        "description": "A variable whose single, required value is a source. Tiles reference it\nas `$variableName` in their sourceId, and other filters in sourceId or\nappliesToSourceIds, so viewers can switch the source those read. Tiles\nthat use it do not load until a source is selected, and cannot have\nalerts.\n",
+        "required": [
+          "type",
+          "name",
+          "allowedSourceKinds"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "DATA_SOURCE"
+            ],
+            "description": "Filter type discriminator. Must be \"DATA_SOURCE\".",
+            "example": "DATA_SOURCE"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name of the variable's dropdown",
+            "example": "Logs source"
+          },
+          "variableName": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]*$",
+            "description": "Token tiles and filters reference the selected source by, as `$variableName`.",
+            "example": "logs"
+          },
+          "isGlobalRequirement": {
+            "type": "boolean",
+            "default": false,
+            "description": "Blocks every tile on the dashboard until a value is selected. False\n(the default) blocks only the tiles that reference the variable.\n",
+            "example": true
+          },
+          "minSelections": {
+            "type": "integer",
+            "enum": [
+              1
+            ],
+            "default": 1,
+            "description": "Must be 1 if provided. The variable always requires a selection.",
+            "example": 1
+          },
+          "maxSelections": {
+            "type": "integer",
+            "enum": [
+              1
+            ],
+            "default": 1,
+            "description": "Must be 1 if provided. The variable is always single-select.",
+            "example": 1
+          },
+          "isBroadcastEnabled": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "default": false,
+            "description": "Must be false or omitted.",
+            "example": false
+          },
+          "isVariableEnabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "default": true,
+            "description": "Must be true if provided, and is true when omitted.",
+            "example": true
+          },
+          "allowedSourceKinds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "log",
+                "trace",
+                "session",
+                "metric",
+                "promql"
+              ]
+            },
+            "description": "Kinds of sources offered. A field can reference the variable if it\naccepts at least one listed kind. A tile whose selected source is a\nkind it cannot use shows an error instead of running.\n",
+            "example": [
+              "log"
+            ]
+          },
+          "connectionId": {
+            "type": "string",
+            "description": "Optional connection the offered sources are limited to: a\nconnection ID, or `$name` of a CONNECTION filter on the dashboard.\n",
+            "example": "$conn"
+          }
+        }
+      },
+      "ConnectionFilterInput": {
+        "type": "object",
+        "description": "A variable whose single, required value is a connection. Raw SQL tiles\nreference it as `$variableName` in their connectionId, and data source\nvariables and SQL query filters in theirs. Tiles that use it do not load\nuntil a connection is selected, and cannot have alerts.\n",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "CONNECTION"
+            ],
+            "description": "Filter type discriminator. Must be \"CONNECTION\".",
+            "example": "CONNECTION"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name of the variable's dropdown",
+            "example": "Connection"
+          },
+          "variableName": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]*$",
+            "description": "Token raw SQL tiles reference the selected connection by, as `$variableName`.",
+            "example": "conn"
+          },
+          "isGlobalRequirement": {
+            "type": "boolean",
+            "default": false,
+            "description": "Blocks every tile on the dashboard until a value is selected. False\n(the default) blocks only the tiles that reference the variable.\n",
+            "example": true
+          },
+          "minSelections": {
+            "type": "integer",
+            "enum": [
+              1
+            ],
+            "default": 1,
+            "description": "Must be 1 if provided. The variable always requires a selection.",
+            "example": 1
+          },
+          "maxSelections": {
+            "type": "integer",
+            "enum": [
+              1
+            ],
+            "default": 1,
+            "description": "Must be 1 if provided. The variable is always single-select.",
+            "example": 1
+          },
+          "isBroadcastEnabled": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "default": false,
+            "description": "Must be false or omitted.",
+            "example": false
+          },
+          "isVariableEnabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "default": true,
+            "description": "Must be true if provided, and is true when omitted.",
+            "example": true
           }
         }
       },
@@ -3998,7 +4254,7 @@
           },
           "sourceId": {
             "type": "string",
-            "description": "Source ID this dashboard filter key applies to",
+            "description": "Source ID this dashboard filter key applies to, or `$name` of a DATA_SOURCE filter on the dashboard",
             "example": "65f5e4a3b9e77c001a111111"
           },
           "sourceMetricType": {
@@ -4292,13 +4548,18 @@
           },
           "connectionId": {
             "type": "string",
-            "description": "ID of the ClickHouse connection the query runs on.",
+            "description": "ClickHouse connection the query runs on: a connection ID, or\n`$name` of a CONNECTION filter on the dashboard.\n",
             "example": "65f5e4a3b9e77c001a567890"
+          },
+          "sourceId": {
+            "type": "string",
+            "description": "Optional Log, Trace, Session, or Metric source on the same\nconnection, or `$name` of a DATA_SOURCE filter on this\ndashboard. Lets `sqlTemplate` use `$__sourceTable` and\n`$__filters`.\n",
+            "example": "65f5e4a3b9e77c001a345678"
           },
           "sqlTemplate": {
             "type": "string",
             "minLength": 1,
-            "description": "Query whose first column populates the dropdown. May use the time\nmacros and other filters' variables, but not `$__sourceTable` or\n`$__filters`, since the filter has no source.\n",
+            "description": "Query whose first column populates the dropdown. May use the time\nmacros and other filters' variables. `$__sourceTable` and\n`$__filters` need a `sourceId`; `$__filters` expands to the\ndashboard's broadcast filter selections for that source.\n",
             "example": "SELECT DISTINCT env FROM default.envs ORDER BY env"
           },
           "isBroadcastEnabled": {
@@ -4349,6 +4610,101 @@
             ],
             "description": "Set to 1 to make the filter single-select.",
             "example": 1
+          }
+        }
+      },
+      "AdhocFilterInput": {
+        "type": "object",
+        "description": "A filter holding free-form \"key operator value\" conditions, with keys\nand values suggested from its sources: columns and map keys for sql\nsources, labels for promql sources. Its conditions are always\nbroadcast to the tiles it applies to: as WHERE conditions on builder\ntiles and raw sql tiles using the $__filters macro, or as label\nmatchers on PromQL tiles. Its conditions are saved in\nsavedFilterValues as an \"adhoc\" entry. Ad hoc filters are a preview\nfeature.\n",
+        "required": [
+          "type",
+          "name",
+          "sourceType",
+          "sources"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "ADHOC"
+            ],
+            "description": "Discriminator. Must be \"ADHOC\".",
+            "example": "ADHOC"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name for the dashboard filter",
+            "example": "Conditions"
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "sql",
+              "promql"
+            ],
+            "description": "The kind of sources the filter reads keys from and applies to: Log,\nTrace, or Session sources for sql, PromQL sources for promql.\n",
+            "example": "sql"
+          },
+          "sources": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "IDs of the sources whose keys and values the filter suggests, all of sourceType, or `$name` of data source variables.",
+            "example": [
+              "65f5e4a3b9e77c001a111111"
+            ]
+          },
+          "where": {
+            "type": "string",
+            "description": "Optional condition narrowing the rows keys and values are suggested\nfrom. Never applied to tiles. May reference the dashboard's\nvariables. sql filters only: rejected when sourceType is promql.\n",
+            "example": "ServiceName:api"
+          },
+          "whereLanguage": {
+            "type": "string",
+            "enum": [
+              "sql",
+              "lucene"
+            ],
+            "description": "Language of the where condition. Rejected when sourceType is promql.",
+            "example": "lucene"
+          },
+          "appliesToSourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IDs of the sources whose tiles the conditions apply to, all of\nsourceType, or `$name` of data source variables. Omit or send an\nempty array to apply to the tiles of the filter's sources.\n",
+            "example": [
+              "65f5e4a3b9e77c001a111111"
+            ]
+          },
+          "isBroadcastEnabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "default": true,
+            "description": "Must be true or omitted.",
+            "example": true
+          },
+          "isVariableEnabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "default": true,
+            "description": "Must be true or omitted.",
+            "example": true
+          },
+          "variableName": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]*$",
+            "description": "Unique name the filter's conditions are saved under, in\nsavedFilterValues and the dashboard URL. Tiles can't reference it\nas a variable. Defaults to the display name with whitespace\nreplaced by underscores and remaining illegal characters removed.\nMust be unique across a dashboard's variable-enabled filters.\n",
+            "example": "conditions"
           }
         }
       },
@@ -5299,6 +5655,24 @@
             "nullable": true,
             "example": "auto"
           },
+          "mapKeyIndexMaxParts": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many data parts are read from text indexes to discover attribute keys and filter values, chosen by mapKeyIndexPartSelection. Raise it if keys or values are missing from filters; lower it if they load slowly. Defaults to 20.",
+            "nullable": true,
+            "example": 20
+          },
+          "mapKeyIndexPartSelection": {
+            "type": "string",
+            "enum": [
+              "median",
+              "smallest",
+              "largest"
+            ],
+            "description": "Which data parts, by row count, are read from text indexes to discover attribute keys and filter values. \"median\" (the default) balances coverage and cost, \"smallest\" reads the newest unmerged parts, \"largest\" reads the most merged data.",
+            "nullable": true,
+            "example": "median"
+          },
           "highlightedTraceAttributeExpressions": {
             "type": "array",
             "description": "Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.",
@@ -5558,6 +5932,24 @@
             "description": "Controls whether lucene rendering uses ClickHouse text indices via hasAllTokens() against the implicit column. \"auto\" detects a covering index at query time, \"enabled\" forces text index usage, \"disabled\" forces a LIKE/hasToken fallback.",
             "nullable": true,
             "example": "auto"
+          },
+          "mapKeyIndexMaxParts": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many data parts are read from text indexes to discover attribute keys and filter values, chosen by mapKeyIndexPartSelection. Raise it if keys or values are missing from filters; lower it if they load slowly. Defaults to 20.",
+            "nullable": true,
+            "example": 20
+          },
+          "mapKeyIndexPartSelection": {
+            "type": "string",
+            "enum": [
+              "median",
+              "smallest",
+              "largest"
+            ],
+            "description": "Which data parts, by row count, are read from text indexes to discover attribute keys and filter values. \"median\" (the default) balances coverage and cost, \"smallest\" reads the newest unmerged parts, \"largest\" reads the most merged data.",
+            "nullable": true,
+            "example": "median"
           },
           "highlightedTraceAttributeExpressions": {
             "type": "array",
@@ -6802,6 +7194,173 @@
         }
       }
     },
+    "/api/v2/alerts/{id}/silenced": {
+      "post": {
+        "summary": "Silence Alert",
+        "description": "Silences an alert until the given time. Notifications are suppressed while the alert is silenced.",
+        "operationId": "silenceAlert",
+        "tags": [
+          "Alerts"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alert ID",
+            "example": "65f5e4a3b9e77c001a123456"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "mutedUntil"
+                ],
+                "properties": {
+                  "mutedUntil": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601 timestamp, in the future, until which the alert is silenced.",
+                    "example": "2026-01-01T00:00:00.000Z"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully silenced alert",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertResponseEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, such as a mutedUntil in the past",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Alert not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Unsilence Alert",
+        "description": "Clears the silence on an alert so notifications resume",
+        "operationId": "unsilenceAlert",
+        "tags": [
+          "Alerts"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alert ID",
+            "example": "65f5e4a3b9e77c001a123456"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully unsilenced alert",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertResponseEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, such as a malformed alert ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Alert not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/charts/series": {
       "post": {
         "summary": "Query Chart Series Data",
@@ -7213,7 +7772,7 @@
       },
       "put": {
         "summary": "Update Connection",
-        "description": "Updates an existing ClickHouse connection.\n\nField semantics: if `password` is omitted or empty the existing\npassword is kept. `hyperdxSettingPrefix` is cleared when set to null\nor an empty string, and `prometheusEndpoint` is cleared when set to\nnull; both are kept unchanged when omitted.\n",
+        "description": "Updates an existing ClickHouse connection.\n\nField semantics: if `password` is omitted or empty the existing\npassword is kept, except when `host` changes: moving a connection\nthat has a stored password to a different host requires sending the\npassword, otherwise the request fails with 400. For a Prometheus\nendpoint (`isPrometheusEndpoint: true`), which doesn't use the stored\npassword, it is cleared instead. `hyperdxSettingPrefix` is cleared when set to null\nor an empty string, and `prometheusEndpoint` is cleared when set to\nnull; both are kept unchanged when omitted.\n",
         "operationId": "updateConnection",
         "tags": [
           "Connections"

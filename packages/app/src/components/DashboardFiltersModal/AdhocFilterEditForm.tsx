@@ -2,17 +2,30 @@ import { useMemo } from 'react';
 import { Controller, UseFormSetValue, useWatch } from 'react-hook-form';
 import { Separator } from '@clickhouse/click-ui';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
-import { getAdhocFilterSourceKinds } from '@hyperdx/common-utils/dist/filters';
+import {
+  getAdhocFilterAppliesToSourceIds,
+  getAdhocFilterSourceKinds,
+  isAdhocFilter,
+} from '@hyperdx/common-utils/dist/filters';
+import {
+  isSourceVariableReferenceAccepted,
+  parseVariableReference,
+  resolveVariableReference,
+} from '@hyperdx/common-utils/dist/referenceVariables';
 import {
   AdhocFilterSourceType,
   DashboardFilter,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
-import { Box, SegmentedControl } from '@mantine/core';
+import { Alert, SegmentedControl } from '@mantine/core';
+import { IconAlertTriangle } from '@tabler/icons-react';
 
-import { CheckBoxControlled } from '@/components/InputControlled';
 import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
 import { SourceMultiSelectControlled } from '@/components/SourceMultiSelect';
+import {
+  useReferenceVariableValues,
+  useSourceVariableDeclarations,
+} from '@/components/sourceSelectUtils';
 import { IS_PROMQL_ENABLED } from '@/config';
 import { useSources } from '@/source';
 
@@ -40,18 +53,47 @@ export const AdhocFilterEditForm = ({
   otherFilters,
 }: AdhocFilterEditFormProps) => {
   const { data: allSources } = useSources();
-  const [sourceType, isBroadcastEnabled, sourceIds] = useWatch({
+  const sourceVariables = useSourceVariableDeclarations();
+  const [sourceType, sourceIds, appliesToSourceIds] = useWatch({
     control,
-    name: ['sourceType', 'isBroadcastEnabled', 'sources'],
+    name: ['sourceType', 'sources', 'appliesToSourceIds'],
   });
-  const allowedSourceKinds = getAdhocFilterSourceKinds(sourceType);
-  const tableConnections = useMemo(
-    () =>
-      (allSources ?? [])
-        .filter(source => sourceIds?.includes(source.id))
-        .map(tcFromSource),
-    [allSources, sourceIds],
+  // Click-to-filter updates every ad hoc filter reaching the clicked tile.
+  const overlappingFilters = useMemo(() => {
+    const targets = getAdhocFilterAppliesToSourceIds({
+      sources: sourceIds ?? [],
+      appliesToSourceIds: appliesToSourceIds?.filter(id => !!id),
+    });
+    return otherFilters
+      .filter(isAdhocFilter)
+      .filter(
+        other =>
+          other.sourceType === sourceType &&
+          getAdhocFilterAppliesToSourceIds(other).some(id =>
+            targets.includes(id),
+          ),
+      );
+  }, [otherFilters, sourceType, sourceIds, appliesToSourceIds]);
+  const allowedSourceKinds = useMemo(
+    () => getAdhocFilterSourceKinds(sourceType),
+    [sourceType],
   );
+  const referenceVariableValues = useReferenceVariableValues();
+  const tableConnections = useMemo(() => {
+    const resolvedIds = new Set(
+      sourceIds?.map(id =>
+        resolveVariableReference(id, referenceVariableValues),
+      ),
+    );
+    // A data source variable can select a source of a kind this filter can't use
+    return (allSources ?? [])
+      .filter(
+        source =>
+          resolvedIds.has(source.id) &&
+          allowedSourceKinds.includes(source.kind),
+      )
+      .map(tcFromSource);
+  }, [allSources, sourceIds, referenceVariableValues, allowedSourceKinds]);
   // Kept visible for a saved PromQL filter so its source type can be changed
   const showSourceType =
     sourceType === 'promql' ||
@@ -62,6 +104,13 @@ export const AdhocFilterEditForm = ({
   // hold after switching from another filter type.
   const validateSourceKinds = (ids: string[] | undefined) => {
     const hasOtherKind = ids?.some(id => {
+      if (parseVariableReference(id) != null) {
+        return !isSourceVariableReferenceAccepted(
+          id,
+          sourceVariables,
+          allowedSourceKinds,
+        );
+      }
       const source = allSources?.find(s => s.id === id);
       return source && !allowedSourceKinds.includes(source.kind);
     });
@@ -111,6 +160,7 @@ export const AdhocFilterEditForm = ({
           comboboxProps={{ withinPortal: true }}
           placeholder="Select sources"
           allowedSourceKinds={allowedSourceKinds}
+          allowSourceVariables
           rules={{
             validate: (value: string[] | undefined) =>
               !value?.length
@@ -138,39 +188,44 @@ export const AdhocFilterEditForm = ({
         </CustomInputWrapper>
       )}
 
-      <Separator size="xs" />
-      <CheckBoxControlled
-        control={control}
-        name="isBroadcastEnabled"
-        size="xs"
-        label="Broadcast filter conditions"
-        description={
+      <CustomInputWrapper
+        label="Applies to sources"
+        tooltipText={
           sourceType === 'promql'
-            ? 'Automatically add the selected conditions as label matchers to every selector in PromQL tiles. Optionally, specify which sources to broadcast to.'
-            : 'Automatically apply the selected conditions to every tile based on the selected data sources. Optionally, specify which sources to broadcast to.'
+            ? "The conditions are added as label matchers to every selector in PromQL tiles using these sources. Leave empty to use the filter's data sources."
+            : "The conditions are applied to every tile using these sources. Leave empty to use the filter's data sources."
         }
-        data-testid="filter-broadcast-checkbox"
-      />
-      {isBroadcastEnabled && (
-        <Box ml="xl">
-          <CustomInputWrapper
-            label="Applies to sources"
-            tooltipText="Which tiles the broadcast reaches. Leave empty to broadcast to all tiles using the filter's data sources."
-          >
-            <SourceMultiSelectControlled
-              control={control}
-              name="appliesToSourceIds"
-              data-testid="applies-to-source-selector"
-              comboboxProps={{ withinPortal: true }}
-              placeholder="Same as data sources"
-              allowedSourceKinds={allowedSourceKinds}
-              rules={{ validate: validateSourceKinds }}
-            />
-          </CustomInputWrapper>
-        </Box>
+      >
+        <SourceMultiSelectControlled
+          control={control}
+          name="appliesToSourceIds"
+          data-testid="applies-to-source-selector"
+          comboboxProps={{ withinPortal: true }}
+          placeholder="Same as data sources"
+          allowedSourceKinds={allowedSourceKinds}
+          allowSourceVariables
+          rules={{ validate: validateSourceKinds }}
+        />
+      </CustomInputWrapper>
+      {overlappingFilters.length > 0 && (
+        <Alert
+          variant="warning"
+          icon={<IconAlertTriangle size={16} />}
+          data-testid="adhoc-filter-overlap-warning"
+        >
+          Another ad hoc filter (
+          {overlappingFilters.map(f => f.name).join(', ')}) already applies to
+          these sources. Clicking a value in a tile will update all of them.
+        </Alert>
       )}
       <Separator size="xs" />
-      <VariableNameInput control={control} otherFilters={otherFilters} />
+      <VariableNameInput
+        control={control}
+        otherFilters={otherFilters}
+        label="Unique name"
+        noun="name"
+        description="Identifies this filter's conditions in the URL. Ad hoc filters can't be referenced as variables in tile queries."
+      />
     </>
   );
 };

@@ -445,7 +445,7 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
 
     // Snapshot the raw tiles from the DB before patching
     const beforePatch = await Dashboard.findById(dashboardId).lean();
-    const tilesBeforePatch = (beforePatch as any).tiles;
+    const tilesBeforePatch = beforePatch!.tiles;
     const tileBBefore = tilesBeforePatch[1];
     const tileCBefore = tilesBeforePatch[2];
 
@@ -470,7 +470,7 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
 
     // Read raw DB tiles again; tiles B and C should be byte-identical
     const afterPatch = await Dashboard.findById(dashboardId).lean();
-    const tilesAfterPatch = (afterPatch as any).tiles;
+    const tilesAfterPatch = afterPatch!.tiles;
 
     expect(tilesAfterPatch).toHaveLength(3);
     // Tile B (index 1) and Tile C (index 2) should be untouched
@@ -943,10 +943,10 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
       const output = JSON.parse(getFirstText(patchResult));
       expect(output.patchedTile.name).toBe('Static SQL');
       const dashboard = await Dashboard.findById(created.id);
-      const persistedConfig = dashboard?.tiles?.[0]?.config as {
-        sqlTemplate?: string;
-      };
-      expect(persistedConfig?.sqlTemplate).toBe('SELECT 1 AS value LIMIT 1');
+      expect(dashboard?.tiles?.[0]?.config).toHaveProperty(
+        'sqlTemplate',
+        'SELECT 1 AS value LIMIT 1',
+      );
 
       expect(Array.isArray(output.warnings)).toBe(true);
       expect(output.warnings).toHaveLength(1);
@@ -1398,6 +1398,88 @@ describe('MCP Dashboard Tools - clickstack_patch_dashboard', () => {
       const tile = JSON.parse(getFirstText(getResult));
       expect(tile.config.formulas).toEqual(formulas);
       expect(tile.config.showOperandSeries).toBe(false);
+    });
+  });
+
+  describe('reference variables', () => {
+    const createDashboard = () =>
+      new Dashboard({
+        name: 'Variable dashboard',
+        tiles: [
+          {
+            id: 'tile',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 3,
+            config: {
+              name: 'Tile',
+              source: ctx.traceSource._id.toString(),
+              displayType: 'line',
+              select: [{ aggFn: 'count', valueExpression: '' }],
+              where: '',
+            },
+          },
+        ],
+        filters: [
+          {
+            id: 'ds-filter',
+            type: 'DATA_SOURCE',
+            name: 'Traces source',
+            variableName: 'traces',
+            allowedSourceKinds: [SourceKind.Trace],
+            minSelections: 1,
+            maxSelections: 1,
+            isBroadcastEnabled: false,
+            isVariableEnabled: true,
+          },
+        ],
+        team: ctx.team._id,
+      }).save();
+
+    const patchSource = (dashboardId: string, sourceId: string) =>
+      callTool(ctx.client!, 'clickstack_patch_dashboard', {
+        dashboardId,
+        tileId: 'tile',
+        tile: {
+          name: 'Tile',
+          config: {
+            displayType: 'line',
+            sourceId,
+            select: [{ aggFn: 'count' }],
+          },
+        },
+      });
+
+    it('patches a tile to read from a declared data source variable', async () => {
+      const dashboard = await createDashboard();
+
+      const result = await patchSource(dashboard._id.toString(), '$traces');
+
+      expect(result.isError).toBeFalsy();
+      const stored = await Dashboard.findById(dashboard._id).lean();
+      expect(stored?.tiles[0].config).toMatchObject({ source: '$traces' });
+    });
+
+    it('rejects a patch referencing an undeclared variable', async () => {
+      const dashboard = await createDashboard();
+
+      const result = await patchSource(dashboard._id.toString(), '$nope');
+
+      expect(result.isError).toBe(true);
+      expect(getFirstText(result)).toContain(
+        'does not name a data source variable',
+      );
+    });
+
+    it('accepts a patch that keeps a reference the dashboard no longer satisfies', async () => {
+      const dashboard = await createDashboard();
+      await patchSource(dashboard._id.toString(), '$traces');
+      await Dashboard.updateOne({ _id: dashboard._id }, { filters: [] });
+
+      const result = await patchSource(dashboard._id.toString(), '$traces');
+
+      expect(result.isError).toBeFalsy();
     });
   });
 });

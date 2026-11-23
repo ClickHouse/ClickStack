@@ -1,5 +1,6 @@
 import { renderChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import { SourceKind, TTraceSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   aggregateServiceMapData,
@@ -412,7 +413,7 @@ describe('aggregateServiceMapData', () => {
 });
 
 describe('getServiceMapQuery', () => {
-  const source: TTraceSource = {
+  const source: TTraceSource = fromPartial({
     id: 'src',
     name: 'Traces',
     kind: SourceKind.Trace,
@@ -428,7 +429,7 @@ describe('getServiceMapQuery', () => {
     statusCodeExpression: 'StatusCode',
     durationExpression: 'Duration',
     durationPrecision: 9,
-  } as TTraceSource;
+  });
 
   const dateRange: [Date, Date] = [
     new Date('2024-01-01T00:00:00Z'),
@@ -445,7 +446,7 @@ describe('getServiceMapQuery', () => {
     const query = await getServiceMapQuery({
       source,
       dateRange,
-      metadata: {} as any,
+      metadata: fromPartial({}),
       samplingFactor: 1,
       groupBy,
     });

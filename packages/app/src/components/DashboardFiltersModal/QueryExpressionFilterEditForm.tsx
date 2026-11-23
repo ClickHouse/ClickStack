@@ -27,6 +27,7 @@ import SourceSchemaPreview, {
   isSourceSchemaPreviewEnabled,
 } from '@/components/SourceSchemaPreview';
 import { SourceSelectControlled } from '@/components/SourceSelect';
+import { useResolvedReference } from '@/components/sourceSelectUtils';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { useSource } from '@/source';
 import { getMetricTableName } from '@/utils';
@@ -60,7 +61,11 @@ export const QueryExpressionFilterEditForm = ({
   showVariableOptions,
 }: QueryExpressionFilterEditFormProps) => {
   const sourceId = useWatch({ control, name: 'source' });
-  const { data: source } = useSource({ id: sourceId });
+  // A data source variable can select a source of a kind this filter can't use
+  const { data: source } = useSource({
+    id: useResolvedReference(sourceId),
+    kinds: QUERY_EXPRESSION_FILTER_SOURCE_KINDS,
+  });
 
   const metricType = useWatch({ control, name: 'sourceMetricType' });
   const tableName = source && getMetricTableName(source, metricType);
@@ -137,6 +142,7 @@ export const QueryExpressionFilterEditForm = ({
           isSchemaPreviewEnabled={isSourceSchemaPreviewEnabled(source)}
           disabled={!!presetSource}
           allowedSourceKinds={QUERY_EXPRESSION_FILTER_SOURCE_KINDS}
+          allowSourceVariables
         />
         <SourceSchemaPreview
           source={source}
@@ -237,6 +243,7 @@ export const QueryExpressionFilterEditForm = ({
               comboboxProps={{ withinPortal: true }}
               placeholder="All sources"
               allowedSourceKinds={QUERY_EXPRESSION_FILTER_SOURCE_KINDS}
+              allowSourceVariables
             />
           </CustomInputWrapper>
         </Box>

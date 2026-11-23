@@ -255,7 +255,7 @@ export function RowOverviewPanel({
   const hasSpanEvents = useMemo(() => {
     return (
       Array.isArray(firstRow?.__hdx_span_events) &&
-      firstRow?.__hdx_span_events.length > 0
+      firstRow?.__hdx_span_events?.length > 0
     );
   }, [firstRow?.__hdx_span_events]);
 
@@ -498,6 +498,7 @@ export function RowOverviewPanel({
               <Flex wrap="wrap" gap="2px" mx={contentPx} mb="lg">
                 {Object.entries(resourceAttributes).map(([key, value]) => (
                   <EventTag
+                    key={key}
                     {...(onPropertyAddClick
                       ? {
                           onPropertyAddClick,
@@ -523,7 +524,6 @@ export function RowOverviewPanel({
                     displayedKey={key}
                     name={`${'resourceAttributesExpression' in source ? source.resourceAttributesExpression : ''}.${key}`}
                     value={value as string}
-                    key={key}
                   />
                 ))}
               </Flex>

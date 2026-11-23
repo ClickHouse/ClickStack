@@ -78,7 +78,7 @@ The webhook API enforces uniqueness on `(team, service, url)`. A hardcoded URL w
 - Assert successful chart loads by checking `.recharts-responsive-container` is visible
 
 ### Tags
-- `{ tag: '@full-stack' }` — tests requiring MongoDB + API backend
+- `{ tag: '@full-stack' }` — tests requiring DocumentDB + API backend
 - Feature tags: `@dashboard`, `@alerts`, `@search`, etc.
 
 ### Imports

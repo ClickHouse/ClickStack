@@ -13,7 +13,7 @@ selected at run time.
 
 - **`yarn dev` running** on at least one worktree — this handles
   `yarn install`, `yarn build:common-utils`, Docker containers (ClickHouse,
-  MongoDB), and the API server. See `agent_docs/development.md` for setup.
+  DocumentDB), and the API server. See `agent_docs/development.md` for setup.
 - **`claude` CLI installed** (the harness spawns it in streaming JSON mode)
 - **`ANTHROPIC_API_KEY`** or **`AI_API_KEY`** in `.env.local` at the monorepo
   root (for `run` and `grade` commands)
@@ -57,7 +57,7 @@ yarn workspace @hyperdx/hdx-eval viewer
 
 For reliable A/B comparison of two HyperDX branches (e.g. feature vs main),
 we recommend reserving two fixed dev slots. This gives you two fully isolated
-HyperDX stacks (separate ClickHouse, MongoDB, API) that can run
+HyperDX stacks (separate ClickHouse, DocumentDB, API) that can run
 simultaneously.
 
 ### 1. Start two dev stacks with fixed slots

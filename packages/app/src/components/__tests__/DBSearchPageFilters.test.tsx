@@ -1,8 +1,8 @@
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
 import { MantineProvider } from '@mantine/core';
-import { UseQueryResult } from '@tanstack/react-query';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   cleanedFacetName,
@@ -78,11 +78,13 @@ const mockDistribution = (
   data: Map<string, number> | undefined,
   error: Error | null = null,
 ) =>
-  jest.mocked(useGetValuesDistribution).mockReturnValue({
-    data,
-    isFetching: false,
-    error,
-  } as UseQueryResult<Map<string, number>>);
+  jest.mocked(useGetValuesDistribution).mockReturnValue(
+    fromPartial({
+      data,
+      isFetching: false,
+      error,
+    }),
+  );
 
 describe('cleanedFacetName', () => {
   describe('basic functionality', () => {
@@ -769,9 +771,10 @@ describe('FilterGroup', () => {
     );
 
     // Find and click the "Only" button for banana
-    const bananaRow = screen
-      .getByText('banana')
-      .closest('.filterCheckbox') as HTMLElement;
+    const bananaRow = screen.getByText('banana').closest('.filterCheckbox');
+    if (!(bananaRow instanceof HTMLElement)) {
+      throw new Error('banana filter row not found');
+    }
     const onlyButton = within(bananaRow).getByText('Only');
     await userEvent.click(onlyButton);
 
