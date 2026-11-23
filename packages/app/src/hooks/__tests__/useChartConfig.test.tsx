@@ -14,6 +14,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { prometheusApi } from '@/api';
 import { useClickhouseClient } from '@/clickhouse';
@@ -390,9 +391,9 @@ describe('useChartConfig', () => {
         </QueryClientProvider>
       );
 
-      mockClickhouseClient = {
+      mockClickhouseClient = fromPartial({
         queryChartConfig: jest.fn(),
-      } as unknown as jest.Mocked<ClickhouseClient>;
+      });
 
       jest.mocked(useClickhouseClient).mockReturnValue(mockClickhouseClient);
     });

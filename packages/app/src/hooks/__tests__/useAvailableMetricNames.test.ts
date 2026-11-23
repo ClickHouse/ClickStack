@@ -9,9 +9,7 @@ import { useGetKeyValues } from '@/hooks/useMetadata';
 
 jest.mock('@/hooks/useMetadata');
 
-const mockUseGetKeyValues = useGetKeyValues as jest.MockedFunction<
-  typeof useGetKeyValues
->;
+const mockUseGetKeyValues = jest.mocked(useGetKeyValues);
 
 const METRIC_SOURCE = {
   id: 'metric-source-1',

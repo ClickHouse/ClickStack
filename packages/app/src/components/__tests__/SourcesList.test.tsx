@@ -1,5 +1,6 @@
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { SourcesList } from '@/components/Sources/SourcesList';
 import { useConnections } from '@/connection';
@@ -14,8 +15,6 @@ jest.mock('@/config', () => ({ IS_LOCAL_MODE: false }));
 // TableSourceForm only renders while editing/creating; stub it so the list test
 // does not pull in the full source form.
 jest.mock('../Sources/SourceForm', () => ({ TableSourceForm: () => null }));
-
-const asMock = (fn: unknown) => fn as jest.Mock;
 
 const makeSource = (
   id: string,
@@ -32,22 +31,26 @@ const makeSource = (
 
 describe('SourcesList section display', () => {
   beforeEach(() => {
-    asMock(useConnections).mockReturnValue({
-      data: [{ id: 'conn-a', name: 'Default' }],
-      isLoading: false,
-      refetch: jest.fn(),
-    });
+    jest.mocked(useConnections).mockReturnValue(
+      fromPartial({
+        data: [{ id: 'conn-a', name: 'Default' }],
+        isLoading: false,
+        refetch: jest.fn(),
+      }),
+    );
   });
 
   it('shows the section on a sectioned source and nothing on an unsectioned one', () => {
-    asMock(useSources).mockReturnValue({
-      data: [
-        makeSource('a', 'Billing Logs', { section: 'Billing' }),
-        makeSource('b', 'Plain Source'),
-      ],
-      isLoading: false,
-      refetch: jest.fn(),
-    });
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [
+          makeSource('a', 'Billing Logs', { section: 'Billing' }),
+          makeSource('b', 'Plain Source'),
+        ],
+        isLoading: false,
+        refetch: jest.fn(),
+      }),
+    );
     renderWithMantine(<SourcesList withCard={false} />);
 
     expect(screen.getByText('Billing Logs')).toBeInTheDocument();
@@ -57,11 +60,13 @@ describe('SourcesList section display', () => {
   });
 
   it('shows no section labels when no source has a section', () => {
-    asMock(useSources).mockReturnValue({
-      data: [makeSource('a', 'App'), makeSource('b', 'Host')],
-      isLoading: false,
-      refetch: jest.fn(),
-    });
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [makeSource('a', 'App'), makeSource('b', 'Host')],
+        isLoading: false,
+        refetch: jest.fn(),
+      }),
+    );
     renderWithMantine(<SourcesList withCard={false} />);
 
     expect(screen.getByText('App')).toBeInTheDocument();
@@ -69,17 +74,19 @@ describe('SourcesList section display', () => {
   });
 
   it('shows the plural kind label for each source', () => {
-    asMock(useSources).mockReturnValue({
-      data: [
-        makeSource('a', 'A'),
-        makeSource('b', 'B', { kind: SourceKind.Trace }),
-        makeSource('c', 'C', { kind: SourceKind.Metric }),
-        makeSource('d', 'D', { kind: SourceKind.Session }),
-        makeSource('e', 'E', { kind: SourceKind.Promql }),
-      ],
-      isLoading: false,
-      refetch: jest.fn(),
-    });
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [
+          makeSource('a', 'A'),
+          makeSource('b', 'B', { kind: SourceKind.Trace }),
+          makeSource('c', 'C', { kind: SourceKind.Metric }),
+          makeSource('d', 'D', { kind: SourceKind.Session }),
+          makeSource('e', 'E', { kind: SourceKind.Promql }),
+        ],
+        isLoading: false,
+        refetch: jest.fn(),
+      }),
+    );
     renderWithMantine(<SourcesList withCard={false} />);
 
     for (const label of [
@@ -94,29 +101,33 @@ describe('SourcesList section display', () => {
   });
 
   it('names a PromQL source after the connection it reads from', () => {
-    asMock(useConnections).mockReturnValue({
-      data: [
-        { id: 'conn-a', name: 'Default' },
-        { id: 'conn-prom', name: 'Thanos', isPrometheusEndpoint: true },
-      ],
-      isLoading: false,
-      refetch: jest.fn(),
-    });
-    asMock(useSources).mockReturnValue({
-      data: [
-        makeSource('a', 'A', { kind: SourceKind.Promql }),
-        makeSource('b', 'B', {
-          kind: SourceKind.Promql,
-          connection: 'conn-prom',
-        }),
-        makeSource('c', 'C', {
-          kind: SourceKind.Promql,
-          connection: 'conn-missing',
-        }),
-      ],
-      isLoading: false,
-      refetch: jest.fn(),
-    });
+    jest.mocked(useConnections).mockReturnValue(
+      fromPartial({
+        data: [
+          { id: 'conn-a', name: 'Default' },
+          { id: 'conn-prom', name: 'Thanos', isPrometheusEndpoint: true },
+        ],
+        isLoading: false,
+        refetch: jest.fn(),
+      }),
+    );
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [
+          makeSource('a', 'A', { kind: SourceKind.Promql }),
+          makeSource('b', 'B', {
+            kind: SourceKind.Promql,
+            connection: 'conn-prom',
+          }),
+          makeSource('c', 'C', {
+            kind: SourceKind.Promql,
+            connection: 'conn-missing',
+          }),
+        ],
+        isLoading: false,
+        refetch: jest.fn(),
+      }),
+    );
     renderWithMantine(<SourcesList withCard={false} />);
 
     expect(screen.getByText('Time Series')).toBeInTheDocument();
