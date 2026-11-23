@@ -1,6 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { inferNumericColumn } from '@hyperdx/common-utils/dist/clickhouse';
-import { isRatioChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
+import {
+  isRatioChartConfig,
+  quotedColumnName,
+} from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
   isBuilderChartConfig,
   isPromqlChartConfig,
@@ -39,7 +42,10 @@ import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
 import type { CellFilterHandler } from './DBTable/DBRowTableFieldWithPopover';
-import { getClientSideSortingFn } from './DBTable/sorting';
+import {
+  getAliasedResultColumns,
+  getClientSideSortingFn,
+} from './DBTable/sorting';
 import MVOptimizationIndicator from './MaterializedViews/MVOptimizationIndicator';
 
 export default function DBTableChart({
@@ -151,25 +157,14 @@ export default function DBTableChart({
   });
   const { observerRef: fetchMoreRef } = useIntersectionObserver(fetchNextPage);
 
-  // Returns an array of aliases, so we can check if something is using an alias
-  const aliasMap = useMemo(() => {
-    if (isRawSqlChartConfig(config) || isPromqlChartConfig(config)) {
-      return [];
-    }
-
-    // If the config.select is a string, we can't infer this.
-    // One day, we could potentially run this through chSqlToAliasMap but AST parsing
-    //  doesn't work for most DBTableChart queries.
-    if (typeof config.select === 'string') {
-      return [];
-    }
-    return config.select.reduce((acc, select) => {
-      if (select.alias) {
-        acc.push(select.alias);
-      }
-      return acc;
-    }, [] as string[]);
-  }, [config]);
+  const resultMeta = data?.meta;
+  const aliasedColumns = useMemo(
+    () =>
+      isBuilderChartConfig(queriedConfig) && resultMeta
+        ? getAliasedResultColumns(queriedConfig, resultMeta)
+        : new Set<string>(),
+    [queriedConfig, resultMeta],
+  );
 
   const { formatByColumn } = useChartNumberFormats(queriedConfig, data?.meta);
 
@@ -269,8 +264,8 @@ export default function DBTableChart({
     return orderedKeys
       .filter(key => !hiddenColumns?.includes(key))
       .map(key => ({
-        // If it's an alias, wrap in quotes to support a variety of formats (ex "Time (ms)", "Req/s", etc)
-        id: aliasMap.includes(key) ? `"${key}"` : key,
+        // The sort id becomes the ORDER BY expression (see queriedConfig).
+        id: aliasedColumns.has(key) ? quotedColumnName(key) : key,
         dataKey: key,
         displayName: key,
         numberFormat: groupByKeys.includes(key)
@@ -288,7 +283,7 @@ export default function DBTableChart({
     queriedConfig,
     hiddenColumns,
     filterKeyByColumn,
-    aliasMap,
+    aliasedColumns,
     formatByColumn,
     colorByColumn,
     rulesByColumn,
