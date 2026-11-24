@@ -16,6 +16,7 @@ import favoritesRouter from './routers/api/favorites';
 import iacRouter from './routers/api/iac';
 import pinnedFiltersRouter from './routers/api/pinnedFilters';
 import savedSearchRouter from './routers/api/savedSearch';
+import slosRouter from './routers/api/slos';
 import sourcesRouter from './routers/api/sources';
 import externalRoutersV2 from './routers/external-api/v2';
 import usageStats from './tasks/usageStats';
@@ -122,6 +123,9 @@ app.use('/clickhouse-proxy', isUserAuthenticated, clickhouseProxyRouter);
 app.use('/iac', isUserAuthenticated, iacRouter);
 if (config.IS_PROMQL_ENABLED) {
   app.use('/v1/prometheus', isUserAuthenticated, routers.prometheusRouter);
+}
+if (config.IS_SLOS_ENABLED) {
+  app.use('/slos', isUserAuthenticated, slosRouter);
 }
 // ---------------------------------------------------------------------
 
