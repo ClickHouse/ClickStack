@@ -65,9 +65,9 @@ jobs:
       # persona except correctness/security/adversarial with `model: "sonnet"`,
       # so remapping the alias is what lifts them. Must stay at JOB level -- the
       # action's own composite `env:` block shadows the caller's step env.
-      # `[1m]` because the mid-tier already runs a 1M window today. Not
+      # No `[1m]` suffix: Opus 5.5 runs a 1M window by default. Not
       # remapping HAIKU: its only user here is CLI internals.
-      ANTHROPIC_DEFAULT_SONNET_MODEL: claude-opus-4-8[1m]
+      ANTHROPIC_DEFAULT_SONNET_MODEL: claude-opus-5-5
     permissions:
       contents: read
       pull-requests: write
@@ -672,7 +672,7 @@ jobs:
           # CLAUDE_CLI_VERSION defaults to. Pair with the job env's
           # ANTHROPIC_DEFAULT_SONNET_MODEL, which covers the rest.
           claude_args: |
-            --model "claude-opus-4-8[1m]"
+            --model claude-opus-5-5
             --setting-sources user
             --strict-mcp-config
             --allowedTools "Bash(git diff:*),Bash(git log:*),Bash(git blame:*),Bash(git show:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(git cat-file:*),Bash(git status:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
