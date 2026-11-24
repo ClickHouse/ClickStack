@@ -11,7 +11,7 @@ import {
 import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 import ms from 'ms';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import { createAlert } from '@/controllers/alerts';

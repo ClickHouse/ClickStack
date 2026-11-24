@@ -13,7 +13,7 @@ import {
 import crypto from 'crypto';
 import express from 'express';
 import pick from 'lodash/pick';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { processRequest, validateRequest } from 'zod-express-middleware';
 
 import {

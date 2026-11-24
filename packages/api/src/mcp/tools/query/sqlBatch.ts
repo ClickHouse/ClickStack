@@ -1,6 +1,6 @@
 import PQueue from '@esm2cjs/p-queue';
 import { trace } from '@opentelemetry/api';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { McpContext, ToolResult } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';

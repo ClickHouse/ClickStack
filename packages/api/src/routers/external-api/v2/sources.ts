@@ -4,7 +4,7 @@ import {
 } from '@hyperdx/common-utils/dist/externalSource';
 import { SourceKind, SourceSchemaNoId } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import { validateConnectionId } from '@/controllers/connection';

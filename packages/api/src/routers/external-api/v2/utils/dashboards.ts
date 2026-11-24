@@ -56,7 +56,7 @@ import { SearchConditionLanguageSchema as whereLanguageSchema } from '@hyperdx/c
 import { pick } from 'lodash';
 import _ from 'lodash';
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { deleteDashboardAlerts } from '@/controllers/alerts';
 import { getConnectionsByTeam } from '@/controllers/connection';

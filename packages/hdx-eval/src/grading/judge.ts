@@ -1,5 +1,5 @@
 import { generateObject, type LanguageModel, NoObjectGeneratedError } from 'ai';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { blindAnswer, type BlindingEntry } from './blind';
 import {

@@ -1,5 +1,5 @@
 import { getParseErrorMessage } from '@modelcontextprotocol/sdk/server/zod-compat.js';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { mcpSaveAlertSchema } from '@/mcp/tools/alerts/schemas';
 import {

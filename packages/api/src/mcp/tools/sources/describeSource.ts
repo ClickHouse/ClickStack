@@ -10,7 +10,7 @@ import {
 import { type MetricTable, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import SqlString from 'sqlstring';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
@@ -96,6 +96,7 @@ type DescribeProgress = {
 async function describeSourceSchema(
   context: McpContext,
   sourceId: string,
+  metricName: string | undefined,
   signal: AbortSignal,
   progress: DescribeProgress,
 ): Promise<ToolResult> {
@@ -122,7 +123,14 @@ async function describeSourceSchema(
   }
 
   if (source.kind === SourceKind.Promql) {
-    return describePromqlSource({ context, source, meta, signal, progress });
+    return describePromqlSource({
+      context,
+      source,
+      metricName,
+      meta,
+      signal,
+      progress,
+    });
   }
 
   if (
@@ -597,9 +605,17 @@ export function registerDescribeSource({
           .describe(
             'The source ID to describe. Get this from clickstack_list_sources.',
           ),
+        metricName: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'PromQL sources only: list the label names of this metric. ' +
+              'Without it, a PromQL source on a ClickHouse table lists metric names only.',
+          ),
       }),
     },
-    async ({ sourceId }) => {
+    async ({ sourceId, metricName }) => {
       const progress: DescribeProgress = {};
 
       const span = trace.getActiveSpan();
@@ -633,7 +649,14 @@ export function registerDescribeSource({
       let outcome: TimeoutOutcome<ToolResult>;
       try {
         outcome = await runWithTimeout(
-          signal => describeSourceSchema(context, sourceId, signal, progress),
+          signal =>
+            describeSourceSchema(
+              context,
+              sourceId,
+              metricName,
+              signal,
+              progress,
+            ),
           { timeoutMs: DESCRIBE_TIMEOUT_MS, graceMs: DESCRIBE_BACKSTOP_MS },
         );
       } catch (e) {

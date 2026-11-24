@@ -1,7 +1,7 @@
 import { type AlertInterval } from '@hyperdx/common-utils/dist/types';
 import { ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import { getRecentAlertHistories } from '@/controllers/alertHistory';

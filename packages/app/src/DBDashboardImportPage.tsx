@@ -13,7 +13,7 @@ import { useRouter } from 'next/router';
 import { uniq } from 'lodash';
 import { parseAsString, useQueryState } from 'nuqs';
 import { Controller, useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { convertToDashboardDocument } from '@hyperdx/common-utils/dist/core/utils';
 import {

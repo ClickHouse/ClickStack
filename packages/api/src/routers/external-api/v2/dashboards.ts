@@ -1,6 +1,6 @@
 import express from 'express';
 import { uniq } from 'lodash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   deleteDashboard,

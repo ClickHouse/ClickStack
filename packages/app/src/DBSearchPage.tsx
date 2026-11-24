@@ -24,7 +24,7 @@ import {
   useQueryStates,
 } from 'nuqs';
 import { useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   ClickHouseQueryError,
