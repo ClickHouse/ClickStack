@@ -261,6 +261,7 @@ export const KubernetesFilters: React.FC<KubernetesFiltersProps> = ({
       select: '',
       timestampValueExpression: metricSource.timestampValueExpression || '',
       connection: metricSource.connection,
+      source: metricSource.id,
       dateRange,
     }),
     [metricSource, facetWhere, dateRange],

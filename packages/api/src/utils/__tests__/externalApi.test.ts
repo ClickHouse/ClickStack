@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { Types } from 'mongoose';
 
 import {
@@ -19,7 +20,7 @@ const foreignChannel = (value: any): AlertChannel => value;
 const createAlertDocument = (
   overrides: Partial<Record<string, unknown>> = {},
 ): AlertDocument =>
-  ({
+  fromAny({
     _id: new Types.ObjectId(),
     team: new Types.ObjectId(),
     threshold: 5,
@@ -29,7 +30,7 @@ const createAlertDocument = (
     state: AlertState.OK,
     channel: { type: null },
     ...overrides,
-  }) as unknown as AlertDocument;
+  });
 
 describe('utils/externalApi', () => {
   describe('translateAlertDocumentToExternalAlert', () => {

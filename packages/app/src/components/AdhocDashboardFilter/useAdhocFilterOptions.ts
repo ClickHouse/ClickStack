@@ -44,6 +44,9 @@ import { mergePath } from '@/utils';
 const STALE_TIME_MS = 1000 * 60 * 5;
 const NO_SOURCES: TSource[] = [];
 const NO_COLUMNS: Set<string> = new Set();
+// getKeyValues already renders a bracket key on a JSON column (`col['a']`) as
+// the `col.a.:String` subcolumn, so these keys need no JSON-specific quoting.
+const NO_JSON_COLUMNS: Set<string> = new Set();
 
 const unionSorted = (lists: (string[] | undefined)[]) =>
   Array.from(new Set(lists.flatMap(list => list ?? []))).sort();
@@ -54,7 +57,9 @@ const unionSorted = (lists: (string[] | undefined)[]) =>
  */
 const toQuotedKeys = (keys: string[], columns: ColumnMeta[]) => {
   const columnNames = new Set(columns.map(column => column.name));
-  return keys.map(key => toQuotedClickHouseKeyExpression(key, columnNames));
+  return keys.map(key =>
+    toQuotedClickHouseKeyExpression(key, columnNames, NO_JSON_COLUMNS),
+  );
 };
 
 /**
@@ -255,24 +260,22 @@ function usePromqlSourceKeys(
   );
 
   return useQueries({
-    queries: sources.map(
-      (source): UseQueryOptions<string[]> => ({
-        queryKey: [
-          'adhoc-filter-promql-keys',
-          source.id,
-          seconds.start,
-          seconds.end,
-        ],
-        queryFn: async () => {
-          const labels = await fetchPromqlLabelNames(
-            promqlLookupParams(source, seconds, attribution),
-          );
-          return labels.filter(label => label !== '__name__');
-        },
-        staleTime: STALE_TIME_MS,
-        placeholderData: keepPreviousData,
-      }),
-    ),
+    queries: sources.map((source): UseQueryOptions<string[]> => ({
+      queryKey: [
+        'adhoc-filter-promql-keys',
+        source.id,
+        seconds.start,
+        seconds.end,
+      ],
+      queryFn: async () => {
+        const labels = await fetchPromqlLabelNames(
+          promqlLookupParams(source, seconds, attribution),
+        );
+        return labels.filter(label => label !== '__name__');
+      },
+      staleTime: STALE_TIME_MS,
+      placeholderData: keepPreviousData,
+    })),
     combine: combineKeys,
   });
 }
@@ -301,7 +304,10 @@ function useSqlSourceValues(
   // Quoted like the search sidebar does, so a column named e.g.
   // `log-attributes` isn't read as a subtraction.
   const keys = useMemo(
-    () => (key ? [toQuotedClickHouseKeyExpression(key, columnNames)] : []),
+    () =>
+      key
+        ? [toQuotedClickHouseKeyExpression(key, columnNames, NO_JSON_COLUMNS)]
+        : [],
     [key, columnNames],
   );
   const { data, isFetching, isError, error } = useMultipleGetKeyValues(
@@ -332,25 +338,23 @@ function usePromqlSourceValues(
   const seconds = toPromqlSeconds(dateRange);
 
   return useQueries({
-    queries: sources.map(
-      (source): UseQueryOptions<string[]> => ({
-        queryKey: [
-          'adhoc-filter-promql-values',
-          source.id,
-          key,
-          seconds.start,
-          seconds.end,
-        ],
-        queryFn: () =>
-          fetchPromqlLabelValues({
-            label: key,
-            ...promqlLookupParams(source, seconds, attribution),
-          }),
-        enabled: !!key,
-        staleTime: STALE_TIME_MS,
-        retry: false,
-      }),
-    ),
+    queries: sources.map((source): UseQueryOptions<string[]> => ({
+      queryKey: [
+        'adhoc-filter-promql-values',
+        source.id,
+        key,
+        seconds.start,
+        seconds.end,
+      ],
+      queryFn: () =>
+        fetchPromqlLabelValues({
+          label: key,
+          ...promqlLookupParams(source, seconds, attribution),
+        }),
+      enabled: !!key,
+      staleTime: STALE_TIME_MS,
+      retry: false,
+    })),
     combine: combineValues,
   });
 }

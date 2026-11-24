@@ -1,6 +1,6 @@
 import express from 'express';
 import { uniq } from 'lodash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   deleteDashboard,
@@ -57,11 +57,12 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *     SavedFilterValue:
  *       description: >
  *         A single saved dashboard filter selection. Either a rendered SQL
- *         condition, or a selection addressed by the name of the dashboard
- *         variable it belongs to.
+ *         condition, a selection addressed by the name of the dashboard
+ *         variable it belongs to, or the conditions of an ADHOC filter.
  *       oneOf:
  *         - $ref: '#/components/schemas/SqlSavedFilterValue'
  *         - $ref: '#/components/schemas/VariableSavedFilterValue'
+ *         - $ref: '#/components/schemas/AdhocSavedFilterValue'
  *     SqlSavedFilterValue:
  *       type: object
  *       required: [condition]
@@ -102,6 +103,55 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             type: string
  *             maxLength: 10000
  *           example: ["hdx-oss-dev-api"]
+ *     AdhocSavedFilterValue:
+ *       type: object
+ *       required: [type, name, conditions]
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [adhoc]
+ *           description: Filter type.
+ *           example: "adhoc"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           maxLength: 1024
+ *           description: The variableName of the ADHOC filter these conditions belong to.
+ *           example: "conditions"
+ *         conditions:
+ *           type: array
+ *           maxItems: 100
+ *           description: The filter's conditions.
+ *           items:
+ *             $ref: '#/components/schemas/AdhocFilterCondition'
+ *     AdhocFilterCondition:
+ *       type: object
+ *       description: >
+ *         One "key operator value" condition. Conditions are AND'd, except that
+ *         IN conditions sharing a key are OR'd into one: IN (...) for sql
+ *         filters, a =~"a|b" matcher for promql filters.
+ *       required: [key, operator, value]
+ *       properties:
+ *         key:
+ *           type: string
+ *           minLength: 1
+ *           maxLength: 10000
+ *           description: A SQL expression (column or map access) for sql filters, or a label name for promql filters.
+ *           example: "ServiceName"
+ *         operator:
+ *           type: string
+ *           enum: ["=", "!=", "=~", "!~", "LIKE", "NOT LIKE", "IN"]
+ *           description: >
+ *             Comparison operator. =~ and !~ match a regular expression. IN
+ *             takes one value per condition. LIKE and NOT LIKE apply to sql
+ *             filters only; a condition its filter's sourceType can't express
+ *             is not applied.
+ *           example: "="
+ *         value:
+ *           type: string
+ *           maxLength: 10000
+ *           description: Value, pattern, or regular expression to compare against.
+ *           example: "api"
  *     MetricDataType:
  *       type: string
  *       enum: [sum, gauge, histogram, summary, exponential histogram]
@@ -655,7 +705,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "line"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -742,7 +792,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "stacked_bar"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -812,7 +862,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "stacked_line"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -888,7 +938,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "table"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -962,7 +1012,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "number"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1021,7 +1071,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "pie"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1074,7 +1124,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "bar"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1167,7 +1217,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "distribution"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1215,7 +1265,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "series"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: array
@@ -1264,7 +1314,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "search"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to query.
+ *           description: ID of the data source to query, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: string
@@ -1295,7 +1345,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "event_patterns"
  *         sourceId:
  *           type: string
- *           description: ID of the data source to mine patterns from.
+ *           description: ID of the data source to mine patterns from, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a111111"
  *         select:
  *           type: string
@@ -1345,7 +1395,9 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "sql"
  *         connectionId:
  *           type: string
- *           description: ID of the ClickHouse connection to execute the query against.
+ *           description: |
+ *             ID of the ClickHouse connection to execute the query against, or
+ *             `$connectionVariable` of a CONNECTION filter on the dashboard.
  *           example: "65f5e4a3b9e77c001a567890"
  *         sqlTemplate:
  *           type: string
@@ -1354,7 +1406,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "SELECT count() FROM otel_logs WHERE timestamp > now() - INTERVAL 1 HOUR"
  *         sourceId:
  *           type: string
- *           description: Optional ID of the data source associated with this Raw SQL chart. Used for applying dashboard filters.
+ *           description: Optional ID of the data source associated with this Raw SQL chart, or `$sourceVariable` of a DATA_SOURCE filter on the dashboard. Used for applying dashboard filters.
  *           example: "65f5e4a3b9e77c001a567890"
  *         numberFormat:
  *           $ref: '#/components/schemas/NumberFormat'
@@ -2368,12 +2420,157 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *         - $ref: '#/components/schemas/QueryExpressionFilterInput'
  *         - $ref: '#/components/schemas/StaticListFilterInput'
  *         - $ref: '#/components/schemas/PrometheusLabelFilterInput'
+ *         - $ref: '#/components/schemas/SqlQueryFilterInput'
+ *         - $ref: '#/components/schemas/AdhocFilterInput'
+ *         - $ref: '#/components/schemas/DataSourceFilterInput'
+ *         - $ref: '#/components/schemas/ConnectionFilterInput'
  *       discriminator:
  *         propertyName: type
  *         mapping:
  *           QUERY_EXPRESSION: '#/components/schemas/QueryExpressionFilterInput'
  *           STATIC_LIST: '#/components/schemas/StaticListFilterInput'
  *           PROMETHEUS_LABEL: '#/components/schemas/PrometheusLabelFilterInput'
+ *           SQL_QUERY: '#/components/schemas/SqlQueryFilterInput'
+ *           ADHOC: '#/components/schemas/AdhocFilterInput'
+ *           DATA_SOURCE: '#/components/schemas/DataSourceFilterInput'
+ *           CONNECTION: '#/components/schemas/ConnectionFilterInput'
+ *
+ *     DataSourceFilterInput:
+ *       type: object
+ *       description: |
+ *         A variable whose single, required value is a source. Tiles reference it
+ *         as `$variableName` in their sourceId, and other filters in sourceId or
+ *         appliesToSourceIds, so viewers can switch the source those read. Tiles
+ *         that use it do not load until a source is selected, and cannot have
+ *         alerts.
+ *       required:
+ *         - type
+ *         - name
+ *         - allowedSourceKinds
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [DATA_SOURCE]
+ *           description: Filter type discriminator. Must be "DATA_SOURCE".
+ *           example: "DATA_SOURCE"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name of the variable's dropdown
+ *           example: "Logs source"
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: Token tiles and filters reference the selected source by, as `$variableName`.
+ *           example: "logs"
+ *         isGlobalRequirement:
+ *           type: boolean
+ *           default: false
+ *           description: |
+ *             Blocks every tile on the dashboard until a value is selected. False
+ *             (the default) blocks only the tiles that reference the variable.
+ *           example: true
+ *         minSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable always requires a selection.
+ *           example: 1
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable is always single-select.
+ *           example: 1
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true if provided, and is true when omitted.
+ *           example: true
+ *         allowedSourceKinds:
+ *           type: array
+ *           minItems: 1
+ *           items:
+ *             type: string
+ *             enum: [log, trace, session, metric, promql]
+ *           description: |
+ *             Kinds of sources offered. A field can reference the variable if it
+ *             accepts at least one listed kind. A tile whose selected source is a
+ *             kind it cannot use shows an error instead of running.
+ *           example: ["log"]
+ *         connectionId:
+ *           type: string
+ *           description: |
+ *             Optional connection the offered sources are limited to: a
+ *             connection ID, or `$name` of a CONNECTION filter on the dashboard.
+ *           example: "$conn"
+ *
+ *     ConnectionFilterInput:
+ *       type: object
+ *       description: |
+ *         A variable whose single, required value is a connection. Raw SQL tiles
+ *         reference it as `$variableName` in their connectionId, and data source
+ *         variables and SQL query filters in theirs. Tiles that use it do not load
+ *         until a connection is selected, and cannot have alerts.
+ *       required:
+ *         - type
+ *         - name
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [CONNECTION]
+ *           description: Filter type discriminator. Must be "CONNECTION".
+ *           example: "CONNECTION"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name of the variable's dropdown
+ *           example: "Connection"
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: Token raw SQL tiles reference the selected connection by, as `$variableName`.
+ *           example: "conn"
+ *         isGlobalRequirement:
+ *           type: boolean
+ *           default: false
+ *           description: |
+ *             Blocks every tile on the dashboard until a value is selected. False
+ *             (the default) blocks only the tiles that reference the variable.
+ *           example: true
+ *         minSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable always requires a selection.
+ *           example: 1
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           default: 1
+ *           description: Must be 1 if provided. The variable is always single-select.
+ *           example: 1
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true if provided, and is true when omitted.
+ *           example: true
  *
  *     QueryExpressionFilterInput:
  *       type: object
@@ -2404,7 +2601,7 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *           example: "environment"
  *         sourceId:
  *           type: string
- *           description: Source ID this dashboard filter key applies to
+ *           description: Source ID this dashboard filter key applies to, or `$name` of a DATA_SOURCE filter on the dashboard
  *           example: "65f5e4a3b9e77c001a111111"
  *         sourceMetricType:
  *           type: string
@@ -2683,6 +2880,180 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             the filter single-select. Omit the field for the default multi-select
  *             behavior.
  *           example: 1
+ *
+ *     SqlQueryFilterInput:
+ *       type: object
+ *       description: |
+ *         A filter whose dropdown lists the first column returned by a ClickHouse
+ *         query, cast to strings with nulls and duplicates removed. Supports
+ *         variable mode only.
+ *       required:
+ *         - type
+ *         - name
+ *         - connectionId
+ *         - sqlTemplate
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [SQL_QUERY]
+ *           description: Discriminator. Must be "SQL_QUERY".
+ *           example: "SQL_QUERY"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name for the dashboard filter
+ *           example: "Environment"
+ *         connectionId:
+ *           type: string
+ *           description: |
+ *             ClickHouse connection the query runs on: a connection ID, or
+ *             `$name` of a CONNECTION filter on the dashboard.
+ *           example: "65f5e4a3b9e77c001a567890"
+ *         sourceId:
+ *           type: string
+ *           description: |
+ *             Optional Log, Trace, Session, or Metric source on the same
+ *             connection, or `$name` of a DATA_SOURCE filter on this
+ *             dashboard. Lets `sqlTemplate` use `$__sourceTable` and
+ *             `$__filters`.
+ *           example: "65f5e4a3b9e77c001a345678"
+ *         sqlTemplate:
+ *           type: string
+ *           minLength: 1
+ *           description: |
+ *             Query whose first column populates the dropdown. May use the time
+ *             macros and other filters' variables. `$__sourceTable` and
+ *             `$__filters` need a `sourceId`; `$__filters` expands to the
+ *             dashboard's broadcast filter selections for that source.
+ *           example: "SELECT DISTINCT env FROM default.envs ORDER BY env"
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [false]
+ *           default: false
+ *           description: Must be false or omitted.
+ *           example: false
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: |
+ *             Must be true if provided, and is true when omitted. Tiles reference
+ *             the selection as `$variableName`.
+ *           example: true
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: |
+ *             Token that tiles reference this filter's selected value by, as
+ *             `$variableName`. Defaults to the display name with whitespace
+ *             replaced by underscores and remaining illegal characters removed.
+ *             Must be unique across a dashboard's variable-enabled filters.
+ *           example: "env"
+ *         minSelections:
+ *           type: integer
+ *           enum: [0, 1]
+ *           default: 0
+ *           description: Set to 1 to make the filter required.
+ *           example: 1
+ *         isGlobalRequirement:
+ *           type: boolean
+ *           default: false
+ *           description: |
+ *             Widens a required filter's block to every tile on the dashboard.
+ *             Ignored unless minSelections is 1.
+ *           example: true
+ *         maxSelections:
+ *           type: integer
+ *           enum: [1]
+ *           description: Set to 1 to make the filter single-select.
+ *           example: 1
+ *
+ *     AdhocFilterInput:
+ *       type: object
+ *       description: |
+ *         A filter holding free-form "key operator value" conditions, with keys
+ *         and values suggested from its sources: columns and map keys for sql
+ *         sources, labels for promql sources. Its conditions are always
+ *         broadcast to the tiles it applies to: as WHERE conditions on builder
+ *         tiles and raw sql tiles using the $__filters macro, or as label
+ *         matchers on PromQL tiles. Its conditions are saved in
+ *         savedFilterValues as an "adhoc" entry. Ad hoc filters are a preview
+ *         feature.
+ *       required:
+ *         - type
+ *         - name
+ *         - sourceType
+ *         - sources
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [ADHOC]
+ *           description: Discriminator. Must be "ADHOC".
+ *           example: "ADHOC"
+ *         name:
+ *           type: string
+ *           minLength: 1
+ *           description: Display name for the dashboard filter
+ *           example: "Conditions"
+ *         sourceType:
+ *           type: string
+ *           enum: [sql, promql]
+ *           description: |
+ *             The kind of sources the filter reads keys from and applies to: Log,
+ *             Trace, or Session sources for sql, PromQL sources for promql.
+ *           example: "sql"
+ *         sources:
+ *           type: array
+ *           minItems: 1
+ *           items:
+ *             type: string
+ *           description: IDs of the sources whose keys and values the filter suggests, all of sourceType, or `$name` of data source variables.
+ *           example: ["65f5e4a3b9e77c001a111111"]
+ *         where:
+ *           type: string
+ *           description: |
+ *             Optional condition narrowing the rows keys and values are suggested
+ *             from. Never applied to tiles. May reference the dashboard's
+ *             variables. sql filters only: rejected when sourceType is promql.
+ *           example: "ServiceName:api"
+ *         whereLanguage:
+ *           type: string
+ *           enum: [sql, lucene]
+ *           description: Language of the where condition. Rejected when sourceType is promql.
+ *           example: "lucene"
+ *         appliesToSourceIds:
+ *           type: array
+ *           items:
+ *             type: string
+ *           description: |
+ *             IDs of the sources whose tiles the conditions apply to, all of
+ *             sourceType, or `$name` of data source variables. Omit or send an
+ *             empty array to apply to the tiles of the filter's sources.
+ *           example: ["65f5e4a3b9e77c001a111111"]
+ *         isBroadcastEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true or omitted.
+ *           example: true
+ *         isVariableEnabled:
+ *           type: boolean
+ *           enum: [true]
+ *           default: true
+ *           description: Must be true or omitted.
+ *           example: true
+ *         variableName:
+ *           type: string
+ *           maxLength: 64
+ *           pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+ *           description: |
+ *             Unique name the filter's conditions are saved under, in
+ *             savedFilterValues and the dashboard URL. Tiles can't reference it
+ *             as a variable. Defaults to the display name with whitespace
+ *             replaced by underscores and remaining illegal characters removed.
+ *             Must be unique across a dashboard's variable-enabled filters.
+ *           example: "conditions"
  *
  *     Filter:
  *       allOf:
@@ -3603,6 +3974,7 @@ router.put(
         tiles,
         filters,
         existingTiles: existingDashboard.tiles ?? [],
+        existingFilters: existingDashboard.filters ?? [],
         containers: effectiveContainers,
       });
       if (validationError) {

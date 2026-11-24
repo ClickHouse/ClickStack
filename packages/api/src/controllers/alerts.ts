@@ -9,10 +9,11 @@ import {
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import { configUsesReferenceVariable } from '@hyperdx/common-utils/dist/referenceVariables';
 import { isRangeThresholdType } from '@hyperdx/common-utils/dist/types';
 import { groupBy } from 'lodash';
 import { type FilterQuery, Types } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { recordOnboardingTaskCompletion } from '@/controllers/user';
 import type { ObjectId } from '@/models';
@@ -97,6 +98,11 @@ export const validateAlertInput = async (
 
     // The alert checker cannot evaluate these tiles, so the alert would never run.
     if (tile.config != null && !savedChartConfigSupportsAlerts(tile.config)) {
+      if (configUsesReferenceVariable(tile.config)) {
+        throw new Api400Error(
+          'Alerts are not supported on tiles that use a data source or connection variable',
+        );
+      }
       if (isPromqlSavedChartConfig(tile.config)) {
         throw new Api400Error('Alerts are not supported on PromQL tiles');
       }
@@ -406,6 +412,34 @@ export const getAlertById = async (
   });
 };
 
+export const silenceAlert = async (
+  alertId: ObjectId | string,
+  teamId: ObjectId | string,
+  userId: ObjectId,
+  until: Date,
+) => {
+  const alert = await getAlertById(alertId, teamId);
+  if (!alert) {
+    return null;
+  }
+  alert.silenced = { by: userId, at: new Date(), until };
+  await alert.save();
+  return alert;
+};
+
+export const unsilenceAlert = async (
+  alertId: ObjectId | string,
+  teamId: ObjectId | string,
+) => {
+  const alert = await getAlertById(alertId, teamId);
+  if (!alert) {
+    return null;
+  }
+  alert.silenced = undefined;
+  await alert.save();
+  return alert;
+};
+
 export const getTeamDashboardAlertsByDashboardAndTile = async (
   teamId: ObjectId,
 ) => {
@@ -504,6 +538,11 @@ const DISPLAY_REF_POPULATE = [
   { path: 'savedSearch', select: 'name tags' },
   { path: 'dashboard', select: 'name tags tiles.id tiles.config.name' },
 ];
+
+/** Populate (and project) the search or dashboard reference of an alert document in place */
+export const populateAlertDisplayRefs = (
+  alert: NonNullable<Awaited<ReturnType<typeof getAlertById>>>,
+) => alert.populate<AlertWithDisplayRefs>(DISPLAY_REF_POPULATE);
 
 /** Get alerts, with a populated (and projected) search or dashboard reference */
 export const getAlertsWithDisplayRefs = async (

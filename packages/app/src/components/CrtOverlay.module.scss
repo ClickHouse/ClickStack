@@ -1,0 +1,99 @@
+// Above modals and notifications; it never takes pointer events.
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+
+  // Rounded screen corners plus edge shading read as a curved tube.
+  border-radius: 3vmin / 4vmin;
+  box-shadow:
+    0 0 0 10vmin #000,
+    inset 0 0 10vmin rgb(0 0 0 / 55%);
+  background: radial-gradient(
+    ellipse at center,
+    rgb(255 255 255 / 3%) 0%,
+    transparent 55%,
+    rgb(0 0 0 / 35%) 100%
+  );
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+  }
+
+  // The light half keeps the lines visible on the dark theme.
+  &::before {
+    background: repeating-linear-gradient(
+      to bottom,
+      rgb(0 0 0 / 30%) 0,
+      rgb(0 0 0 / 30%) 2px,
+      rgb(255 255 255 / 3%) 2px,
+      rgb(255 255 255 / 3%) 4px
+    );
+  }
+
+  // RGB phosphor mask; this layer also carries the flicker.
+  &::after {
+    background: repeating-linear-gradient(
+      to right,
+      rgb(255 0 0 / 5%) 0,
+      rgb(255 0 0 / 5%) 1px,
+      rgb(0 255 0 / 4%) 1px,
+      rgb(0 255 0 / 4%) 2px,
+      rgb(0 0 255 / 5%) 2px,
+      rgb(0 0 255 / 5%) 3px
+    );
+    will-change: opacity;
+    animation: flicker 0.15s steps(1) infinite;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  }
+}
+
+.roll {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 15vh;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgb(255 255 255 / 7%),
+    transparent
+  );
+  transform: translateY(-15vh);
+  will-change: transform;
+  animation: roll 8s linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    display: none;
+  }
+}
+
+@keyframes roll {
+  to {
+    transform: translateY(100vh);
+  }
+}
+
+@keyframes flicker {
+  0% {
+    opacity: 0.7;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+// Chromatic aberration and phosphor glow on all text. `.root` goes on <html>.
+.root body {
+  text-shadow:
+    0.6px 0 rgb(255 0 80 / 35%),
+    -0.6px 0 rgb(0 200 255 / 35%),
+    0 0 2px color-mix(in srgb, currentcolor 60%, transparent);
+}

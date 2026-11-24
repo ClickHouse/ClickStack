@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import express from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { validateRequest } from 'zod-express-middleware';
 
 import { getTeam, getTeamInviteUrl } from '@/controllers/team';

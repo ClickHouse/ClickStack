@@ -39,13 +39,13 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowBarToLeft,
   IconChartBar,
   IconChartBarOff,
   IconChevronDown,
   IconChevronRight,
   IconChevronUp,
   IconFilterOff,
+  IconLayoutSidebarLeftCollapse,
   IconMinus,
   IconPlus,
   IconRefresh,
@@ -53,6 +53,7 @@ import {
   IconSitemap,
 } from '@tabler/icons-react';
 
+import api from '@/api';
 import { IS_CLICKHOUSE_BUILD } from '@/config';
 import {
   useColumns,
@@ -485,10 +486,10 @@ const FilterGroupBody = ({
 }) => {
   const [search, setSearch] = useState('');
   // "Show More" button when there's lots of options
-  const [shouldShowMore, setShowMore] = useState(false);
+  const [shouldShowMore, setShouldShowMore] = useState(false);
   // Track recently moved items for highlight animation
   const [recentlyMoved, setRecentlyMoved] = useState<Set<string | boolean>>(
-    new Set(),
+    () => new Set(),
   );
   // For live searches, don't refresh percentages when date range changes
   const [dateRange, setDateRange] = useState<[Date, Date]>(
@@ -769,7 +770,7 @@ const FilterGroupBody = ({
             }
             onClick={() => {
               // When show more is clicked, immediately show all and also fetch more from server.
-              setShowMore(!shouldShowMore);
+              setShouldShowMore(!shouldShowMore);
               if (!shouldShowMore) {
                 onLoadMore?.(name);
               }
@@ -1220,10 +1221,14 @@ const DBSearchPageFiltersComponent = ({
     'hdx-shared-filters-expanded',
     true,
   );
-  const [showAllValues, setShowAllValues] = useLocalStorage(
+  const { data: me } = api.useMe();
+  // null = user hasn't chosen, so fall back to the team default
+  const [userShowAllValues, setShowAllValues] = useLocalStorage<boolean | null>(
     'hdx-show-all-filter-values',
-    true,
+    null,
   );
+  const teamShowAllValues = !me?.team?.filterValuesExactByDefault;
+  const showAllValues = userShowAllValues ?? teamShowAllValues;
   const { size, startResize } = useResizable(16, 'left');
 
   const { data: source } = useSource({ id: sourceId });
@@ -1258,6 +1263,10 @@ const DBSearchPageFiltersComponent = ({
   const knownColumns = useMemo(
     () => (columns ? new Set(columns.map(c => c.name)) : new Set<string>()),
     [columns],
+  );
+  const jsonColumnSet = useMemo(
+    () => new Set(jsonColumns ?? []),
+    [jsonColumns],
   );
 
   const [showMoreFields, setShowMoreFields] = useState(false);
@@ -1581,6 +1590,7 @@ const DBSearchPageFiltersComponent = ({
                 sqlKey: toQuotedClickHouseKeyExpression(
                   child.key,
                   knownColumns,
+                  jsonColumnSet,
                 ),
               }))}
               selectedValues={group.children.reduce((acc, child) => {
@@ -1647,6 +1657,7 @@ const DBSearchPageFiltersComponent = ({
             const facetSqlKey = toQuotedClickHouseKeyExpression(
               facet.key,
               knownColumns,
+              jsonColumnSet,
             );
             return (
               <FilterGroup
@@ -1737,6 +1748,7 @@ const DBSearchPageFiltersComponent = ({
       setFilterRange,
       tableMetadata,
       knownColumns,
+      jsonColumnSet,
       extraFacetKeys,
     ],
   );
@@ -1802,6 +1814,9 @@ const DBSearchPageFiltersComponent = ({
                 }}
                 showAllValues={showAllValues}
                 onShowAllValuesChange={setShowAllValues}
+                teamShowAllValues={teamShowAllValues}
+                isShowAllValuesOverridden={userShowAllValues != null}
+                onResetShowAllValues={() => setShowAllValues(null)}
               />
               {onCollapse && (
                 <Tooltip label="Hide filters" position="bottom">
@@ -1811,7 +1826,7 @@ const DBSearchPageFiltersComponent = ({
                     onClick={onCollapse}
                     aria-label="Hide filters"
                   >
-                    <IconArrowBarToLeft size={14} />
+                    <IconLayoutSidebarLeftCollapse size={14} />
                   </ActionIcon>
                 </Tooltip>
               )}

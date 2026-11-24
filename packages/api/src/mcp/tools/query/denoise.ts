@@ -9,9 +9,13 @@ import {
 import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 
 import { resolveBodyExpression } from './helpers';
@@ -46,7 +50,7 @@ export interface DenoiseResult {
  * the shared TypeScript Drain implementation.
  */
 export async function denoiseSearchResults(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   startDate: Date,
   endDate: Date,
@@ -61,7 +65,7 @@ export async function denoiseSearchResults(
   }
 
   // ── Resolve source & connection ──
-  const source = await getSource(teamId, sourceId);
+  const source = await getMcpSource(context, sourceId);
   if (!source) {
     return { rows, removedPatterns: [], skipped: 'source_not_found' };
   }
@@ -71,20 +75,16 @@ export async function denoiseSearchResults(
     return { rows, removedPatterns: [], skipped: 'no_body_column' };
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return { rows, removedPatterns: [], skipped: 'connection_not_found' };
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
 
   const tsExpr = getFirstTimestampValueExpression(
@@ -229,6 +229,7 @@ export async function denoiseSearchResults(
   const isNoisy = buildNoisyBodyMatcher(
     patterns.map(p => p.pattern),
     noisyTemplates,
+    { masked: true },
   );
   const filteredRows = rows.filter(row => {
     const bodyValue = row[bodyColumnKey];

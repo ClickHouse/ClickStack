@@ -75,8 +75,10 @@ function InlineNameField({
   );
 }
 
-export interface InlineNameInputProps
-  extends Omit<InlineNameFieldProps, 'value' | 'onChange' | 'invalid'> {
+export interface InlineNameInputProps extends Omit<
+  InlineNameFieldProps,
+  'value' | 'onChange' | 'invalid'
+> {
   value: string;
   /**
    * Called with the trimmed name when it changed and isn't empty. Return a
@@ -150,8 +152,9 @@ export function InlineNameInput({
   );
 }
 
-export interface InlineNameInputControlledProps<T extends FieldValues>
-  extends Omit<InlineNameFieldProps, 'value' | 'onChange' | 'invalid'> {
+export interface InlineNameInputControlledProps<
+  T extends FieldValues,
+> extends Omit<InlineNameFieldProps, 'value' | 'onChange' | 'invalid'> {
   name: Path<T>;
   control: Control<T>;
   rules?: Parameters<Control<T>['register']>[1];

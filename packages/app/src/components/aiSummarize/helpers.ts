@@ -14,7 +14,6 @@ const ALWAYS_ON_END = new Date('2026-04-07T00:00:00').getTime();
 const HARD_OFF = new Date('2026-05-01T00:00:00').getTime();
 const DISMISS_KEY = 'hdx-ai-summarize-dismissed';
 
-// eslint-disable-next-line no-restricted-syntax -- one-time module-level check
 const NOW_MS = new Date().getTime();
 
 function isDismissed(): boolean {

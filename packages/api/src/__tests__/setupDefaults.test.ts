@@ -15,7 +15,7 @@ jest.mock('@/config', () => ({
     },
     {
       kind: 'promql',
-      name: 'PromQL',
+      name: 'Time Series',
       connection: 'Local ClickHouse',
       from: { databaseName: 'default', tableName: 'metrics_ts' },
       timestampValueExpression: 'timestamp',

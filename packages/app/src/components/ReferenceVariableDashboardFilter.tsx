@@ -1,0 +1,188 @@
+import { useCallback, useMemo } from 'react';
+import { isSourceOfferedByVariable } from '@hyperdx/common-utils/dist/referenceVariables';
+import {
+  ConnectionDashboardFilter as ConnectionFilter,
+  DataSourceDashboardFilter as DataSourceFilter,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
+import {
+  Center,
+  CheckIcon,
+  ComboboxItem,
+  Group,
+  Select,
+  Stack,
+  Text,
+} from '@mantine/core';
+import { IconServer, IconStack } from '@tabler/icons-react';
+
+import { isValueInSelectData } from '@/components/SelectControlled';
+import {
+  getSourceOptionIcon,
+  sourceSelectFilter,
+  SourceSelectGroup,
+  useFilteredSortedSourceItems,
+  useSourceKindMap,
+} from '@/components/sourceSelectUtils';
+import { useConnectionItems } from '@/hooks/useConnectionItems';
+import { useSources } from '@/source';
+
+import {
+  DashboardFilterLabel,
+  FilterCaution,
+  FilterEffect,
+  getPendingVariablesTooltip,
+} from './DashboardFilterLabel';
+
+import sourceSelectStyles from '@styles/SourceSelectControlled.module.scss';
+
+type ReferenceVariableFilterProps = {
+  value: string | undefined;
+  onChange: (id: string | undefined) => void;
+  effect: FilterEffect;
+  requiredTooltip: string;
+};
+
+/**
+ * The filter bar control shared by data source and connection variables: a
+ * single picker over the IDs the variable can select.
+ */
+function ReferenceVariableSelect({
+  name,
+  items,
+  value,
+  onChange,
+  effect,
+  requiredTooltip,
+  pendingVariables,
+  placeholder,
+  renderIcon,
+}: ReferenceVariableFilterProps & {
+  name: string;
+  items: ComboboxItem[] | SourceSelectGroup[];
+  pendingVariables?: string[];
+  placeholder: string;
+  renderIcon: (value: string | null) => React.ReactNode;
+}) {
+  // A selection that is no longer offered (deleted, disabled, or no longer
+  // allowed by the variable) shows as empty, so it reads as unselected.
+  const isOffered = useMemo(
+    () => isValueInSelectData(items, value),
+    [items, value],
+  );
+  const selected = value && isOffered ? value : null;
+
+  const renderOption = useCallback(
+    ({ option, checked }: { option: ComboboxItem; checked?: boolean }) => (
+      <Group gap="xs" wrap="nowrap">
+        {checked ? (
+          <Center w={16}>
+            <CheckIcon size={10} />
+          </Center>
+        ) : (
+          renderIcon(option.value)
+        )}
+        <Text size="xs">{option.label}</Text>
+      </Group>
+    ),
+    [renderIcon],
+  );
+
+  return (
+    <Stack gap={2}>
+      <DashboardFilterLabel name={name} effect={effect}>
+        {selected == null && (
+          <FilterCaution
+            label={requiredTooltip}
+            testId={`dashboard-filter-required-${name}`}
+          />
+        )}
+        {!!pendingVariables?.length && (
+          <FilterCaution
+            label={getPendingVariablesTooltip(pendingVariables)}
+            testId={`dashboard-filter-pending-variable-${name}`}
+          />
+        )}
+      </DashboardFilterLabel>
+      <Select
+        w={250}
+        size="xs"
+        placeholder={placeholder}
+        data={items}
+        value={selected}
+        onChange={id => onChange(id ?? undefined)}
+        renderOption={renderOption}
+        classNames={{ groupLabel: sourceSelectStyles.groupLabel }}
+        maxDropdownHeight={300}
+        filter={sourceSelectFilter}
+        leftSection={renderIcon(selected)}
+        searchable
+        allowDeselect={false}
+        data-testid={`dashboard-filter-select-${name}`}
+      />
+    </Stack>
+  );
+}
+
+/**
+ * A data source variable's picker. `filter` carries its connection resolved;
+ * while that connection's variable is unselected no source is offered.
+ */
+export const DataSourceDashboardFilter = ({
+  filter,
+  pendingVariables,
+  ...props
+}: ReferenceVariableFilterProps & {
+  filter: DataSourceFilter;
+  pendingVariables?: string[];
+}) => {
+  const { data: sources } = useSources();
+  const sourceKindMap = useSourceKindMap(sources);
+  const isSourceAllowed = useCallback(
+    (source: TSource) => isSourceOfferedByVariable(source, filter),
+    [filter],
+  );
+  const items = useFilteredSortedSourceItems({
+    sources,
+    isSourceAllowed,
+    groupBySection: true,
+  });
+  const renderIcon = useCallback(
+    (value: string | null) =>
+      getSourceOptionIcon(value ?? undefined, sourceKindMap) ?? (
+        <IconStack size={16} />
+      ),
+    [sourceKindMap],
+  );
+
+  return (
+    <ReferenceVariableSelect
+      {...props}
+      name={filter.name}
+      items={items}
+      pendingVariables={pendingVariables}
+      placeholder="Select a source"
+      renderIcon={renderIcon}
+    />
+  );
+};
+
+const renderConnectionIcon = () => <IconServer size={16} />;
+
+/** A connection variable's picker. */
+export const ConnectionDashboardFilter = ({
+  filter,
+  ...props
+}: ReferenceVariableFilterProps & { filter: ConnectionFilter }) => {
+  const items = useConnectionItems({ sorted: true });
+
+  return (
+    <ReferenceVariableSelect
+      {...props}
+      name={filter.name}
+      items={items}
+      placeholder="Select a connection"
+      renderIcon={renderConnectionIcon}
+    />
+  );
+};

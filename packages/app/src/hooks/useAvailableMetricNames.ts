@@ -56,6 +56,7 @@ export function useAvailableMetricNames({
       groupBy: '',
       timestampValueExpression: metricSource.timestampValueExpression ?? '',
       connection: metricSource.connection,
+      source: metricSource.id,
       dateRange,
     };
   }, [metricSource, gaugeTable, correlationWhere, metricNames, dateRange]);

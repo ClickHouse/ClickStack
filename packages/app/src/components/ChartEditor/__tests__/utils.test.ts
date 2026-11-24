@@ -1,5 +1,9 @@
+import {
+  isBuilderChartConfig,
+  isBuilderSavedChartConfig,
+  isRawSqlSavedChartConfig,
+} from '@hyperdx/common-utils/dist/guards';
 import type {
-  BuilderChartConfig,
   BuilderSavedChartConfig,
   RawSqlSavedChartConfig,
   TMetricSource,
@@ -12,6 +16,7 @@ import {
   PromqlReducer,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import type { ChartEditorFormState } from '@/components/ChartEditor/types';
 import {
@@ -19,6 +24,7 @@ import {
   convertFormStateToSavedChartConfig,
   convertSavedChartConfigToFormState,
   getAllowedSourceKinds,
+  getInterchangeableSourceKind,
   promqlExpressionPlaceholder,
   validateChartForm,
 } from '@/components/ChartEditor/utils';
@@ -50,7 +56,7 @@ const metricSource: TMetricSource = {
   connection: 'conn-1',
   from: { databaseName: 'db', tableName: '' },
   timestampValueExpression: 'TimeUnix',
-  metricTables: { gauge: 'gauge_table' } as TMetricSource['metricTables'],
+  metricTables: fromPartial({ gauge: 'gauge_table' }),
   resourceAttributesExpression: 'ResourceAttributes',
 };
 
@@ -91,6 +97,16 @@ const promqlSource: TSource = {
   from: { databaseName: 'db', tableName: 'prom' },
   timestampValueExpression: 'Timestamp',
 };
+
+function narrow<T extends U, U>(
+  value: U | undefined,
+  guard: (v: U) => v is T,
+): T {
+  if (value === undefined || !guard(value)) {
+    throw new Error('Unexpected config type');
+  }
+  return value;
+}
 
 const seriesItem = {
   aggFn: 'count' as const,
@@ -273,10 +289,10 @@ describe('convertFormStateToSavedChartConfig', () => {
       where: 'status = 200',
       series: [seriesItem],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
     expect(result.select).toEqual([seriesItem]);
     expect('series' in result).toBe(false);
     expect(result.source).toBe('source-log');
@@ -298,10 +314,10 @@ describe('convertFormStateToSavedChartConfig', () => {
       select: 'Body, SeverityText',
       series: [seriesItem],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
     expect(result.select).toBe('Body, SeverityText');
     expect('series' in result).toBe(false);
   });
@@ -312,10 +328,10 @@ describe('convertFormStateToSavedChartConfig', () => {
       select: [seriesItem],
       series: [],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
     expect(result.select).toBe('');
     expect('series' in result).toBe(false);
   });
@@ -327,32 +343,33 @@ describe('convertFormStateToSavedChartConfig', () => {
         {
           ...seriesItem,
           metricName: 'cpu.usage',
-          metricType: 'gauge' as any,
+          metricType: MetricsDataType.Gauge,
         },
       ],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
-    const select = result.select as (typeof seriesItem)[];
-    expect(select[0]).not.toHaveProperty('metricName');
-    expect(select[0]).not.toHaveProperty('metricType');
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
+    if (typeof result.select === 'string') {
+      throw new Error('Expected series select');
+    }
+    expect(result.select[0]).not.toHaveProperty('metricName');
+    expect(result.select[0]).not.toHaveProperty('metricType');
   });
 
   it('preserves form metricTables for metric source', () => {
-    const formMetricTables = {
-      gauge: 'gauge_table',
-    } as BuilderSavedChartConfig['metricTables'];
+    const formMetricTables: BuilderSavedChartConfig['metricTables'] =
+      fromPartial({ gauge: 'gauge_table' });
     const form: ChartEditorFormState = {
       displayType: DisplayType.Line,
       series: [seriesItem],
       metricTables: formMetricTables,
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      metricSource,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, metricSource),
+      isBuilderSavedChartConfig,
+    );
     expect(result.metricTables).toEqual(formMetricTables);
   });
 
@@ -360,12 +377,12 @@ describe('convertFormStateToSavedChartConfig', () => {
     const form: ChartEditorFormState = {
       displayType: DisplayType.Line,
       series: [seriesItem],
-      metricTables: { gauge: 'gauge_table' } as any,
+      metricTables: fromPartial({ gauge: 'gauge_table' }),
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
     expect(result.metricTables).toBeUndefined();
   });
 
@@ -385,17 +402,20 @@ describe('convertFormStateToSavedChartConfig', () => {
       having,
       orderBy,
     };
-    const tableResult = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const tableResult = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
     expect(tableResult.having).toBe(having);
     expect(tableResult.orderBy).toEqual(orderBy);
 
-    const lineResult = convertFormStateToSavedChartConfig(
-      { ...form, displayType: DisplayType.Line },
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const lineResult = narrow(
+      convertFormStateToSavedChartConfig(
+        { ...form, displayType: DisplayType.Line },
+        logSource,
+      ),
+      isBuilderSavedChartConfig,
+    );
     expect(lineResult.having).toBeUndefined();
     expect(lineResult.orderBy).toBeUndefined();
   });
@@ -405,10 +425,10 @@ describe('convertFormStateToSavedChartConfig', () => {
       displayType: DisplayType.Line,
       series: [seriesItem],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
     expect(result.where).toBe('');
   });
 
@@ -419,10 +439,10 @@ describe('convertFormStateToSavedChartConfig', () => {
       source: '',
       series: [],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      undefined,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, undefined),
+      isBuilderSavedChartConfig,
+    );
     expect(result).toBeDefined();
     expect(result.displayType).toBe(DisplayType.Markdown);
     expect(result.markdown).toBe('## Hello World');
@@ -437,10 +457,10 @@ describe('convertFormStateToSavedChartConfig', () => {
       markdown: '## With Source',
       series: [],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      logSource,
-    ) as BuilderSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, logSource),
+      isBuilderSavedChartConfig,
+    );
     expect(result).toBeDefined();
     expect(result.displayType).toBe(DisplayType.Markdown);
     expect(result.source).toBe('source-log');
@@ -540,12 +560,11 @@ describe('convertFormStateToChartConfig', () => {
       displayType: DisplayType.Line,
       series: [],
     };
-    const result = convertFormStateToChartConfig(
-      form,
-      dateRange,
-      logSource,
-    ) as BuilderChartConfig;
-    expect(result?.select).toBe(logSource.defaultTableSelectExpression);
+    const result = narrow(
+      convertFormStateToChartConfig(form, dateRange, logSource),
+      isBuilderChartConfig,
+    );
+    expect(result.select).toBe(logSource.defaultTableSelectExpression);
   });
 
   it('uses series as select for non-Search displayType', () => {
@@ -553,12 +572,11 @@ describe('convertFormStateToChartConfig', () => {
       displayType: DisplayType.Line,
       series: [seriesItem],
     };
-    const result = convertFormStateToChartConfig(
-      form,
-      dateRange,
-      logSource,
-    ) as BuilderChartConfig;
-    expect(result?.select).toEqual([seriesItem]);
+    const result = narrow(
+      convertFormStateToChartConfig(form, dateRange, logSource),
+      isBuilderChartConfig,
+    );
+    expect(result.select).toEqual([seriesItem]);
   });
 
   it('uses form.select for Search displayType', () => {
@@ -567,12 +585,11 @@ describe('convertFormStateToChartConfig', () => {
       select: 'Body',
       series: [],
     };
-    const result = convertFormStateToChartConfig(
-      form,
-      dateRange,
-      logSource,
-    ) as BuilderChartConfig;
-    expect(result?.select).toBe('Body');
+    const result = narrow(
+      convertFormStateToChartConfig(form, dateRange, logSource),
+      isBuilderChartConfig,
+    );
+    expect(result.select).toBe('Body');
   });
 });
 
@@ -1196,12 +1213,12 @@ describe('validateChartForm', () => {
         displayType: DisplayType.Line,
         sqlTemplate: 'SELECT count() FROM logs',
         connection: 'conn-1',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 100,
-          thresholdType: 'above',
+          thresholdType: AlertThresholdType.ABOVE,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       undefined,
       setError,
@@ -1224,12 +1241,12 @@ describe('validateChartForm', () => {
         sqlTemplate:
           'SELECT toStartOfInterval(ts, INTERVAL {intervalSeconds:Int64} SECOND) AS ts, count() FROM logs WHERE ts >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND ts <= fromUnixTimestamp64Milli({endDateMilliseconds:Int64}) GROUP BY ts',
         connection: 'conn-1',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 100,
-          thresholdType: 'above',
+          thresholdType: AlertThresholdType.ABOVE,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       undefined,
       setError,
@@ -1270,12 +1287,12 @@ describe('validateChartForm', () => {
         sqlTemplate:
           'SELECT count() FROM logs WHERE ts >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND ts <= fromUnixTimestamp64Milli({endDateMilliseconds:Int64})',
         connection: 'conn-1',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 100,
-          thresholdType: 'above',
+          thresholdType: AlertThresholdType.ABOVE,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       undefined,
       setError,
@@ -1296,12 +1313,12 @@ describe('validateChartForm', () => {
         sqlTemplate:
           'SELECT count() FROM logs WHERE ts >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND ts <= fromUnixTimestamp64Milli({endDateMilliseconds:Int64})',
         connection: 'conn-1',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 100,
-          thresholdType: 'above',
+          thresholdType: AlertThresholdType.ABOVE,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       undefined,
       setError,
@@ -1767,12 +1784,12 @@ describe('validateChartForm', () => {
     const errors = validateChartForm(
       makeForm({
         source: 'source-log',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 10,
           thresholdType: AlertThresholdType.BETWEEN,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       logSource,
       setError,
@@ -1791,12 +1808,12 @@ describe('validateChartForm', () => {
     const errors = validateChartForm(
       makeForm({
         source: 'source-log',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 10,
           thresholdType: AlertThresholdType.NOT_BETWEEN,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       logSource,
       setError,
@@ -1813,13 +1830,13 @@ describe('validateChartForm', () => {
     const errors = validateChartForm(
       makeForm({
         source: 'source-log',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 10,
           thresholdMax: 5,
           thresholdType: AlertThresholdType.BETWEEN,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       logSource,
       setError,
@@ -1838,13 +1855,13 @@ describe('validateChartForm', () => {
     const errors = validateChartForm(
       makeForm({
         source: 'source-log',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 10,
           thresholdMax: 10,
           thresholdType: AlertThresholdType.BETWEEN,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       logSource,
       setError,
@@ -1857,13 +1874,13 @@ describe('validateChartForm', () => {
     const errors = validateChartForm(
       makeForm({
         source: 'source-log',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 10,
           thresholdMax: 20,
           thresholdType: AlertThresholdType.BETWEEN,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       logSource,
       setError,
@@ -1876,12 +1893,12 @@ describe('validateChartForm', () => {
     const errors = validateChartForm(
       makeForm({
         source: 'source-log',
-        alert: {
+        alert: fromPartial({
           interval: '1h',
           threshold: 10,
           thresholdType: AlertThresholdType.ABOVE,
           channel: { type: 'webhook' },
-        } as ChartEditorFormState['alert'],
+        }),
       }),
       logSource,
       setError,
@@ -2059,10 +2076,10 @@ describe('color round-trip (sql/promql Number tile)', () => {
       color: 'chart-success',
       series: [],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      undefined,
-    ) as RawSqlSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, undefined),
+      isRawSqlSavedChartConfig,
+    );
     expect(result).toBeDefined();
     expect(result.color).toBe('chart-success');
   });
@@ -2078,7 +2095,7 @@ describe('color round-trip (sql/promql Number tile)', () => {
     };
     const result = convertFormStateToChartConfig(form, dateRange, undefined);
     expect(result).toBeDefined();
-    expect((result as any).color).toBe('chart-orange');
+    expect(result).toMatchObject({ color: 'chart-orange' });
   });
 
   it('preserves color through convertFormStateToSavedChartConfig for promql Number tile', () => {
@@ -2092,7 +2109,7 @@ describe('color round-trip (sql/promql Number tile)', () => {
     };
     const result = convertFormStateToSavedChartConfig(form, undefined);
     expect(result).toBeDefined();
-    expect((result as any).color).toBe('chart-warning');
+    expect(result).toMatchObject({ color: 'chart-warning' });
   });
 
   it('preserves color through convertFormStateToChartConfig for promql Number tile', () => {
@@ -2106,7 +2123,7 @@ describe('color round-trip (sql/promql Number tile)', () => {
     };
     const result = convertFormStateToChartConfig(form, dateRange, undefined);
     expect(result).toBeDefined();
-    expect((result as any).color).toBe('chart-error');
+    expect(result).toMatchObject({ color: 'chart-error' });
   });
 
   it('preserves colorRules through both conversions for sql Number tile', () => {
@@ -2163,10 +2180,10 @@ describe('color round-trip (sql/promql Number tile)', () => {
       connection: 'conn-1',
       series: [],
     };
-    const result = convertFormStateToSavedChartConfig(
-      form,
-      undefined,
-    ) as RawSqlSavedChartConfig;
+    const result = narrow(
+      convertFormStateToSavedChartConfig(form, undefined),
+      isRawSqlSavedChartConfig,
+    );
     expect(result).toBeDefined();
     expect(result.color).toBeUndefined();
   });
@@ -2704,4 +2721,87 @@ describe('promqlExpressionPlaceholder', () => {
       promqlExpressionPlaceholder(DisplayType.Number, 'distribution'),
     );
   });
+});
+
+describe('data source variable references', () => {
+  it('saves the reference rather than the source it resolves to', () => {
+    const form: ChartEditorFormState = {
+      displayType: DisplayType.Line,
+      source: '$logs',
+      series: [seriesItem],
+    };
+    expect(convertFormStateToSavedChartConfig(form, logSource)).toMatchObject({
+      source: '$logs',
+    });
+  });
+
+  it('queries the resolved source for a raw SQL chart', () => {
+    const form: ChartEditorFormState = {
+      configType: 'sql',
+      displayType: DisplayType.Table,
+      source: '$logs',
+      connection: 'conn-1',
+      sqlTemplate: 'SELECT 1',
+      series: [],
+    };
+    expect(convertFormStateToSavedChartConfig(form, logSource)).toMatchObject({
+      source: '$logs',
+    });
+    expect(
+      convertFormStateToChartConfig(form, dateRange, logSource),
+    ).toMatchObject({ source: logSource.id });
+  });
+
+  it('saves a reference with no selected source when its kind is known', () => {
+    const form: ChartEditorFormState = {
+      displayType: DisplayType.Line,
+      source: '$logs',
+      series: [
+        { ...seriesItem, metricName: 'cpu', metricType: MetricsDataType.Gauge },
+      ],
+    };
+    const saved = convertFormStateToSavedChartConfig(
+      form,
+      undefined,
+      SourceKind.Log,
+    );
+    expect(saved).toMatchObject({ source: '$logs' });
+    expect(saved).toMatchObject({
+      select: [expect.not.objectContaining({ metricName: 'cpu' })],
+    });
+  });
+
+  it('validates a reference with no selected source by its kind', () => {
+    const form: ChartEditorFormState = {
+      displayType: DisplayType.Line,
+      source: '$logs',
+      series: [seriesItem],
+    };
+    expect(
+      validateChartForm(form, undefined, jest.fn(), {
+        sourceKind: SourceKind.Log,
+      }),
+    ).toEqual([]);
+    expect(
+      validateChartForm(form, undefined, jest.fn(), {
+        missingSourceMessage: 'Select a source for $logs',
+      }),
+    ).toEqual([{ path: 'source', message: 'Select a source for $logs' }]);
+  });
+});
+
+describe('getInterchangeableSourceKind', () => {
+  it.each<[SourceKind[], SourceKind | undefined]>([
+    [[SourceKind.Log], SourceKind.Log],
+    [[SourceKind.Log, SourceKind.Trace], SourceKind.Log],
+    [[SourceKind.Log, SourceKind.Metric], undefined],
+    [[SourceKind.Log, SourceKind.Session], undefined],
+    [[SourceKind.Session, SourceKind.Promql], undefined],
+    [[], undefined],
+  ])(
+    'returns a stand-in for %p only when charts treat them alike',
+    (kinds, expected) => {
+      expect(getInterchangeableSourceKind(kinds)).toBe(expected);
+    },
+  );
 });

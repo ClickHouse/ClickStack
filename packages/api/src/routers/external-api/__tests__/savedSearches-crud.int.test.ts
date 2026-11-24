@@ -1,4 +1,5 @@
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 import request, { SuperAgentTest } from 'supertest';
 
@@ -585,9 +586,11 @@ describe('External API v2 Saved Searches CRUD', () => {
         .mockImplementation(() => {});
       const deleteSpy = jest
         .spyOn(SavedSearch, 'deleteOne')
-        .mockImplementationOnce((() => {
-          throw new Error('simulated deleteOne failure');
-        }) as any);
+        .mockImplementationOnce(
+          fromAny(() => {
+            throw new Error('simulated deleteOne failure');
+          }),
+        );
 
       try {
         await authRequest('delete', `${BASE_URL}/${savedSearchId}`).expect(500);

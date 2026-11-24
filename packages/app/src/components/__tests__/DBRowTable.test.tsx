@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 import type { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import { renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   appendSelectWithAdditionalKeys,
@@ -55,11 +56,13 @@ describe('RawLogTable', () => {
     jest.clearAllMocks();
     jest
       .spyOn(useChartConfigModule, 'useAliasMapFromChartConfig')
-      .mockReturnValue({
-        data: {},
-        isLoading: false,
-        error: null,
-      } as any);
+      .mockReturnValue(
+        fromPartial({
+          data: {},
+          isLoading: false,
+          error: null,
+        }),
+      );
 
     // Suppress console errors for expected errors in tests. Keeps the test output clean.
     jest.spyOn(console, 'error').mockImplementation(() => {
@@ -195,14 +198,16 @@ describe('RawLogTable', () => {
     it('Should reference alias map when possible', async () => {
       jest
         .spyOn(useChartConfigModule, 'useAliasMapFromChartConfig')
-        .mockReturnValue({
-          data: {
-            col1: 'col1_alias',
-            col2: 'col2_alias',
-          },
-          isLoading: false,
-          error: null,
-        } as any);
+        .mockReturnValue(
+          fromPartial({
+            data: {
+              col1: 'col1_alias',
+              col2: 'col2_alias',
+            },
+            isLoading: false,
+            error: null,
+          }),
+        );
 
       const callback = jest.fn();
       renderWithMantine(
@@ -1197,5 +1202,86 @@ describe('useConfigWithAdditionalSelect', () => {
     expect(result.current?.select).toBe(
       'Timestamp,ServiceName,Body,toDate(Timestamp),toStartOfFiveMinutes(Timestamp),_block_offset',
     );
+  });
+
+  describe('with a row key expression', () => {
+    const metadataLoading = () => {
+      mockUseTableMetadata.mockReturnValue({ data: undefined });
+      mockUseColumns.mockReturnValue({ data: undefined });
+      mockUseMergeTreeSettings.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+      });
+    };
+
+    it('restricts the row lookup to the listed columns', () => {
+      metadataLoading();
+
+      const { result } = renderHook(() =>
+        useConfigWithAdditionalSelect(
+          config,
+          'source-id',
+          'ServiceName, Timestamp, _block_number, _block_offset',
+        ),
+      );
+
+      expect(result.current?.select).toBe(
+        'Timestamp,ServiceName,Body,_block_number,_block_offset',
+      );
+      expect(result.current?.additionalKeysLength).toBe(2);
+      expect(result.current?.rowKeyColumns).toEqual(
+        new Set(['ServiceName', 'Timestamp', '_block_number', '_block_offset']),
+      );
+      expect(result.current?.rowKeyColumns?.has('Body')).toBe(false);
+    });
+
+    it('returns a config without waiting for table metadata or settings', () => {
+      metadataLoading();
+
+      const { result } = renderHook(() =>
+        useConfigWithAdditionalSelect(
+          config,
+          'source-id',
+          'Timestamp, _block_number, _block_offset',
+        ),
+      );
+
+      expect(mockUseTableMetadata).toHaveBeenCalledWith(expect.anything(), {
+        enabled: false,
+      });
+      expect(mockUseColumns).toHaveBeenCalledWith(expect.anything(), {
+        enabled: false,
+      });
+      expect(mockUseMergeTreeSettings).toHaveBeenCalledWith('conn', {
+        enabled: false,
+      });
+      expect(result.current).toBeDefined();
+    });
+
+    it('does not split inside function calls', () => {
+      metadataLoading();
+
+      const { result } = renderHook(() =>
+        useConfigWithAdditionalSelect(
+          config,
+          'source-id',
+          'toYYYYMM(event_date), service, _block_number, _block_offset',
+        ),
+      );
+
+      expect(result.current?.select).toBe(
+        'Timestamp,ServiceName,Body,event_date,service,_block_number,_block_offset,toYYYYMM(event_date)',
+      );
+      expect(result.current?.additionalKeysLength).toBe(5);
+      expect(result.current?.rowKeyColumns).toEqual(
+        new Set([
+          'toYYYYMM(event_date)',
+          'service',
+          '_block_number',
+          '_block_offset',
+          'event_date',
+        ]),
+      );
+    });
   });
 });

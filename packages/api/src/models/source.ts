@@ -1,6 +1,7 @@
 import {
   BaseSourceSchema,
   LogSourceSchema,
+  MapKeyIndexPartSelection,
   MetricsDataType,
   MetricSourceSchema,
   PROMQL_SOURCE_BACKENDS,
@@ -12,7 +13,7 @@ import {
   UseTextIndex,
 } from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
-import z from 'zod';
+import z from 'zod/v3';
 
 import { objectIdSchema } from '@/utils/zod';
 
@@ -170,6 +171,7 @@ export const LogSource = Source.discriminator<ILogSource>(
     spanIdExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
@@ -188,6 +190,11 @@ export const LogSource = Source.discriminator<ILogSource>(
     metadataMaterializedViews: {
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
+    },
+    mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
     },
     orderByExpression: String,
   }),
@@ -222,6 +229,7 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     spanLinksValueExpression: String,
     implicitColumnExpression: String,
     knownColumnsListExpression: String,
+    rowKeyExpression: String,
     useTextIndexForImplicitColumn: {
       type: String,
       enum: Object.values(UseTextIndex),
@@ -239,6 +247,11 @@ export const TraceSource = Source.discriminator<ITraceSource>(
     metadataMaterializedViews: {
       type: MetadataMaterializedViewsMongoSchema,
       default: undefined,
+    },
+    mapKeyIndexMaxParts: Number,
+    mapKeyIndexPartSelection: {
+      type: String,
+      enum: Object.values(MapKeyIndexPartSelection),
     },
     orderByExpression: String,
   }),

@@ -17,6 +17,15 @@ jest.mock('@/mcp/tools/query/helpers', () => {
   };
 });
 
+jest.mock('@/mcp/tools/dashboards/variables', () => {
+  const actual = jest.requireActual('@/mcp/tools/dashboards/variables');
+  return {
+    ...actual,
+    getReferenceTargets: () =>
+      Promise.resolve({ sources: [], connectionIds: new Set() }),
+  };
+});
+
 jest.mock('@/models/dashboard', () => ({
   __esModule: true,
   default: { findOne: (...args: unknown[]) => mockFindOne(...args) },
@@ -205,7 +214,7 @@ describe('clickstack_query_tiles handler — dashboard variables', () => {
     });
 
     expect(mockRunConfigTile).toHaveBeenCalledWith(
-      'team-1',
+      expect.objectContaining({ teamId: 'team-1' }),
       expect.objectContaining({ id: 't1' }),
       expect.any(Date),
       expect.any(Date),
@@ -230,7 +239,7 @@ describe('clickstack_query_tiles handler — dashboard variables', () => {
     });
 
     expect(mockRunConfigTile).toHaveBeenCalledWith(
-      'team-1',
+      expect.objectContaining({ teamId: 'team-1' }),
       expect.anything(),
       expect.any(Date),
       expect.any(Date),

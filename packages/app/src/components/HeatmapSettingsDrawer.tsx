@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { Separator } from '@clickhouse/click-ui';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { TableConnection } from '@hyperdx/common-utils/dist/core/metadata';

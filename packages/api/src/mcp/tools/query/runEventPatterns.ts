@@ -6,22 +6,31 @@ import {
   type Granularity,
   splitAndTrimWithBracket,
 } from '@hyperdx/common-utils/dist/core/utils';
-import { minePatterns } from '@hyperdx/common-utils/dist/drain';
+import {
+  buildPatternPredicate,
+  DATE_MASK,
+  MAX_PREDICATE_TEMPLATE_LENGTH,
+  minePatterns,
+} from '@hyperdx/common-utils/dist/drain';
 import type {
   ChartConfigWithDateRange,
   ChartVariable,
 } from '@hyperdx/common-utils/dist/types';
-import { DisplayType } from '@hyperdx/common-utils/dist/types';
+import { DisplayType, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import {
   type McpErrorResult,
   mcpServerError,
   mcpUserError,
 } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
@@ -34,8 +43,6 @@ import {
 } from './helpers';
 import {
   andSql,
-  buildPatternPredicate,
-  MAX_PREDICATE_TEMPLATE_LENGTH,
   PATTERN_MATCH_SEMANTICS,
   userWhereAsSql,
 } from './patternDrilldown';
@@ -58,7 +65,7 @@ const drilldownWhereFailedCounter = getCounter(
  * Returns either an error result (MCP shape) or the mined patterns.
  */
 export async function mineWindowPatterns(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   startDate: Date,
   endDate: Date,
@@ -93,10 +100,11 @@ export async function mineWindowPatterns(
       drilldown?: { where: string; includesUserFilter: boolean };
     }
 > {
+  const { teamId } = context;
   const sampleSize = options?.sampleSize ?? 10_000;
   const trendBuckets = options?.trendBuckets ?? 0;
 
-  const source = await getSource(teamId, sourceId);
+  const source = await getMcpSource(context, sourceId);
   if (!source) {
     return {
       error: mcpUserError(
@@ -104,12 +112,14 @@ export async function mineWindowPatterns(
       ),
     };
   }
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return {
       error: mcpUserError(
         `Connection not found for source: ${sourceId}. Call clickstack_list_sources to discover available source IDs.`,
@@ -155,11 +165,6 @@ export async function mineWindowPatterns(
     ...filters.map(f => ('condition' in f ? f.condition : undefined)),
   );
 
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
   const tsExpr = getFirstTimestampValueExpression(
     source.timestampValueExpression,
@@ -168,6 +173,8 @@ export async function mineWindowPatterns(
     'implicitColumnExpression' in source
       ? source.implicitColumnExpression
       : undefined;
+  const bodyExpression =
+    source.kind === SourceKind.Log ? source.bodyExpression : undefined;
   const useTextIndexForImplicitColumn =
     'useTextIndexForImplicitColumn' in source
       ? source.useTextIndexForImplicitColumn
@@ -190,6 +197,7 @@ export async function mineWindowPatterns(
     connection: source.connection.toString(),
     timestampValueExpression: source.timestampValueExpression,
     implicitColumnExpression: implicitColumn,
+    bodyExpression,
     useTextIndexForImplicitColumn,
     orderBy: [{ ordering: 'DESC' as const, valueExpression: 'rand()' }],
     limit: { limit: sampleSize, offset: 0 },
@@ -211,6 +219,7 @@ export async function mineWindowPatterns(
     connection: source.connection.toString(),
     timestampValueExpression: source.timestampValueExpression,
     implicitColumnExpression: implicitColumn,
+    bodyExpression,
     useTextIndexForImplicitColumn,
     limit: { limit: 1, offset: 0 },
     dateRange: [startDate, endDate] as [Date, Date],
@@ -232,6 +241,7 @@ export async function mineWindowPatterns(
           tableName: source.from.tableName,
           connectionId: source.connection.toString(),
           implicitColumnExpression: implicitColumn,
+          bodyExpression,
           useTextIndexForImplicitColumn,
         }).catch(err => {
           if (queriesFailed || options.abortSignal?.aborted) return null;
@@ -376,7 +386,7 @@ export const EVENT_PATTERNS_REDUCTIONS: Reduction[] = [
 ];
 
 export async function runEventPatterns(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   startDate: Date,
   endDate: Date,
@@ -404,16 +414,22 @@ export async function runEventPatterns(
   // conversion, sampleMultiplier usage). The helper wraps minePatterns in
   // try/catch and returns an {error} union, so a thrown Drain error surfaces as
   // a clean MCP error here rather than escaping.
-  const mined = await mineWindowPatterns(teamId, sourceId, startDate, endDate, {
-    where: options?.where,
-    whereLanguage: options?.whereLanguage,
-    bodyExpression: options?.bodyExpression,
-    sampleSize: options?.sampleSize,
-    trendBuckets,
-    abortSignal: options?.abortSignal,
-    variables: options?.variables,
-    includeDrilldownWhere: true,
-  });
+  const mined = await mineWindowPatterns(
+    context,
+    sourceId,
+    startDate,
+    endDate,
+    {
+      where: options?.where,
+      whereLanguage: options?.whereLanguage,
+      bodyExpression: options?.bodyExpression,
+      sampleSize: options?.sampleSize,
+      trendBuckets,
+      abortSignal: options?.abortSignal,
+      variables: options?.variables,
+      includeDrilldownWhere: true,
+    },
+  );
   if ('error' in mined) return mined.error;
 
   const {
@@ -463,7 +479,9 @@ export async function runEventPatterns(
   const slicedPatterns = rawPatterns.slice(0, topN);
 
   const patterns = slicedPatterns.map((p, i) => {
-    const predicate = buildPatternPredicate(bodyColumn, p.pattern);
+    const predicate = buildPatternPredicate(bodyColumn, p.pattern, {
+      masks: [DATE_MASK],
+    });
     const whereSnippet =
       predicate == null ? '' : andSql(drilldown?.where, predicate);
 

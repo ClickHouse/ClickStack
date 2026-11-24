@@ -143,16 +143,54 @@ describe('provisionDashboards', () => {
     // rejects the legacy enum and `readDashboardFiles` skips the file
     // outright, so a provisioned dashboard authored against #2265
     // wouldn't ship at all.
+    it('parses a tile that references a declared data source variable', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'source-variable.json'),
+        JSON.stringify({
+          name: 'Source Variable',
+          tiles: [makeTile({ sourceId: '$logs' })],
+          filters: [
+            {
+              id: 'ds',
+              type: 'DATA_SOURCE',
+              name: 'Logs source',
+              variableName: 'logs',
+              allowedSourceKinds: ['log'],
+              minSelections: 1,
+              maxSelections: 1,
+              isBroadcastEnabled: false,
+              isVariableEnabled: true,
+            },
+          ],
+        }),
+      );
+      expect(readDashboardFiles(tmpDir)).toHaveLength(1);
+    });
+
+    it('skips a tile that references an undeclared data source variable', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'unknown-variable.json'),
+        JSON.stringify({
+          name: 'Unknown Variable',
+          tiles: [makeTile({ sourceId: '$logs' })],
+        }),
+      );
+      expect(readDashboardFiles(tmpDir)).toEqual([]);
+    });
+
     it('migrates legacy chart-N tile colors before schema validation', () => {
       const tile = makeTile();
-      (tile.config as any).color = 'chart-1';
       fs.writeFileSync(
         path.join(tmpDir, 'legacy.json'),
-        JSON.stringify({ name: 'Legacy', tiles: [tile], tags: [] }),
+        JSON.stringify({
+          name: 'Legacy',
+          tiles: [{ ...tile, config: { ...tile.config, color: 'chart-1' } }],
+          tags: [],
+        }),
       );
       const result = readDashboardFiles(tmpDir);
       expect(result).toHaveLength(1);
-      expect((result[0].tiles[0].config as any).color).toBe('chart-green');
+      expect(result[0].tiles[0].config).toHaveProperty('color', 'chart-green');
     });
 
     // Early-return for files whose `tiles` is non-array (or missing).
@@ -210,12 +248,12 @@ describe('provisionDashboards', () => {
 
       await syncDashboards(team._id.toString(), tmpDir);
 
-      const dashboard = (await Dashboard.findOne({
+      const dashboard = await Dashboard.findOne({
         name: 'Existing',
         team: team._id,
-      })) as any;
-      expect(dashboard.tiles[0].id).toBe(newTile.id);
-      expect(dashboard.tags).toEqual(['updated']);
+      });
+      expect(dashboard!.tiles[0].id).toBe(newTile.id);
+      expect(dashboard!.tags).toEqual(['updated']);
     });
 
     it('does not create duplicates on repeated sync', async () => {
@@ -296,14 +334,14 @@ describe('provisionDashboards', () => {
 
       await syncDashboards(team._id.toString(), tmpDir);
 
-      const userDashboard = (await Dashboard.findOne({
+      const userDashboard = await Dashboard.findOne({
         name: 'My Dashboard',
         team: team._id,
         provisioned: { $ne: true },
-      })) as any;
+      });
       expect(userDashboard).toBeTruthy();
-      expect(userDashboard.tiles[0].id).toBe(userTile.id);
-      expect(userDashboard.tags).toEqual(['user-tag']);
+      expect(userDashboard!.tiles[0].id).toBe(userTile.id);
+      expect(userDashboard!.tags).toEqual(['user-tag']);
 
       const provisionedDashboard = await Dashboard.findOne({
         name: 'My Dashboard',

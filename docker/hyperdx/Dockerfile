@@ -7,23 +7,24 @@
 # - Mongo
 # - Otel Collector (otelcol)
 
-ARG NODE_VERSION=22.23.4
+ARG NODE_VERSION=22.23.5
 ARG CLICKHOUSE_VERSION=26.10.3.7
-ARG OTEL_COLLECTOR_VERSION=0.155.0
-ARG OTEL_COLLECTOR_CORE_VERSION=1.61.0
+ARG OTEL_COLLECTOR_VERSION=0.165.0
+ARG OTEL_COLLECTOR_CORE_VERSION=1.71.0
 
 # base #############################################################################################
 # == Otel Collector Image ==
 FROM otel/opentelemetry-collector-opampsupervisor:${OTEL_COLLECTOR_VERSION} AS otel_collector_opampsupervisor_base
-FROM kukymbr/goose-docker@sha256:0cd025636df126e7f66472861ca4db3683bc649be46cd1f6ef1a316209058e23 AS goose
 
 # Build the custom HyperDX collector binary using OCB (OpenTelemetry Collector Builder).
 # This replaces the pre-built otel/opentelemetry-collector-contrib image so we can
 # include custom receiver/processor components alongside the standard contrib ones.
 # Note: The official OCB image may ship an older Go than the contrib modules require,
 # so we copy the ocb binary into a golang base with a newer toolchain.
+# The golang image is pinned by digest: a floating tag invalidates the multi-minute
+# OCB compile whenever upstream republishes it. Bump the tag and digest together.
 FROM otel/opentelemetry-collector-builder:${OTEL_COLLECTOR_VERSION} AS ocb-bin
-FROM golang:1.26-alpine AS ocb-builder
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS ocb-builder
 ARG OTEL_COLLECTOR_VERSION
 ARG OTEL_COLLECTOR_CORE_VERSION
 COPY --from=ocb-bin /usr/local/bin/ocb /usr/local/bin/ocb
@@ -35,7 +36,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=ocb-gomod \
     CGO_ENABLED=0 ocb --config=builder-config.yaml
 
 # Build the Go migration tool with full TLS support for ClickHouse
-FROM golang:1.26-alpine AS migrate-builder
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS migrate-builder
 WORKDIR /build
 COPY packages/otel-collector/go.mod packages/otel-collector/go.sum ./
 RUN go mod download
@@ -47,12 +48,12 @@ FROM node:${NODE_VERSION}-alpine AS node_base
 WORKDIR /app
 
 COPY .yarn ./.yarn
-COPY .yarnrc.yml yarn.lock package.json nx.json .prettierrc .prettierignore ./tsconfig.base.json ./
+COPY .yarnrc.yml yarn.lock package.json nx.json .oxfmtrc.json ./tsconfig.base.json ./
 # Only copy package.json for workspace resolution during yarn install;
 # full source is copied in the build stages that need it.
 COPY ./packages/common-utils/package.json ./packages/common-utils/package.json
 COPY ./packages/api/jest.config.js ./packages/api/tsconfig.json ./packages/api/tsconfig.build.json ./packages/api/package.json ./packages/api/
-COPY ./packages/app/jest.config.js ./packages/app/tsconfig.json ./packages/app/tsconfig.build.json ./packages/app/package.json ./packages/app/next.config.mjs ./packages/app/mdx.d.ts ./packages/app/css.d.ts ./packages/app/eslint.config.mjs ./packages/app/
+COPY ./packages/app/jest.config.js ./packages/app/tsconfig.json ./packages/app/tsconfig.build.json ./packages/app/package.json ./packages/app/next.config.mjs ./packages/app/mdx.d.ts ./packages/app/css.d.ts ./packages/app/
 
 # Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine to understand why libc6-compat might be needed.
 RUN apk add --no-cache libc6-compat
@@ -124,8 +125,10 @@ ENV OTEL_RESOURCE_ATTRIBUTES="service.version=$CODE_VERSION"
 ENV OTEL_SERVICE_NAME=hdx-oss-app
 ENV NODE_ENV=production
 
-# Remove package managers from production image (not needed at runtime)
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+# Pick up Alpine security fixes newer than the base image, then remove package
+# managers from production image (not needed at runtime)
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
@@ -152,7 +155,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 ENTRYPOINT ["sh", "/etc/local/entry.sh"]
 
 # all-in-one base ############################################################################################
-FROM hairyhenderson/gomplate:v4.3.3-alpine AS gomplate
+FROM hairyhenderson/gomplate:v5.3.1-alpine AS gomplate
 FROM clickhouse/clickhouse-server:${CLICKHOUSE_VERSION}-alpine AS all-in-one-base
 
 ARG CODE_VERSION
@@ -194,16 +197,15 @@ COPY --from=otel-collector --chmod=755 ./entrypoint.sh /otel-entrypoint.sh
 # Copy gomplate binary from the gomplate image
 COPY --from=gomplate /bin/gomplate /usr/local/bin/gomplate
 
-# Copy goose binary from the goose image
-COPY --from=goose /bin/goose /usr/local/bin/goose
-
 # Copy migrate binary (Go-based goose migration tool with full TLS support)
 COPY --from=migrate-builder /migrate /usr/local/bin/migrate
 
 # Install MongoDB and other dependencies (consolidated into a single RUN command).
 # libstdc++/libgcc are the Node.js runtime deps, installed before the v3.9
-# repositories are appended so they resolve from this image's own Alpine release.
-RUN apk add --no-cache libstdc++ libgcc && \
+# repositories are appended so they resolve from this image's own Alpine release,
+# as does the upgrade that picks up security fixes newer than the base image.
+RUN apk upgrade --no-cache && \
+  apk add --no-cache libstdc++ libgcc && \
   echo 'http://dl-cdn.alpinelinux.org/alpine/v3.9/main' >> /etc/apk/repositories && \
   echo 'http://dl-cdn.alpinelinux.org/alpine/v3.9/community' >> /etc/apk/repositories && \
   apk update && \

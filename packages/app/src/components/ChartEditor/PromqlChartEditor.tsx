@@ -21,6 +21,7 @@ import { IconCirclePlus } from '@tabler/icons-react';
 
 import { HeatmapModeControl } from '@/components/DBEditTimeChartForm/HeatmapModeControl';
 import { SourceSelectControlled } from '@/components/SourceSelect';
+import { useResolvedReference } from '@/components/sourceSelectUtils';
 import { usePromqlMetricNames } from '@/hooks/usePromqlMetadata';
 import { useSource } from '@/source';
 
@@ -80,7 +81,7 @@ export default function PromqlChartEditor({
     );
   }, []);
 
-  const sourceId = useWatch({ control, name: 'source' });
+  const sourceId = useResolvedReference(useWatch({ control, name: 'source' }));
   const displayType = useWatch({ control, name: 'displayType' });
   const { data: source } = useSource({ id: sourceId });
   // The form can still hold a non-PromQL source right after switching a tile
@@ -107,6 +108,7 @@ export default function PromqlChartEditor({
           name="source"
           data-testid="source-selector"
           allowedSourceKinds={allowedSourceKinds}
+          allowSourceVariables
         />
       </Group>
       {displayType === DisplayType.Heatmap && (

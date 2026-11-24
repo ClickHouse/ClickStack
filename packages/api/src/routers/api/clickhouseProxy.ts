@@ -2,7 +2,7 @@ import { sanitizeUrl } from '@braintree/sanitize-url';
 import express, { RequestHandler, Response } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { performance } from 'perf_hooks';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { validateRequest } from 'zod-express-middleware';
 
 import { CODE_VERSION } from '@/config';
@@ -12,15 +12,19 @@ import { validateRequestHeaders } from '@/middleware/validation';
 import { recordOperationOutcome } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import { writeProxyBody } from '@/utils/proxyBody';
+import {
+  noteTransportError,
+  observeProxyRequest,
+  observeUpstreamResponse,
+  trackProxyOutcome,
+} from '@/utils/proxyOutcome';
 import { IPV6_BRACKET_RE, isPrivateIp } from '@/utils/validators';
 import { objectIdSchema } from '@/utils/zod';
 
-// SLO operations for the ClickHouse proxy. Both paths swallow their errors
-// (returning JSON / writing the response directly) so they never reach the API
-// error middleware — they must report their own SLIs. See
-// agent_docs/observability.md.
+// The connection test swallows its errors (returning JSON) so they never reach
+// the API error middleware; it must report its own SLI. The query proxy's is
+// recorded by trackProxyOutcome. See agent_docs/observability.md.
 const CONNECTION_TEST_OPERATION = 'clickhouse_proxy.connection_test';
-const QUERY_PROXY_OPERATION = 'clickhouse_proxy.query';
 
 /**
  * Validates and sanitizes a URL path to prevent injection attacks.
@@ -243,6 +247,7 @@ const proxyMiddleware: RequestHandler =
     },
     on: {
       proxyReq: (proxyReq, _req, res) => {
+        observeProxyRequest(proxyReq, res);
         // set user-agent to the hyperdx version identifier
         proxyReq.setHeader('user-agent', `hyperdx ${CODE_VERSION}`);
 
@@ -265,16 +270,7 @@ const proxyMiddleware: RequestHandler =
         writeProxyBody(proxyReq, _req);
       },
       proxyRes: (proxyRes, _req, res) => {
-        const startedAt = (res as Response).locals?.hdxProxyStartedAt;
-        const statusCode = proxyRes.statusCode ?? 0;
-        recordOperationOutcome({
-          operation: QUERY_PROXY_OPERATION,
-          // A response (even a 4xx/5xx from ClickHouse) means the proxy hop
-          // itself worked; outcome reflects whether ClickHouse served it.
-          outcome: statusCode < 400 ? 'success' : 'error',
-          durationMs:
-            typeof startedAt === 'number' ? performance.now() - startedAt : 0,
-        });
+        observeUpstreamResponse(proxyRes, res);
 
         // since clickhouse v24, the cors headers * will be attached to the response by default
         // which will cause the browser to block the response
@@ -294,20 +290,19 @@ const proxyMiddleware: RequestHandler =
         }
       },
       error: (err, _req, _res) => {
-        const startedAt = (_res as Response).locals?.hdxProxyStartedAt;
-        recordOperationOutcome({
-          operation: QUERY_PROXY_OPERATION,
-          // No usable response from ClickHouse (connection refused, timeout,
-          // DNS failure, ...) — a hard availability failure for the proxy.
-          outcome: 'error',
-          durationMs:
-            typeof startedAt === 'number' ? performance.now() - startedAt : 0,
-        });
+        const res = _res as Response;
+        noteTransportError(res, err);
         console.error('Proxy error:', err);
-        (_res as Response).writeHead(500, {
+        // The upstream broke off mid-stream: a second status would throw, and
+        // ending cleanly would pass the truncated rows off as complete.
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
+        res.writeHead(500, {
           'Content-Type': 'application/json',
         });
-        _res.end(
+        res.end(
           JSON.stringify({
             success: false,
             error: err.message || 'Failed to connect to ClickHouse server',
@@ -320,24 +315,18 @@ const proxyMiddleware: RequestHandler =
     // }),
   });
 
-// Stamp a start time so the proxy callbacks can record query SLO latency.
-const markProxyStart: RequestHandler = (_req, res, next) => {
-  res.locals.hdxProxyStartedAt = performance.now();
-  next();
-};
-
 router.get(
   '/*',
   hasConnectionId,
   getConnection,
-  markProxyStart,
+  trackProxyOutcome,
   proxyMiddleware,
 );
 router.post(
   '/*',
   hasConnectionId,
   getConnection,
-  markProxyStart,
+  trackProxyOutcome,
   proxyMiddleware,
 );
 

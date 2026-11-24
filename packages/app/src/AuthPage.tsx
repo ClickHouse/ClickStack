@@ -233,7 +233,9 @@ export default function AuthPage({ action }: { action: 'register' | 'login' }) {
                           ? 'Password authentication is not allowed by your team admin.'
                           : err === 'teamAlreadyExists'
                             ? 'Team already exists, please login instead.'
-                            : 'Unknown error occurred, please try again later.'}
+                            : err === 'tooManyAttempts'
+                              ? 'Too many failed login attempts. Please wait a few minutes and try again.'
+                              : 'Unknown error occurred, please try again later.'}
                 </Notification>
               )}
 

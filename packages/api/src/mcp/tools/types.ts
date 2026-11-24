@@ -3,7 +3,7 @@ import type {
   CallToolResult,
   ToolAnnotations,
 } from '@modelcontextprotocol/sdk/types.js';
-import type { AnyZodObject } from 'zod';
+import type { AnyZodObject } from 'zod/v3';
 
 import type { ToolBehaviorAnnotations } from '@/mcp/tools/annotations';
 import type { McpClientInfo } from '@/mcp/utils/mcpClient';

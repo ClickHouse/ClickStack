@@ -11,11 +11,16 @@ import { useColumns } from '@/hooks/useMetadata';
 import {
   DEFAULT_DATABASE,
   KNOWN_COLUMNS_EXPRESSION_HELP_TEXT,
+  ROW_KEY_EXPRESSION_HELP_TEXT,
   SERVICE_VERSION_EXPRESSION_HELP_TEXT,
 } from './constants';
 import { ExpressionFormRow } from './ExpressionFormRow';
 import { FormRow } from './FormRow';
 import { HighlightedAttributeExpressionsFormRow } from './HighlightedAttributes';
+import {
+  MapKeyIndexMaxPartsFormRow,
+  MapKeyIndexPartSelectionFormRow,
+} from './MapKeyIndexMaxPartsFormRow';
 import {
   MaterializedViewsFormSection,
   MetadataMaterializedViewsFormSection,
@@ -379,7 +384,25 @@ export function TraceTableModelForm(props: TableModelProps) {
           disableKeywordAutocomplete
         />
       </FormRow>
+      <FormRow
+        label="Row key expression"
+        helpText={ROW_KEY_EXPRESSION_HELP_TEXT}
+      >
+        <SQLInlineEditorControlled
+          tableConnection={{
+            databaseName,
+            tableName,
+            connectionId,
+          }}
+          control={control}
+          name="rowKeyExpression"
+          placeholder="ServiceName, Timestamp, _block_number, _block_offset"
+          disableKeywordAutocomplete
+        />
+      </FormRow>
       <UseTextIndexFormRow control={control} />
+      <MapKeyIndexMaxPartsFormRow control={control} />
+      <MapKeyIndexPartSelectionFormRow control={control} />
       <FormRow
         label={'Displayed Timestamp Column'}
         helpText="This DateTime column is used to display and order search results."

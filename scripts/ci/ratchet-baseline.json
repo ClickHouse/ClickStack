@@ -2,13 +2,13 @@
   "api": {
     "as-any": 88,
     "ts-ignore": 0,
-    "eslint-disable": 36,
+    "eslint-disable": 32,
     "@source": 0
   },
   "app": {
-    "as-any": 213,
+    "as-any": 67,
     "ts-ignore": 0,
-    "eslint-disable": 141,
+    "eslint-disable": 119,
     "@source": 0
   },
   "cli": {

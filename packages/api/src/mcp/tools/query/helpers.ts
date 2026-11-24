@@ -26,12 +26,16 @@ import {
 import { ObjectId } from 'mongodb';
 import ms from 'ms';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { PromQLQueryError } from '@/controllers/promql';
-import { getSource } from '@/controllers/sources';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import {
   MCP_QUERY_MAX_EXECUTION_SEC,
   MCP_TIMEOUT_GRACE_MS,
@@ -42,13 +46,21 @@ import {
   isConfigTile,
 } from '@/routers/external-api/v2/utils/dashboards';
 import { isQueryTimeoutError } from '@/tasks/checkAlerts/errors';
-import { isClickHouseError } from '@/utils/clickhouseErrors';
+import {
+  getClickHouseErrorType,
+  isClickHouseError,
+} from '@/utils/clickhouseErrors';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 import type { ExternalDashboardTileWithId } from '@/utils/zod';
 import { externalDashboardTileSchemaWithId } from '@/utils/zod';
 
 import { runPromqlTile } from './promqlTile';
 import { runEventPatterns } from './runEventPatterns';
+import {
+  partialSearchHint,
+  runWindowedSearch,
+  type SearchCoverage,
+} from './windowedSearch';
 
 // ─── Source body expression helpers ──────────────────────────────────────────
 
@@ -355,7 +367,11 @@ function isEmptyResult(result: unknown): boolean {
   return false;
 }
 
-function formatQueryResult(result: unknown, maxResponseChars?: number) {
+function formatQueryResult(
+  result: unknown,
+  maxResponseChars?: number,
+  partial?: SearchCoverage,
+) {
   // Trimmed under its response key, so note paths read `result.data…`.
   const {
     data: { result: trimmedResult },
@@ -363,6 +379,15 @@ function formatQueryResult(result: unknown, maxResponseChars?: number) {
     notes: trimNotes,
   } = trimToolResponse({ result }, maxResponseChars);
   const empty = isEmptyResult(result);
+  // A partial empty result did not search the whole range, so "no data
+  // found" would be wrong.
+  const hints = partial
+    ? [partialSearchHint(partial, { empty })]
+    : empty
+      ? [
+          'No data found in the queried time range. Try setting startTime to a wider window (e.g. 24 hours ago) or check that filters match existing data.',
+        ]
+      : [];
   return {
     content: [
       {
@@ -376,13 +401,8 @@ function formatQueryResult(result: unknown, maxResponseChars?: number) {
                   trimNotes,
                 }
               : {}),
-            ...(empty
-              ? {
-                  hints: [
-                    'No data found in the queried time range. Try setting startTime to a wider window (e.g. 24 hours ago) or check that filters match existing data.',
-                  ],
-                }
-              : {}),
+            ...(partial ? { partial } : {}),
+            ...(hints.length > 0 ? { hints } : {}),
           },
           null,
           2,
@@ -455,7 +475,7 @@ export function assertSourceKindMatchesSelect(
 // ─── Tile execution ──────────────────────────────────────────────────────────
 
 /**
- * `getSource` returns a hydrated Mongoose document, so `source.metricTables`
+ * `getMcpSource` returns a hydrated Mongoose document, so `source.metricTables`
  * is a live subdocument rather than a plain object. Downstream render paths
  * may clone the chart config — notably `convertToCategoricalChartConfig`
  * (pie/bar) runs it through `structuredClone`, which cannot clone a Mongoose
@@ -473,7 +493,7 @@ function toPlainMetricTables(
 }
 
 export async function runConfigTile(
-  teamId: string,
+  context: McpContext,
   tile: ExternalDashboardTileWithId,
   startDate: Date,
   endDate: Date,
@@ -490,9 +510,15 @@ export async function runConfigTile(
     /** SQL LIMIT for builder tiles that aren't searches (MCP table tool). */
     limit?: number;
     /** Source lookup for raw SQL tiles, so a batch can share one per-call cache. */
-    lookupSource?: (sourceId: string) => ReturnType<typeof getSource>;
+    lookupSource?: (sourceId: string) => ReturnType<typeof getMcpSource>;
+    /**
+     * Search tiles only: scan newest-first under a time budget and return
+     * partial rows instead of a timeout (MCP search tool).
+     */
+    partialSearchResults?: boolean;
   },
 ) {
+  const { teamId } = context;
   if (!isConfigTile(tile)) {
     return mcpUserError('Invalid tile: config field missing');
   }
@@ -524,7 +550,7 @@ export async function runConfigTile(
       const selectStr =
         typeof builderConfig.select === 'string' ? builderConfig.select : '';
       return runEventPatterns(
-        teamId,
+        context,
         builderConfig.source,
         startDate,
         endDate,
@@ -543,7 +569,7 @@ export async function runConfigTile(
       );
     }
 
-    const source = await getSource(teamId, builderConfig.source);
+    const source = await getMcpSource(context, builderConfig.source);
     if (!source) {
       return mcpUserError(
         `Source not found: ${builderConfig.source}. Call clickstack_list_sources to discover available source IDs.`,
@@ -558,23 +584,19 @@ export async function runConfigTile(
     );
     if (kindMismatch) return kindMismatch;
 
-    const connection = await getConnectionById(
-      teamId,
-      source.connection.toString(),
-      true,
-    );
-    if (!connection) {
+    let clickhouseClient: ClickhouseClient;
+    try {
+      clickhouseClient = await getMcpClickhouseClient(
+        context,
+        source.connection.toString(),
+        { requestTimeout: MCP_REQUEST_TIMEOUT },
+      );
+    } catch (e) {
+      if (!(e instanceof McpConnectionNotFoundError)) throw e;
       return mcpUserError(
         `Connection not found for source: ${builderConfig.source}`,
       );
     }
-
-    const clickhouseClient = new ClickhouseClient({
-      host: connection.host,
-      username: connection.username,
-      password: connection.password,
-      requestTimeout: MCP_REQUEST_TIMEOUT,
-    });
 
     const isSearch = builderConfig.displayType === DisplayType.Search;
     const isMetricSource = source.kind === SourceKind.Metric;
@@ -678,6 +700,8 @@ export async function runConfigTile(
       connection: source.connection.toString(),
       timestampValueExpression: source.timestampValueExpression,
       implicitColumnExpression: implicitColumn,
+      bodyExpression:
+        source.kind === SourceKind.Log ? source.bodyExpression : undefined,
       useTextIndexForImplicitColumn,
       dateRange: [startDate, endDate] as [Date, Date],
       variables: options?.variables,
@@ -693,6 +717,18 @@ export async function runConfigTile(
 
     const metadata = getMetadata(clickhouseClient);
     try {
+      if (isSearch && options?.partialSearchResults) {
+        const { result, partial } = await runWindowedSearch({
+          clickhouseClient,
+          metadata,
+          config: chartConfig,
+          querySettings: source.querySettings,
+          clickhouseSettings: MCP_CLICKHOUSE_SETTINGS,
+          maxResults: options?.maxResults ?? 50,
+          abortSignal: options?.abortSignal,
+        });
+        return formatQueryResult(result, options?.maxResponseChars, partial);
+      }
       const result = await clickhouseClient.queryChartConfig({
         config: renderConfig,
         metadata,
@@ -738,13 +774,14 @@ export async function runConfigTile(
   let sourceFields: {
     from?: { databaseName: string; tableName: string };
     implicitColumnExpression?: string;
+    bodyExpression?: string;
     useTextIndexForImplicitColumn?: UseTextIndex;
     metricTables?: MetricTable;
   } = {};
   if (savedConfig.source) {
     const source = await (options?.lookupSource
       ? options.lookupSource(savedConfig.source)
-      : getSource(teamId, savedConfig.source));
+      : getMcpSource(context, savedConfig.source));
     if (source) {
       sourceFields = {
         from: source.from,
@@ -752,6 +789,8 @@ export async function runConfigTile(
           'implicitColumnExpression' in source
             ? source.implicitColumnExpression
             : undefined,
+        bodyExpression:
+          source.kind === SourceKind.Log ? source.bodyExpression : undefined,
         useTextIndexForImplicitColumn:
           'useTextIndexForImplicitColumn' in source
             ? source.useTextIndexForImplicitColumn
@@ -764,23 +803,19 @@ export async function runConfigTile(
     }
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    savedConfig.connection,
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      savedConfig.connection,
+      { requestTimeout: MCP_REQUEST_TIMEOUT },
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(
       `Connection not found: ${savedConfig.connection}. Call clickstack_list_sources to discover available connection IDs.`,
     );
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-    requestTimeout: MCP_REQUEST_TIMEOUT,
-  });
 
   const chartConfig = {
     ...savedConfig,
@@ -994,6 +1029,33 @@ export function errorHint(
       'this works for both DateTime and DateTime64 columns. For the sql tool, prefer ' +
       '`$__timeFilter(Timestamp)` which handles casting automatically. ' +
       'Bare ISO 8601 strings will NOT auto-cast to DateTime/DateTime64.'
+    );
+  }
+  // hasToken() accepts one token of ASCII letters and digits; '_', '-', '.',
+  // '@', ':' and spaces are separators. Agents reach for it in SQL filters
+  // with ids, emails and snake_case names. The BAD_ARGUMENTS + hasToken
+  // fallback keeps the hint if ClickHouse rewords the message.
+  if (
+    /Needle must not contain whitespace or separator characters/i.test(msg) ||
+    (/\bhasToken\b/.test(msg) &&
+      (getClickHouseErrorType(error) === 'BAD_ARGUMENTS' ||
+        /BAD_ARGUMENTS|Code: 36\b/.test(msg)))
+  ) {
+    // position() works on every ClickHouse version and, unlike LIKE, has no '_'
+    // wildcard. hasAllTokens() is newer and only worth adding with a text index.
+    const sqlAlternatives =
+      "position(col, 'payment_failed') > 0 for the exact term. If the column " +
+      "has a text index, prefix it with hasAllTokens(col, 'payment_failed') AND " +
+      'so the index can skip granules.';
+    return (
+      'hasToken() takes a single token of letters and digits; "_", "-", ".", ' +
+      '"@", ":" and spaces all split tokens, so a needle like payment_failed, ' +
+      'a UUID or an email is rejected. ' +
+      (options?.rawSql
+        ? `Use ${sqlAlternatives}`
+        : 'Put the term in a Lucene filter (whereLanguage:"lucene", e.g. ' +
+          '"payment_failed"), which splits it into tokens and still uses the ' +
+          `text index. In SQL, use ${sqlAlternatives}`)
     );
   }
   if (/Syntax error.*\bAS\b/.test(msg)) {
