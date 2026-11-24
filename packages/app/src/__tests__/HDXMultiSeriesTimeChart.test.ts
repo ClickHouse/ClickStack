@@ -23,6 +23,7 @@ import {
   getSelectedLineData,
   getVisibleLineData,
   getVisibleTooltipRows,
+  getXAxisTickDateFormat,
   getYAxisTicks,
   HARD_LINES_LIMIT,
   sameActiveClickSeries,
@@ -1365,5 +1366,75 @@ describe('compactTickAnchor', () => {
 
   it('resolves the single-tick case to start (the first-edge check wins)', () => {
     expect(compactTickAnchor(0, 1)).toBe('start');
+  });
+});
+
+describe('getXAxisTickDateFormat', () => {
+  const seconds = (iso: string) => new Date(iso).getTime() / 1000;
+  const utcMidnight = seconds('2026-10-27T00:00:00Z');
+
+  it('keeps the date on the first tick only below daily granularity', () => {
+    const format = (index: number) =>
+      getXAxisTickDateFormat({
+        tickSeconds: utcMidnight,
+        index,
+        granularity: '12 hour',
+        timeZone: 'Etc/UTC',
+      });
+    expect(format(0)).toBe('normal');
+    expect(format(1)).toBe('time');
+  });
+
+  it.each(['1 day', '7 day', '30 day'])(
+    'shows only the date on every midnight tick at %s granularity',
+    granularity => {
+      for (const index of [0, 1, 5]) {
+        expect(
+          getXAxisTickDateFormat({
+            tickSeconds: utcMidnight,
+            index,
+            granularity,
+            timeZone: 'Etc/UTC',
+          }),
+        ).toBe('date');
+      }
+    },
+  );
+
+  it('uses midnight in the display time zone, not UTC', () => {
+    expect(
+      getXAxisTickDateFormat({
+        tickSeconds: seconds('2026-10-27T04:00:00Z'),
+        index: 1,
+        granularity: '1 day',
+        timeZone: 'America/New_York',
+      }),
+    ).toBe('date');
+  });
+
+  it('adds the time when a daily bucket does not start at midnight', () => {
+    // UTC-aligned buckets start at 8 PM in New York before the Nov 1 DST
+    // change and 7 PM after it.
+    for (const iso of ['2026-10-27T00:00:00Z', '2026-11-05T00:00:00Z']) {
+      expect(
+        getXAxisTickDateFormat({
+          tickSeconds: seconds(iso),
+          index: 1,
+          granularity: '1 day',
+          timeZone: 'America/New_York',
+        }),
+      ).toBe('short');
+    }
+  });
+
+  it('falls back to the sub-day formats for an unrecognized granularity', () => {
+    expect(
+      getXAxisTickDateFormat({
+        tickSeconds: utcMidnight,
+        index: 1,
+        granularity: 'auto',
+        timeZone: 'Etc/UTC',
+      }),
+    ).toBe('time');
   });
 });

@@ -6,7 +6,13 @@ import { useUserPreferences } from './useUserPreferences';
 
 type DateLike = number | string | Date;
 
-type DateFormat = 'normal' | 'short' | 'withMs' | 'time' | 'withYear';
+export type DateFormat =
+  | 'normal'
+  | 'short'
+  | 'withMs'
+  | 'time'
+  | 'withYear'
+  | 'date';
 
 const parse = (time: DateLike) => {
   if (time instanceof Date) {
