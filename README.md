@@ -109,6 +109,10 @@ include:
 Once ClickStack is running, you can point your OpenTelemetry SDK to the
 OpenTelemetry collector spun up at `http://localhost:4318`.
 
+The [Loom integration guide](https://github.com/ClickHouse/loom/blob/v1.3.0/docs/features/integrations/clickstack.md) shows
+how to view Loom operation traces, retrieval metrics, and code index health in
+ClickStack.
+
 ## ClickStack CLI
 
 Prefer the terminal? [`@hyperdx/cli`](./packages/cli) provides an interactive
