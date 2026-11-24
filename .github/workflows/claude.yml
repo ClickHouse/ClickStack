@@ -46,8 +46,10 @@ jobs:
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: https://inference-internal.clickhouse.cloud
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic_api_key: ${{ secrets.INFERENCE_GATEWAY_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           use_sticky_comment: 'true'
           include_fix_links: 'true'
