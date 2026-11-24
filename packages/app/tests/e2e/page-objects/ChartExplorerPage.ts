@@ -24,6 +24,21 @@ export class ChartExplorerPage {
     await this.page.goto('/chart');
   }
 
+  /** Navigate to the chart explorer with an absolute time range. */
+  async gotoWithTimeRange(from: Date, to: Date) {
+    await this.page.goto(`/chart?from=${from.getTime()}&to=${to.getTime()}`);
+  }
+
+  /** Read the time chart's x-axis tick labels, left to right. */
+  async getTimeChartXAxisLabels(): Promise<string[]> {
+    const ticks = this.getFirstChart().locator(
+      '.recharts-xAxis-tick-labels .recharts-cartesian-axis-tick-value',
+    );
+    await ticks.first().waitFor({ state: 'visible', timeout: 15000 });
+    const labels = await ticks.allTextContents();
+    return labels.map(l => l.trim());
+  }
+
   /**
    * Get chart containers (recharts)
    */
