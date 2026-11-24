@@ -34,7 +34,7 @@ import type { ISlo } from '@/models/slo';
 const SLO_QUERY_TIMEOUT_MS = 30_000;
 const SLO_MIN_QUERY_MS = 5_000;
 
-type SloDefinitionFields = Pick<
+export type SloDefinitionFields = Pick<
   ISlo,
   'indicator' | 'target' | 'window' | 'groupBy'
 >;
