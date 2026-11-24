@@ -144,8 +144,6 @@ export function TraceRedMetricsChart({
     sourceId: source.id,
     enabled: isReady,
     showDisplaySwitcher: false,
-    showMVOptimizationIndicator: false,
-    showDateRangeIndicator: false,
     queryKeyPrefix,
     onTimeRangeSelect,
     enableParallelQueries: true,

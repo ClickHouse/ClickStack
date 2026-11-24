@@ -145,6 +145,33 @@ test.describe(
       await expect(aggTable).toContainText('count');
     });
 
+    test('trace search RED charts show that the view accelerated them', async ({
+      page,
+    }) => {
+      const searchPage = new SearchPage(page);
+      const mvComponent = new MaterializedViewComponent(page);
+
+      await searchPage.goto();
+      await searchPage.selectSource(DEFAULT_TRACES_MV_SOURCE_NAME);
+      // One-minute buckets, the view's granularity.
+      await searchPage.timePicker.selectRelativeTime('Last 1 hour');
+
+      // Throughput, Errors and Duration each read the view: counts by status,
+      // the error ratio, and avg/p95/p99 of Duration are all pre-aggregated.
+      const indicators = mvComponent.getIndicator();
+      await expect(indicators).toHaveCount(3, { timeout: 15000 });
+      for (const indicator of await indicators.all()) {
+        await expect(indicator).toHaveAttribute('data-mv-accelerated', 'true', {
+          timeout: 15000,
+        });
+      }
+
+      // The dialog explains which view served the chart.
+      await indicators.first().click();
+      await expect(mvComponent.getModal()).toBeVisible({ timeout: 10000 });
+      await expect(mvComponent.getModalItem(E2E_TRACES_MV_TABLE)).toBeVisible();
+    });
+
     test(
       'Configuring an MV with auto-population in the source form',
       { tag: '@sources' },
