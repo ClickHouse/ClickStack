@@ -372,6 +372,21 @@ describe('clickstack_describe_source deadline', () => {
         .mockResolvedValue(promqlSource);
     });
 
+    it('looks the connection up through the MCP connection helper', async () => {
+      jest.mocked(getPromqlLabelCatalog).mockResolvedValue({
+        backend: 'clickhouse',
+        labelNames: [],
+        metricNames: [],
+      });
+
+      await runWithClock(0);
+
+      const { getConnection } = jest.mocked(getPromqlLabelCatalog).mock
+        .calls[0][0];
+      await getConnection!('conn-1', { selectPassword: true });
+      expect(getConnectionById).toHaveBeenCalledWith('team-1', 'conn-1', true);
+    });
+
     it('aborts the label lookup at the deadline', async () => {
       jest
         .mocked(getPromqlLabelCatalog)

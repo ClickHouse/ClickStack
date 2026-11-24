@@ -254,6 +254,21 @@ async function fetchPrometheusData<T extends z.ZodTypeAny>(
   return data.data;
 }
 
+type PromqlConnection = NonNullable<
+  Awaited<ReturnType<typeof getConnectionById>>
+>;
+
+/** Looks up a connection by ID. Defaults to the team-scoped controller lookup. */
+export type PromqlConnectionLookup = (
+  connectionId: string,
+  options: { selectPassword: boolean },
+) => PromiseLike<PromqlConnection | null>;
+
+const teamConnectionLookup =
+  (teamId: string): PromqlConnectionLookup =>
+  (connectionId, { selectPassword }) =>
+    getConnectionById(teamId, connectionId, selectPassword);
+
 export type PromqlLabelCatalog = {
   backend: PromqlBackend;
   /** Without `metricName`, only a Prometheus endpoint lists label names. */
@@ -280,6 +295,7 @@ export async function getPromqlLabelCatalog({
   metricName,
   limit,
   signal,
+  getConnection = teamConnectionLookup(teamId),
 }: {
   teamId: string;
   source: {
@@ -291,12 +307,11 @@ export async function getPromqlLabelCatalog({
   metricName?: string;
   limit: number;
   signal?: AbortSignal;
+  getConnection?: PromqlConnectionLookup;
 }): Promise<PromqlLabelCatalog> {
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
+  const connection = await getConnection(source.connection.toString(), {
+    selectPassword: true,
+  });
   if (!connection) {
     throw new Error('Connection not found');
   }
@@ -349,7 +364,7 @@ export async function getPromqlLabelCatalog({
 }
 
 type PromqlTarget = {
-  connection: NonNullable<Awaited<ReturnType<typeof getConnectionById>>>;
+  connection: PromqlConnection;
   databaseName: string;
   tableName: string;
   /** The source's scrape interval floor, e.g. "1 minute". */
@@ -366,7 +381,10 @@ type PromqlTarget = {
 export async function resolvePromqlTarget(
   teamId: string,
   sourceId: string | undefined,
-  { selectPassword }: { selectPassword: boolean },
+  {
+    selectPassword,
+    getConnection = teamConnectionLookup(teamId),
+  }: { selectPassword: boolean; getConnection?: PromqlConnectionLookup },
 ): Promise<PromqlTarget | { status: 400 | 404; error: string }> {
   if (!sourceId) {
     return { status: 400, error: 'missing required parameter: sourceId' };
@@ -378,11 +396,9 @@ export async function resolvePromqlTarget(
     return { status: 404, error: 'Source not found' };
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
+  const connection = await getConnection(source.connection.toString(), {
     selectPassword,
-  );
+  });
 
   if (!connection) {
     return { status: 404, error: 'Connection not found' };

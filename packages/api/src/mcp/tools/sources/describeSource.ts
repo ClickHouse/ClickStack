@@ -100,7 +100,6 @@ async function describeSourceSchema(
   signal: AbortSignal,
   progress: DescribeProgress,
 ): Promise<ToolResult> {
-  const { teamId } = context;
   const source = await getVisibleMcpSource(context, sourceId);
   if (!source) {
     return mcpUserError(
@@ -125,7 +124,7 @@ async function describeSourceSchema(
 
   if (source.kind === SourceKind.Promql) {
     return describePromqlSource({
-      teamId,
+      context,
       source,
       metricName,
       meta,

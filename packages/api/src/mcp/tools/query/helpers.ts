@@ -518,7 +518,6 @@ export async function runConfigTile(
     partialSearchResults?: boolean;
   },
 ) {
-  const { teamId } = context;
   if (!isConfigTile(tile)) {
     return mcpUserError('Invalid tile: config field missing');
   }
@@ -749,7 +748,7 @@ export async function runConfigTile(
     try {
       return formatQueryResult(
         await runPromqlTile({
-          teamId,
+          context,
           config: savedConfig,
           dateRange: [startDate, endDate],
           variables: options?.variables,
