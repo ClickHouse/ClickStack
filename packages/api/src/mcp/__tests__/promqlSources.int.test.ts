@@ -218,7 +218,25 @@ describe('MCP PromQL sources', () => {
 
       const output = JSON.parse(getFirstText(result));
       expect(output.labelNames).toEqual([]);
-      expect(output.note).toContain('"no_such_metric"');
+      expect(output.note).toContain(
+        'No series has the metric name "no_such_metric".',
+      );
+    });
+
+    it('says a metric had no recent samples when an endpoint has no labels for it', async () => {
+      const source = await createPrometheusSource();
+      mockFetch.mockImplementation(async () => prometheusResponse([]));
+
+      const result = await callTool(client, 'clickstack_describe_source', {
+        sourceId: source._id.toString(),
+        metricName: 'idle_metric',
+      });
+
+      const output = JSON.parse(getFirstText(result));
+      expect(output.labelNames).toEqual([]);
+      expect(output.note).toContain(
+        'No series with the metric name "idle_metric" had samples in the last 24 hours.',
+      );
     });
 
     it('passes metricName to a Prometheus endpoint as a match[] selector', async () => {

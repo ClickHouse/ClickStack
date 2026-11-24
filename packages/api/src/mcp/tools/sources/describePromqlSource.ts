@@ -70,9 +70,14 @@ export async function describePromqlSource({
       ...(labelNames == null
         ? ['Pass metricName to list the label names of one metric.']
         : []),
-      // A metric's label names always include __name__.
+      // A metric's label names always include __name__. A Prometheus endpoint
+      // only looks at the lookback window, so there it may just be idle.
       ...(metricName != null && labelNames?.length === 0
-        ? [`No series has the metric name ${JSON.stringify(metricName)}.`]
+        ? [
+            catalog.backend === 'clickhouse'
+              ? `No series has the metric name ${JSON.stringify(metricName)}.`
+              : `No series with the metric name ${JSON.stringify(metricName)} had samples in the last 24 hours.`,
+          ]
         : []),
     ];
     const table =
