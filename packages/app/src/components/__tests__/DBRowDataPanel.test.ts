@@ -53,6 +53,11 @@ function queriedOptions(call = 0) {
   return options;
 }
 
+const ROW_LOOKUP_SETTING = {
+  setting: 'read_from_filesystem_cache_if_exists_otherwise_bypass_cache',
+  value: '1',
+};
+
 const showMaterializedAliasColumns = () =>
   localStorage.setItem('hdx-row-show-materialized-alias-columns', 'true');
 
@@ -321,11 +326,11 @@ describe('DBRowDataPanel', () => {
     });
   });
 
-  it('adds no query settings while the viewer option is off', () => {
+  it('adds only the filesystem cache setting while the viewer option is off', () => {
     renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
 
     for (const options of [queriedOptions(0), queriedOptions(1)]) {
-      expect(options.additionalQuerySettings).toBeUndefined();
+      expect(options.additionalQuerySettings).toEqual([ROW_LOOKUP_SETTING]);
       expect(options.retry).toBeUndefined();
     }
   });
@@ -336,6 +341,7 @@ describe('DBRowDataPanel', () => {
 
     for (const options of [queriedOptions(0), queriedOptions(1)]) {
       expect(options.additionalQuerySettings).toEqual([
+        ROW_LOOKUP_SETTING,
         { setting: 'asterisk_include_materialized_columns', value: '1' },
         { setting: 'asterisk_include_alias_columns', value: '1' },
       ]);
@@ -357,11 +363,12 @@ describe('DBRowDataPanel', () => {
 
     const options = queriedOptions();
     expect(options.additionalQuerySettings).toEqual([
+      ROW_LOOKUP_SETTING,
       { setting: 'asterisk_include_materialized_columns', value: '1' },
     ]);
   });
 
-  it('adds no query settings when the source sets both itself', () => {
+  it('adds no column settings when the source sets both itself', () => {
     showMaterializedAliasColumns();
     const sourceWithSettings: TLogSource = {
       ...source,
@@ -376,10 +383,10 @@ describe('DBRowDataPanel', () => {
     );
 
     const options = queriedOptions();
-    expect(options.additionalQuerySettings).toBeUndefined();
+    expect(options.additionalQuerySettings).toEqual([ROW_LOOKUP_SETTING]);
   });
 
-  it('adds no query settings when the source has a Known Columns List', () => {
+  it('adds no column settings when the source has a Known Columns List', () => {
     showMaterializedAliasColumns();
     const sourceWithKnownColumns: TLogSource = {
       ...source,
@@ -391,7 +398,7 @@ describe('DBRowDataPanel', () => {
     );
 
     for (const options of [queriedOptions(0), queriedOptions(1)]) {
-      expect(options.additionalQuerySettings).toBeUndefined();
+      expect(options.additionalQuerySettings).toEqual([ROW_LOOKUP_SETTING]);
     }
   });
 

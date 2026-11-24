@@ -5,6 +5,7 @@ import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   isLogSource,
   isTraceSource,
+  QuerySettings,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
@@ -54,6 +55,15 @@ export enum ROW_DATA_ALIASES {
 // looks the same row up again. Those lookups reuse a found row instead of
 // running `SELECT *` again. A miss stays stale so the next lookup retries it:
 // the row may not have been ingested yet.
+// A single-row lookup reads few granules, so it uses whatever is already in the
+// filesystem cache without filling it with data nothing else is likely to read.
+const ROW_LOOKUP_QUERY_SETTINGS: QuerySettings = [
+  {
+    setting: 'read_from_filesystem_cache_if_exists_otherwise_bypass_cache',
+    value: '1',
+  },
+];
+
 function rowLookupStaleTime(query: Query<ChartQueryResult>) {
   return query.state.data?.data.length ? Infinity : 0;
 }
@@ -273,7 +283,12 @@ export function useRowData({
     ...(aliasWith && aliasWith.length > 0 ? { with: aliasWith } : {}),
   };
 
-  const additionalQuerySettings = useSelectAllColumnsQuerySettings(source);
+  const selectAllColumnsQuerySettings =
+    useSelectAllColumnsQuerySettings(source);
+  const additionalQuerySettings: QuerySettings = [
+    ...ROW_LOOKUP_QUERY_SETTINGS,
+    ...(selectAllColumnsQuerySettings ?? []),
+  ];
 
   // This key replaces the config-derived one, so it has to carry the column
   // check's effect on the select.
