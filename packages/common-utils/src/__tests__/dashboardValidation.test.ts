@@ -1,11 +1,13 @@
 import { z } from 'zod/v3';
 
 import {
+  collectRefinementIssues,
   validateChartConfigFormulas,
   validateDashboardFilterFieldGating,
   validateDashboardFilterModes,
   validateDashboardFilterOptionUniqueness,
   validateDashboardFilterVariableNames,
+  validateDashboardSavedFilterValues,
 } from '@/dashboardValidation';
 
 type TestFilter = {
@@ -288,6 +290,8 @@ type GatingFilter = ModeFilter & {
   sourceType?: string;
   where?: string;
   whereLanguage?: string;
+  allowAll?: boolean;
+  maxSelections?: number;
 };
 
 const collectGatingIssues = (
@@ -443,6 +447,76 @@ describe('validateDashboardFilterFieldGating', () => {
     );
 
     expect(issues[0].path).toEqual(['body', 'filters', 0, 'variableName']);
+  });
+
+  it('rejects allowAll on a single-select filter only', () => {
+    const issues = collectGatingIssues([
+      { name: 'Multi', isVariableEnabled: true, allowAll: true },
+      {
+        name: 'Single',
+        isVariableEnabled: true,
+        allowAll: true,
+        maxSelections: 1,
+      },
+      {
+        name: 'Off',
+        isVariableEnabled: true,
+        allowAll: false,
+        maxSelections: 1,
+      },
+    ]);
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toEqual(['filters', 1, 'allowAll']);
+    expect(issues[0].message).toBe(
+      'Filter "Single" sets allowAll but is single-select; drop allowAll or maxSelections',
+    );
+  });
+});
+
+describe('validateDashboardSavedFilterValues', () => {
+  const filters = [
+    {
+      type: 'STATIC_LIST' as const,
+      name: 'Environment',
+      variableName: 'env',
+      allowAll: true,
+    },
+    { type: 'STATIC_LIST' as const, name: 'Region', variableName: 'region' },
+  ];
+
+  const collect = (
+    savedFilterValues: Parameters<typeof validateDashboardSavedFilterValues>[1],
+  ) =>
+    collectRefinementIssues(ctx =>
+      validateDashboardSavedFilterValues(filters, savedFilterValues, ctx),
+    );
+
+  it('accepts "all" on a filter that offers it', () => {
+    expect(collect([{ type: 'variable', name: 'env', all: true }])).toEqual([]);
+  });
+
+  it('rejects "all" on a filter that does not offer it', () => {
+    const issues = collect([
+      { type: 'variable', name: 'env', all: true },
+      { type: 'variable', name: 'region', all: true },
+    ]);
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toEqual(['savedFilterValues', 1, 'all']);
+    expect(issues[0].message).toBe(
+      'Saved filter value for "region" sets all: true, but its filter does not offer "All"; set allowAll on the filter or select specific values',
+    );
+  });
+
+  it('ignores explicit values and names no filter declares', () => {
+    expect(
+      collect([
+        { type: 'variable', name: 'region' },
+        { type: 'variable', name: 'unknown', all: true },
+        { type: 'sql', all: true },
+      ]),
+    ).toEqual([]);
   });
 });
 

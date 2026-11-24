@@ -36,6 +36,7 @@ import {
   escapePromqlStringValue,
   formatVariableValues,
   getVariableReferences,
+  isFilterSingleSelect,
   substituteVariables,
 } from '@/variables';
 
@@ -1128,6 +1129,27 @@ export function isPrometheusLabelFilter<
   T extends { type: DashboardFilterKind },
 >(filter: T): filter is Extract<T, { type: 'PROMETHEUS_LABEL' }> {
   return filter.type === 'PROMETHEUS_LABEL';
+}
+
+/**
+ * Whether the filter's selection can be an "all" value sentinel: a static list
+ * or SQL query filter that opts in with `allowAll` and is multi-select.
+ *
+ * Limited to filters whose option list the author controls, so "all" is a known
+ * set. Query expression and Prometheus label options are capped and scoped to
+ * the time range, so "all" could silently miss values, and a broadcasting query
+ * expression filter would also need a rule for what "all" applies to tiles.
+ */
+export function filterSupportsAllValue(filter: {
+  type: DashboardFilterKind;
+  allowAll?: boolean;
+  maxSelections?: number;
+}): boolean {
+  return (
+    (filter.type === 'STATIC_LIST' || filter.type === 'SQL_QUERY') &&
+    filter.allowAll === true &&
+    !isFilterSingleSelect(filter)
+  );
 }
 
 /** Type guard for ADHOC type filters. */

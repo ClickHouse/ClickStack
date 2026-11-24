@@ -2,6 +2,8 @@ import { z } from 'zod/v3';
 
 import { validateFormula } from './core/formula';
 import {
+  DashboardFilterKind,
+  filterSupportsAllValue,
   getFilterVariableName,
   hasFilterEffect,
   isFilterBroadcastEnabled,
@@ -23,6 +25,7 @@ import {
   DashboardFilter,
   DisplayType,
 } from './types';
+import { isFilterSingleSelect } from './variables';
 
 // Inputs shared by the internal `DashboardSchema` refinement and the
 // external API body schema: the validation only depends on the
@@ -49,6 +52,8 @@ type FilterForGatingValidation = FilterForModeValidation & {
   sourceType?: string;
   where?: string;
   whereLanguage?: string;
+  allowAll?: boolean;
+  maxSelections?: number;
 };
 
 /**
@@ -259,6 +264,8 @@ export function validateDashboardFilterModes<T extends FilterForModeValidation>(
  * - A non-empty `appliesToSourceIds` on a filter that does not broadcast (path `<filtersPath>[i].appliesToSourceIds`).
  * - `where` or `whereLanguage` on a PromQL ad hoc filter, which only SQL ad hoc
  *   filters read (path `<filtersPath>[i].where` / `.whereLanguage`).
+ * - `allowAll` on a single-select filter, where "All" isn't offered
+ *   (path `<filtersPath>[i].allowAll`).
  */
 export function validateDashboardFilterFieldGating<
   T extends FilterForGatingValidation,
@@ -304,6 +311,68 @@ export function validateDashboardFilterFieldGating<
         });
       }
     }
+
+    if (filter.allowAll === true && isFilterSingleSelect(filter)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Filter "${filter.name}" sets allowAll but is single-select; drop allowAll or maxSelections`,
+        path: [...filtersPath, filterIdx, 'allowAll'],
+      });
+    }
+  });
+}
+
+type FilterForAllValueValidation = {
+  type: DashboardFilterKind;
+  name: string;
+  variableName?: string;
+  allowAll?: boolean;
+  maxSelections?: number;
+};
+
+type SavedFilterValueForValidation = {
+  type?: string;
+  name?: string;
+  all?: boolean;
+};
+
+/**
+ * Rejects an `all: true` saved filter value addressed to a filter that cannot
+ * hold one (see `filterSupportsAllValue`). Values for undeclared names are left
+ * alone: the dashboard ignores them when it loads.
+ *
+ * Issues raised:
+ * - `all: true` for a filter that doesn't offer "All"
+ *   (path `<savedFilterValuesPath>[i].all`).
+ */
+export function validateDashboardSavedFilterValues(
+  filters: FilterForAllValueValidation[],
+  savedFilterValues: SavedFilterValueForValidation[],
+  ctx: z.RefinementCtx,
+  paths?: { savedFilterValuesPath?: (string | number)[] },
+): void {
+  const savedFilterValuesPath = paths?.savedFilterValuesPath ?? [
+    'savedFilterValues',
+  ];
+
+  const declaredNames = new Set<string>();
+  const allCapableNames = new Set<string>();
+  for (const filter of filters) {
+    const variableName = getFilterVariableName(filter);
+    if (!variableName) continue;
+    declaredNames.add(variableName);
+    if (filterSupportsAllValue(filter)) allCapableNames.add(variableName);
+  }
+
+  savedFilterValues.forEach((value, valueIdx) => {
+    if (value.type !== 'variable' || !value.all) return;
+    const name = value.name ?? '';
+    if (!declaredNames.has(name) || allCapableNames.has(name)) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Saved filter value for "${name}" sets all: true, but its filter does not offer "All"; set allowAll on the filter or select specific values`,
+      path: [...savedFilterValuesPath, valueIdx, 'all'],
+    });
   });
 }
 

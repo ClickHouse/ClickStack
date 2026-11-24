@@ -5917,11 +5917,14 @@ describe('External API v2 Dashboards - new format', () => {
       ...overrides,
     });
 
-    const sendFilters = async (filters: Record<string, unknown>[]) => {
-      const payload = createMockDashboardWithIds(
-        traceSource._id.toString(),
-        {},
-      );
+    const sendFilters = async (
+      filters: Record<string, unknown>[],
+      savedFilterValues: Record<string, unknown>[] = [],
+    ) => {
+      const payload = {
+        ...createMockDashboardWithIds(traceSource._id.toString(), {}),
+        savedFilterValues,
+      };
       if (method === 'post') {
         // A create body may not choose filter ids, so the shared fixtures shed
         // theirs on this path.
@@ -6151,6 +6154,37 @@ describe('External API v2 Dashboards - new format', () => {
         ]);
 
         expect(response.status).toBe(200);
+      });
+    });
+
+    // Held back until the dashboard UI offers "All".
+    describe('"All" option', () => {
+      it.each([
+        ['STATIC_LIST', () => staticFilterInput({ allowAll: true })],
+        [
+          'SQL_QUERY',
+          () => ({
+            id: new ObjectId().toString(),
+            type: 'SQL_QUERY' as const,
+            name: 'Environment',
+            connectionId: connection._id.toString(),
+            sqlTemplate: 'SELECT DISTINCT env FROM envs',
+            allowAll: true,
+          }),
+        ],
+      ] as const)(
+        'rejects allowAll on a %s filter',
+        async (_type, makeFilter) => {
+          await expectFilters([makeFilter()], 400);
+        },
+      );
+
+      it('rejects a saved "all" value', async () => {
+        const response = await sendFilters(
+          [staticFilterInput()],
+          [{ type: 'variable', name: 'env', values: [], all: true }],
+        );
+        expect(response.status).toBe(400);
       });
     });
 

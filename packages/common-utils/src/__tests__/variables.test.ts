@@ -40,6 +40,8 @@ const substituteVariablesSql = (
 
 const SERVICE = variable('service', ['api', 'web'], 'ServiceName');
 const EMPTY_SERVICE = variable('service', [], 'ServiceName');
+/** "All" selected, with the filter's options already expanded into `values`. */
+const ALL_SERVICE: ChartVariable = { ...SERVICE, all: true };
 
 const builderConfig = (
   overrides: Partial<BuilderChartConfig> = {},
@@ -239,6 +241,14 @@ describe('substituteVariables', () => {
       ).toBe("'checkout'");
     });
 
+    it('renders every option when "All" is selected', () => {
+      expect(
+        substituteVariablesSql('WHERE ServiceName IN ($service)', [
+          ALL_SERVICE,
+        ]),
+      ).toBe("WHERE ServiceName IN ('api', 'web')");
+    });
+
     it('leaves a lone $ and $-digit sequences alone', () => {
       expect(substituteVariablesSql('SELECT $, $1, x$', [SERVICE])).toBe(
         'SELECT $, $1, x$',
@@ -369,6 +379,14 @@ describe('substituteVariables', () => {
       ).toBe("WHERE (1=1 /** no values selected for variable 'service' */)");
     });
 
+    it('matches every option when "All" is selected', () => {
+      expect(
+        substituteVariablesSql('WHERE $__filter(ServiceName, $service)', [
+          ALL_SERVICE,
+        ]),
+      ).toBe("WHERE (ServiceName IN ('api', 'web'))");
+    });
+
     it('substitutes references nested in the expression argument', () => {
       expect(
         substituteVariablesSql(
@@ -460,6 +478,15 @@ describe('substituteVariables', () => {
           [SERVICE],
         ),
       ).toBe("WHERE (ServiceName IN ('api', 'web'))");
+    });
+
+    it('emits a no-op predicate when "All" is selected', () => {
+      expect(
+        substituteVariablesSql(
+          'WHERE $__conditionalAll(ServiceName IN ($service), $service)',
+          [ALL_SERVICE],
+        ),
+      ).toBe("WHERE (1=1 /** all values selected for variable 'service' */)");
     });
 
     it('rejects a name argument written without its $', () => {

@@ -6,6 +6,7 @@ import {
   FilterState,
   filterStateToPredicate,
   filtersToQuery,
+  filterSupportsAllValue,
   getAdhocFilterAppliesToSourceIds,
   getDashboardVariableDeclarations,
   getDashboardVariableFilters,
@@ -2047,6 +2048,40 @@ describe('filters', () => {
 
     it('holds for a cap of one', () => {
       expect(isFilterSingleSelect({ maxSelections: 1 })).toBe(true);
+    });
+  });
+
+  describe('filterSupportsAllValue', () => {
+    it('holds for multi-select static list and SQL query filters that opt in', () => {
+      expect(
+        filterSupportsAllValue({ type: 'STATIC_LIST', allowAll: true }),
+      ).toBe(true);
+      expect(
+        filterSupportsAllValue({ type: 'SQL_QUERY', allowAll: true }),
+      ).toBe(true);
+    });
+
+    it('does not hold without the opt-in', () => {
+      expect(filterSupportsAllValue({ type: 'STATIC_LIST' })).toBe(false);
+      expect(
+        filterSupportsAllValue({ type: 'SQL_QUERY', allowAll: false }),
+      ).toBe(false);
+    });
+
+    it('does not hold for a single-select filter', () => {
+      expect(
+        filterSupportsAllValue({
+          type: 'STATIC_LIST',
+          allowAll: true,
+          maxSelections: 1,
+        }),
+      ).toBe(false);
+    });
+
+    it('does not hold for other filter types', () => {
+      expect(
+        filterSupportsAllValue({ type: 'QUERY_EXPRESSION', allowAll: true }),
+      ).toBe(false);
     });
   });
 

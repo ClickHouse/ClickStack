@@ -1333,6 +1333,8 @@ export const VariableFilterValueSchema = z.object({
   type: z.literal('variable'),
   name: z.string().min(1).max(1024),
   values: z.array(z.string().max(10000)).max(1000),
+  /** When true, represents a selection of "all available values", and `values` is ignored. */
+  all: z.literal(true).optional(),
 });
 
 export type VariableFilterValue = z.infer<typeof VariableFilterValueSchema>;
@@ -1901,6 +1903,11 @@ export const ChartVariableSchema = z.object({
   values: z.array(z.string()),
   /** The filter's selection cap; 1 means the variable is single-select. */
   maxSelections: z.number().optional(),
+  /**
+   * Set when "All" is selected. `values` holds every option once expanded by
+   * `expandAllSelections`, and is empty until then.
+   */
+  all: z.literal(true).optional(),
 });
 
 export type ChartVariable = z.infer<typeof ChartVariableSchema>;
@@ -2416,6 +2423,12 @@ export const QueryExpressionDashboardFilterSchema =
     isVariableEnabled: z.boolean().optional(),
   });
 
+/**
+ * Whether the dropdown offers an "All" option, which selects every option the
+ * filter lists. Multi-select filters only (`validateDashboardFilterFieldGating`).
+ */
+const dashboardFilterAllowAllSchema = z.boolean().optional();
+
 /** A filter whose dropdown offers a hand-authored list. */
 export const StaticListDashboardFilterSchema = dashboardFilterBaseSchema.extend(
   {
@@ -2424,6 +2437,7 @@ export const StaticListDashboardFilterSchema = dashboardFilterBaseSchema.extend(
       .array(z.string().min(1).max(10000))
       .min(1)
       .max(DASHBOARD_STATIC_FILTER_MAX_OPTIONS),
+    allowAll: dashboardFilterAllowAllSchema,
     isBroadcastEnabled: z.literal(false),
     isVariableEnabled: z.literal(true),
   },
@@ -2466,6 +2480,7 @@ export const SqlQueryDashboardFilterSchema = dashboardFilterBaseSchema.extend({
    */
   source: z.string().min(1).optional(),
   sqlTemplate: z.string().min(1),
+  allowAll: dashboardFilterAllowAllSchema,
   // Variable-only: there is no column to broadcast
   isBroadcastEnabled: z.literal(false),
   isVariableEnabled: z.literal(true),
