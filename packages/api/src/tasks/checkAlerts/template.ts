@@ -3,21 +3,32 @@ import { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { getPromqlSeries } from '@hyperdx/common-utils/dist/core/promql';
 import { renderChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import { buildSearchChartConfig } from '@hyperdx/common-utils/dist/core/searchChartConfig';
+import { getSloGroupValue } from '@hyperdx/common-utils/dist/core/slo';
 import {
   formatDate,
   objectHash,
   UTC_TIME_ZONE,
 } from '@hyperdx/common-utils/dist/core/utils';
+import { describeFilter } from '@hyperdx/common-utils/dist/filters';
 import {
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
 import {
+  describeSloAlertRule,
+  describeSloLastWindow,
+  formatSloWindowAdjective,
+  getSloAlertRuleLabel,
+  getSloBurnCondition,
+  getSloBurnWindowMs,
+  getSloWindowMs,
+  type SloBurnStats,
+} from '@hyperdx/common-utils/dist/slo';
+import {
   AlertChannelType,
   AlertThresholdType,
   BuilderChartConfigWithOptDateRange,
   ChartConfigWithOptDateRange,
-  Filter,
   isRangeThresholdType,
   SavedChartConfig,
   SourceKind,
@@ -38,6 +49,7 @@ import {
 } from '@/models/alert';
 import { IDashboard } from '@/models/dashboard';
 import { ISavedSearch } from '@/models/savedSearch';
+import { ISlo } from '@/models/slo';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
 import {
@@ -117,11 +129,6 @@ const describeThreshold = (alert: AlertInput): string => {
     : `${alert.threshold}`;
 };
 
-const describeFilter = (filter: Filter): string =>
-  filter.type === 'sql_ast'
-    ? `${filter.left} ${filter.operator} ${filter.right}`
-    : filter.condition;
-
 const joinConditions = (...parts: (string | undefined)[]): string => {
   const present = parts
     .map(part => part?.trim())
@@ -163,7 +170,18 @@ const describeSourceQuery = (
   alert: AlertInput,
   savedSearch?: ISavedSearch | null,
   dashboard?: IDashboard | null,
+  slo?: ISlo | null,
 ): string => {
+  if (alert.source === AlertSource.SLO) {
+    // The eligible events; the burn rate is the share of them that is bad.
+    const eligible = slo?.indicator.eligible;
+    return eligible
+      ? joinConditions(
+          eligible.where,
+          ...(eligible.filters ?? []).map(describeFilter),
+        )
+      : '';
+  }
   if (alert.source === AlertSource.INLINE) {
     return alert.chartConfig ? describeChartConfigQuery(alert.chartConfig) : '';
   }
@@ -257,9 +275,91 @@ export type AlertMessageTemplateDefaultView = {
   group?: string;
   isGroupedAlert: boolean;
   savedSearch?: ISavedSearch | null;
+  /** SLO alerts: the SLO that owns the alert. */
+  slo?: ISlo | null;
+  /** SLO alerts: the burn numbers of the check that sent the message. */
+  sloBurn?: SloBurnStats[] | null;
   source?: ISource | null;
   startTime: Date;
   value: number;
+};
+
+const formatBurnRate = (rate: number | null) =>
+  rate == null ? 'no events' : `${Math.round(rate * 100) / 100}x`;
+
+type SloMessageNumbers = {
+  burn: SloBurnStats[];
+  budgetRemaining: number | null;
+};
+
+/**
+ * The numbers to state, for the group the message is about or the whole
+ * SLO: the check's own burn numbers, or the SLO's last stored ones when the
+ * message did not bring any (a resolve).
+ */
+const getSloMessageNumbers = (
+  view: AlertMessageTemplateDefaultView,
+): SloMessageNumbers => {
+  const status = view.slo?.status;
+  const group =
+    view.slo != null ? getSloGroupValue(view.slo, view.group) : undefined;
+  const numbers =
+    group != null ? status?.groups?.find(g => g.value === group) : status;
+  return {
+    burn: view.sloBurn ?? numbers?.burn ?? [],
+    budgetRemaining: numbers?.budgetRemaining ?? null,
+  };
+};
+
+const formatShare = (share: number) => `${Math.round(share * 1000) / 10}%`;
+
+/**
+ * The burn alert that sent the message, and its rule's numbers: the share
+ * of the SLO window's budget spent in the rule's long window, at its burn
+ * rate.
+ */
+const getSloRuleMessage = (view: AlertMessageTemplateDefaultView) => {
+  const rule = view.alert.sloRule ?? 'fastBurn';
+  const { burn, budgetRemaining } = getSloMessageNumbers(view);
+  const condition = burn.find(c => c.rule === rule);
+  const spent =
+    condition?.burnRate != null && view.slo != null
+      ? (condition.burnRate * getSloBurnWindowMs(condition.window)) /
+        getSloWindowMs(view.slo.window)
+      : null;
+  return { rule, condition, spent, budgetRemaining };
+};
+
+/** What the burn alert saw, and when it fires. */
+const describeSloBurn = (
+  slo: ISlo,
+  {
+    rule,
+    condition,
+    spent,
+    budgetRemaining,
+  }: ReturnType<typeof getSloRuleMessage>,
+) => {
+  const { window, shortWindow } = getSloBurnCondition(rule);
+  const budget = `${formatSloWindowAdjective(slo.window)} error budget`;
+  return [
+    condition != null && spent != null
+      ? `${getSloAlertRuleLabel(rule)}: ${formatShare(spent)} of the ` +
+        `${budget} was spent in ${describeSloLastWindow(window)} ` +
+        `(${formatBurnRate(condition.burnRate)} the allowed rate), and ` +
+        `${describeSloLastWindow(shortWindow)} burned at ` +
+        `${formatBurnRate(condition.shortBurnRate)}.`
+      : null,
+    `It fires when ${describeSloAlertRule(rule, slo.window)} and ` +
+      `${describeSloLastWindow(shortWindow)} burn as fast.`,
+    budgetRemaining == null
+      ? null
+      : budgetRemaining > 0
+        ? `Error budget left: ${formatShare(budgetRemaining)}.`
+        : 'The error budget for the window is spent.',
+  ]
+    .filter(part => part != null)
+    .join(' ');
 };
 
 export const isAlertResolved = (state?: AlertState): boolean => {
@@ -303,10 +403,23 @@ export const buildAlertMessageTemplateHdxLink = (
     dashboard,
     endTime,
     granularity,
+    group,
     savedSearch,
+    slo,
     startTime,
   }: AlertMessageTemplateDefaultView,
 ) => {
+  if (alert.source === AlertSource.SLO) {
+    if (slo == null) {
+      throw new Error(`Source is ${alert.source} but slo is null`);
+    }
+    return alertProvider.buildSloLink({
+      sloId: slo._id.toString(),
+      endTime,
+      startTime,
+      group: getSloGroupValue(slo, group),
+    });
+  }
   if (alert.source === AlertSource.SAVED_SEARCH) {
     if (savedSearch == null) {
       throw new Error(`Source is ${alert.source} but savedSearch is null`);
@@ -346,8 +459,11 @@ export const buildAlertMessageTemplateHdxLink = (
 
 export const buildAlertMessageTemplateTitle = ({
   view,
+  state,
 }: {
   view: AlertMessageTemplateDefaultView;
+  /** SLO titles follow the alert's state: its rule is not the value alone. */
+  state?: AlertState;
 }) => {
   const { alert, dashboard, savedSearch, value } = view;
   const handlebars = createHandlebarsWithHelpers();
@@ -369,6 +485,25 @@ export const buildAlertMessageTemplateTitle = ({
     dashboard,
   });
 
+  if (alert.source === AlertSource.SLO) {
+    const { rule, spent } = getSloRuleMessage(view);
+    // A grouped SLO's message is about one of its groups.
+    const subject =
+      `SLO "${displayName}"${view.group ? ` (${view.group})` : ''}: ` +
+      getSloAlertRuleLabel(rule).toLowerCase();
+    const { window } = getSloBurnCondition(rule);
+    return (
+      renderedTemplate ??
+      (state != null && isAlertResolved(state)
+        ? `${subject} resolved`
+        : subject +
+          (spent != null && view.slo != null
+            ? `, ${formatShare(spent)} of the ` +
+              `${formatSloWindowAdjective(view.slo.window)} budget spent in ` +
+              describeSloLastWindow(window)
+            : ''))
+    );
+  }
   if (alert.source === AlertSource.SAVED_SEARCH) {
     if (savedSearch == null) {
       throw new Error(`Source is ${alert.source}  but savedSearch is null`);
@@ -764,7 +899,7 @@ export const renderAlertTemplate = async ({
         groupKey: group ?? '',
         groupValues: groupValues ?? {},
         sourceQuery: truncateString(
-          describeSourceQuery(alert, savedSearch, dashboard),
+          describeSourceQuery(alert, savedSearch, dashboard, view.slo),
           MAX_SOURCE_QUERY_LENGTH,
         ),
         teamId,
@@ -936,6 +1071,13 @@ ${targetTemplate}
 \`\`\`
 {{{__hdx_query_results__}}}
 \`\`\``;
+  } else if (alert.source === AlertSource.SLO) {
+    if (view.slo == null) {
+      throw new Error(`Source is ${alert.source} but slo is null`);
+    }
+    rawTemplateBody = `{{#if group}}Group: "{{{group}}}"
+{{/if}}${describeSloBurn(view.slo, getSloRuleMessage(view))}\n${timeRangeMessage}
+${targetTemplate}`;
   } else if (
     alert.source === AlertSource.TILE ||
     alert.source === AlertSource.INLINE

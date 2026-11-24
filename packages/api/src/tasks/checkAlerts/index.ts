@@ -23,6 +23,10 @@ import {
   buildSearchChartConfig,
 } from '@hyperdx/common-utils/dist/core/searchChartConfig';
 import {
+  buildSloBurnChartConfig,
+  getSloGroupBy,
+} from '@hyperdx/common-utils/dist/core/slo';
+import {
   aliasMapToWithClauses,
   displayTypeSupportsBuilderAlerts,
   displayTypeSupportsRawSqlAlerts,
@@ -36,6 +40,7 @@ import {
   isRawSqlChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import type { SloBurnStats } from '@hyperdx/common-utils/dist/slo';
 import {
   ALERT_NOTIFICATION_TARGETS_LIMIT,
   AlertErrorType,
@@ -70,6 +75,7 @@ import AlertHistory, {
 } from '@/models/alertHistory';
 import { IDashboard } from '@/models/dashboard';
 import { ISavedSearch } from '@/models/savedSearch';
+import { ISlo } from '@/models/slo';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
 import {
@@ -157,6 +163,10 @@ export const alertHasGroupBy = (
   // AlertChartConfig members are the tile config types minus the embedded
   // alert field, so they're assignable to SavedChartConfig (which the
   // chart-config guards narrow on).
+  // A grouped SLO's alert keeps a state for each group the SLO tracks.
+  if (details.taskType === AlertTaskType.SLO) {
+    return getSloGroupBy(details.slo) != null;
+  }
   const savedConfig: SavedChartConfig | undefined =
     details.taskType === AlertTaskType.TILE
       ? details.tile.config
@@ -249,7 +259,7 @@ const QUERY_TIMEOUT_RETRY_NOTE =
  * (client request timeout/abort, server-side TIMEOUT_EXCEEDED, socket
  * timeouts) separately from other query errors so the message is actionable.
  */
-const makeQueryAlertError = (
+export const makeQueryAlertError = (
   e: unknown,
   requestTimeoutMs: number,
 ): IAlertError => {
@@ -504,6 +514,8 @@ const fireChannelEvent = async ({
   isGroupedAlert,
   metadata,
   savedSearch,
+  slo,
+  sloBurn,
   source,
   startTime,
   state,
@@ -522,6 +534,8 @@ const fireChannelEvent = async ({
   isGroupedAlert: boolean;
   metadata: Metadata;
   savedSearch?: ISavedSearch | null;
+  slo?: ISlo | null;
+  sloBurn?: SloBurnStats[] | null;
   source?: ISource | null;
   startTime: Date;
   state: AlertState;
@@ -568,6 +582,8 @@ const fireChannelEvent = async ({
       thresholdMax: alert.thresholdMax,
       thresholdType: alert.thresholdType,
       tileId: alert.tileId,
+      // SLO alerts: which of the SLO's burn alerts sent the message.
+      sloRule: alert.sloRule,
       // Inline alerts: the persisted config, used to build the explorer link
       // and the default notification title.
       chartConfig: alert.chartConfig,
@@ -579,6 +595,8 @@ const fireChannelEvent = async ({
     group,
     isGroupedAlert,
     savedSearch,
+    slo,
+    sloBurn,
     source,
     startTime,
     value: totalCount,
@@ -589,7 +607,7 @@ const fireChannelEvent = async ({
     clickhouseClient,
     metadata,
     state,
-    title: buildAlertMessageTemplateTitle({ view: templateView }),
+    title: buildAlertMessageTemplateTitle({ view: templateView, state }),
     template: alert.message,
     view: templateView,
     teamId,
@@ -631,7 +649,10 @@ export const computeHistoryMapKey = (
  * Safely handles group names that may contain colons or other special characters
  * by using the alert ID prefix with the delimiter to identify the split point.
  */
-const extractGroupKeyFromMapKey = (mapKey: string, alertId: string): string => {
+export const extractGroupKeyFromMapKey = (
+  mapKey: string,
+  alertId: string,
+): string => {
   const alertIdPrefix = getAlertKeyPrefix(alertId);
   return mapKey.startsWith(alertIdPrefix)
     ? mapKey.substring(alertIdPrefix.length)
@@ -910,6 +931,23 @@ const getChartConfigFromAlert = (
     if (config != null) {
       return config;
     }
+  } else if (details.taskType === AlertTaskType.SLO) {
+    // SLO alerts count eligible and good events per 5 minutes over the
+    // burn rule's longest window, ending where the scheduled window ends;
+    // the SLO evaluator sums each condition's windows from the buckets. A
+    // grouped SLO's alert counts by group, for the groups the SLO tracks.
+    const { slo, source } = details;
+    const scope =
+      getSloGroupBy(slo) != null
+        ? {
+            byGroup: true as const,
+            groups: slo.status?.groups?.map(g => g.value) ?? [],
+          }
+        : undefined;
+    return {
+      ...buildSloBurnChartConfig({ slo, source, now: dateRange[1], scope }),
+      connection,
+    };
   } else if (details.taskType === AlertTaskType.INLINE) {
     // Inline alerts have no dashboard, so no variables are declared.
     const config = buildAlertChartConfigFromSavedConfig({
@@ -1349,12 +1387,14 @@ export const processAlert = async (
       state,
       startTime = nowInMinsRoundDown,
       attributes = {},
+      sloBurn,
     }: {
       state: AlertState;
       totalCount: number;
       group: string;
       startTime?: Date;
       attributes?: Record<string, string>;
+      sloBurn?: SloBurnStats[];
     }): Promise<boolean> => {
       // KNOWN LIMITATION: Alert data (including silenced state) is fetched when
       // the task is queued via AlertProvider, not when it processes. If a user
@@ -1397,11 +1437,18 @@ export const processAlert = async (
             clickhouseClient,
             dashboard: (details as any).dashboard,
             startTime,
-            endTime: fns.addMinutes(startTime, windowSizeInMins),
+            // An SLO alert's window is the burn window, which ends where the
+            // scheduled window ends.
+            endTime:
+              details.taskType === AlertTaskType.SLO
+                ? dateRange[1]
+                : fns.addMinutes(startTime, windowSizeInMins),
             group,
             isGroupedAlert: hasGroupBy,
             metadata,
             savedSearch: (details as any).savedSearch,
+            slo: details.taskType === AlertTaskType.SLO ? details.slo : null,
+            sloBurn,
             source,
             state,
             totalCount,

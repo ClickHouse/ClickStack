@@ -1,3 +1,5 @@
+import { computeSloStats } from '@hyperdx/common-utils/dist/core/sloStats';
+import type { SloBurnStats, SloStatus } from '@hyperdx/common-utils/dist/slo';
 import {
   AlertState,
   AlertThresholdType,
@@ -16,6 +18,7 @@ import {
   RAW_SQL_ALERT_TEMPLATE,
 } from '@/fixtures';
 import { AlertSource } from '@/models/alert';
+import type { ISlo } from '@/models/slo';
 import type { IWebhook } from '@/models/webhook';
 import {
   NotificationDispatcher,
@@ -24,6 +27,7 @@ import {
 import { loadProvider } from '@/tasks/checkAlerts/providers';
 import {
   AlertMessageTemplateDefaultView,
+  buildAlertMessageTemplateHdxLink,
   buildAlertMessageTemplateTitle,
   renderAlertTemplate,
 } from '@/tasks/checkAlerts/template';
@@ -1221,5 +1225,204 @@ describe('notification targets are resolved once per webhook', () => {
     expect(dispatched).toHaveLength(1);
     expect(failures).toHaveLength(1);
     expect(String(failures[0].error)).toContain('not a webhook channel');
+  });
+});
+
+describe('SLO alerts', () => {
+  const sloId = new mongoose.Types.ObjectId();
+
+  /** Both rules' numbers, with each long and short window at its rate. */
+  const burn = (fastRate: number, slowRate = 1): SloBurnStats[] => [
+    {
+      rule: 'fastBurn',
+      window: '1h',
+      shortWindow: '5m',
+      budgetSpent: 0.02,
+      minEvents: 20,
+      threshold: 14.4,
+      eligible: 1000,
+      bad: fastRate * 5,
+      burnRate: fastRate,
+      shortBurnRate: fastRate,
+    },
+    {
+      rule: 'slowBurn',
+      window: '6h',
+      shortWindow: '30m',
+      budgetSpent: 0.05,
+      minEvents: 100,
+      threshold: 6,
+      eligible: 6000,
+      bad: slowRate * 30,
+      burnRate: slowRate,
+      shortBurnRate: slowRate,
+    },
+  ];
+
+  /**
+   * Stats over 100,000 events against a 0.5% budget (500 bad events), with
+   * `budgetRemaining` of it left.
+   */
+  const stats = (budgetRemaining: number, rate: number) =>
+    computeSloStats(
+      { eligible: 100_000, good: 100_000 - (1 - budgetRemaining) * 500 },
+      burn(rate),
+      99.5,
+    );
+
+  const status: SloStatus = {
+    ...stats(0.9, 1),
+    state: 'healthy',
+    evaluatedAt: endTime.toISOString(),
+    windowStart: startTime.toISOString(),
+    windowEnd: endTime.toISOString(),
+    durationMs: 0,
+    rowsRead: 0,
+  };
+
+  const slo: ISlo = {
+    _id: sloId,
+    team: new mongoose.Types.ObjectId(),
+    source: new mongoose.Types.ObjectId(),
+    version: 1,
+    name: 'Checkout availability',
+    tags: [],
+    indicator: {
+      template: 'availability',
+      eligible: { where: "SpanKind = 'Server'", whereLanguage: 'sql' },
+      good: "StatusCode != 'Error'",
+    },
+    target: 99.5,
+    window: '30d',
+    alerts: {},
+    status,
+    createdAt: startTime,
+    updatedAt: startTime,
+  };
+
+  const groupedSlo: ISlo = {
+    ...slo,
+    groupBy: 'ServiceName',
+    status: {
+      ...status,
+      groups: [
+        { ...stats(0.25, 40), value: 'checkout', state: 'burning' },
+        { ...stats(1, 0), value: 'cart', state: 'healthy' },
+      ],
+    },
+  };
+
+  const makeSloView = (
+    overrides: Partial<AlertMessageTemplateDefaultView> = {},
+    rule: 'fastBurn' | 'slowBurn' = 'fastBurn',
+  ): AlertMessageTemplateDefaultView => ({
+    alert: {
+      source: AlertSource.SLO,
+      sloRule: rule,
+      displayName: 'Checkout availability',
+      thresholdType: AlertThresholdType.ABOVE,
+      threshold: 1,
+      channel: { type: null },
+      interval: rule === 'slowBurn' ? '15m' : '5m',
+    },
+    attributes: {},
+    endTime,
+    granularity: '5 minute',
+    isGroupedAlert: false,
+    slo,
+    startTime,
+    value: 1.38,
+    ...overrides,
+  });
+
+  const checkout = {
+    slo: groupedSlo,
+    group: 'ServiceName:checkout',
+    isGroupedAlert: true,
+  };
+
+  it('states what the fast burn alert saw and when it fires', async () => {
+    const view = makeSloView({ sloBurn: burn(20) });
+    const body = await render(view, AlertState.ALERT);
+    expect(body).not.toContain('Group:');
+    // 20x for an hour of a 30-day window: 20 / 720 of the budget.
+    expect(body).toContain(
+      'Fast burn: 2.8% of the 30-day error budget was spent in the last ' +
+        'hour (20x the allowed rate), and the last 5 minutes burned at 20x. ' +
+        'It fires when 2% of the 30-day error budget is spent within 1 hour ' +
+        '(14.4x the allowed rate) and the last 5 minutes burn as fast. ' +
+        'Error budget left: 90%.',
+    );
+    expect(
+      buildAlertMessageTemplateTitle({ view, state: AlertState.ALERT }),
+    ).toBe(
+      'SLO "Checkout availability": fast burn, 2.8% of the 30-day budget spent in the last hour',
+    );
+  });
+
+  it('states the slow burn of the slow burn alert', async () => {
+    const overspent: ISlo = {
+      ...slo,
+      status: { ...status, ...stats(-0.2, 1) },
+    };
+    const view = makeSloView(
+      { slo: overspent, sloBurn: burn(1, 7) },
+      'slowBurn',
+    );
+    const body = await render(view, AlertState.ALERT);
+    expect(body).toContain(
+      'Slow burn: 5.8% of the 30-day error budget was spent in the last 6 ' +
+        'hours (7x the allowed rate), and the last 30 minutes burned at 7x. ' +
+        'It fires when 5% of the 30-day error budget is spent within 6 ' +
+        'hours (6x the allowed rate) and the last 30 minutes burn as fast. ' +
+        'The error budget for the window is spent.',
+    );
+    expect(
+      buildAlertMessageTemplateTitle({ view, state: AlertState.ALERT }),
+    ).toBe(
+      'SLO "Checkout availability": slow burn, 5.8% of the 30-day budget spent in the last 6 hours',
+    );
+  });
+
+  it("names the group of a grouped SLO and states the group's numbers", async () => {
+    const view = makeSloView({ ...checkout, sloBurn: burn(40) });
+    const body = await render(view, AlertState.ALERT);
+    expect(body).toContain('Group: "ServiceName:checkout"');
+    expect(body).toContain('Fast burn: 5.6% of the 30-day error budget');
+    expect(body).toContain('Error budget left: 25%.');
+    expect(
+      buildAlertMessageTemplateTitle({ view, state: AlertState.ALERT }),
+    ).toBe(
+      'SLO "Checkout availability" (ServiceName:checkout): fast burn, 5.6% of the 30-day budget spent in the last hour',
+    );
+    expect(
+      buildAlertMessageTemplateTitle({
+        view: makeSloView(checkout),
+        state: AlertState.OK,
+      }),
+    ).toBe(
+      'SLO "Checkout availability" (ServiceName:checkout): fast burn resolved',
+    );
+  });
+
+  it('links to the bad events of the window, for the group', () => {
+    const link = new URL(
+      buildAlertMessageTemplateHdxLink(alertProvider, makeSloView(checkout)),
+    );
+    expect(link.pathname).toBe(`/slos/${sloId}`);
+    expect(Object.fromEntries(link.searchParams)).toEqual({
+      bad: 'custom',
+      from: String(startTime.getTime()),
+      to: String(endTime.getTime()),
+      group: 'checkout',
+    });
+    // A group of what the SLO was grouped by before links to the whole SLO.
+    const stale = new URL(
+      buildAlertMessageTemplateHdxLink(
+        alertProvider,
+        makeSloView({ ...checkout, group: 'SpanName:GET /cart' }),
+      ),
+    );
+    expect(stale.searchParams.has('group')).toBe(false);
   });
 });

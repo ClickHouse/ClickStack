@@ -179,6 +179,7 @@ describe('CheckAlertTask', () => {
         asyncDispose: jest.fn(),
         buildChartLink: jest.fn(),
         buildChartExplorerLink: jest.fn(),
+        buildSloLink: jest.fn(),
         buildLogSearchLink: jest.fn(),
         getClickHouseClient: jest
           .fn()
