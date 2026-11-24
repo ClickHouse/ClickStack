@@ -1,7 +1,8 @@
 import { quoteIdentifierIfNeeded } from '@hyperdx/common-utils/dist/core/metadata';
 
 import { getPromqlLabelCatalog } from '@/controllers/promql';
-import type { ToolResult } from '@/mcp/tools/types';
+import type { McpContext, ToolResult } from '@/mcp/tools/types';
+import { getMcpConnection } from '@/mcp/utils/connections';
 import { PROMQL_QUERY_USAGE, timeSeriesSqlUsage } from '@/mcp/utils/promql';
 import logger from '@/utils/logger';
 
@@ -18,14 +19,14 @@ const MAX_METRIC_NAMES = 200;
  * metric's.
  */
 export async function describePromqlSource({
-  teamId,
+  context,
   source,
   metricName,
   meta,
   signal,
   progress,
 }: {
-  teamId: string;
+  context: McpContext;
   metricName?: string;
   source: Parameters<typeof getPromqlLabelCatalog>[0]['source'];
   meta: Record<string, unknown>;
@@ -44,13 +45,15 @@ export async function describePromqlSource({
   const endMs = Date.now();
   try {
     const catalog = await getPromqlLabelCatalog({
-      teamId,
+      teamId: context.teamId,
       source,
       startMs: endMs - LABEL_LOOKBACK_MS,
       endMs,
       metricName,
       limit: Math.max(MAX_LABEL_NAMES, MAX_METRIC_NAMES),
       signal,
+      getConnection: (connectionId, options) =>
+        getMcpConnection(context, connectionId, options),
     });
     const { labelNames, metricNames } = catalog;
     const truncated =
@@ -101,7 +104,7 @@ export async function describePromqlSource({
     );
   } catch (e) {
     logger.warn(
-      { teamId, error: e },
+      { teamId: context.teamId, error: e },
       'Failed to list labels for a PromQL source',
     );
     progress.partial = true;
