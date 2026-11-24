@@ -2,6 +2,7 @@ import type { Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { getSloDefaultDuration } from '@hyperdx/common-utils/dist/core/sloLatency';
 import {
+  type SloApiResponse,
   type SloInput,
   SloInputSchema,
   type SloLatency,
@@ -43,6 +44,29 @@ export const DEFAULT_SLO_FORM_VALUES: SloFormValues = {
   target: 99.9,
   window: '30d',
 };
+
+export function sloToFormValues(slo: SloApiResponse): SloFormValues {
+  const { template, eligible, good, latency } = slo.indicator;
+  return {
+    name: slo.name,
+    description: slo.description ?? '',
+    tags: slo.tags,
+    source: slo.source,
+    indicator: {
+      template,
+      // Kept as saved, with any filters the builder does not show.
+      eligible,
+      good: good ?? '',
+      latency: latency ?? DEFAULT_LATENCY,
+    },
+    // Kept as saved, so editing a grouped SLO keeps its groups.
+    groupBy: slo.groupBy,
+    target: slo.target,
+    window: slo.window,
+    // Kept as saved, so editing an SLO keeps its alerts.
+    alerts: slo.alerts,
+  };
+}
 
 /**
  * The source's duration column and its unit, when the expression is that

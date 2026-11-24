@@ -1,7 +1,8 @@
+import Link from 'next/link';
 import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
 import { ActionIcon, Menu } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconDots, IconTrash } from '@tabler/icons-react';
+import { IconDots, IconPencil, IconTrash } from '@tabler/icons-react';
 
 import { useDeleteSlo } from '@/slo';
 import { useConfirm } from '@/useConfirm';
@@ -51,6 +52,14 @@ export function SloRowMenu({ slo }: { slo: SloApiResponse }) {
         </ActionIcon>
       </Menu.Target>
       <Menu.Dropdown onClick={e => e.stopPropagation()}>
+        <Menu.Item
+          component={Link}
+          href={`/slos/${slo.id}/edit`}
+          leftSection={<IconPencil size={14} />}
+        >
+          Edit
+        </Menu.Item>
+        <Menu.Divider />
         <Menu.Item
           color="red"
           leftSection={<IconTrash size={14} />}

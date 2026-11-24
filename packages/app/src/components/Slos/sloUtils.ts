@@ -1,4 +1,8 @@
-import type { SloApiResponse, SloState } from '@hyperdx/common-utils/dist/slo';
+import type {
+  SloApiResponse,
+  SloState,
+  SloWindow,
+} from '@hyperdx/common-utils/dist/slo';
 
 /** An SLO's state as shown: pending until the background computes it. */
 export type SloDisplayState = SloState | 'pending';
@@ -78,6 +82,10 @@ export function formatBurnRate(burnRate: number | null | undefined): string {
   if (burnRate == null) return '-';
   if (burnRate >= 100) return `${Math.round(burnRate)}x`;
   return `${burnRate.toFixed(burnRate >= 10 ? 1 : 2)}x`;
+}
+
+export function formatSloWindow(window: SloWindow): string {
+  return window === '7d' ? '7 days' : '30 days';
 }
 
 export function budgetColorVar(budget: number | null | undefined): string {

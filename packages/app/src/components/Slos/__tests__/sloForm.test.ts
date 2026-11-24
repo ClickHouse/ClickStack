@@ -1,10 +1,12 @@
 import type { FieldErrors } from 'react-hook-form';
+import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
 import { SourceKind, type TSource } from '@hyperdx/common-utils/dist/types';
 
 import {
   DEFAULT_SLO_FORM_VALUES,
   sloFormResolver,
   type SloFormValues,
+  sloToFormValues,
   toSloInput,
 } from '@/components/Slos/sloForm';
 
@@ -44,6 +46,33 @@ const latency = (expression: string): SloFormValues => ({
     latency: { ...valid.indicator.latency, expression },
   },
 });
+
+const savedSlo: SloApiResponse = {
+  version: 1,
+  name: 'Checkout availability',
+  source: 'source-1',
+  indicator: {
+    template: 'availability',
+    eligible: {
+      where: "SpanKind = 'Server'",
+      whereLanguage: 'sql',
+      filters: [{ type: 'sql', condition: "ServiceName = 'checkout'" }],
+    },
+    good: "StatusCode != 'Error'",
+  },
+  target: 99.5,
+  window: '7d',
+  groupBy: 'ServiceName',
+  tags: ['checkout'],
+  description: 'Checkout requests that do not fail',
+  alerts: {
+    fastBurn: { channels: [{ type: 'webhook', webhookId: 'hook-1' }] },
+  },
+  alertStates: {},
+  id: 'slo-1',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+};
 
 const resolve = (values: SloFormValues) =>
   sloFormResolver(values, undefined, {
@@ -120,5 +149,22 @@ describe('SLO form', () => {
       toSloInput(withUnit("SpanAttributes['duration_ms']"), traceSource)
         .indicator.latency?.unit,
     ).toBe('ms');
+  });
+
+  it('loads a saved SLO back into the form unchanged', () => {
+    const saved = savedSlo;
+    const values = sloToFormValues(saved);
+    expect(toSloInput(values)).toEqual(
+      expect.objectContaining({
+        name: saved.name,
+        description: saved.description,
+        tags: saved.tags,
+        indicator: saved.indicator,
+        target: saved.target,
+        window: saved.window,
+        groupBy: saved.groupBy,
+        alerts: saved.alerts,
+      }),
+    );
   });
 });
