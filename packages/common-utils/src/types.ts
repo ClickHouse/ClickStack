@@ -1870,12 +1870,6 @@ export const _ChartConfigSchema = SharedChartSettingsSchema.extend({
   sampleWeightExpression: z.string().optional(),
   markdown: z.string().optional(),
   filtersLogicalOperator: z.enum(['AND', 'OR']).optional(),
-  // Whether multi-predicate AND is evaluated per span (default) or across all
-  // spans of a trace. Absence resolves to span, preserving existing output.
-  filtersScope: SearchScopeSchema.optional(),
-  // Trace-id expression carried from the source; only trace scope reads it.
-  // Absence disables the trace-scope rewrite (fail-closed to span).
-  traceIdExpression: z.string().optional(),
   filters: z.array(FilterSchema).optional(),
   connection: z.string(),
   selectGroupBy: z.boolean().optional(),
@@ -2103,6 +2097,20 @@ export type DateRange = {
   // match spans that straddle a window boundary instead of only seeing the
   // current chunk's window. Never persisted.
   traceScopeDateRange?: [Date, Date];
+  // Runtime-only trace-scope search fields, set by buildSearchChartConfig from
+  // the search's scope and its source; never persisted, so dashboard tiles and
+  // tile alerts cannot carry a trace-scope rewrite or a stale copy of the
+  // source's trace-id expression. `filtersScope: 'trace'` evaluates
+  // multi-predicate AND across all spans of a trace instead of per span; it
+  // only takes effect with a `traceIdExpression` (absent: fail-closed to span).
+  filtersScope?: SearchScope;
+  traceIdExpression?: string;
+  // Runtime-only: filters on the returned rows themselves, AND-ed onto the
+  // query and never folded into a trace-scope membership subquery. A caller
+  // that narrows a trace-scoped search to some of its spans (DBDeltaChart's
+  // selection box) uses it so the user's predicates stay trace-scoped while
+  // its own stay span-level. Never persisted.
+  traceScopeOuterFilters?: Filter[];
   // Runtime-only, populated from the queried Metric or PromQL source's
   // `minAutoGranularity` (when set) by whichever caller resolves the source
   // before rendering. Floors "auto" granularity resolution; see

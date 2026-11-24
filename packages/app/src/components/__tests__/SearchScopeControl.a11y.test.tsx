@@ -3,10 +3,6 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { SearchScopeControl } from '@/components/DBSearchPageFilters';
-import {
-  getScopeIndicatorLabel,
-  getTraceZeroEmptyDescription,
-} from '@/DBSearchPage';
 
 const traceSource = {
   id: 'trace-src',
@@ -124,27 +120,5 @@ describe('SearchScopeControl accessibility', () => {
     screen.getByRole('radio', { name: /span/i }).focus();
     await userEvent.keyboard('{ArrowRight}');
     expect(onChange).toHaveBeenCalledWith('trace');
-  });
-});
-
-describe('result-scope surface states', () => {
-  it('@AC-FR004-01 labels a trace-scoped result header with the trace scope', () => {
-    renderWithMantine(
-      <span aria-label={getScopeIndicatorLabel('trace')}>
-        {getScopeIndicatorLabel('trace')}
-      </span>,
-    );
-
-    expect(screen.getByLabelText('Scope: Trace')).toHaveTextContent(
-      'Scope: Trace',
-    );
-  });
-
-  it('@AC-FR004-02 renders the trace-zero empty as labelled copy, not a blank', () => {
-    const description = getTraceZeroEmptyDescription();
-    renderWithMantine(<div>{description}</div>);
-
-    expect(screen.getByText(description)).toBeInTheDocument();
-    expect(description.toLowerCase()).toContain('trace');
   });
 });

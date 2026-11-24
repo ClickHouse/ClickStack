@@ -2,14 +2,7 @@ import {
   ALERT_COUNT_DEFAULT_SELECT,
   buildSearchChartConfig,
 } from '@/core/searchChartConfig';
-import {
-  ChartConfig,
-  DisplayType,
-  Filter,
-  SourceKind,
-  TraceScopeResolution,
-  TSource,
-} from '@/types';
+import { DisplayType, Filter, SourceKind, TSource } from '@/types';
 
 // Factory helpers keep tests focused on the behavior under test rather than
 // the full source shape. We cast to TSource because most per-kind fields are
@@ -571,55 +564,6 @@ describe('buildSearchChartConfig', () => {
       });
 
       expect(config.traceIdExpression).toBe('TraceId');
-    });
-
-    it('accepts filtersScope as an optional span/trace field on ChartConfig', () => {
-      // @AC-FR002-01
-      const spanConfig: ChartConfig = {
-        connection: 'conn-1',
-        source: 'trace-source-1',
-        from: { databaseName: 'default', tableName: 'otel_traces' },
-        select: '',
-        where: '',
-        whereLanguage: 'sql',
-        timestampValueExpression: 'Timestamp',
-        filtersScope: 'span',
-      };
-      const traceConfig: ChartConfig = { ...spanConfig, filtersScope: 'trace' };
-      const unscopedConfig: ChartConfig = { ...spanConfig };
-      delete unscopedConfig.filtersScope;
-
-      expect(spanConfig.filtersScope).toBe('span');
-      expect(traceConfig.filtersScope).toBe('trace');
-      expect(unscopedConfig.filtersScope).toBeUndefined();
-    });
-  });
-
-  describe('TraceScopeResolution placeholder type', () => {
-    it('narrows the applicable branch to expose traceIdExpression', () => {
-      // @AC-FR002-01
-      const resolution: TraceScopeResolution = {
-        applicable: true,
-        traceIdExpression: 'TraceId',
-      };
-
-      expect(resolution.applicable).toBe(true);
-      if (resolution.applicable) {
-        expect(resolution.traceIdExpression).toBe('TraceId');
-      }
-    });
-
-    it('narrows the inapplicable branch to expose a reason', () => {
-      // @AC-FR002-01
-      const resolution: TraceScopeResolution = {
-        applicable: false,
-        reason: 'non-trace-source',
-      };
-
-      expect(resolution.applicable).toBe(false);
-      if (!resolution.applicable) {
-        expect(resolution.reason).toBe('non-trace-source');
-      }
     });
   });
 

@@ -55,7 +55,6 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
-  Alert,
   Anchor,
   Badge,
   Box,
@@ -148,6 +147,12 @@ import {
   useUpdateSavedSearch,
 } from '@/savedSearch';
 import { useSearchPageFilterState } from '@/searchFilters';
+import {
+  resolveSearchScope,
+  SEARCH_SCOPE_PARAM,
+  TRACE_SCOPE_LABEL,
+  TRACE_ZERO_EMPTY_DESCRIPTION,
+} from '@/searchScope';
 import { getEventBody, useSource, useSources } from '@/source';
 import {
   parseRelativeTimeQuery,
@@ -241,25 +246,6 @@ export const SearchConfigSchema = z.object({
 });
 
 type SearchConfigFromSchema = z.infer<typeof SearchConfigSchema>;
-
-export function resolveSearchScope(
-  scope: string | null | undefined,
-): SearchScope {
-  return scope === 'trace' ? 'trace' : 'span';
-}
-
-export const SEARCH_SCOPE_PARAM = parseAsStringEnum<SearchScope>([
-  'span',
-  'trace',
-]);
-
-export function getScopeIndicatorLabel(scope: SearchScope): string {
-  return scope === 'trace' ? 'Scope: Trace' : 'Scope: Span';
-}
-
-export function getTraceZeroEmptyDescription(): string {
-  return 'No traces match all predicates at trace scope.';
-}
 
 const QUERY_KEY_PREFIX = 'search';
 // The RED tiles are auxiliary viz, not the results query, so they key their
@@ -3106,9 +3092,9 @@ function DBSearchPageContent() {
                                   variant="light"
                                   color="blue"
                                   radius="sm"
-                                  aria-label={getScopeIndicatorLabel('trace')}
+                                  aria-label={TRACE_SCOPE_LABEL}
                                 >
-                                  {getScopeIndicatorLabel('trace')}
+                                  {TRACE_SCOPE_LABEL}
                                 </Badge>
                               )}
                               {traceChartsSource != null && (
@@ -3206,29 +3192,6 @@ function DBSearchPageContent() {
                   {hasQueryError && queryError ? (
                     <>
                       <div className="h-100 w-100 px-4 mt-4 align-items-center justify-content-center text-muted overflow-auto">
-                        <Alert
-                          variant="danger"
-                          title="Query failed"
-                          mb="md"
-                          data-testid="search-query-error"
-                        >
-                          <Group justify="space-between" align="center">
-                            <Text size="sm">
-                              {traceScopeActive
-                                ? `The query didn't complete, so this is not a zero-result. ${getScopeIndicatorLabel(
-                                    'trace',
-                                  )}.`
-                                : "The query didn't complete, so this is not a zero-result."}
-                            </Text>
-                            <Button
-                              variant="secondary"
-                              size="xs"
-                              onClick={() => onSubmit()}
-                            >
-                              Retry
-                            </Button>
-                          </Group>
-                        </Alert>
                         {whereSuggestions && whereSuggestions.length > 0 && (
                           <Box mb="xl">
                             <Text size="lg">
@@ -3382,7 +3345,7 @@ function DBSearchPageContent() {
                             onResolvedColumnsChange={onResolvedColumnsChange}
                             noResultsMessage={
                               traceScopeActive
-                                ? getTraceZeroEmptyDescription()
+                                ? TRACE_ZERO_EMPTY_DESCRIPTION
                                 : undefined
                             }
                           />

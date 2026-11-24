@@ -104,22 +104,24 @@ export default function DBDeltaChart({
     config.timestampValueExpression,
   );
 
-  // The heatmap spreads the (possibly trace-scoped) search config into this
-  // chart, but the delta's own outlier/inlier/`indexHint` predicates are
-  // span-level internals. Running them through the trace-membership rewrite
-  // (`TraceId IN (SELECT ...)`) would turn the selection box into "any trace
-  // with one span in the box", the inlier `NOT (...)` into "some span outside
-  // the box", and `indexHint` (always 1) into a match on every trace — breaking
-  // the delta. Strip the scope so every delta query stays span-scoped; the
-  // user's search predicates still apply, just at span granularity.
-  const baseConfig = useMemo(() => {
-    const {
-      filtersScope: _filtersScope,
-      traceIdExpression: _traceIdExpression,
-      ...rest
-    } = config;
-    return rest;
-  }, [config]);
+  // The heatmap next to this chart runs the (possibly trace-scoped) search
+  // config, so the user's predicates keep that scope here and the delta
+  // compares the same population of spans. The delta's own predicates
+  // (selection box, aggregate timestamps, `indexHint`) are span-level: under
+  // trace scope they go to `traceScopeOuterFilters`, which renderWhere applies
+  // to the returned spans and never folds into a trace-membership subquery,
+  // where the box would turn into "any trace with one span in the box".
+  const isTraceScoped = config.filtersScope === 'trace';
+  const withDeltaFilters = (
+    userFilters: Filter[],
+    deltaFilters: Filter[],
+  ): Pick<
+    BuilderChartConfigWithDateRange,
+    'filters' | 'traceScopeOuterFilters'
+  > =>
+    isTraceScoped
+      ? { filters: userFilters, traceScopeOuterFilters: deltaFilters }
+      : { filters: [...userFilters, ...deltaFilters] };
 
   /** Distributed (and Merge) tables need different subquery handling:
    * - An `IN <subquery>` over a Distributed table is rejected under the
@@ -146,28 +148,32 @@ export default function DBDeltaChart({
       ? {
           name: 'AggregatedTimestamps',
           chartConfig: {
-            ...baseConfig,
+            ...config,
             from: config.from,
             select: timestampExpr,
-            filters: [
-              ...(config.filters ?? []),
-              {
-                type: 'sql',
-                condition: `${timestampExpr} >= ${xMin}`,
-              } satisfies Filter,
-              {
-                type: 'sql',
-                condition: `${timestampExpr} <= ${xMax}`,
-              } satisfies Filter,
-              ...(config.where
-                ? [
-                    {
-                      type: config.whereLanguage,
-                      condition: config.where,
-                    } as Filter,
-                  ]
-                : []),
-            ],
+            ...withDeltaFilters(
+              [
+                ...(config.filters ?? []),
+                ...(config.where
+                  ? [
+                      {
+                        type: config.whereLanguage,
+                        condition: config.where,
+                      } as Filter,
+                    ]
+                  : []),
+              ],
+              [
+                {
+                  type: 'sql',
+                  condition: `${timestampExpr} >= ${xMin}`,
+                } satisfies Filter,
+                {
+                  type: 'sql',
+                  condition: `${timestampExpr} <= ${xMax}`,
+                } satisfies Filter,
+              ],
+            ),
             groupBy: timestampExpr,
             having: `(${valueExpr}) >= ${yMin} AND (${valueExpr}) <= ${yMax}`,
           },
@@ -198,10 +204,9 @@ export default function DBDeltaChart({
       ? {
           name: 'PartIds',
           chartConfig: {
-            ...baseConfig,
+            ...config,
             select: 'tuple(_part, _part_offset)',
-            filters: [
-              ...(config.filters ?? []),
+            ...withDeltaFilters(config.filters ?? [], [
               {
                 type: 'sql',
                 condition: buildSqlCondition(),
@@ -214,7 +219,7 @@ export default function DBDeltaChart({
                     } satisfies Filter,
                   ]
                 : []),
-            ],
+            ]),
             orderBy: [
               { ordering: 'DESC' as const, valueExpression: stableSampleExpr },
             ],
@@ -247,8 +252,7 @@ export default function DBDeltaChart({
       }
     };
 
-    return [
-      ...(config.filters ?? []),
+    return withDeltaFilters(config.filters ?? [], [
       {
         type: 'sql',
         condition: buildSqlCondition(),
@@ -269,7 +273,7 @@ export default function DBDeltaChart({
             } as { type: 'sql'; condition: string },
           ]
         : []),
-    ];
+    ]);
   };
 
   const {
@@ -278,10 +282,10 @@ export default function DBDeltaChart({
     isLoading: isOutlierLoading,
   } = useQueriedChartConfig(
     {
-      ...baseConfig,
+      ...config,
       with: buildWithClauses(true),
       select: selectExpression,
-      filters: buildFilters(true),
+      ...buildFilters(true),
       orderBy: [{ ordering: 'DESC', valueExpression: stableSampleExpr }],
       limit: { limit: SAMPLE_SIZE },
     },
@@ -291,10 +295,10 @@ export default function DBDeltaChart({
   const { data: inlierData, isLoading: isInlierLoading } =
     useQueriedChartConfig(
       {
-        ...baseConfig,
+        ...config,
         with: buildWithClauses(false),
         select: selectExpression,
-        filters: buildFilters(false),
+        ...buildFilters(false),
         orderBy: [{ ordering: 'DESC', valueExpression: stableSampleExpr }],
         limit: { limit: SAMPLE_SIZE },
       },
@@ -308,7 +312,7 @@ export default function DBDeltaChart({
     isLoading: isAllSpansLoading,
   } = useQueriedChartConfig(
     {
-      ...baseConfig,
+      ...config,
       select: selectExpression,
       orderBy: [{ ordering: 'DESC', valueExpression: stableSampleExpr }],
       limit: { limit: SAMPLE_SIZE },

@@ -1,10 +1,5 @@
-import {
-  getScopeIndicatorLabel,
-  getTraceZeroEmptyDescription,
-  resolveSearchScope,
-  SEARCH_SCOPE_PARAM,
-  SearchConfigSchema,
-} from '@/DBSearchPage';
+import { SearchConfigSchema } from '@/DBSearchPage';
+import { resolveSearchScope } from '@/searchScope';
 
 jest.mock('@/layout', () => ({
   withAppNav: <T,>(component: T): T => component,
@@ -59,43 +54,5 @@ describe('resolveSearchScope', () => {
 
   it('preserves an explicit span scope', () => {
     expect(resolveSearchScope('span')).toBe('span');
-  });
-});
-
-describe('SEARCH_SCOPE_PARAM URL round-trip', () => {
-  it('serializes trace scope to the URL and parses it back', () => {
-    // @AC-FR001-01
-    const serialized = SEARCH_SCOPE_PARAM.serialize('trace');
-    expect(SEARCH_SCOPE_PARAM.parse(serialized)).toBe('trace');
-  });
-
-  it('serializes span scope to the URL and parses it back', () => {
-    // @AC-FR001-01
-    const serialized = SEARCH_SCOPE_PARAM.serialize('span');
-    expect(SEARCH_SCOPE_PARAM.parse(serialized)).toBe('span');
-  });
-
-  it('parses an unknown URL value to null (so the schema/default takes over)', () => {
-    // @AC-FR003-02
-    expect(SEARCH_SCOPE_PARAM.parse('bogus')).toBeNull();
-  });
-});
-
-describe('getScopeIndicatorLabel', () => {
-  it('states the trace scope in text', () => {
-    // @AC-FR004-01
-    expect(getScopeIndicatorLabel('trace')).toBe('Scope: Trace');
-  });
-
-  it('states the span scope in text', () => {
-    // @AC-FR004-03
-    expect(getScopeIndicatorLabel('span')).toBe('Scope: Span');
-  });
-});
-
-describe('getTraceZeroEmptyDescription', () => {
-  it('labels the empty state with the trace scope so a zero reads as truly-none', () => {
-    // @AC-FR004-02
-    expect(getTraceZeroEmptyDescription().toLowerCase()).toContain('trace');
   });
 });

@@ -1,4 +1,7 @@
-import { SavedSearchSchema } from '@hyperdx/common-utils/dist/types';
+import {
+  SavedSearchSchema,
+  SearchScopeSchema,
+} from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
 import { z } from 'zod';
 
@@ -65,7 +68,11 @@ const savedSearchSchema = new Schema<
     filters: [{ type: mongoose.Schema.Types.Mixed }],
     // Strict mode drops undeclared paths, so a saved Trace search would
     // silently reload as Span without this.
-    searchScope: { type: String, enum: ['span', 'trace'], required: false },
+    searchScope: {
+      type: String,
+      enum: SearchScopeSchema.options,
+      required: false,
+    },
     // Immutable: ownership attribution is set once at creation.
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

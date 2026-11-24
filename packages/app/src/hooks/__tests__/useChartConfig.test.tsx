@@ -1576,6 +1576,39 @@ describe('useChartConfig', () => {
       });
     });
 
+    it('keeps the full range for trace-scope membership when a trace-scoped query is chunked', async () => {
+      const fullRange: [Date, Date] = [
+        new Date('2025-10-01 00:00:00Z'),
+        new Date('2025-10-02 00:00:00Z'),
+      ];
+      const config = {
+        ...createMockChartConfig({
+          dateRange: fullRange,
+          granularity: '3 hour',
+        }),
+        filtersScope: 'trace' as const,
+        traceIdExpression: 'TraceId',
+      };
+
+      mockClickhouseClient.queryChartConfig.mockResolvedValue(
+        createMockQueryResponse([]),
+      );
+
+      const { result } = renderHook(
+        () => useQueriedChartConfig(config, { enableQueryChunking: true }),
+        { wrapper },
+      );
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+      const clickHouseCalls = mockClickhouseClient.queryChartConfig.mock.calls;
+      expect(clickHouseCalls.length).toBeGreaterThan(1);
+      for (const [{ config: windowConfig }] of clickHouseCalls) {
+        expect(windowConfig).toMatchObject({ traceScopeDateRange: fullRange });
+      }
+    });
+
     it('fetches data with chunking when granularity and date range are provided', async () => {
       const config = createMockChartConfig({
         dateRange: [

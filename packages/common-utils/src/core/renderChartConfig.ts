@@ -36,6 +36,7 @@ import { replaceMacros } from '@/macros';
 import {
   buildTextIndexInfoLookup,
   CustomSchemaSQLSerializerV2,
+  parse as parseLucene,
   SearchQueryBuilder,
   TextIndexInfoLookup,
 } from '@/queryParser';
@@ -1454,55 +1455,89 @@ const SQL_NEGATION_OPERATORS = new Set([
 // avoids allocating one each time.
 const NEGATION_SQL_PARSER = new SQLParser.Parser();
 
-/**
- * True when a lucene predicate carries a second top-level term after its
- * leading negation — i.e. a term boundary (whitespace, `&&`, `||`) that sits
- * outside quotes and any grouping/range brackets. Such a query is a mix of
- * terms, not a sole negation. Range queries (`[1 TO 5]`, `{1 TO 5}`) and groups
- * (`(...)`) carry internal spaces that must not read as a term boundary.
- */
-function luceneHasSecondTerm(rest: string): boolean {
-  let inQuote = false;
-  let depth = 0;
-  let prev = '';
-  for (const ch of rest) {
-    if (ch === '"' && !(inQuote && prev === '\\')) {
-      inQuote = !inQuote;
-      prev = ch;
-      continue;
-    }
-    if (inQuote) {
-      prev = ch;
-      continue;
-    }
-    if (ch === '(' || ch === '[' || ch === '{') {
-      depth++;
-      prev = ch;
-      continue;
-    }
-    if (ch === ')' || ch === ']' || ch === '}') {
-      if (depth > 0) depth--;
-      prev = ch;
-      continue;
-    }
-    if (depth > 0) {
-      prev = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) return true;
-    // The second character of a top-level `&&` / `||` operator.
-    if ((ch === '&' && prev === '&') || (ch === '|' && prev === '|')) {
-      return true;
-    }
-    prev = ch;
+// How a predicate (or one node of it) relates to negation. A node is `negated`
+// only when every leaf under it is an exclusion, `positive` when none is, and
+// `mixed` otherwise.
+type NegationClass = 'negated' | 'positive' | 'mixed';
+
+function flipNegation(c: NegationClass): NegationClass {
+  if (c === 'mixed') return c;
+  return c === 'negated' ? 'positive' : 'negated';
+}
+
+// AND and OR combine the same way: an all-exclusion compound (`A != x AND
+// B != y`, `-a -b`) is still a per-span exclusion and must stay on the outer
+// WHERE, while one that mixes in a positive term keeps driving membership.
+function combineNegation(a: NegationClass, b: NegationClass): NegationClass {
+  return a === b ? a : 'mixed';
+}
+
+type LuceneNodeLike = {
+  field?: string;
+  prefix?: string | null;
+  start?: string;
+  operator?: string;
+  left?: LuceneNodeLike;
+  right?: LuceneNodeLike;
+};
+
+function classifyLuceneNode(node: LuceneNodeLike | undefined): NegationClass {
+  if (node == null) return 'positive';
+  if (node.left == null) {
+    // A term: `-field:value`, `-"phrase"`, or `-field:[1 TO 5]`.
+    const negated = node.field?.startsWith('-') || node.prefix === '-';
+    return negated ? 'negated' : 'positive';
   }
-  return false;
+  let left = classifyLuceneNode(node.left);
+  if (node.start?.toUpperCase() === 'NOT') left = flipNegation(left);
+  if (node.right == null) return left;
+  let right = classifyLuceneNode(node.right);
+  // `a AND NOT b` / `NOT a NOT b`: the operator negates its right operand.
+  if (/\bNOT$/i.test(node.operator ?? '')) right = flipNegation(right);
+  return combineNegation(left, right);
+}
+
+type SqlNodeLike = {
+  type?: string;
+  operator?: string;
+  left?: SqlNodeLike;
+  right?: SqlNodeLike;
+  expr?: SqlNodeLike;
+  name?: { name?: { value?: string }[] };
+  args?: { value?: SqlNodeLike[] };
+};
+
+function classifySqlNode(node: SqlNodeLike | null | undefined): NegationClass {
+  if (node == null) return 'positive';
+  const op = String(node.operator ?? '').toUpperCase();
+  if (node.type === 'binary_expr') {
+    if (op === 'AND' || op === 'OR') {
+      return combineNegation(
+        classifySqlNode(node.left),
+        classifySqlNode(node.right),
+      );
+    }
+    return SQL_NEGATION_OPERATORS.has(op) ? 'negated' : 'positive';
+  }
+  // `NOT <expr>` parses as a unary_expr, and `NOT (<expr>)` as a `NOT(...)`
+  // function node; both negate their operand.
+  if (node.type === 'unary_expr' && op === 'NOT') {
+    return node.expr ? flipNegation(classifySqlNode(node.expr)) : 'negated';
+  }
+  if (
+    node.type === 'function' &&
+    node.name?.name?.[0]?.value?.toUpperCase() === 'NOT'
+  ) {
+    const operand = node.args?.value?.[0];
+    return operand ? flipNegation(classifySqlNode(operand)) : 'negated';
+  }
+  return 'positive';
 }
 
 /**
- * Best-effort detection of a predicate that is a single top-level exclusion /
- * negation, derived from the raw condition (the source of truth) rather than an
- * out-of-band flag saved searches and older URLs don't carry.
+ * Best-effort detection of a predicate that is an exclusion as a whole, derived
+ * from the raw condition (the source of truth) rather than an out-of-band flag
+ * saved searches and older URLs don't carry.
  *
  * Trace scope must keep such predicates off the existential trace-membership
  * rewrite: `TraceId IN (SELECT ... WHERE <col> NOT IN (...))` asks for a trace
@@ -1510,14 +1545,13 @@ function luceneHasSecondTerm(rest: string): boolean {
  * the exclusion would stop excluding. Detected negations are applied to the
  * outer rows instead.
  *
- * SQL is classified from the parsed AST, not substring matching, so a `!=`
- * inside a string literal (`Body = 'a != b'`), `NOT LIKE` / `NOT BETWEEN`
- * (whose inner `AND` no longer masks the negation), and top-level `AND`/`OR`
- * (a mix, treated as positive) are all handled correctly. Lucene is classified
- * as a sole negation only when the whole query is a single negated term; a
- * mixed lucene query (e.g. `-ServiceName:cart SpanName:checkout`, implicit AND)
- * stays positive so its positive part still drives a membership subquery — a
- * documented conservative limitation.
+ * Both languages are classified from their parsed AST: SQL via node-sql-parser
+ * (so a `!=` inside a string literal, `NOT LIKE` and `NOT BETWEEN` are read
+ * correctly) and lucene via the same parser the search bar uses. A compound is
+ * an exclusion when every term in it is one (`-a -b`, `A != x AND B != y`); a
+ * query that mixes an exclusion with an inclusion (`-ServiceName:cart
+ * SpanName:checkout`) stays positive so its positive part still drives a
+ * membership subquery, a documented conservative limitation.
  */
 export function isNegatedFilterCondition(
   condition: string | null | undefined,
@@ -1527,51 +1561,26 @@ export function isNegatedFilterCondition(
   if (!c) return false;
 
   if (language === 'lucene') {
-    let rest: string | null = null;
-    const notMatch = c.match(/^NOT\s+/i);
-    if (notMatch) {
-      rest = c.slice(notMatch[0].length);
-    } else if (c.startsWith('-') && c.length > 1 && !/\s/.test(c[1])) {
-      rest = c.slice(1);
+    try {
+      return classifyLuceneNode(parseLucene(c)) === 'negated';
+    } catch {
+      // Unparseable lucene renders no usable predicate either; keep it positive.
+      return false;
     }
-    if (rest == null || rest.trim() === '') return false;
-    return !luceneHasSecondTerm(rest);
   }
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- astify returns a union; we read only `.where`
-    const ast = NEGATION_SQL_PARSER.astify(`SELECT * FROM t WHERE ${c}`, {
-      database: 'Postgresql',
-    }) as SQLParser.Select;
-    const where = ast.where as
-      | {
-          type?: string;
-          operator?: string;
-          name?: { name?: { value?: string }[] };
-        }
-      | null
-      | undefined;
-    if (!where) return false;
-    if (where.type === 'binary_expr') {
-      const op = String(where.operator ?? '').toUpperCase();
-      if (op === 'AND' || op === 'OR') return false;
-      return SQL_NEGATION_OPERATORS.has(op);
-    }
-    // `NOT <expr>` parses as a unary_expr, and `NOT (<expr>)` as a `NOT(...)`
-    // function node; both are a top-level negation.
-    if (
-      where.type === 'unary_expr' &&
-      String(where.operator ?? '').toUpperCase() === 'NOT'
-    ) {
-      return true;
-    }
-    if (
-      where.type === 'function' &&
-      where.name?.name?.[0]?.value?.toUpperCase() === 'NOT'
-    ) {
-      return true;
-    }
-    return false;
+    const ast: unknown = NEGATION_SQL_PARSER.astify(
+      `SELECT * FROM t WHERE ${c}`,
+      {
+        database: 'Postgresql',
+      },
+    );
+    const where =
+      ast != null && typeof ast === 'object' && 'where' in ast
+        ? (ast.where as SqlNodeLike | null) // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- node-sql-parser's Select.where is `any`
+        : null;
+    return classifySqlNode(where) === 'negated';
   } catch {
     // Unparseable predicate: fall back to matching only the deterministic
     // sidebar exclusion shapes, which never contain string literals.
@@ -1684,52 +1693,58 @@ async function renderWhere(
     ).filter(v => v !== null) as ChSql[];
   }
 
-  const renderedFilters: { condition: ChSql | []; negated: boolean }[] =
-    await Promise.all(
-      (chartConfig.filters ?? []).map(async filter => {
-        if (filter.type === 'sql_ast') {
-          return {
-            condition: wrapChSqlIfNotEmpty(
-              chSql`${{ UNSAFE_RAW_SQL: filter.left }} ${filter.operator} ${{ UNSAFE_RAW_SQL: filter.right }}`,
-              '(',
-              ')',
-            ),
-            negated: filter.operator === '!=',
-          };
-        } else if (filter.type === 'lucene' || filter.type === 'sql') {
-          const condition =
-            filter.type === 'sql'
-              ? rewriteSqlFilterWithKvItems(
-                  filter.condition,
-                  textIndexInfoLookup,
-                )
-              : filter.condition;
-          return {
-            condition: wrapChSqlIfNotEmpty(
-              await renderWhereExpression({
-                condition,
-                from: chartConfig.from,
-                language: filter.type,
-                implicitColumnExpression: chartConfig.implicitColumnExpression,
-                bodyExpression: chartConfig.bodyExpression,
-                useTextIndexForImplicitColumn:
-                  chartConfig.useTextIndexForImplicitColumn,
-                metadata,
-                connectionId: chartConfig.connection,
-                with: chartConfig.with,
-              }),
-              '(',
-              ')',
-            ),
-            negated: isNegatedFilterCondition(filter.condition, filter.type),
-          };
-        }
+  const renderFilter = async (
+    filter: Filter,
+  ): Promise<{ condition: ChSql | []; negated: boolean }> => {
+    if (filter.type === 'sql_ast') {
+      return {
+        condition: wrapChSqlIfNotEmpty(
+          chSql`${{ UNSAFE_RAW_SQL: filter.left }} ${filter.operator} ${{ UNSAFE_RAW_SQL: filter.right }}`,
+          '(',
+          ')',
+        ),
+        negated: filter.operator === '!=',
+      };
+    } else if (filter.type === 'lucene' || filter.type === 'sql') {
+      const condition =
+        filter.type === 'sql'
+          ? rewriteSqlFilterWithKvItems(filter.condition, textIndexInfoLookup)
+          : filter.condition;
+      return {
+        condition: wrapChSqlIfNotEmpty(
+          await renderWhereExpression({
+            condition,
+            from: chartConfig.from,
+            language: filter.type,
+            implicitColumnExpression: chartConfig.implicitColumnExpression,
+            bodyExpression: chartConfig.bodyExpression,
+            useTextIndexForImplicitColumn:
+              chartConfig.useTextIndexForImplicitColumn,
+            metadata,
+            connectionId: chartConfig.connection,
+            with: chartConfig.with,
+          }),
+          '(',
+          ')',
+        ),
+        negated: isNegatedFilterCondition(filter.condition, filter.type),
+      };
+    }
 
-        throw new Error(`Unknown filter type: ${filter.type}`);
-      }),
-    );
+    throw new Error(`Unknown filter type: ${filter.type}`);
+  };
 
+  const renderedFilters = await Promise.all(
+    (chartConfig.filters ?? []).map(renderFilter),
+  );
   const filterConditions = renderedFilters.map(f => f.condition);
+  // Always AND-ed onto the returned rows, never folded into a trace-scope
+  // membership subquery or OR-ed with the user's filters (see the type).
+  const outerFilterConditions = (
+    await Promise.all(
+      (chartConfig.traceScopeOuterFilters ?? []).map(renderFilter),
+    )
+  ).map(f => f.condition);
 
   const timeFilter: ChSql | [] =
     chartConfig.dateRange != null &&
@@ -1770,7 +1785,6 @@ async function renderWhere(
     // trace must satisfy each across (possibly different) spans.
     const membershipPredicates = [
       searchBarNegated ? [] : whereSearchCondition,
-      aggConditionGroup,
       ...renderedFilters.filter(f => !f.negated).map(f => f.condition),
     ].filter((p): p is ChSql => !Array.isArray(p) && p.sql.length > 0);
 
@@ -1855,7 +1869,13 @@ async function renderWhere(
       ' AND ',
       timeFilter,
       ...membershipSubqueries,
+      // Each select's -If aggregate already counts only rows matching its
+      // aggCondition, so (as on the span path) the OR-group is just an index
+      // hint on the outer rows; a membership subquery for it could not change
+      // the result and would cost a full-range scan.
+      aggConditionGroup,
       ...exclusionConditions,
+      ...outerFilterConditions,
     );
   }
 
@@ -1873,6 +1893,7 @@ async function renderWhere(
       '(',
       ')',
     ),
+    ...outerFilterConditions,
     // $__filters expands (at query time) to the dashboard filters, which
     // reference columns of the real source table. Only emit it when this WHERE
     // targets that source table (indicated by a non-empty databaseName).

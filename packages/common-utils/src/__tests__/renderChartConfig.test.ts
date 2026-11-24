@@ -6330,6 +6330,57 @@ describe('renderChartConfig', () => {
       ).toBe(false);
     });
 
+    it('treats a compound of exclusions as an exclusion', () => {
+      // Regression: any top-level AND/OR (or a second lucene term) was classed
+      // as positive, so `-a -b` was wrapped in a membership subquery and a
+      // second exclusion made the first one stop excluding.
+      expect(
+        isNegatedFilterCondition(
+          '-ServiceName:cart -ServiceName:api',
+          'lucene',
+        ),
+      ).toBe(true);
+      expect(
+        isNegatedFilterCondition(
+          '-ServiceName:cart AND -SpanName:api',
+          'lucene',
+        ),
+      ).toBe(true);
+      expect(
+        isNegatedFilterCondition(
+          'NOT ServiceName:cart NOT SpanName:api',
+          'lucene',
+        ),
+      ).toBe(true);
+      expect(
+        isNegatedFilterCondition(
+          "ServiceName != 'a' AND SpanName != 'b'",
+          'sql',
+        ),
+      ).toBe(true);
+      expect(
+        isNegatedFilterCondition(
+          "(ServiceName NOT IN ('a') OR SpanName NOT LIKE '%b%')",
+          'sql',
+        ),
+      ).toBe(true);
+    });
+
+    it('keeps a negated mix or a double negation positive', () => {
+      expect(
+        isNegatedFilterCondition(
+          'ServiceName:cart AND NOT SpanName:api',
+          'lucene',
+        ),
+      ).toBe(false);
+      expect(isNegatedFilterCondition('NOT -ServiceName:cart', 'lucene')).toBe(
+        false,
+      );
+      expect(
+        isNegatedFilterCondition("NOT (ServiceName != 'cart')", 'sql'),
+      ).toBe(false);
+    });
+
     it('does not treat a != inside a string literal as a negation', () => {
       // Regression: substring matching flagged the `!=` inside the literal.
       expect(isNegatedFilterCondition("Body = 'a != b'", 'sql')).toBe(false);
@@ -6529,6 +6580,95 @@ describe('renderChartConfig', () => {
       expect(sql).toContain("SpanName = 'checkout'");
       expect(sql).toContain("ServiceName != 'api'");
       expect(sql).toContain("ServiceName != 'cart'");
+    });
+
+    it('keeps a search bar of only exclusions on the outer WHERE @AC-FR002-02', async () => {
+      // Regression: `A != x AND B != y` was classed as positive and wrapped as
+      // `TraceId IN (SELECT ... WHERE A != x AND B != y)`, which matches almost
+      // any multi-span trace, so the excluded spans came back. Now only the
+      // positive filter is a membership subquery.
+      const sql = await renderSql(
+        buildTraceConfig({
+          where: "ServiceName != 'cart' AND ServiceName != 'api'",
+          whereLanguage: 'sql',
+          filters: [{ type: 'sql', condition: "SpanName = 'checkout'" }],
+        }),
+      );
+
+      const subqueryCount = (
+        sql.match(/TraceId IN \(SELECT TraceId FROM/g) ?? []
+      ).length;
+      expect(subqueryCount).toBe(1);
+      expect(sql).toContain("SpanName = 'checkout'");
+      expect(sql).toContain("ServiceName != 'cart' AND ServiceName != 'api'");
+    });
+
+    it('applies aggConditions to the outer rows, not as a membership subquery', async () => {
+      // Each -If aggregate already counts only rows matching its aggCondition,
+      // so a membership subquery for the aggCondition group could not change
+      // the result; it stays an index hint on the outer WHERE, as on the span
+      // path.
+      const sql = await renderSql(
+        buildTraceConfig({
+          select: [
+            {
+              aggFn: 'count',
+              valueExpression: '',
+              aggCondition: "StatusCode = 'Error'",
+              aggConditionLanguage: 'sql',
+            },
+          ],
+          filters: [{ type: 'sql', condition: "SpanName = 'checkout'" }],
+        }),
+      );
+
+      const subqueryCount = (
+        sql.match(/TraceId IN \(SELECT TraceId FROM/g) ?? []
+      ).length;
+      expect(subqueryCount).toBe(1);
+      expect(sql).toContain("StatusCode = 'Error'");
+    });
+
+    it('applies traceScopeOuterFilters to the returned rows only', async () => {
+      // A caller narrowing a trace-scoped search to some of its spans (the
+      // delta chart's selection box) keeps the user's predicates as
+      // membership subqueries and its own on the outer rows.
+      const sql = await renderSql({
+        ...buildTraceConfig({
+          filters: [{ type: 'sql', condition: "SpanName = 'checkout'" }],
+        }),
+        traceScopeOuterFilters: [
+          { type: 'sql', condition: 'Duration >= 100 AND Duration <= 200' },
+        ],
+      });
+
+      const subqueryCount = (
+        sql.match(/TraceId IN \(SELECT TraceId FROM/g) ?? []
+      ).length;
+      expect(subqueryCount).toBe(1);
+      expect(sql).toContain('Duration >= 100 AND Duration <= 200');
+      expect(sql.indexOf('Duration >= 100')).toBeGreaterThan(
+        sql.lastIndexOf("SpanName = 'checkout'"),
+      );
+    });
+
+    it('AND-composes traceScopeOuterFilters outside trace scope, even with OR filters', async () => {
+      const sql = await renderSql({
+        ...buildTraceConfig({
+          filtersScope: undefined,
+          filtersLogicalOperator: 'OR',
+          filters: [
+            { type: 'sql', condition: "ServiceName = 'api'" },
+            { type: 'sql', condition: "SpanName = 'checkout'" },
+          ],
+        }),
+        traceScopeOuterFilters: [{ type: 'sql', condition: 'Duration >= 100' }],
+      });
+
+      expect(sql).not.toContain('TraceId IN (SELECT');
+      expect(sql).toContain(
+        "((ServiceName = 'api') OR (SpanName = 'checkout')) AND (Duration >= 100)",
+      );
     });
 
     it('scans each membership subquery over the full range, not the paginated window @AC-FR001-05', async () => {
