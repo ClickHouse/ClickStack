@@ -32,6 +32,7 @@ import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEdito
 import { SloEligibleFilters } from './SloEligibleFilters';
 import type { SloFormValues } from './sloForm';
 import { SloFormRow } from './SloFormLayout';
+import { SloGroupByField } from './SloGroupByField';
 import { SloLatencyFields } from './SloLatencyFields';
 import { formatSloWindow } from './sloUtils';
 
@@ -155,6 +156,11 @@ export function SloIndicatorFields({
           <Input.Error mt={4}>{errors.indicator?.good?.message}</Input.Error>
         </SloFormRow>
       )}
+      <SloGroupByField
+        control={control}
+        sourceId={sourceId}
+        tableConnection={tableConnection}
+      />
     </>
   );
 }

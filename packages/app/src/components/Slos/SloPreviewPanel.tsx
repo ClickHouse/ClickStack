@@ -1,8 +1,10 @@
 import {
   parseSloCountsRow,
+  parseSloGroupCountRow,
   parseSloTotalRow,
 } from '@hyperdx/common-utils/dist/core/slo';
 import { computeSloStats } from '@hyperdx/common-utils/dist/core/sloStats';
+import { SLO_MAX_GROUPS } from '@hyperdx/common-utils/dist/slo';
 import {
   Accordion,
   Alert,
@@ -71,7 +73,12 @@ function SloPreviewResults({
 }) {
   const counts = useQueriedChartConfig(request.counts, PREVIEW_QUERY_OPTIONS);
   const total = useQueriedChartConfig(request.total, PREVIEW_QUERY_OPTIONS);
-  const error = counts.error;
+  // Runs only with a group-by; the config stands in otherwise.
+  const groups = useQueriedChartConfig(request.groups ?? request.total, {
+    ...PREVIEW_QUERY_OPTIONS,
+    enabled: request.groups != null,
+  });
+  const error = counts.error ?? (request.groups ? groups.error : null);
 
   if (error) {
     return (
@@ -91,6 +98,10 @@ function SloPreviewResults({
   const excluded = total.data
     ? Math.max(0, parseSloTotalRow(total.data.data) - stats.eligible)
     : undefined;
+  const groupCount =
+    request.groups && groups.data
+      ? parseSloGroupCountRow(groups.data.data)
+      : undefined;
   return (
     <Stack gap="sm">
       <SimpleGrid cols={3} spacing="xs">
@@ -120,9 +131,22 @@ function SloPreviewResults({
           value={formatBudget(stats.budgetRemaining)}
           color={budgetColorVar(stats.budgetRemaining)}
         />
+        {request.groups && (
+          <PreviewStat
+            label="Groups"
+            value={
+              groupCount != null && groupCount > SLO_MAX_GROUPS
+                ? `${SLO_MAX_GROUPS} of ${formatCount(groupCount)}`
+                : formatCount(groupCount)
+            }
+            testId="slo-preview-groups"
+          />
+        )}
       </SimpleGrid>
       <Text size="xs" c="dimmed">
         Excluded events are in the source but outside the eligible events.
+        {request.groups &&
+          ` The numbers are for all groups together; each group gets its own once the SLO is saved.`}
       </Text>
       <Accordion variant="contained" chevronPosition="left">
         <Accordion.Item value="sql">
@@ -136,6 +160,14 @@ function SloPreviewResults({
                 All rows, for the excluded count
               </Text>
               <ChartSQLPreview config={request.total} enableCopy />
+              {request.groups && (
+                <>
+                  <Text size="xs" c="dimmed">
+                    Distinct groups
+                  </Text>
+                  <ChartSQLPreview config={request.groups} enableCopy />
+                </>
+              )}
             </Stack>
           </Accordion.Panel>
         </Accordion.Item>
