@@ -3,7 +3,7 @@ import { withQueryAttribution } from '@hyperdx/common-utils/dist/clickhouse/node
 import { getSloWindowRange } from '@hyperdx/common-utils/dist/core/slo';
 import type { SloStatus } from '@hyperdx/common-utils/dist/slo';
 
-import { getSloQueryContext, SloQueryContext } from '@/controllers/slo';
+import { getSloQueryContext } from '@/controllers/slo';
 import {
   buildSloStatus,
   computeSloBurn,
