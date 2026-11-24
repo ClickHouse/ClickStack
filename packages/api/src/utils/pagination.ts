@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';

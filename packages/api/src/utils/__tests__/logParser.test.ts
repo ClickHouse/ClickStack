@@ -1,3 +1,5 @@
+import { fromAny } from '@total-typescript/shoehorn';
+
 import { mapObjectToKeyValuePairs, traverseJson } from '@/utils/logParser';
 
 describe('logParser', () => {
@@ -54,7 +56,7 @@ describe('logParser', () => {
   });
 
   it('mapObjectToKeyValuePairs', () => {
-    expect(mapObjectToKeyValuePairs(null as any)).toEqual({
+    expect(mapObjectToKeyValuePairs(fromAny(null))).toEqual({
       'bool.names': [],
       'bool.values': [],
       'number.names': [],

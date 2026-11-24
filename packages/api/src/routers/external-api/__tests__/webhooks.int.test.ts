@@ -1,4 +1,5 @@
 import { WebhookService } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import { ObjectId } from 'mongodb';
 import request, { SuperAgentTest } from 'supertest';
 
@@ -305,11 +306,13 @@ describe('External API v2 Webhooks', () => {
       // fails externalWebhookSchema parsing on read. meta.total counts every
       // stored row (countDocuments) while data drops the unparseable one, so
       // data.length can be less than meta.total — this documents that skew.
-      await Webhook.collection.insertOne({
-        team: team._id,
-        name: 'Broken Webhook',
-        service: 'not-a-real-service',
-      } as any);
+      await Webhook.collection.insertOne(
+        fromAny({
+          team: team._id,
+          name: 'Broken Webhook',
+          service: 'not-a-real-service',
+        }),
+      );
 
       const response = await authRequest('get', WEBHOOKS_BASE_URL).expect(200);
 
@@ -847,14 +850,17 @@ describe('External API v2 Webhooks', () => {
         team: team._id,
       });
 
-      const spy = jest.spyOn(Webhook, 'findOne').mockImplementationOnce((() =>
-        (async () => {
-          await Webhook.updateOne(
-            { _id: created._id },
-            { $set: { url: 'https://example.com/moved-concurrently' } },
-          );
-          return staleDoc;
-        })()) as any);
+      const spy = jest.spyOn(Webhook, 'findOne').mockImplementationOnce(
+        fromAny(() =>
+          (async () => {
+            await Webhook.updateOne(
+              { _id: created._id },
+              { $set: { url: 'https://example.com/moved-concurrently' } },
+            );
+            return staleDoc;
+          })(),
+        ),
+      );
 
       try {
         const response = await authRequest(
@@ -890,11 +896,14 @@ describe('External API v2 Webhooks', () => {
         team: team._id,
       });
 
-      const spy = jest.spyOn(Webhook, 'findOne').mockImplementationOnce((() =>
-        (async () => {
-          await Webhook.deleteOne({ _id: created._id });
-          return staleDoc;
-        })()) as any);
+      const spy = jest.spyOn(Webhook, 'findOne').mockImplementationOnce(
+        fromAny(() =>
+          (async () => {
+            await Webhook.deleteOne({ _id: created._id });
+            return staleDoc;
+          })(),
+        ),
+      );
 
       try {
         await authRequest('put', `${WEBHOOKS_BASE_URL}/${created._id}`)

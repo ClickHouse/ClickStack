@@ -156,7 +156,6 @@ const TimePickerComponent = ({
 
   useHotkeys('d', () => toggle(), { preventDefault: true }, [toggle]);
 
-  // eslint-disable-next-line no-restricted-syntax
   const today = React.useMemo(() => new Date(), []);
 
   const relativeTimeOptions = React.useMemo(() => {

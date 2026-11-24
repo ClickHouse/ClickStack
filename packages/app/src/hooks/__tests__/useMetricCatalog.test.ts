@@ -1,4 +1,30 @@
-import { clampCatalogDateRange } from '@/hooks/useMetricCatalog';
+import React from 'react';
+import {
+  MetricsDataType,
+  SourceKind,
+  TMetricSource,
+} from '@hyperdx/common-utils/dist/types';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
+
+import {
+  clampCatalogDateRange,
+  useMetricCatalog,
+} from '@/hooks/useMetricCatalog';
+
+const query = jest.fn();
+
+jest.mock('@/clickhouse', () => ({
+  getClickhouseClient: () => ({ query }),
+}));
+jest.mock('@/hooks/useMetadata', () => ({
+  useMetadataWithSettings: () => ({
+    getColumns: () => Promise.resolve([{ name: 'MetricName' }]),
+  }),
+}));
+jest.mock('@/queryAttribution', () => ({
+  useMetadataQueryAttribution: () => ({}),
+}));
 
 const NOW = new Date('2026-08-22T12:00:00Z');
 const at = (iso: string) => new Date(iso);
@@ -52,5 +78,54 @@ describe('clampCatalogDateRange', () => {
       NOW,
     );
     expect(end).toEqual(at('2026-08-10T00:00:00Z'));
+  });
+});
+
+describe('useMetricCatalog', () => {
+  const source: TMetricSource = {
+    id: 'metrics',
+    name: 'Metrics',
+    kind: SourceKind.Metric,
+    connection: 'conn-1',
+    from: { databaseName: 'default', tableName: '' },
+    timestampValueExpression: 'TimeUnix',
+    resourceAttributesExpression: 'ResourceAttributes',
+    metricTables: {
+      [MetricsDataType.Gauge]: 'otel_metrics_gauge',
+      [MetricsDataType.Sum]: '',
+      [MetricsDataType.Histogram]: '',
+      [MetricsDataType.ExponentialHistogram]: '',
+      [MetricsDataType.Summary]: '',
+    },
+    querySettings: [
+      { setting: 'force_optimize_skip_unused_shards', value: '0' },
+      { setting: 'timeout_overflow_mode', value: 'throw' },
+    ],
+  };
+
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(
+      QueryClientProvider,
+      {
+        client: new QueryClient({
+          defaultOptions: { queries: { retry: false } },
+        }),
+      },
+      children,
+    );
+
+  beforeEach(() => {
+    query.mockReset();
+    query.mockResolvedValue({ json: () => Promise.resolve({ data: [] }) });
+  });
+
+  it('applies source query settings without overriding the timeout bound', async () => {
+    renderHook(() => useMetricCatalog({ source }), { wrapper });
+
+    await waitFor(() => expect(query).toHaveBeenCalled());
+    expect(query.mock.calls[0][0].clickhouse_settings).toMatchObject({
+      force_optimize_skip_unused_shards: '0',
+      timeout_overflow_mode: 'break',
+    });
   });
 });

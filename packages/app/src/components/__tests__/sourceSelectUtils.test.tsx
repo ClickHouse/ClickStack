@@ -1,5 +1,6 @@
 import { SourceKind, TSource } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import {
   firstSourceItemValue,
@@ -15,13 +16,13 @@ const makeSource = (
   kind: SourceKind,
   overrides: Partial<TSource> = {},
 ): TSource =>
-  ({
+  fromAny<TSource, Record<string, unknown>>({
     id,
     name,
     kind,
     connection: 'conn-a',
     ...overrides,
-  }) as unknown as TSource;
+  });
 
 describe('useSourceKindMap', () => {
   it('returns an empty map when sources is undefined', () => {

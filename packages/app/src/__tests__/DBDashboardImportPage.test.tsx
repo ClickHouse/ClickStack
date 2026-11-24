@@ -2,6 +2,7 @@ import {
   type DashboardTemplate,
   DashboardTemplateSchema,
   DashboardWithoutIdSchema,
+  DisplayType,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -95,7 +96,7 @@ jest.mock('../api', () => ({
 // satisfy the schema without a real query.
 const builderTile = (
   id: string,
-  displayType: string,
+  displayType: DisplayType,
   source: string,
   y: number,
 ) => ({
@@ -129,7 +130,7 @@ const allTileTypesTemplate: DashboardTemplate = {
       h: 1,
       config: {
         name: 'tile-markdown',
-        displayType: 'markdown',
+        displayType: DisplayType.Markdown,
         source: '',
         where: '',
         whereLanguage: 'sql',
@@ -137,13 +138,13 @@ const allTileTypesTemplate: DashboardTemplate = {
         markdown: '## Overview',
       },
     },
-    builderTile('tile-number', 'number', 'Metrics', 1),
-    builderTile('tile-line', 'line', 'Metrics', 4),
-    builderTile('tile-stacked_bar', 'stacked_bar', 'Metrics', 7),
-    builderTile('tile-table', 'table', 'Traces', 10),
-    builderTile('tile-pie', 'pie', 'Metrics', 13),
-    builderTile('tile-heatmap', 'heatmap', 'Traces', 16),
-    builderTile('tile-search', 'search', 'Logs', 19),
+    builderTile('tile-number', DisplayType.Number, 'Metrics', 1),
+    builderTile('tile-line', DisplayType.Line, 'Metrics', 4),
+    builderTile('tile-stacked_bar', DisplayType.StackedBar, 'Metrics', 7),
+    builderTile('tile-table', DisplayType.Table, 'Traces', 10),
+    builderTile('tile-pie', DisplayType.Pie, 'Metrics', 13),
+    builderTile('tile-heatmap', DisplayType.Heatmap, 'Traces', 16),
+    builderTile('tile-search', DisplayType.Search, 'Logs', 19),
     {
       id: 'tile-rawsql',
       x: 0,
@@ -152,7 +153,7 @@ const allTileTypesTemplate: DashboardTemplate = {
       h: 3,
       config: {
         name: 'tile-rawsql',
-        displayType: 'table',
+        displayType: DisplayType.Table,
         configType: 'sql',
         connection: 'Default',
         sqlTemplate: 'SELECT 1',
@@ -170,7 +171,7 @@ const allTileTypesTemplate: DashboardTemplate = {
       whereLanguage: 'sql',
     },
   ],
-} as DashboardTemplate;
+};
 
 // A template whose only filter names a source that doesn't exist in the
 // workspace, so the auto-mapping effect can't resolve it and the mapping select
@@ -178,7 +179,7 @@ const allTileTypesTemplate: DashboardTemplate = {
 const unresolvedFilterSourceTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Unresolved Filter Source',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-machine',
@@ -196,7 +197,7 @@ const unresolvedFilterSourceTemplate = DashboardTemplateSchema.parse({
 const promqlFilterTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'PromQL Label Filter',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-service',
@@ -217,7 +218,7 @@ const promqlFilterTemplate = DashboardTemplateSchema.parse({
 const promqlFilterOnLogSourceTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'PromQL Label Filter On Log Source',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-service',
@@ -237,7 +238,7 @@ const promqlFilterOnLogSourceTemplate = DashboardTemplateSchema.parse({
 const queriedFilterTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Queried Filter',
-  tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
   filters: [
     {
       id: 'filter-service',
@@ -274,7 +275,7 @@ const MISSING = 'Does Not Exist In This Workspace';
 const unresolvedTileSourceTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Unresolved Tile Source',
-  tiles: [builderTile('tile-number', 'number', MISSING, 0)],
+  tiles: [builderTile('tile-number', DisplayType.Number, MISSING, 0)],
 });
 
 const unresolvedConnectionTemplate = DashboardTemplateSchema.parse({
@@ -303,7 +304,7 @@ const sqlQueryFilterTemplate = (connection: string, source?: string) =>
   DashboardTemplateSchema.parse({
     version: '0.1.0',
     name: 'SQL Query Filter',
-    tiles: [builderTile('tile-number', 'number', 'Metrics', 0)],
+    tiles: [builderTile('tile-number', DisplayType.Number, 'Metrics', 0)],
     filters: [
       {
         id: 'filter-env',
@@ -325,7 +326,7 @@ const markdownStaleSourceTemplate = DashboardTemplateSchema.parse({
   name: 'Markdown With Stale Source',
   tiles: [
     markdownTileWithSource('tile-markdown', MISSING, 0),
-    builderTile('tile-number', 'number', 'Metrics', 1),
+    builderTile('tile-number', DisplayType.Number, 'Metrics', 1),
   ],
 });
 
@@ -342,7 +343,7 @@ describe('Dashboard import - all tile types', () => {
     expect(parsed.success).toBe(true);
 
     const displayTypes = new Set(
-      allTileTypesTemplate.tiles.map(t => (t.config as any).displayType),
+      allTileTypesTemplate.tiles.map(t => t.config.displayType),
     );
     // markdown, number, line, stacked_bar, table, pie, heatmap, search
     expect(displayTypes.size).toBe(8);
@@ -761,7 +762,7 @@ describe('Dashboard import - filter source kind', () => {
 const adhocFilterTemplate = DashboardTemplateSchema.parse({
   version: '0.1.0',
   name: 'Ad Hoc Filter',
-  tiles: [builderTile('tile-search', 'search', 'Logs', 0)],
+  tiles: [builderTile('tile-search', DisplayType.Search, 'Logs', 0)],
   filters: [
     {
       id: 'filter-adhoc',
@@ -877,7 +878,7 @@ describe('Dashboard import - data source variables', () => {
   const sourceVariableTemplate = DashboardTemplateSchema.parse({
     version: '0.1.0',
     name: 'Source Variables',
-    tiles: [builderTile('tile-line', 'line', '$logs', 0)],
+    tiles: [builderTile('tile-line', DisplayType.Line, '$logs', 0)],
     filters: [
       {
         id: 'ds',
@@ -937,7 +938,7 @@ describe('Dashboard import - data source variables', () => {
     const template = DashboardTemplateSchema.parse({
       version: '0.1.0',
       name: 'Undeclared',
-      tiles: [builderTile('tile-line', 'line', '$traces', 0)],
+      tiles: [builderTile('tile-line', DisplayType.Line, '$traces', 0)],
       filters: [
         {
           id: 'svc',

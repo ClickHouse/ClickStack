@@ -13,7 +13,7 @@ import { useRouter } from 'next/router';
 import { uniq } from 'lodash';
 import { parseAsString, useQueryState } from 'nuqs';
 import { Controller, useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { convertToDashboardDocument } from '@hyperdx/common-utils/dist/core/utils';
 import {
@@ -514,9 +514,7 @@ const appliesToSourceKinds = (
  * The source kinds a filter of this type can read its dropdown values from, or
  * `undefined` for a filter that reads no source at all.
  */
-const filterSourceKinds = (
-  filter: DashboardFilter,
-): SourceKind[] | undefined =>
+const filterSourceKinds = (filter: DashboardFilter): SourceKind[] | undefined =>
   isPrometheusLabelFilter(filter)
     ? [SourceKind.Promql]
     : isQueryExpressionFilter(filter)

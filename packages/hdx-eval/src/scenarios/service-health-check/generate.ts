@@ -130,12 +130,9 @@ type Rng = GenerateContext['rng'];
 function sampleLatencyMs(rng: Rng, scale: number): number {
   const r = rng.next();
   let base: number;
-  if (r < 0.5)
-    base = 30 + rng.next() * 70; //          30..100  (p50 ~65)
-  else if (r < 0.9)
-    base = 60 + rng.next() * 140; //    60..200  (p90 ~190)
-  else if (r < 0.99)
-    base = 180 + rng.next() * 120; //  180..300 (p99 entry)
+  if (r < 0.5) base = 30 + rng.next() * 70; //          30..100  (p50 ~65)
+  else if (r < 0.9) base = 60 + rng.next() * 140; //    60..200  (p90 ~190)
+  else if (r < 0.99) base = 180 + rng.next() * 120; //  180..300 (p99 entry)
   else base = 280 + rng.next() * 80; //                 280..360 (p99 tail)
   return base * scale;
 }

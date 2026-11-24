@@ -1,7 +1,7 @@
 import { isRenderablePinnedFilter } from '@hyperdx/common-utils/dist/filters';
 import { type Filter } from '@hyperdx/common-utils/dist/types';
 import express from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   createSavedSearch,

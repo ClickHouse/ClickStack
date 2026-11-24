@@ -1,4 +1,5 @@
 import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/node';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import * as config from '@/config';
@@ -44,7 +45,7 @@ const buildPartitionTask = (
   alerts: { id: string; previousMap: Map<string, TestHistory> }[],
   teamId = new mongoose.Types.ObjectId(),
 ): AlertTask =>
-  ({
+  fromPartial({
     alerts: alerts.map(({ id, previousMap }) => ({
       alert: {
         id,
@@ -68,7 +69,7 @@ const buildPartitionTask = (
       team: teamId,
     },
     now: new Date(),
-  }) as unknown as AlertTask;
+  });
 
 describe('partitionPreviousMapsByAlert', () => {
   it('gives each alert only its own entries from a shared map, keys unchanged', () => {
@@ -176,7 +177,7 @@ describe('CheckAlertTask', () => {
         buildLogSearchLink: jest.fn(),
         getClickHouseClient: jest
           .fn()
-          .mockResolvedValue({} as ClickhouseClient),
+          .mockResolvedValue(fromPartial<ClickhouseClient>({})),
       };
 
       jest.mocked(loadProvider).mockResolvedValue(mockAlertProvider);
@@ -191,7 +192,9 @@ describe('CheckAlertTask', () => {
     });
 
     it('should throw error for invalid task name', async () => {
-      const args = { taskName: 'invalid-task' } as any;
+      const args = fromAny<CheckAlertsTaskArgs, { taskName: string }>({
+        taskName: 'invalid-task',
+      });
       const task = new CheckAlertTask(args);
 
       await expect(task.execute()).rejects.toThrow(
@@ -237,7 +240,7 @@ describe('CheckAlertTask', () => {
       const args: CheckAlertsTaskArgs = { taskName: TaskName.CHECK_ALERTS };
       const task = new CheckAlertTask(args);
 
-      const mockAlert = {
+      const mockAlert: IAlert = fromPartial({
         id: 'alert-123',
         team: { _id: new mongoose.Types.ObjectId() },
         source: AlertSource.SAVED_SEARCH,
@@ -245,22 +248,22 @@ describe('CheckAlertTask', () => {
         thresholdType: AlertThresholdType.ABOVE,
         interval: '5m',
         channel: { type: 'webhook', webhookId: 'webhook-123' },
-      } as IAlert;
+      });
 
-      const mockSource = {
+      const mockSource: ISource = fromPartial({
         id: 'source-123',
         from: { databaseName: 'default', tableName: 'otel_logs' },
         timestampValueExpression: 'Timestamp',
-      } as ISource;
+      });
 
       const mockAlertTask = {
         alerts: [
-          {
+          fromPartial<AlertDetails>({
             alert: mockAlert,
             source: mockSource,
             taskType: AlertTaskType.SAVED_SEARCH,
             previousMap: new Map(),
-          } as AlertDetails,
+          }),
         ],
         conn: {
           id: 'conn-123',
@@ -277,10 +280,10 @@ describe('CheckAlertTask', () => {
       const teamWebhooksById = new Map<string, IWebhook>([
         [
           'webhook-123',
-          {
+          fromAny({
             _id: 'webhook-123',
             url: 'http://example.com/webhook',
-          } as unknown as IWebhook,
+          }),
         ],
       ]);
 
@@ -313,7 +316,7 @@ describe('CheckAlertTask', () => {
       const team1Id = new mongoose.Types.ObjectId();
       const team2Id = new mongoose.Types.ObjectId();
 
-      const mockAlert1 = {
+      const mockAlert1: IAlert = fromPartial({
         id: 'alert-123',
         team: { _id: team1Id },
         source: AlertSource.SAVED_SEARCH,
@@ -321,9 +324,9 @@ describe('CheckAlertTask', () => {
         thresholdType: AlertThresholdType.ABOVE,
         interval: '5m',
         channel: { type: 'webhook', webhookId: 'webhook-team1' },
-      } as IAlert;
+      });
 
-      const mockAlert2 = {
+      const mockAlert2: IAlert = fromPartial({
         id: 'alert-456',
         team: { _id: team2Id },
         source: AlertSource.SAVED_SEARCH,
@@ -331,22 +334,22 @@ describe('CheckAlertTask', () => {
         thresholdType: AlertThresholdType.BELOW,
         interval: '1m',
         channel: { type: 'webhook', webhookId: 'webhook-team2' },
-      } as IAlert;
+      });
 
-      const mockSource = {
+      const mockSource: ISource = fromPartial({
         id: 'source-123',
         from: { databaseName: 'default', tableName: 'otel_logs' },
         timestampValueExpression: 'Timestamp',
-      } as ISource;
+      });
 
       const mockAlertTask1 = {
         alerts: [
-          {
+          fromPartial<AlertDetails>({
             alert: mockAlert1,
             source: mockSource,
             taskType: AlertTaskType.SAVED_SEARCH,
             previousMap: new Map(),
-          } as AlertDetails,
+          }),
         ],
         conn: {
           id: 'conn-123',
@@ -362,12 +365,12 @@ describe('CheckAlertTask', () => {
 
       const mockAlertTask2 = {
         alerts: [
-          {
+          fromPartial<AlertDetails>({
             alert: mockAlert2,
             source: mockSource,
             taskType: AlertTaskType.SAVED_SEARCH,
             previousMap: new Map(),
-          } as AlertDetails,
+          }),
         ],
         conn: {
           id: 'conn-456',
@@ -385,24 +388,24 @@ describe('CheckAlertTask', () => {
       const team1WebhooksById = new Map<string, IWebhook>([
         [
           'webhook-team1',
-          {
+          fromAny({
             _id: 'webhook-team1',
             name: 'Team1 Webhook',
             url: 'http://team1.example.com/webhook',
             team: team1Id,
-          } as unknown as IWebhook,
+          }),
         ],
       ]);
 
       const team2WebhooksById = new Map<string, IWebhook>([
         [
           'webhook-team2',
-          {
+          fromAny({
             _id: 'webhook-team2',
             name: 'Team2 Webhook',
             url: 'http://team2.example.com/webhook',
             team: team2Id,
-          } as unknown as IWebhook,
+          }),
         ],
       ]);
 
@@ -522,7 +525,7 @@ describe('CheckAlertTask', () => {
         alertId: string,
         teamId: mongoose.Types.ObjectId,
       ) =>
-        ({
+        fromPartial<AlertTask>({
           alerts: [
             {
               alert: {
@@ -553,7 +556,7 @@ describe('CheckAlertTask', () => {
             team: teamId,
           },
           now: new Date(),
-        }) as unknown as AlertTask;
+        });
 
       beforeEach(() => {
         unhandledRejections = [];

@@ -12,7 +12,7 @@ import {
   type SQLInterval,
 } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';

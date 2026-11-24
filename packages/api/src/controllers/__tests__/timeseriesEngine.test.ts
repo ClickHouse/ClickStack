@@ -1,5 +1,6 @@
 import { ClickHouseError } from '@clickhouse/client-common';
 import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import {
   formatMatrixResponse,
@@ -50,7 +51,7 @@ describe('formatMatrixResponse', () => {
         ] as [string | number, number][],
       },
     ];
-    expect(formatMatrixResponse(rows as any)).toEqual([
+    expect(formatMatrixResponse(fromAny(rows))).toEqual([
       {
         metric: { __name__: 'http_requests_total', method: 'GET' },
         values: [
@@ -72,7 +73,7 @@ describe('formatVectorResponse', () => {
       { tags: [['service', 'api']], timestamp: 1700000000, value: 42 },
       { tags: [], timestamp: '2023-11-14T22:13:20.000Z', value: 3 },
     ];
-    expect(formatVectorResponse(rows as any)).toEqual([
+    expect(formatVectorResponse(fromAny(rows))).toEqual([
       { metric: { service: 'api' }, value: [1700000000, '42'] },
       { metric: {}, value: [1700000000, '3'] },
     ]);

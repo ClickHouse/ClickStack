@@ -1,15 +1,16 @@
 import { act, renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { Dashboard } from '@/dashboard';
 import useDashboardContainers from '@/hooks/useDashboardContainers';
 
 function makeDashboard(overrides: Partial<Dashboard> = {}): Dashboard {
-  return {
+  return fromPartial<Dashboard>({
     name: 'Test Dashboard',
     tiles: [],
     containers: [],
     ...overrides,
-  } as Dashboard;
+  });
 }
 
 function renderContainersHook(dashboard: Dashboard) {
@@ -41,7 +42,7 @@ describe('useDashboardContainers', () => {
           ],
         },
       ],
-      tiles: [
+      tiles: fromPartial<Dashboard['tiles']>([
         { id: 't1', containerId: 'c1', tabId: 'tab-1', x: 0, y: 0, w: 6, h: 4 },
         { id: 't2', containerId: 'c1', tabId: 'tab-1', x: 6, y: 0, w: 6, h: 4 },
         {
@@ -54,7 +55,7 @@ describe('useDashboardContainers', () => {
           h: 4,
         },
         { id: 't4', containerId: 'c1', tabId: 'tab-3', x: 0, y: 0, w: 6, h: 4 },
-      ] as Dashboard['tiles'],
+      ]),
     });
 
     it('action "delete" removes tiles belonging to the deleted tab', () => {
@@ -127,7 +128,7 @@ describe('useDashboardContainers', () => {
             ],
           },
         ],
-        tiles: [
+        tiles: fromPartial<Dashboard['tiles']>([
           {
             id: 't1',
             containerId: 'c1',
@@ -137,7 +138,7 @@ describe('useDashboardContainers', () => {
             w: 6,
             h: 4,
           },
-        ] as Dashboard['tiles'],
+        ]),
       });
 
       const { hook, getDashboard } = renderContainersHook(emptyTabDashboard);
@@ -164,7 +165,7 @@ describe('useDashboardContainers', () => {
             ],
           },
         ],
-        tiles: [
+        tiles: fromPartial<Dashboard['tiles']>([
           {
             id: 't1',
             containerId: 'c1',
@@ -183,7 +184,7 @@ describe('useDashboardContainers', () => {
             w: 6,
             h: 4,
           },
-        ] as Dashboard['tiles'],
+        ]),
       });
 
       const { hook, getDashboard } = renderContainersHook(twoTabDashboard);
@@ -217,7 +218,7 @@ describe('useDashboardContainers', () => {
           collapsed: true,
         },
       ],
-      tiles: [
+      tiles: fromPartial<Dashboard['tiles']>([
         {
           id: 't1',
           containerId: 'section-1',
@@ -242,7 +243,7 @@ describe('useDashboardContainers', () => {
           w: 8,
           h: 6,
         },
-      ] as Dashboard['tiles'],
+      ]),
     });
 
     it('handleAddTab creates 2 tabs and assigns existing tiles to tab 1', () => {
@@ -315,11 +316,11 @@ describe('useDashboardContainers', () => {
           ],
         },
       ],
-      tiles: [
+      tiles: fromPartial<Dashboard['tiles']>([
         { id: 't1', containerId: 'g1', tabId: 'tab-a', x: 0, y: 0, w: 6, h: 4 },
         { id: 't2', containerId: 'g1', tabId: 'tab-a', x: 6, y: 0, w: 6, h: 4 },
         { id: 't3', containerId: 'g1', tabId: 'tab-b', x: 0, y: 0, w: 6, h: 4 },
-      ] as Dashboard['tiles'],
+      ]),
     });
 
     it('action="ungroup" strips containerId and tabId from all tiles across all tabs', () => {

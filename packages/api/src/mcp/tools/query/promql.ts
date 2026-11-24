@@ -2,7 +2,7 @@ import {
   PromqlQueryTypeSchema,
   SQLIntervalSchema,
 } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
@@ -49,8 +49,6 @@ const promqlSchema = z.object({
 // ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerPromql({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_promql',
     {
@@ -107,7 +105,7 @@ export function registerPromql({ context, registerTool }: ToolRegistrar) {
               granularity: input.granularity,
             });
 
-      return runConfigTile(teamId.toString(), tile, startDate, endDate);
+      return runConfigTile(context, tile, startDate, endDate);
     },
   );
 }

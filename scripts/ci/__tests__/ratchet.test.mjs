@@ -22,7 +22,10 @@ function fixture(packages, workspaces = ['packages/*']) {
   for (const [pkg, files] of Object.entries(packages)) {
     const dir = path.join(root, 'packages', pkg);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: pkg }));
+    writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: pkg }),
+    );
     for (const [rel, source] of Object.entries(files)) {
       const file = path.join(dir, rel);
       mkdirSync(path.dirname(file), { recursive: true });
@@ -43,6 +46,16 @@ test('counts escape hatches across a package, not just src/', () => {
   assert.deepEqual(collectCounts(root), {
     app: { 'as-any': 1, 'ts-ignore': 1, 'eslint-disable': 1, '@source': 0 },
   });
+});
+
+test('oxlint-disable comments count as disable directives too', () => {
+  const root = fixture({
+    app: {
+      'src/a.ts':
+        '// oxlint-disable-next-line no-console\n// eslint-disable-line no-var\n',
+    },
+  });
+  assert.equal(collectCounts(root).app['eslint-disable'], 2);
 });
 
 test('`as any` is word-anchored, so prose does not inflate the count', () => {
@@ -96,8 +109,12 @@ test('above baseline fails', () => {
 
 test('an advisory pattern above baseline warns instead of failing', () => {
   const { failed, messages } = compare(
-    { cli: { 'as-any': 0, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 38 } },
-    { cli: { 'as-any': 0, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 37 } },
+    {
+      cli: { 'as-any': 0, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 38 },
+    },
+    {
+      cli: { 'as-any': 0, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 37 },
+    },
   );
   assert.equal(failed, false);
   assert.match(messages.join('\n'), /! cli\/@source: 38 > baseline 37/);
@@ -105,8 +122,12 @@ test('an advisory pattern above baseline warns instead of failing', () => {
 
 test('an advisory rise does not mask a gated pattern rising too', () => {
   const { failed, messages } = compare(
-    { cli: { 'as-any': 1, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 38 } },
-    { cli: { 'as-any': 0, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 37 } },
+    {
+      cli: { 'as-any': 1, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 38 },
+    },
+    {
+      cli: { 'as-any': 0, 'ts-ignore': 0, 'eslint-disable': 0, '@source': 37 },
+    },
   );
   assert.equal(failed, true);
   assert.match(messages.join('\n'), /x cli\/as-any: 1 > baseline 0/);
@@ -143,7 +164,10 @@ test('a baselined package that vanished is a hard error, not a free pass', () =>
 test('the committed baseline is not already breached by the real repo', () => {
   const repoRoot = path.resolve(import.meta.dirname, '../../..');
   const baseline = JSON.parse(
-    readFileSync(path.join(repoRoot, 'scripts/ci/ratchet-baseline.json'), 'utf8'),
+    readFileSync(
+      path.join(repoRoot, 'scripts/ci/ratchet-baseline.json'),
+      'utf8',
+    ),
   );
   // Only asserts not-above-baseline: below-baseline is a deliberate warn.
   assert.equal(compare(collectCounts(repoRoot), baseline).failed, false);

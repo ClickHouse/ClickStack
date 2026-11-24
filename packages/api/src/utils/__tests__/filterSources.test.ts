@@ -1,4 +1,5 @@
 import { DashboardFilter, SourceKind } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   getChangedFilterSourceRefs,
@@ -104,7 +105,7 @@ describe('getChangedFilterSourceRefs', () => {
     const { id: _id, ...withoutId } = adhoc();
     expect(
       getChangedFilterSourceRefs(
-        [withoutId as DashboardFilter, adhoc({ id: 'new' })],
+        [fromPartial(withoutId), adhoc({ id: 'new' })],
         [adhoc()],
       ),
     ).toEqual([

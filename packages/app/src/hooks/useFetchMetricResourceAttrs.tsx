@@ -3,6 +3,7 @@ import {
   ResponseJSON,
   tableExpr,
 } from '@hyperdx/common-utils/dist/clickhouse';
+import { querySettingsToClickHouseSettings } from '@hyperdx/common-utils/dist/core/utils';
 import { SourceKind, TMetricSource } from '@hyperdx/common-utils/dist/types';
 import { useQuery } from '@tanstack/react-query';
 
@@ -153,11 +154,11 @@ export const useFetchMetricResourceAttrs = ({
 
   const shouldFetch = Boolean(
     databaseName &&
-      tableName &&
-      metricType &&
-      metricName &&
-      tableSource &&
-      tableSource?.kind === SourceKind.Metric,
+    tableName &&
+    metricType &&
+    metricName &&
+    tableSource &&
+    tableSource?.kind === SourceKind.Metric,
   );
 
   const attribution = useMetadataQueryAttribution();
@@ -187,6 +188,9 @@ export const useFetchMetricResourceAttrs = ({
           format: 'JSON',
           abort_signal: signal,
           connectionId: tableSource!.connection,
+          clickhouse_settings: querySettingsToClickHouseSettings(
+            tableSource?.querySettings,
+          ),
         })
         .then(res => res.json())) as ResponseJSON<MetricAttributesResponse>;
 
