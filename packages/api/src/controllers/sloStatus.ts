@@ -9,7 +9,7 @@ import {
 } from '@hyperdx/common-utils/dist/core/sloStats';
 import type { SloStatus } from '@hyperdx/common-utils/dist/slo';
 
-import { getSloQueryContext } from '@/controllers/slo';
+import { getSloQueryContext, SloQueryContext } from '@/controllers/slo';
 import {
   buildSloStatus,
   computeSloBurn,
