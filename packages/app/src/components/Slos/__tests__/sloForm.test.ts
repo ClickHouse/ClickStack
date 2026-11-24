@@ -6,8 +6,10 @@ import {
   buildSloPreviewRequest,
   DEFAULT_SLO_FORM_VALUES,
   getSloPreviewKey,
+  sloCopyFormValues,
   sloFormResolver,
   type SloFormValues,
+  sloFormValuesFromSearch,
   sloToFormValues,
   toSloInput,
 } from '@/components/Slos/sloForm';
@@ -168,6 +170,39 @@ describe('SLO form', () => {
         alerts: saved.alerts,
       }),
     );
+  });
+
+  it('copies an SLO under a new name and without its alerts', () => {
+    const copy = sloCopyFormValues(savedSlo);
+    expect(copy).toEqual({
+      ...sloToFormValues(savedSlo),
+      name: 'Copy of Checkout availability',
+      alerts: undefined,
+    });
+  });
+
+  it('starts an SLO from a search', () => {
+    expect(
+      sloFormValuesFromSearch({
+        source: 'source-1',
+        name: 'Checkout errors',
+        where: 'ServiceName:checkout',
+        whereLanguage: 'lucene',
+        filters: null,
+      }),
+    ).toEqual({
+      ...DEFAULT_SLO_FORM_VALUES,
+      name: 'Checkout errors',
+      source: 'source-1',
+      indicator: {
+        ...DEFAULT_SLO_FORM_VALUES.indicator,
+        eligible: {
+          where: 'ServiceName:checkout',
+          whereLanguage: 'lucene',
+          filters: [],
+        },
+      },
+    });
   });
 
   it('marks a preview stale when its counts would change, not the target', () => {

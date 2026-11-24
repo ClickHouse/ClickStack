@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
 import { ActionIcon, Menu } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconDots, IconPencil, IconTrash } from '@tabler/icons-react';
+import { IconCopy, IconDots, IconPencil, IconTrash } from '@tabler/icons-react';
 
 import { useDeleteSlo } from '@/slo';
 import { useConfirm } from '@/useConfirm';
@@ -58,6 +58,15 @@ export function SloRowMenu({ slo }: { slo: SloApiResponse }) {
           leftSection={<IconPencil size={14} />}
         >
           Edit
+        </Menu.Item>
+        {/* A copy starts without its alerts, as a duplicated tile does. */}
+        <Menu.Item
+          component={Link}
+          href={`/slos/new?duplicate=${slo.id}`}
+          leftSection={<IconCopy size={14} />}
+          data-testid="slo-duplicate"
+        >
+          Duplicate
         </Menu.Item>
         <Menu.Divider />
         <Menu.Item

@@ -3,12 +3,14 @@ import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import { useQueryStates } from 'nuqs';
 import {
   type FieldPath,
   useForm,
   useFormState,
   useWatch,
 } from 'react-hook-form';
+import type { Filter } from '@hyperdx/common-utils/dist/types';
 import {
   Anchor,
   Box,
@@ -30,6 +32,7 @@ import { withAppNavForSurface } from '@/layout';
 import { useSaveSlo, useSlo, useSlosEnabledGuard } from '@/slo';
 import { useSource } from '@/source';
 import { getApiErrorMessage } from '@/utils/apiErrors';
+import { parseAsJsonEncoded, parseAsStringEncoded } from '@/utils/queryParsers';
 
 import {
   SloDetailsFields,
@@ -40,8 +43,10 @@ import {
   buildSloPreviewRequest,
   DEFAULT_SLO_FORM_VALUES,
   getSloPreviewKey,
+  sloCopyFormValues,
   sloFormResolver,
   type SloFormValues,
+  sloFormValuesFromSearch,
   type SloPreviewRequest,
   sloToFormValues,
   toSloInput,
@@ -57,12 +62,28 @@ const PREVIEW_FIELDS: FieldPath<SloFormValues>[] = [
   'window',
 ];
 
+// Carried over from Search by "Create SLO from this search".
+const prefillParsers = {
+  source: parseAsStringEncoded,
+  where: parseAsStringEncoded,
+  whereLanguage: parseAsStringEncoded,
+  filters: parseAsJsonEncoded<Filter[]>(),
+  name: parseAsStringEncoded,
+};
+
 function SloEditorPage() {
   const enabled = useSlosEnabledGuard();
   const router = useRouter();
   const editId =
     typeof router.query.sloId === 'string' ? router.query.sloId : undefined;
+  // "Duplicate" on an SLO links here with ?duplicate=<id>.
+  const duplicateId =
+    !editId && typeof router.query.duplicate === 'string'
+      ? router.query.duplicate
+      : undefined;
+  const [prefill] = useQueryStates(prefillParsers);
   const { data: existing } = useSlo(editId);
+  const { data: original } = useSlo(duplicateId);
   const title = usePageTitle(editId ? 'Edit SLO' : 'New SLO');
 
   const { control, handleSubmit, reset, setValue, getValues, trigger } =
@@ -77,16 +98,21 @@ function SloEditorPage() {
   });
   const { data: source } = useSource({ id: sourceId || undefined });
 
-  // Load the SLO being edited, once.
+  // Load the SLO being edited or copied, or the search it starts from, once.
   const initializedRef = useRef(false);
   useEffect(() => {
     if (initializedRef.current || !router.isReady) return;
     if (editId) {
       if (!existing) return;
       reset(sloToFormValues(existing));
+    } else if (duplicateId) {
+      if (!original) return;
+      reset(sloCopyFormValues(original));
+    } else if (prefill.source) {
+      reset(sloFormValuesFromSearch({ ...prefill, source: prefill.source }));
     }
     initializedRef.current = true;
-  }, [router.isReady, editId, existing, reset]);
+  }, [router.isReady, editId, existing, duplicateId, original, prefill, reset]);
 
   const [preview, setPreview] = useState<SloPreviewRequest | null>(null);
   const runPreview = async () => {
@@ -99,6 +125,21 @@ function SloEditorPage() {
       { source: sourceId, indicator, window: sloWindow },
       source,
     ) !== preview.key;
+
+  // A definition carried over from Search previews itself once its source
+  // has loaded.
+  const autoPreviewedRef = useRef(false);
+  useEffect(() => {
+    if (autoPreviewedRef.current || !initializedRef.current || !source) return;
+    if (editId || !prefill.source) return;
+    autoPreviewedRef.current = true;
+    void trigger(PREVIEW_FIELDS).then(valid => {
+      if (!valid) return;
+      setPreview(
+        buildSloPreviewRequest(getValues(), source, Date.now()) ?? null,
+      );
+    });
+  });
 
   const save = useSaveSlo();
   const onSave = handleSubmit(async values => {
