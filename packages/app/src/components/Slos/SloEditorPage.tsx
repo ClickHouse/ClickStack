@@ -149,7 +149,7 @@ function SloEditorPage() {
         slo: toSloInput(values, source),
       });
       notifications.show({ color: 'green', message: `Saved ${saved.name}` });
-      router.push('/slos');
+      router.push(`/slos/${saved.id}`);
     } catch (e) {
       notifications.show({
         color: 'red',

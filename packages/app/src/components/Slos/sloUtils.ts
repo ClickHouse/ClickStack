@@ -1,5 +1,6 @@
 import type {
   SloApiResponse,
+  SloBurnWindow,
   SloState,
   SloWindow,
 } from '@hyperdx/common-utils/dist/slo';
@@ -53,6 +54,25 @@ export function sloStateDescription(state: SloDisplayState): string {
     case 'pending':
       return 'The numbers are computed in the background within a few minutes of a save.';
   }
+}
+
+/** "hour" or "5 minutes", as in "the last hour". */
+function formatBurnWindow(window: SloBurnWindow): string {
+  switch (window) {
+    case '5m':
+      return '5 minutes';
+    case '30m':
+      return '30 minutes';
+    case '1h':
+      return 'hour';
+    case '6h':
+      return '6 hours';
+  }
+}
+
+/** "the last hour" or "the last 5 minutes", for sentences about a window. */
+export function describeBurnWindow(window: SloBurnWindow): string {
+  return `the last ${formatBurnWindow(window)}`;
 }
 
 /** SLIs near 100% need more decimals to tell 99.9% from 99.99%. */
