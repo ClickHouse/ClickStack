@@ -399,6 +399,111 @@ describe('materializedViews', () => {
       expect(result.errors).toBeUndefined();
     });
 
+    it.each([
+      {
+        type: 'AggregateFunction(quantileDD(0.01, 0.5), UInt64)',
+        aggFn: 'quantileDDMerge',
+        sketchParams: [0.01],
+      },
+      {
+        type: 'AggregateFunction(quantilesDD(0.001, 0.9, 0.99), UInt64)',
+        aggFn: 'quantileDDMerge',
+        sketchParams: [0.001],
+      },
+      {
+        type: 'AggregateFunction(quantileGK(100, 0.5), UInt64)',
+        aggFn: 'quantileGKMerge',
+        sketchParams: [100],
+      },
+    ])(
+      'should carry the accuracy of a $type select into the merge',
+      async ({ type, aggFn, sketchParams }) => {
+        const sketchMetadata: Metadata = {
+          getColumn: jest.fn().mockImplementation(({ column }) => {
+            if (column === 'quantile__Duration') {
+              return { type } as unknown as ColumnMeta;
+            }
+            return undefined;
+          }),
+        } as unknown as Metadata;
+
+        const chartConfig: ChartConfigWithOptDateRange = {
+          from: {
+            databaseName: 'default',
+            tableName: 'otel_spans',
+          },
+          select: [
+            {
+              valueExpression: 'Duration',
+              aggFn: 'quantile',
+              level: 0.95,
+            },
+          ],
+          where: '',
+          connection: 'test-connection',
+        };
+
+        const result = await tryConvertConfigToMaterializedViewSelect(
+          chartConfig,
+          MV_CONFIG_METRIC_ROLLUP_1M,
+          sketchMetadata,
+        );
+
+        expect(result.optimizedConfig?.select).toEqual([
+          {
+            valueExpression: 'quantile__Duration',
+            aggFn,
+            level: 0.95,
+            sketchParams,
+          },
+        ]);
+        expect(result.errors).toBeUndefined();
+      },
+    );
+
+    it('should not carry sketch parameters for sketches merged by level alone', async () => {
+      const bfloat16Metadata: Metadata = {
+        getColumn: jest.fn().mockImplementation(({ column }) => {
+          if (column === 'quantile__Duration') {
+            return {
+              type: 'AggregateFunction(quantileBFloat16(0.5), UInt64)',
+            } as unknown as ColumnMeta;
+          }
+          return undefined;
+        }),
+      } as unknown as Metadata;
+
+      const chartConfig: ChartConfigWithOptDateRange = {
+        from: {
+          databaseName: 'default',
+          tableName: 'otel_spans',
+        },
+        select: [
+          {
+            valueExpression: 'Duration',
+            aggFn: 'quantile',
+            level: 0.99,
+          },
+        ],
+        where: '',
+        connection: 'test-connection',
+      };
+
+      const result = await tryConvertConfigToMaterializedViewSelect(
+        chartConfig,
+        MV_CONFIG_METRIC_ROLLUP_1M,
+        bfloat16Metadata,
+      );
+
+      expect(result.optimizedConfig?.select).toEqual([
+        {
+          valueExpression: 'quantile__Duration',
+          aggFn: 'quantileBFloat16Merge',
+          level: 0.99,
+        },
+      ]);
+    });
+
     it('should convert a histogram AggregateFunction select', async () => {
       const chartConfig: ChartConfigWithOptDateRange = {
         from: {

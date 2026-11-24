@@ -3396,6 +3396,53 @@ describe('renderChartConfig', () => {
       expect(actual).toMatchSnapshot();
     });
 
+    it('should merge a quantile sketch with its accuracy ahead of the level', async () => {
+      // The selects the materialized view optimizer produces for a view that
+      // stores quantileDD(0.01, ...) states. They're declared apart from the
+      // config because `sketchParams` isn't part of the select schema.
+      const ddMerge = {
+        aggFn: 'quantileDDMerge',
+        valueExpression: 'quantile__Duration',
+        sketchParams: [0.01],
+      };
+      const select = [
+        { ...ddMerge, level: 0.95, aggCondition: '' },
+        {
+          ...ddMerge,
+          level: 0.99,
+          aggCondition: 'severity:"ERROR"',
+          aggConditionLanguage: 'lucene' as const,
+        },
+      ];
+      const config: ChartConfigWithOptDateRange = {
+        displayType: DisplayType.Table,
+        connection: 'test-connection',
+        from: {
+          databaseName: 'default',
+          tableName: 'logs',
+        },
+        select,
+        where: '',
+        whereLanguage: 'sql',
+        groupBy: 'severity',
+        timestampValueExpression: 'timestamp',
+        dateRange: [new Date('2025-02-12'), new Date('2025-02-14')],
+      };
+
+      const generatedSql = await renderChartConfig(
+        config,
+        mockMetadata,
+        querySettings,
+      );
+      const actual = parameterizedQueryToSql(generatedSql);
+      expect(actual).toContain(
+        'quantileDDMerge(0.01, 0.95)(quantile__Duration)',
+      );
+      expect(actual).toContain(
+        "quantileDDMergeIf(0.01, 0.99)(quantile__Duration, ((severity = 'ERROR')) AND",
+      );
+    });
+
     it('should generate SQL for an histogram merge function', async () => {
       const config: ChartConfigWithOptDateRange = {
         displayType: DisplayType.Table,
