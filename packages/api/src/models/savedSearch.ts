@@ -3,7 +3,7 @@ import {
   SearchScopeSchema,
 } from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 type ObjectId = mongoose.Types.ObjectId;
 

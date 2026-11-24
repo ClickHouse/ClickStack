@@ -87,6 +87,23 @@ describe('useAvailableMetricNames', () => {
     expect(result.current.isLoading).toBe(true);
   });
 
+  it('names the source so its query settings apply', () => {
+    mockUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
+    render();
+    expect(mockUseGetKeyValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chartConfig: expect.objectContaining({ source: METRIC_SOURCE.id }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it('returns an empty set when the query has no data', () => {
     mockUseGetKeyValues.mockReturnValue(
       fromPartial({

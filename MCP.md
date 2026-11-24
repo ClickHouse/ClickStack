@@ -229,7 +229,8 @@ builder tools do not read it; use PromQL:
 
 1. `clickstack_list_sources` shows each PromQL source with its `backend`
    (`prometheus` or `clickhouse`).
-2. `clickstack_describe_source` lists its metric names and label names.
+2. `clickstack_describe_source` lists its metric names, and with `metricName`
+   that metric's label names.
 3. `clickstack_promql` runs an expression. A `range` query (default) returns
    `{ __hdx_time_bucket, series_name, value }` rows plus `seriesLabels`; an
    `instant` query evaluates at `endTime` and returns one row per series with a

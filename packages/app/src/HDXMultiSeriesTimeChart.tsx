@@ -30,7 +30,10 @@ import {
 import { getTickValuesFixedDomain } from 'recharts/lib/util/scale/getNiceTickValues';
 import { CurveType } from 'recharts/types/shape/Curve';
 import { AxisDomain, XAxisTickContentProps } from 'recharts/types/util/types';
-import { convertGranularityToSeconds } from '@hyperdx/common-utils/dist/core/utils';
+import {
+  convertGranularityToSeconds,
+  toWallClock,
+} from '@hyperdx/common-utils/dist/core/utils';
 import {
   DisplayType,
   getDefaultLineInterpolation,
@@ -74,7 +77,9 @@ import {
   MAX_TIME_CHART_SERIES,
   toStartOfInterval,
 } from './ChartUtils';
-import { useFormatTime } from './useFormatTime';
+import { getLocalTimeZone } from './timeZone';
+import { useDisplayTimeZone } from './useDisplayTimeZone';
+import { type DateFormat, useFormatTime } from './useFormatTime';
 import { useContentFontSize } from './useUserPreferences';
 
 import styles from '@styles/HDXLineChart.module.scss';
@@ -1394,6 +1399,40 @@ export function compactTickAnchor(
   return 'middle';
 }
 
+const SECONDS_PER_DAY = 24 * 60 * 60;
+
+/**
+ * Format for an x-axis tick label. Below daily granularity the first tick
+ * carries the date and the rest only the time. At daily granularity or coarser
+ * every tick carries the date, plus the time when the bucket does not start at
+ * midnight in `timeZone` (buckets are UTC-aligned, so this happens in most
+ * zones). An undefined `timeZone` means the browser's zone.
+ */
+export function getXAxisTickDateFormat({
+  tickSeconds,
+  index,
+  granularity,
+  timeZone,
+}: {
+  tickSeconds: number;
+  index: number;
+  granularity: string;
+  timeZone: string | undefined;
+}): DateFormat {
+  if (convertGranularityToSeconds(granularity) < SECONDS_PER_DAY) {
+    return index === 0 ? 'normal' : 'time';
+  }
+  const wallClock = toWallClock(
+    new Date(tickSeconds * 1000),
+    timeZone ?? getLocalTimeZone(),
+  );
+  const isMidnight =
+    wallClock.getUTCHours() === 0 &&
+    wallClock.getUTCMinutes() === 0 &&
+    wallClock.getUTCSeconds() === 0;
+  return isMidnight ? 'date' : 'short';
+}
+
 export const MemoChart = memo(function MemoChart({
   graphResults,
   setIsClickActive,
@@ -1743,13 +1782,19 @@ export const MemoChart = memo(function MemoChart({
   }, [displayType, graphResults.length, containerWidth, yAxisWidth]);
 
   const formatTime = useFormatTime();
+  const displayTimeZone = useDisplayTimeZone();
   const xTickFormatter = useCallback(
     (value: number, index: number) => {
       return formatTime(value * 1000, {
-        format: index === 0 ? 'normal' : 'time',
+        format: getXAxisTickDateFormat({
+          tickSeconds: value,
+          index,
+          granularity,
+          timeZone: displayTimeZone,
+        }),
       });
     },
-    [formatTime],
+    [formatTime, granularity, displayTimeZone],
   );
 
   // Compact mode: anchor the first label to the start and the last to the end

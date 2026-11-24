@@ -1,7 +1,7 @@
 import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
 import express from 'express';
 import { ObjectId } from 'mongodb';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   EXTERNAL_API_SEARCH_DEFAULT_MAX_RESULTS,

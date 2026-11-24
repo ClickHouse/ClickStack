@@ -91,7 +91,6 @@
     "minimatch@^10.2.2": "^10.2.3",
     "picomatch@^4.0.2": "^4.0.4",
     "picomatch@^4.0.3": "^4.0.4",
-    "@hono/node-server": "^1.19.13",
     "protobufjs": "^7.6.3",
     "smol-toml@1.6.1": "^1.8.0",
     "send": "^0.19.0",

@@ -1382,6 +1382,21 @@ describe('Metadata', () => {
       ).toBeUndefined();
     });
 
+    it('applies source query settings without overriding the pinned ones', async () => {
+      await metadata.getMetricNames({
+        ...baseArgs,
+        querySettings: [
+          { setting: 'force_optimize_skip_unused_shards', value: '0' },
+          { setting: 'timeout_overflow_mode', value: 'break' },
+        ],
+      });
+
+      expect(lastQuery().clickhouse_settings).toMatchObject({
+        force_optimize_skip_unused_shards: '0',
+        timeout_overflow_mode: 'throw',
+      });
+    });
+
     it('rejects a non-positive limit', async () => {
       await expect(
         metadata.getMetricNames({ ...baseArgs, limit: 0 }),

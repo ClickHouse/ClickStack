@@ -10,7 +10,7 @@ import express from 'express';
 import { ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
 import ms from 'ms';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { validateRequest } from 'zod-express-middleware';
 
 import { createWebhook, deleteWebhook } from '@/controllers/webhook';

@@ -1,5 +1,5 @@
 import { trace } from '@opentelemetry/api';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
@@ -92,8 +92,6 @@ const SQL_OR_QUERIES_ERROR =
 // ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerSql({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_sql',
     {
@@ -137,7 +135,7 @@ export function registerSql({ context, registerTool }: ToolRegistrar) {
         }
         trace.getActiveSpan()?.setAttribute('mcp.sql.mode', 'batch');
         return runSqlBatch({
-          teamId: teamId.toString(),
+          context,
           queries,
           defaults: {
             connectionId: input.connectionId,
@@ -158,18 +156,13 @@ export function registerSql({ context, registerTool }: ToolRegistrar) {
           connectionId: input.connectionId,
           sourceId: input.sourceId,
         },
-        createSourceLookup(teamId.toString()),
+        createSourceLookup(context),
       );
       if ('error' in prepared) {
         return prepared.error;
       }
 
-      return runConfigTile(
-        teamId.toString(),
-        prepared.tile,
-        startDate,
-        endDate,
-      );
+      return runConfigTile(context, prepared.tile, startDate, endDate);
     },
   );
 }
