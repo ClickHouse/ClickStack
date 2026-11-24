@@ -119,7 +119,7 @@ describe('SLO form', () => {
   it('saves the good condition or the latency settings, not both', () => {
     expect(toSloInput(valid).indicator).toEqual({
       template: 'availability',
-      eligible: { where: '', whereLanguage: 'sql' },
+      eligible: { where: '', whereLanguage: 'sql', filters: [] },
       good: "StatusCode != 'Error'",
     });
     const { indicator } = toSloInput(latency('Duration'), traceSource);
