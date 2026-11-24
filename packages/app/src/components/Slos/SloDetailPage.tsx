@@ -3,7 +3,12 @@ import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { parseAsInteger, parseAsStringEnum, useQueryStates } from 'nuqs';
+import {
+  parseAsInteger,
+  parseAsStringEnum,
+  useQueryState,
+  useQueryStates,
+} from 'nuqs';
 import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
 import type { TSource } from '@hyperdx/common-utils/dist/types';
 import {
@@ -32,6 +37,7 @@ import {
   type SloEventsRange,
   type SloEventsRequest,
 } from './SloEventsDrawer';
+import { SloGroupSelect } from './SloGroupSelect';
 import { SloNumbers } from './SloNumbers';
 import { SloRowMenu } from './SloRowMenu';
 import { SloStateBadge } from './SloStateBadge';
@@ -42,13 +48,21 @@ import {
   useSloNow,
 } from './useSloLiveStatus';
 
+type SloGroupProps = {
+  /** The group of a grouped SLO the page shows; all groups when unset. */
+  group?: string;
+  onGroupChange: (group: string | null) => void;
+};
+
 function SloDetailView({
   slo,
   source,
   now,
   live,
   liveError,
-}: {
+  group,
+  onGroupChange,
+}: SloGroupProps & {
   slo: SloApiResponse;
   source?: TSource;
   now?: Date;
@@ -83,7 +97,16 @@ function SloDetailView({
       setBadEvents({ bad: 'custom', from: start.getTime(), to: end.getTime() }),
     [setBadEvents],
   );
-  const state = live?.state ?? getSloDisplayState(slo);
+  // A grouped SLO is as bad as its worst group, which its stored state
+  // knows and the live numbers of all groups together do not.
+  const state =
+    group != null
+      ? (live?.state ??
+        slo.status?.groups?.find(g => g.value === group)?.state ??
+        'pending')
+      : slo.groupBy != null
+        ? getSloDisplayState(slo)
+        : (live?.state ?? getSloDisplayState(slo));
 
   return (
     <div data-testid="slo-detail-page">
@@ -104,6 +127,13 @@ function SloDetailView({
               {slo.name}
             </Text>
             <SloStateBadge state={state} />
+            {slo.groupBy != null && (
+              <SloGroupSelect
+                slo={slo}
+                group={group}
+                onChange={onGroupChange}
+              />
+            )}
           </Group>
         }
         actions={
@@ -130,6 +160,7 @@ function SloDetailView({
           )}
           <SloNumbers
             slo={slo}
+            group={group}
             hasSource={source != null}
             live={live}
             liveError={liveError}
@@ -139,6 +170,7 @@ function SloDetailView({
               slo={slo}
               source={source}
               now={now}
+              group={group}
               onBucketSelect={onBucketSelect}
             />
           )}
@@ -149,6 +181,7 @@ function SloDetailView({
       <SloEventsDrawer
         slo={slo}
         source={source}
+        group={group}
         request={eventsRequest}
         onRangeChange={openBadEvents}
         onClose={() => setBadEvents({ bad: null, from: null, to: null })}
@@ -161,12 +194,13 @@ function SloDetailView({
 function SloDetailLive({
   slo,
   source,
-}: {
+  ...groupProps
+}: SloGroupProps & {
   slo: SloApiResponse;
   source: TSource;
 }) {
   const now = useSloNow();
-  const { live, error } = useSloLiveStatus(slo, source, now);
+  const { live, error } = useSloLiveStatus(slo, source, now, groupProps.group);
   return (
     <SloDetailView
       slo={slo}
@@ -174,6 +208,7 @@ function SloDetailLive({
       now={now}
       live={live}
       liveError={error}
+      {...groupProps}
     />
   );
 }
@@ -187,6 +222,8 @@ function SloDetailPage() {
   const { data: source, isPending: isSourcePending } = useSource({
     id: slo?.source,
   });
+  // The group in view, from list rows and alert notifications too.
+  const [groupParam, setGroup] = useQueryState('group');
 
   if (!enabled) return null;
   if (isPending || (slo != null && isSourcePending)) {
@@ -207,11 +244,15 @@ function SloDetailPage() {
       </Container>
     );
   }
+  const groupProps: SloGroupProps = {
+    group: slo.groupBy != null ? (groupParam ?? undefined) : undefined,
+    onGroupChange: value => void setGroup(value),
+  };
   // A deleted source leaves the stored numbers, which say what went wrong.
   return source ? (
-    <SloDetailLive slo={slo} source={source} />
+    <SloDetailLive slo={slo} source={source} {...groupProps} />
   ) : (
-    <SloDetailView slo={slo} />
+    <SloDetailView slo={slo} {...groupProps} />
   );
 }
 

@@ -33,6 +33,7 @@ export function SloStateBadge({ state }: { state: SloDisplayState }) {
         return <Badge text={label} state="success" />;
       case 'no_data':
       case 'pending':
+      case 'insufficient_data':
         return <Badge text={label} state="neutral" />;
     }
   })();

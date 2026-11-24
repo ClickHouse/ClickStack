@@ -17,6 +17,7 @@ import { useZIndex, ZIndexContext } from '@/zIndex';
 import {
   formatBurnWindow,
   formatCount,
+  formatSloGroup,
   formatSloWindow,
   getSourceDefaultSelect,
 } from './sloUtils';
@@ -37,12 +38,15 @@ export type SloEventsRequest = {
 export function SloEventsDrawer({
   slo,
   source,
+  group,
   request,
   onRangeChange,
   onClose,
 }: {
   slo: SloApiResponse;
   source?: TSource;
+  /** One group of a grouped SLO. */
+  group?: string;
   request: SloEventsRequest | null;
   onRangeChange: (range: 'burn' | 'window') => void;
   onClose: () => void;
@@ -58,7 +62,7 @@ export function SloEventsDrawer({
   const config = useMemo(() => {
     if (!source || !dateRange) return undefined;
     const defaultSelect = getSourceDefaultSelect(source);
-    const search = buildSloBadEventsSearch(slo, defaultSelect);
+    const search = buildSloBadEventsSearch(slo, defaultSelect, group);
     const sourceOrderBy =
       'orderByExpression' in source ? source.orderByExpression?.trim() : '';
     return {
@@ -76,11 +80,14 @@ export function SloEventsDrawer({
       }),
       dateRange,
     };
-  }, [source, dateRange, slo]);
+  }, [source, dateRange, slo, group]);
 
   // The SLO's own count for the burn window, so a small difference from late
   // data is not a surprise.
-  const storedBurn = slo.status?.burn[0];
+  const status = slo.status;
+  const storedBurn = (
+    group != null ? status?.groups?.find(g => g.value === group) : status
+  )?.burn[0];
   const sloBadCount =
     request?.range === 'burn' && storedBurn?.window === burn.window
       ? storedBurn.bad
@@ -99,7 +106,10 @@ export function SloEventsDrawer({
     >
       <ZIndexContext value={drawerZIndex}>
         <Stack gap={0} h="100vh">
-          <DrawerHeader header={`Bad events: ${slo.name}`} onClose={onClose} />
+          <DrawerHeader
+            header={`Bad events: ${slo.name}${group != null ? ` (${formatSloGroup(group)})` : ''}`}
+            onClose={onClose}
+          />
           <Group px="md" py="xs" gap="sm" wrap="wrap">
             <SegmentedControl
               size="xs"
