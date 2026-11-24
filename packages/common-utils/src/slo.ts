@@ -1,12 +1,18 @@
 import { z } from 'zod/v3';
 
-import { AlertInterval, FilterSchema } from '@/types';
+import {
+  AlertInterval,
+  AlertState,
+  FilterSchema,
+  validateAlertChannelSelection,
+  zAlertChannels,
+} from '@/types';
 
 // An SLO follows OpenSLO v1 concepts in one flat document: an occurrence
-// based indicator (good over eligible events), a target percentage and a
-// rolling window. The eligible events keep the shape of a saved search
-// (where clause, language, filters), so Search and the SLO count the same
-// rows.
+// based indicator (good over eligible events), a target percentage, a rolling
+// window, and optional fast and slow burn alerts. The eligible events keep
+// the shape of a saved search (where clause, language, filters), so Search
+// and the SLO count the same rows.
 
 export const SLO_SCHEMA_VERSION = 1;
 
@@ -216,6 +222,29 @@ export const SloIndicatorSchema = z
   });
 export type SloIndicator = z.infer<typeof SloIndicatorSchema>;
 
+/** Where one burn alert notifies. */
+export const SloAlertTargetSchema = z
+  .object({
+    channels: zAlertChannels,
+  })
+  .superRefine(validateAlertChannelSelection);
+export type SloAlertTarget = z.infer<typeof SloAlertTargetSchema>;
+
+/** The burn alerts that are on, each with its channels. */
+export const SloAlertsSchema = z.object({
+  fastBurn: SloAlertTargetSchema.nullish(),
+  slowBurn: SloAlertTargetSchema.nullish(),
+});
+export type SloAlerts = z.infer<typeof SloAlertsSchema>;
+
+export function getSloAlertTarget(
+  alerts: SloAlerts | null | undefined,
+  rule: SloAlertRule,
+): SloAlertTarget | null {
+  if (rule === 'slowBurn') return alerts?.slowBurn ?? null;
+  return alerts?.fastBurn ?? null;
+}
+
 export const SloInputSchema = z.object({
   version: z.literal(SLO_SCHEMA_VERSION).default(SLO_SCHEMA_VERSION),
   name: z.string().trim().min(1, 'Name is required').max(256),
@@ -235,6 +264,103 @@ export const SloInputSchema = z.object({
    * alert, for example ServiceName or SpanAttributes['http.route'].
    */
   groupBy: z.string().trim().max(512).nullish(),
+  alerts: SloAlertsSchema.default({}),
 });
 export type SloInput = z.input<typeof SloInputSchema>;
 export type SloDefinition = z.output<typeof SloInputSchema>;
+
+export const SloStateSchema = z.enum([
+  'healthy',
+  'burning',
+  'breached',
+  'no_data',
+  'error',
+]);
+export type SloState = z.infer<typeof SloStateSchema>;
+
+/** One burn condition, with its numbers. */
+export type SloBurnStats = SloBurnCondition & {
+  /** The burn rate at which the condition holds. */
+  threshold: number;
+  /** Eligible and bad events in the long window. */
+  eligible: number;
+  bad: number;
+  /** Bad rate in the long window divided by (1 - target). */
+  burnRate: number | null;
+  /** The same over the short window, which shows the burn is still going. */
+  shortBurnRate: number | null;
+};
+
+export type SloStats = {
+  eligible: number;
+  good: number;
+  bad: number;
+  /** good / eligible, or null without eligible events. */
+  sli: number | null;
+  /** Allowed bad events in the window: (1 - target) x eligible. */
+  errorBudget: number;
+  /** Fraction of the error budget left; negative once it is overspent. */
+  budgetRemaining: number | null;
+  budgetRemainingEvents: number;
+  /** One entry per burn condition, fast burn first. */
+  burn: SloBurnStats[];
+};
+
+/** A group's state: an SLO state, or too few events to have one. */
+export type SloGroupState = SloState | 'insufficient_data';
+
+/** One group of a grouped SLO, with its own numbers and state. */
+export type SloGroupStatus = SloStats & {
+  /** The group-by expression's value, as text. */
+  value: string;
+  state: SloGroupState;
+};
+
+/**
+ * The stored snapshot, refreshed in the background: the burn numbers every
+ * few minutes, the window numbers (SLI, budget) less often, since a 7 or 30
+ * day budget moves slowly and its query reads the whole window.
+ */
+export type SloStatus = SloStats & {
+  /** A grouped SLO is as bad as its worst group with enough events. */
+  state: SloState;
+  /** When this snapshot was taken, successful or not. */
+  evaluatedAt: string;
+  /** When the numbers were last computed successfully. */
+  lastSuccessAt?: string | null;
+  /** When the window numbers were computed. */
+  windowEvaluatedAt?: string | null;
+  windowStart: string;
+  windowEnd: string;
+  /** Cost of the window queries, the expensive ones. */
+  durationMs: number;
+  rowsRead: number;
+  /** Grouped SLOs: the busiest groups (at most SLO_MAX_GROUPS), worst first. */
+  groups?: SloGroupStatus[];
+  /** Grouped SLOs: distinct groups in the window, tracked or not. */
+  groupCount?: number;
+  error?: string | null;
+};
+
+/** A burn alert the SLO owns, as it runs. */
+export type SloAlertStatus = {
+  id: string;
+  state: AlertState;
+  /** Set while someone has silenced the alert. */
+  silencedUntil: string | null;
+};
+
+export type SloApiResponse = SloDefinition & {
+  id: string;
+  status?: SloStatus | null;
+  /** The burn alerts the SLO owns, by rule; missing when not running. */
+  alertStates: { fastBurn?: SloAlertStatus; slowBurn?: SloAlertStatus };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SloHistoryBucket = {
+  ts: number;
+  eligible: number;
+  good: number;
+};
