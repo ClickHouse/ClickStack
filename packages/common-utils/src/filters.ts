@@ -613,6 +613,12 @@ function countTopLevelAnd(condition: string): number {
   return count;
 }
 
+/** A filter as the condition a person would write, for display. */
+export const describeFilter = (filter: Filter): string =>
+  filter.type === 'sql_ast'
+    ? `${filter.left} ${filter.operator} ${filter.right}`
+    : filter.condition;
+
 /**
  * Whether a filter renders *fully* as a single facet in the search sidebar.
  *

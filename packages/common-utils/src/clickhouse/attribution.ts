@@ -33,6 +33,7 @@ export const QUERY_SURFACES = [
   'search',
   'service-dashboard',
   'session-replay',
+  'slo',
   'unknown',
 ] as const;
 
