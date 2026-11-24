@@ -1,5 +1,7 @@
 import React from 'react';
+import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import { act, fireEvent, renderHook, screen } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { SearchNumRows, useSearchTelemetry } from '@/DBSearchPage';
 
@@ -297,10 +299,10 @@ describe('useSearchTelemetry', () => {
 // SearchNumRows
 // ---------------------------------------------------------------------------
 
-const baseConfig = {
+const baseConfig = fromPartial<ChartConfigWithDateRange>({
   source: 'test-source',
-  dateRange: { from: new Date('2024-01-01'), to: new Date('2024-01-02') },
-} as any;
+  dateRange: [new Date('2024-01-01'), new Date('2024-01-02')],
+});
 
 describe('SearchNumRows', () => {
   beforeEach(() => {
@@ -503,7 +505,7 @@ describe('SearchNumRows', () => {
 
   it('uses sqlConfig in the modal when provided — title says "Timeline" and content uses sqlConfig', async () => {
     mockExplainData = [{ rows: 50 }];
-    const sqlConfig = { ...baseConfig, source: 'timeline-source' } as any;
+    const sqlConfig = { ...baseConfig, source: 'timeline-source' };
 
     renderWithMantine(
       <SearchNumRows
@@ -529,7 +531,7 @@ describe('SearchNumRows', () => {
 
   it('uses plain "Generated SQL" title and rows config when no sqlConfig is passed', async () => {
     mockExplainData = [{ rows: 50 }];
-    const rowsConfig = { ...baseConfig, source: 'rows-source' } as any;
+    const rowsConfig = { ...baseConfig, source: 'rows-source' };
 
     renderWithMantine(
       <SearchNumRows

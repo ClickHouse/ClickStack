@@ -13,7 +13,7 @@ import {
   UseTextIndex,
 } from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
-import z from 'zod';
+import z from 'zod/v3';
 
 import { objectIdSchema } from '@/utils/zod';
 

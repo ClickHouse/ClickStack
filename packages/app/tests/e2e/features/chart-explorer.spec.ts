@@ -2,7 +2,11 @@ import { DisplayType } from '@hyperdx/common-utils/dist/types';
 
 import { ChartExplorerPage } from '../page-objects/ChartExplorerPage';
 import { expect, test } from '../utils/base-test';
-import { DEFAULT_LOGS_SOURCE_NAME, E2E_LOGS_TABLE } from '../utils/constants';
+import {
+  DEFAULT_LOGS_SOURCE_NAME,
+  DEFAULT_METRICS_SOURCE_NAME,
+  E2E_LOGS_TABLE,
+} from '../utils/constants';
 
 test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
   let chartExplorerPage: ChartExplorerPage;
@@ -158,6 +162,119 @@ test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
         .toEqual(descendingLabels.slice(0, seriesLimit));
     });
   });
+
+  test('should query an edited Order By instead of the last header sort on a table', async () => {
+    const { chartEditor } = chartExplorerPage;
+    let headerSortValues: string[] = [];
+    let headerSortDesc = false;
+
+    await test.step('Query a table grouped by ServiceName', async () => {
+      await expect(chartExplorerPage.form).toBeVisible();
+      await chartExplorerPage.page.waitForLoadState('networkidle');
+      await chartEditor.setChartType(DisplayType.Table);
+      await chartEditor.setGroupBy('ServiceName');
+      await chartEditor.runQuery(false);
+      await expect(
+        chartExplorerPage.getTableSortButton('ServiceName'),
+      ).toBeVisible({ timeout: 15000 });
+    });
+
+    await test.step('Sort by clicking the ServiceName header', async () => {
+      await chartExplorerPage.getTableSortButton('ServiceName').click();
+      await expect
+        .poll(() => chartExplorerPage.getOrderByText(), { timeout: 10000 })
+        .toMatch(/^ServiceName (ASC|DESC)$/);
+      headerSortDesc = (await chartExplorerPage.getOrderByText()).endsWith(
+        'DESC',
+      );
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(1);
+
+      await expect
+        .poll(
+          async () =>
+            (await chartExplorerPage.getTableColumnValues('ServiceName'))
+              .length,
+          { timeout: 10000 },
+        )
+        .toBeGreaterThan(1);
+      headerSortValues =
+        await chartExplorerPage.getTableColumnValues('ServiceName');
+    });
+
+    await test.step('Edit the Order By to the opposite direction with a trailing modifier', async () => {
+      // "NULLS LAST" has no trailing ASC/DESC, so the table can't show it as a
+      // header sort; it must still be queried as typed.
+      await chartEditor.setOrderBy(
+        `ServiceName ${headerSortDesc ? 'ASC' : 'DESC'} NULLS LAST`,
+      );
+      await chartEditor.runQuery(false);
+
+      await expect
+        .poll(() => chartExplorerPage.getTableColumnValues('ServiceName'), {
+          timeout: 10000,
+        })
+        .toEqual([...headerSortValues].reverse());
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(0);
+    });
+
+    await test.step('Clear the Order By and verify the header sort is not restored', async () => {
+      await chartEditor.setOrderBy('');
+      await chartEditor.runQuery(false);
+
+      await expect
+        .poll(
+          async () =>
+            (await chartExplorerPage.getTableColumnValues('ServiceName'))
+              .length,
+          { timeout: 10000 },
+        )
+        .toBeGreaterThan(1);
+      await expect(chartExplorerPage.getTableSortIndicators()).toHaveCount(0);
+      expect(await chartExplorerPage.getOrderByText()).toBe('');
+    });
+  });
+
+  test(
+    'should sort a metric table by a formula column whose alias has a space',
+    { tag: ['@full-stack'] },
+    async ({ page }) => {
+      const { chartEditor } = chartExplorerPage;
+
+      await test.step('Query a metric table with a formula aliased "duration min"', async () => {
+        await expect(chartExplorerPage.form).toBeVisible();
+        await chartEditor.setChartType(DisplayType.Table);
+        await chartEditor.selectSource(DEFAULT_METRICS_SOURCE_NAME);
+        await chartEditor.selectMetricForSeries(
+          0,
+          'container.cpu.utilization',
+          'container.cpu.utilization:::::::gauge',
+        );
+        await chartEditor.addFormula('A * 100', 'duration min');
+        await chartEditor.runQuery(false);
+        await expect(
+          chartExplorerPage.getTableSortButton('duration min'),
+        ).toBeVisible({ timeout: 15000 });
+      });
+
+      await test.step('Sort by the formula column and verify the query succeeds', async () => {
+        await chartExplorerPage.getTableSortButton('duration min').click();
+
+        await expect
+          .poll(() => chartExplorerPage.getOrderByText(), { timeout: 10000 })
+          .toMatch(/^"duration min" (ASC|DESC)$/);
+        await expect(
+          chartExplorerPage
+            .getTableSortButton('duration min')
+            .getByTestId('raw-log-table-sort-indicator'),
+        ).toBeVisible({ timeout: 15000 });
+        await page.waitForLoadState('networkidle');
+        await expect(page.getByTestId('chart-error-state')).toHaveCount(0);
+        await expect(
+          page.locator('table tbody tr[data-index]').first(),
+        ).toBeVisible();
+      });
+    },
+  );
 
   test('should apply a custom ORDER BY on a categorical pie chart', async () => {
     let ascendingLabels: string[] = [];
@@ -360,3 +477,105 @@ test.describe('Chart Explorer Functionality', { tag: ['@charts'] }, () => {
     },
   );
 });
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+// "Oct 27"
+const DATE_ONLY_LABEL = /^[A-Z][a-z]{2} \d{1,2}$/;
+// "Oct 26 7:00PM"
+const DATE_AND_SHORT_TIME_LABEL =
+  /^[A-Z][a-z]{2} \d{1,2} \d{1,2}:\d{2}(AM|PM)$/;
+// "Oct 26 7:00:00 PM"
+const DATE_AND_TIME_LABEL =
+  /^[A-Z][a-z]{2} \d{1,2} \d{1,2}:\d{2}:\d{2} (AM|PM)$/;
+// "7:00:00 PM"
+const TIME_ONLY_LABEL = /^\d{1,2}:\d{2}:\d{2} (AM|PM)$/;
+
+async function runTimeChart(
+  chartExplorerPage: ChartExplorerPage,
+  rangeDays: number,
+  granularityLabel: string,
+) {
+  const to = new Date();
+  await chartExplorerPage.gotoWithTimeRange(
+    new Date(to.getTime() - rangeDays * DAY_MS),
+    to,
+  );
+  await chartExplorerPage.chartEditor.waitForDataToLoad();
+  await chartExplorerPage.chartEditor.setGranularity(granularityLabel);
+  await chartExplorerPage.chartEditor.runQuery();
+}
+
+test.describe(
+  'Chart Explorer x-axis labels in UTC',
+  { tag: ['@charts'] },
+  () => {
+    test.use({ timezoneId: 'UTC' });
+
+    test('shows the date on every tick at daily granularity', async ({
+      page,
+    }) => {
+      const chartExplorerPage = new ChartExplorerPage(page);
+      await runTimeChart(chartExplorerPage, 30, '1 Day Granularity');
+
+      await expect
+        .poll(
+          async () => (await chartExplorerPage.getTimeChartXAxisLabels())[1],
+          { timeout: 15000 },
+        )
+        .toMatch(DATE_ONLY_LABEL);
+      const labels = await chartExplorerPage.getTimeChartXAxisLabels();
+      expect(labels.length).toBeGreaterThan(1);
+      for (const label of labels) {
+        expect(label).toMatch(DATE_ONLY_LABEL);
+      }
+      expect(new Set(labels).size).toBe(labels.length);
+    });
+
+    test('keeps time-only ticks after the first below daily granularity', async ({
+      page,
+    }) => {
+      const chartExplorerPage = new ChartExplorerPage(page);
+      await runTimeChart(chartExplorerPage, 2, '1 Hour Granularity');
+
+      await expect
+        .poll(
+          async () => (await chartExplorerPage.getTimeChartXAxisLabels())[1],
+          { timeout: 15000 },
+        )
+        .toMatch(TIME_ONLY_LABEL);
+      const [first, ...rest] =
+        await chartExplorerPage.getTimeChartXAxisLabels();
+      expect(first).toMatch(DATE_AND_TIME_LABEL);
+      for (const label of rest) {
+        expect(label).toMatch(TIME_ONLY_LABEL);
+      }
+    });
+  },
+);
+
+test.describe(
+  'Chart Explorer x-axis labels outside UTC',
+  { tag: ['@charts'] },
+  () => {
+    test.use({ timezoneId: 'America/New_York' });
+
+    test('shows the date and time when daily buckets do not start at local midnight', async ({
+      page,
+    }) => {
+      const chartExplorerPage = new ChartExplorerPage(page);
+      await runTimeChart(chartExplorerPage, 30, '1 Day Granularity');
+
+      await expect
+        .poll(
+          async () => (await chartExplorerPage.getTimeChartXAxisLabels())[1],
+          { timeout: 15000 },
+        )
+        .toMatch(DATE_AND_SHORT_TIME_LABEL);
+      const labels = await chartExplorerPage.getTimeChartXAxisLabels();
+      expect(labels.length).toBeGreaterThan(1);
+      for (const label of labels) {
+        expect(label).toMatch(DATE_AND_SHORT_TIME_LABEL);
+      }
+    });
+  },
+);

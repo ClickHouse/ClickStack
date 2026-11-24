@@ -5,7 +5,7 @@ import { whatsNewSchema } from '@/components/AppNav/useWhatsNew';
 
 // The parser lives in scripts/ (CommonJS) so next.config.mjs can import it at
 // build time; the test reaches across to exercise the same source of truth.
-// eslint-disable-next-line no-restricted-imports -- scripts/ is outside the @/ (src) alias by design
+// Relative import: scripts/ is outside the @/ (src) alias by design
 import parseWhatsNew from '../../../../scripts/parse-whats-new';
 
 const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..', '..');

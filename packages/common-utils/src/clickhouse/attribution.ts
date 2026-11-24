@@ -16,7 +16,7 @@
  * check) get a `query_id` but an empty `log_comment`.
  */
 
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * Which part of the product sent the query.

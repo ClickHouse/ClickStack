@@ -1,7 +1,7 @@
 import { MAX_ALERT_DISPLAY_NAME_LENGTH } from '@hyperdx/common-utils/dist/types';
 import { escapeRegExp } from 'lodash';
 import type { FilterQuery } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { ALERT_PAGE_POPULATE, type AlertPageRefs } from '@/controllers/alerts';
 import type { ObjectId } from '@/models';

@@ -3326,7 +3326,7 @@ describe('External API v2 Dashboards - new format', () => {
         response.body.data.id,
       ).lean();
 
-      expect((dashboardInDb!.tiles[0].config as any).where).toBe('');
+      expect(dashboardInDb!.tiles[0].config).toHaveProperty('where', '');
     });
 
     it('persists select-item where as empty string when omitted', async () => {
@@ -3355,9 +3355,10 @@ describe('External API v2 Dashboards - new format', () => {
         response.body.data.id,
       ).lean();
 
-      expect(
-        (dashboardInDb!.tiles[0].config as any).select[0].aggCondition,
-      ).toBe('');
+      expect(dashboardInDb!.tiles[0].config).toHaveProperty(
+        ['select', 0, 'aggCondition'],
+        '',
+      );
     });
 
     it('does not silently downgrade a corrupted heatmap to line on GET', async () => {

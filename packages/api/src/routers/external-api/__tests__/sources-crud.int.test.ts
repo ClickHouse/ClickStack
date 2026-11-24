@@ -1,4 +1,5 @@
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 import request, { SuperAgentTest } from 'supertest';
 
@@ -553,7 +554,7 @@ describe('External API v2 Sources CRUD', () => {
         .spyOn(Source.collection, 'replaceOne')
         .mockImplementationOnce(async () => {
           await Source.deleteOne({ _id: logSource._id });
-          return { matchedCount: 0 } as any;
+          return fromAny({ matchedCount: 0 });
         });
 
       try {

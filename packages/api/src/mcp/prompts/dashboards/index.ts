@@ -1,9 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { getConnectionsByTeam } from '@/controllers/connection';
-import { getSources } from '@/controllers/sources';
 import type { PromptDefinition } from '@/mcp/tools/types';
-import { isHiddenSource, isPromqlEnabled } from '@/mcp/utils/promql';
+import { getMcpConnections } from '@/mcp/utils/connections';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
+import { getMcpSources, getVisibleMcpSources } from '@/mcp/utils/sources';
 import logger from '@/utils/logger';
 
 import {
@@ -46,11 +46,10 @@ const dashboardPrompts: PromptDefinition = (server, context) => {
       let logSourceId: string;
 
       try {
-        const [allSources, connections] = await Promise.all([
-          getSources(teamId),
-          getConnectionsByTeam(teamId),
+        const [sources, connections] = await Promise.all([
+          getVisibleMcpSources(context),
+          getMcpConnections(context),
         ]);
-        const sources = allSources.filter(s => !isHiddenSource(context, s));
 
         sourceSummary = buildSourceSummary(
           sources.map(s => ({
@@ -127,8 +126,8 @@ const dashboardPrompts: PromptDefinition = (server, context) => {
 
       try {
         const [sources, connections] = await Promise.all([
-          getSources(teamId),
-          getConnectionsByTeam(teamId),
+          getMcpSources(context),
+          getMcpConnections(context),
         ]);
 
         traceSourceId = getFirstSourceId(

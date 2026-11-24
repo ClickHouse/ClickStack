@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { z, ZodError } from 'zod';
+import { z, ZodError } from 'zod/v3';
 
 /**
  * Formats a Zod error into a single concatenated error message

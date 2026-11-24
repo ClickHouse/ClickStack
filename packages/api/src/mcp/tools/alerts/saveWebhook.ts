@@ -1,6 +1,6 @@
 import { WebhookService } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { createWebhook, updateWebhook } from '@/controllers/webhook';
 import { OPEN_WORLD_UPSERT_TOOL } from '@/mcp/tools/annotations';

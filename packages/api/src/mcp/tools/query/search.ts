@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
@@ -58,8 +58,6 @@ const searchSchema = z.object({
 // ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerSearch({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_search',
     {
@@ -98,16 +96,10 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
         whereLanguage: input.whereLanguage,
       });
 
-      const result = await runConfigTile(
-        teamId.toString(),
-        tile,
-        startDate,
-        endDate,
-        {
-          maxResults: input.maxResults,
-          partialSearchResults: true,
-        },
-      );
+      const result = await runConfigTile(context, tile, startDate, endDate, {
+        maxResults: input.maxResults,
+        partialSearchResults: true,
+      });
 
       // ── Denoising post-processing ──
       if (!input.denoise || ('isError' in result && result.isError)) {
@@ -159,7 +151,7 @@ export function registerSearch({ context, registerTool }: ToolRegistrar) {
       let denoised;
       try {
         denoised = await denoiseSearchResults(
-          teamId.toString(),
+          context,
           input.sourceId,
           denoiseStartDate,
           endDate,

@@ -1,6 +1,6 @@
 import { env } from 'next-runtime-env';
 
-// eslint-disable-next-line no-restricted-imports -- package.json lives outside src, no @/ alias reaches it
+// Relative import: package.json lives outside src, no @/ alias reaches it
 import packageJson from '../package.json';
 
 // ONLY USED IN LOCAL MODE
@@ -67,7 +67,6 @@ export const BASE_PATH = process.env.NEXT_PUBLIC_HYPERDX_BASE_PATH ?? '';
 export const IS_NOINDEX = process.env.NEXT_PUBLIC_NOINDEX === 'true';
 
 /** Time captured at module load, use this a stable fallback/default time value instead of Date.now() defined in each React component file */
-// eslint-disable-next-line no-restricted-syntax
 export const NOW = Date.now();
 
 // Features in development

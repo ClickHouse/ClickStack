@@ -26,7 +26,6 @@ const metricNamesQueryArgs = ({
   metricSource: TMetricSource;
   metricType: MetricsDataType;
 }) => {
-  // eslint-disable-next-line no-restricted-syntax
   const now = new Date();
 
   return {
@@ -37,6 +36,7 @@ const metricNamesQueryArgs = ({
     connectionId: metricSource.connection,
     timestampValueExpression: metricSource.timestampValueExpression ?? '',
     dateRange: clampCatalogDateRange(dateRange, now),
+    querySettings: metricSource.querySettings,
   };
 };
 
@@ -72,6 +72,7 @@ function useMetricNamesForKind(
       args.timestampValueExpression,
       args.dateRange[0].getTime(),
       args.dateRange[1].getTime(),
+      args.querySettings,
     ],
     // Not memoized: read when the query runs, not hashed into its key.
     streamFactory: ({ signal }) =>
@@ -82,6 +83,7 @@ function useMetricNamesForKind(
         connectionId: args.connectionId,
         dateRange: args.dateRange,
         timestampValueExpression: args.timestampValueExpression,
+        querySettings: args.querySettings,
         signal,
       }),
     enabled: isQueryable && !isSearching,

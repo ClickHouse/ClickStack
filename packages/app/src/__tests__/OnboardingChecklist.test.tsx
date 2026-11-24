@@ -1,8 +1,12 @@
-import { ONBOARDING_TASK_IDS } from '@hyperdx/common-utils/dist/types';
+import {
+  ONBOARDING_TASK_IDS,
+  OnboardingTaskId,
+} from '@hyperdx/common-utils/dist/types';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import api from '@/api';
 import { useConnections } from '@/connection';
@@ -42,10 +46,12 @@ const dismissMutate = jest.fn();
 // brand-new team so existing tests exercise the "eligible" path.
 function setTeamAgeDays(ageDays: number) {
   const createdAt = new Date(Date.now() - ageDays * 86_400_000).toISOString();
-  mockUseTeam.mockReturnValue({
-    data: { createdAt },
-    isLoading: false,
-  } as unknown as ReturnType<typeof api.useTeam>);
+  mockUseTeam.mockReturnValue(
+    fromPartial({
+      data: { createdAt },
+      isLoading: false,
+    }),
+  );
 }
 
 // A real authenticated user carries a 24-hex ObjectId; the all-in-one-noauth
@@ -53,23 +59,28 @@ function setTeamAgeDays(ageDays: number) {
 const REAL_USER_ID = '507f1f77bcf86cd799439011';
 
 function setMe(
-  onboardingData: { completedTasks: string[]; isDismissed: boolean } | null,
+  onboardingData: {
+    completedTasks: OnboardingTaskId[];
+    isDismissed: boolean;
+  } | null,
   id: string = REAL_USER_ID,
 ) {
-  mockUseMe.mockReturnValue({
-    data:
-      onboardingData === null
-        ? null
-        : {
-            id,
-            email: 'a@b.com',
-            accessKey: 'k',
-            name: 'User',
-            createdAt: '',
-            onboardingData,
-          },
-    isLoading: false,
-  } as unknown as ReturnType<typeof api.useMe>);
+  mockUseMe.mockReturnValue(
+    fromPartial({
+      data:
+        onboardingData === null
+          ? null
+          : {
+              id,
+              email: 'a@b.com',
+              accessKey: 'k',
+              name: 'User',
+              createdAt: '',
+              onboardingData,
+            },
+      isLoading: false,
+    }),
+  );
 }
 
 // setupComplete=false -> no connections/sources/data (setup phase visible).
@@ -86,18 +97,30 @@ function setSetup(complete: boolean, loading = false) {
         },
       ]
     : [];
-  mockUseConnections.mockReturnValue({
-    data: loading ? undefined : conn,
-    isLoading: loading,
-  } as unknown as ReturnType<typeof useConnections>);
-  mockUseSources.mockReturnValue({
-    data: loading ? undefined : src,
-    isLoading: loading,
-  } as unknown as ReturnType<typeof useSources>);
-  mockUseQueriedChartConfig.mockReturnValue({
-    data: loading ? undefined : { data: [{ total_rows: complete ? 10 : 0 }] },
-    isLoading: loading,
-  } as unknown as ReturnType<typeof useQueriedChartConfig>);
+  // Literal isLoading per branch: a widened boolean fits no UseQueryResult
+  // union member.
+  if (loading) {
+    mockUseConnections.mockReturnValue(
+      fromPartial({ data: undefined, isLoading: true }),
+    );
+    mockUseSources.mockReturnValue(
+      fromPartial({ data: undefined, isLoading: true }),
+    );
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({ data: undefined, isLoading: true }),
+    );
+    return;
+  }
+  mockUseConnections.mockReturnValue(
+    fromPartial({ data: conn, isLoading: false }),
+  );
+  mockUseSources.mockReturnValue(fromPartial({ data: src, isLoading: false }));
+  mockUseQueriedChartConfig.mockReturnValue(
+    fromPartial({
+      data: { data: [{ total_rows: complete ? 10 : 0 }] },
+      isLoading: false,
+    }),
+  );
 }
 
 function renderChecklist() {
@@ -117,10 +140,12 @@ describe('OnboardingChecklist', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setTeamAgeDays(0);
-    mockUseDismiss.mockReturnValue({
-      mutate: dismissMutate,
-      isPending: false,
-    } as unknown as ReturnType<typeof api.useDismissOnboarding>);
+    mockUseDismiss.mockReturnValue(
+      fromPartial({
+        mutate: dismissMutate,
+        isPending: false,
+      }),
+    );
   });
 
   it('renders the setup phase before setup is complete', () => {
@@ -366,16 +391,18 @@ describe('OnboardingChecklist', () => {
     // both the quote and backslash paths independently.
     setMe({ completedTasks: [], isDismissed: false });
     setSetup(true);
-    mockUseSources.mockReturnValue({
-      data: [
-        {
-          id: 's1',
-          connection: 'c1',
-          from: { databaseName: 'db\\x', tableName: "t' OR 1=1 --" },
-        },
-      ],
-      isLoading: false,
-    } as unknown as ReturnType<typeof useSources>);
+    mockUseSources.mockReturnValue(
+      fromPartial({
+        data: [
+          {
+            id: 's1',
+            connection: 'c1',
+            from: { databaseName: 'db\\x', tableName: "t' OR 1=1 --" },
+          },
+        ],
+        isLoading: false,
+      }),
+    );
 
     renderChecklist();
 

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * Error category for MCP tool failures.

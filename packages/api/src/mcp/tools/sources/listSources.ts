@@ -10,16 +10,13 @@ import {
   quoteIdentifierIfNeeded,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import {
-  getConnectionById,
-  getConnectionsByTeam,
-} from '@/controllers/connection';
-import { getSources } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
-import type { ToolRegistrar } from '@/mcp/tools/types';
-import { isHiddenSource, PROMQL_SOURCE_USAGE } from '@/mcp/utils/promql';
+import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
+import { getMcpConnection, getMcpConnections } from '@/mcp/utils/connections';
+import { PROMQL_SOURCE_USAGE } from '@/mcp/utils/promql';
+import { getVisibleMcpSources } from '@/mcp/utils/sources';
 import { runWithTimeout } from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
 
@@ -75,10 +72,10 @@ class PreviewClickhouseClient extends ClickhouseClient {
  * carries metricTables + the discovery nextSteps).
  */
 async function attachMetricNamePreviews({
-  teamId,
+  context,
   entries,
 }: {
-  teamId: string;
+  context: McpContext;
   entries: Array<{
     summary: Record<string, unknown>;
     databaseName: string;
@@ -100,7 +97,9 @@ async function attachMetricNamePreviews({
   >();
   await Promise.all(
     connectionIds.map(async connectionId => {
-      const connection = await getConnectionById(teamId, connectionId, true);
+      const connection = await getMcpConnection(context, connectionId, {
+        selectPassword: true,
+      });
       if (!connection) return;
       const clickhouseClient = new PreviewClickhouseClient({
         host: connection.host,
@@ -225,9 +224,9 @@ export function registerListSources({
       inputSchema: z.object({}),
     },
     async () => {
-      const [sources, connections] = await Promise.all([
-        getSources(teamId.toString()),
-        getConnectionsByTeam(teamId.toString()),
+      const [visibleSources, connections] = await Promise.all([
+        getVisibleMcpSources(context),
+        getMcpConnections(context),
       ]);
 
       const metricPreviewEntries: Array<{
@@ -244,7 +243,6 @@ export function registerListSources({
           .map(c => c._id.toString()),
       );
 
-      const visibleSources = sources.filter(s => !isHiddenSource(context, s));
       const sourceSummaries = visibleSources.map(s => {
         const meta: Record<string, unknown> = {
           id: s._id.toString(),
@@ -332,7 +330,7 @@ export function registerListSources({
       // Best-effort: never let preview sampling fail or stall the catalog.
       try {
         await attachMetricNamePreviews({
-          teamId: teamId.toString(),
+          context,
           entries: metricPreviewEntries,
         });
       } catch (e) {

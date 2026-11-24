@@ -9,7 +9,7 @@ import {
 import dns from 'dns';
 import { Address4, Address6 } from 'ip-address';
 import type { LookupFunction } from 'net';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import {
