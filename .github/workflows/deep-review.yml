@@ -464,11 +464,12 @@ jobs:
       - name: Run deep review
         id: review
         if: steps.gate.outputs.should_review == 'true'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b # v1.0.289
         env:
           ANTHROPIC_BASE_URL: https://inference-internal.clickhouse.cloud
         with:
           anthropic_api_key: ${{ secrets.INFERENCE_GATEWAY_KEY }}
+          allow_fork_prs: 'true'
           github_token: ${{ secrets.GITHUB_TOKEN }} # bypasses OIDC auth (required for pull_request_target)
           # Pin the CLI to dodge the >=2.1.216 bwrap sandbox regression that
           # breaks every Bash call. Remove this input to revert to the action's
