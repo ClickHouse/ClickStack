@@ -8,6 +8,7 @@ import { Group, Stack, Table, Text, Tooltip } from '@mantine/core';
 
 import { useSources } from '@/source';
 
+import { SloRowMenu } from './SloRowMenu';
 import { SloStateBadge } from './SloStateBadge';
 import {
   budgetColorVar,
@@ -114,6 +115,9 @@ function SloRow({
           </Text>
         </Text>
       </Table.Td>
+      <Table.Td>
+        <SloRowMenu slo={slo} />
+      </Table.Td>
     </Table.Tr>
   );
 }
@@ -141,6 +145,7 @@ export function SloTable({ slos }: { slos: SloApiResponse[] }) {
               help="How fast the budget is being spent: 1x spends it exactly over the window."
             />
             <Table.Th>Target</Table.Th>
+            <Table.Th w={48} />
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
