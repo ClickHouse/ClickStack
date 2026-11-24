@@ -183,6 +183,7 @@ describe('getAlertSourceLabel', () => {
       'Dashboard tile',
     );
     expect(getAlertSourceLabel({ source: AlertSource.INLINE })).toBe('Chart');
+    expect(getAlertSourceLabel({ source: AlertSource.SLO })).toBe('SLO');
   });
 
   // The row's tooltip, the alerts-page filter and free-text search all read
@@ -292,6 +293,18 @@ describe('getAlertSourceUrl', () => {
       getAlertSourceUrl(inlineAlert({ chartConfig: inlineChartConfig })),
     ).toBe('/chart?alertId=alert-1');
     expect(getAlertSourceUrl(inlineAlert())).toBe('/chart?alertId=alert-1');
+  });
+
+  // The SLO is where its alert's state, history and settings live.
+  it('links an SLO alert to its SLO', () => {
+    expect(
+      getAlertSourceUrl(
+        inlineAlert({ source: AlertSource.SLO, sloId: 'slo-1' }),
+      ),
+    ).toBe('/slos/slo-1');
+    expect(getAlertSourceUrl(inlineAlert({ source: AlertSource.SLO }))).toBe(
+      '',
+    );
   });
 });
 

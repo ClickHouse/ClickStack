@@ -1,6 +1,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { isImportableAlert } from '@hyperdx/common-utils/dist/iac';
+import { getSloAlertRuleLabel } from '@hyperdx/common-utils/dist/slo';
 import { AlertSource } from '@hyperdx/common-utils/dist/types';
 import { ActionIcon, Menu, Modal } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
@@ -19,7 +20,7 @@ import { EditAlertModal } from '@/components/alerts/EditAlertModal';
 import { EditInlineAlertModal } from '@/components/alerts/EditInlineAlertModal';
 import { TerraformHelperPanel } from '@/components/Iac/TerraformHelperPanel';
 import { useTerraformSnippets } from '@/components/Iac/useTerraformSnippets';
-import { IS_IAC_EXPORT_ENABLED } from '@/config';
+import { IS_IAC_EXPORT_ENABLED, IS_SLOS_ENABLED } from '@/config';
 import type { AlertsPageItem } from '@/types';
 import { useConfirm } from '@/useConfirm';
 import { intervalToDateRange } from '@/utils/alerts';
@@ -65,7 +66,20 @@ export function AlertRowMenu({
   // `||`, not `??`: the empty string these arrive as for an unresolvable
   // source is not nullish, and would read as "Open " and "Delete ?".
   const name = alertName?.trim() || 'this alert';
-  const sourceLabel = linkTitle?.trim().toLowerCase() || 'source';
+  // An SLO owns its alert: it is edited from the SLO, and deleting it here
+  // turns the alert off on the SLO. With SLOs turned off there is no SLO
+  // page to edit it on.
+  const isSloAlert = alert.source === AlertSource.SLO;
+  const sloManaged = isSloAlert && IS_SLOS_ENABLED;
+  // The alert carries its SLO's name, so "Delete {name}?" would read as
+  // deleting the SLO.
+  const deleteMessage = isSloAlert
+    ? `Delete the ${getSloAlertRuleLabel(alert.sloRule ?? 'fastBurn').toLowerCase()} alert of ${alertName?.trim() || 'this SLO'}? The SLO keeps tracking.`
+    : `Delete ${name}?`;
+  // "SLO" is an acronym, so it keeps its case mid-sentence.
+  const sourceLabel = isSloAlert
+    ? 'SLO'
+    : linkTitle?.trim().toLowerCase() || 'source';
   const [terraformOpened, setTerraformOpened] = React.useState(false);
   const [editOpened, setEditOpened] = React.useState(false);
   const confirm = useConfirm();
@@ -120,7 +134,7 @@ export function AlertRowMenu({
     });
 
   const onDelete = React.useCallback(async () => {
-    const confirmed = await confirm(`Delete ${name}?`, 'Delete', {
+    const confirmed = await confirm(deleteMessage, 'Delete', {
       variant: 'danger',
     });
     if (!confirmed) {
@@ -134,10 +148,11 @@ export function AlertRowMenu({
         autoClose: 5000,
       });
       // The alerts list and the source-bound edit surfaces (saved search
-      // modal / dashboard tile editor) all render this alert.
+      // modal / dashboard tile editor / SLO pages) all render this alert.
       queryClient.invalidateQueries({ queryKey: api.getAlertsQueryKey() });
       queryClient.invalidateQueries({ queryKey: ['saved-search'] });
       queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+      queryClient.invalidateQueries({ queryKey: ['slos'] });
       onDeleted?.();
     } catch (error) {
       console.error('Failed to delete alert:', error);
@@ -152,7 +167,7 @@ export function AlertRowMenu({
     brandName,
     confirm,
     deleteAlert,
-    name,
+    deleteMessage,
     onDeleted,
     queryClient,
   ]);
@@ -171,13 +186,26 @@ export function AlertRowMenu({
           </ActionIcon>
         </Menu.Target>
         <Menu.Dropdown>
-          <Menu.Item
-            leftSection={<IconPencil size={16} />}
-            onClick={() => setEditOpened(true)}
-            data-testid={`alert-edit-${alert._id}`}
-          >
-            Edit alert
-          </Menu.Item>
+          {sloManaged ? (
+            <Menu.Item
+              component={Link}
+              href={`/slos/${alert.sloId}/edit#alerts`}
+              leftSection={<IconPencil size={16} />}
+              data-testid={`alert-edit-${alert._id}`}
+            >
+              Edit in SLO
+            </Menu.Item>
+          ) : (
+            !isSloAlert && (
+              <Menu.Item
+                leftSection={<IconPencil size={16} />}
+                onClick={() => setEditOpened(true)}
+                data-testid={`alert-edit-${alert._id}`}
+              >
+                Edit alert
+              </Menu.Item>
+            )
+          )}
           {alertUrl && (
             <Menu.Item
               component={Link}

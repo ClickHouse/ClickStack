@@ -21,6 +21,7 @@ import {
   SavedChartConfig,
 } from '@hyperdx/common-utils/dist/types';
 
+import { IS_SLOS_ENABLED } from '@/config';
 import type { AlertsPageItem } from '@/types';
 
 export function intervalToGranularity(interval: AlertInterval) {
@@ -261,6 +262,8 @@ export function getAlertSourceLabel(alert: {
       return 'Saved search';
     case AlertSource.INLINE:
       return 'Chart';
+    case AlertSource.SLO:
+      return 'SLO';
     default:
       return 'Unknown source';
   }
@@ -289,9 +292,9 @@ export const ALERT_STATE_FILTER_OPTIONS = [
 ].map(state => ({ value: state, label: ALERT_STATE_LABELS[state] }));
 
 /** Options for the alerts-page source filter. */
-export const ALERT_SOURCE_FILTER_OPTIONS = Object.values(AlertSource).map(
-  source => ({ value: source, label: getAlertSourceLabel({ source }) }),
-);
+export const ALERT_SOURCE_FILTER_OPTIONS = Object.values(AlertSource)
+  .filter(source => source !== AlertSource.SLO || IS_SLOS_ENABLED)
+  .map(source => ({ value: source, label: getAlertSourceLabel({ source }) }));
 
 /**
  * The name the server would derive if the alert had none of its own. Only for
@@ -336,6 +339,9 @@ export function getAlertSourceUrl(alert: AlertsPageItem): string {
   }
   if (alert.source === AlertSource.INLINE) {
     return `/chart?alertId=${alert._id}`;
+  }
+  if (alert.source === AlertSource.SLO && alert.sloId) {
+    return `/slos/${alert.sloId}`;
   }
   return '';
 }

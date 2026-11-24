@@ -1,4 +1,7 @@
-import { AlertThresholdType } from '@hyperdx/common-utils/dist/types';
+import {
+  AlertSource,
+  AlertThresholdType,
+} from '@hyperdx/common-utils/dist/types';
 import { act, screen } from '@testing-library/react';
 
 import { AlertPropertiesSummary } from '@/components/alerts/AlertPropertiesSummary';
@@ -152,5 +155,39 @@ describe('AlertPropertiesSummary notification targets', () => {
 
       expect(targetsText()).toBe('Notify viaWebhook');
     });
+  });
+});
+
+describe('AlertPropertiesSummary condition', () => {
+  it('states the threshold of a threshold alert', () => {
+    renderWithMantine(<AlertPropertiesSummary alert={baseAlert} />);
+
+    expect(screen.getByText(/If value/).textContent).toBe(
+      'If value is at least (≥) 3',
+    );
+  });
+
+  // An SLO alert's threshold is 1 on a value that is not a burn rate, so the
+  // row states the SLO's burn rule instead.
+  it("states an SLO alert's burn rule", () => {
+    renderWithMantine(
+      <AlertPropertiesSummary
+        alert={
+          {
+            ...baseAlert,
+            source: AlertSource.SLO,
+            threshold: 1,
+            sloId: 'slo-1',
+            sloRule: 'slowBurn',
+          } satisfies AlertsPageItem
+        }
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        'Slow burn: if 5% of the error budget is spent within 6 hours',
+      ),
+    ).toBeInTheDocument();
   });
 });

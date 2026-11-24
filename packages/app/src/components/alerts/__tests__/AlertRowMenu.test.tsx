@@ -24,10 +24,25 @@ jest.mock('@/api', () => ({
   },
 }));
 
-jest.mock('@/config', () => ({
-  IS_IAC_EXPORT_ENABLED: true,
-  BASE_PATH: '',
-}));
+// The flag lives in the factory: modules read it while the imports load,
+// before anything declared in this file exists.
+jest.mock('@/config', () => {
+  const flags = { slos: true };
+  return {
+    IS_IAC_EXPORT_ENABLED: true,
+    BASE_PATH: '',
+    get IS_SLOS_ENABLED() {
+      return flags.slos;
+    },
+    setSlosEnabled: (enabled: boolean) => {
+      flags.slos = enabled;
+    },
+  };
+});
+const setSlosEnabled = (enabled: boolean) =>
+  jest
+    .requireMock<{ setSlosEnabled: (enabled: boolean) => void }>('@/config')
+    .setSlosEnabled(enabled);
 
 // The edit modal pulls in the whole alert form (queries, editors, target
 // picker); this suite is about the menu, so stub it down to an open/closed
@@ -94,6 +109,14 @@ const unaddressableTileAlert: AlertsPageItem = {
   unaddressableTile: true,
 };
 
+const sloAlert: AlertsPageItem = {
+  ...savedSearchAlert,
+  _id: 'alert-5',
+  source: AlertSource.SLO,
+  savedSearchId: undefined,
+  sloId: 'slo-1',
+};
+
 function renderMenu(ui: React.ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -154,6 +177,57 @@ describe('AlertRowMenu', () => {
       }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId('edit-alert-modal')).not.toBeInTheDocument();
+  });
+
+  // An SLO owns its alert: edits go to the SLO.
+  it('sends an SLO alert to its SLO for edits', async () => {
+    renderMenu(
+      <AlertRowMenu alert={sloAlert} alertUrl="/slos/slo-1" linkTitle="SLO" />,
+    );
+    await openMenu('alert-row-menu-alert-5');
+
+    expect(screen.getByTestId('alert-edit-alert-5')).toHaveAttribute(
+      'href',
+      '/slos/slo-1/edit#alerts',
+    );
+    expect(screen.getByText('Open SLO')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('terraform-menu-item-alert-5'),
+    ).not.toBeInTheDocument();
+  });
+
+  // The alert carries its SLO's name, so the generic "Delete {name}?" would
+  // read as deleting the SLO itself.
+  it('says the SLO stays when its alert is deleted', async () => {
+    renderMenu(
+      <AlertRowMenu alert={sloAlert} alertName="Checkout availability" />,
+    );
+    await openMenu('alert-row-menu-alert-5');
+    await userEvent.click(screen.getByTestId('alert-delete-alert-5'));
+
+    expect(confirm).toHaveBeenCalledWith(
+      'Delete the fast burn alert of Checkout availability? The SLO keeps tracking.',
+      'Delete',
+      expect.objectContaining({ variant: 'danger' }),
+    );
+    expect(mutateAsync).toHaveBeenCalledWith('alert-5');
+  });
+
+  // With SLOs turned off there is no SLO page to edit it on, but it can still
+  // be deleted.
+  it('offers only delete for an SLO alert while SLOs are turned off', async () => {
+    setSlosEnabled(false);
+    try {
+      renderMenu(<AlertRowMenu alert={sloAlert} />);
+      await openMenu('alert-row-menu-alert-5');
+
+      expect(screen.getByTestId('alert-delete-alert-5')).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('alert-edit-alert-5'),
+      ).not.toBeInTheDocument();
+    } finally {
+      setSlosEnabled(true);
+    }
   });
 
   it('offers Terraform export for a saved-search alert', async () => {

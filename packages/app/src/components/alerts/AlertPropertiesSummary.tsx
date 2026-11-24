@@ -1,5 +1,10 @@
 import * as React from 'react';
 import {
+  describeSloAlertRule,
+  getSloAlertRuleLabel,
+} from '@hyperdx/common-utils/dist/slo';
+import {
+  AlertSource,
   isRangeThresholdType,
   WebhookService,
 } from '@hyperdx/common-utils/dist/types';
@@ -180,12 +185,22 @@ export function AlertPropertiesSummary({
   return (
     <div className={`fs-8 ${styles.propertiesSummary}`}>
       <span className={styles.propertySegment}>
-        If value {thresholdLabel}{' '}
-        <span className="fw-bold">{alert.threshold}</span>
-        {isRangeThresholdType(alert.thresholdType) && (
+        {alert.source === AlertSource.SLO ? (
+          // Its value only says how close the SLO's burn rule is to holding.
           <>
-            {' '}
-            and <span className="fw-bold">{alert.thresholdMax ?? '-'}</span>
+            {getSloAlertRuleLabel(alert.sloRule ?? 'fastBurn')}: if{' '}
+            {describeSloAlertRule(alert.sloRule ?? 'fastBurn')}
+          </>
+        ) : (
+          <>
+            If value {thresholdLabel}{' '}
+            <span className="fw-bold">{alert.threshold}</span>
+            {isRangeThresholdType(alert.thresholdType) && (
+              <>
+                {' '}
+                and <span className="fw-bold">{alert.thresholdMax ?? '-'}</span>
+              </>
+            )}
           </>
         )}
       </span>

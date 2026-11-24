@@ -20,6 +20,7 @@ import {
   IconHelpCircle,
   IconNote,
   IconTableRow,
+  IconTargetArrow,
 } from '@tabler/icons-react';
 
 import { AckAlert } from '@/components/alerts/AckAlert';
@@ -27,7 +28,7 @@ import { AlertHistoryCardList } from '@/components/alerts/AlertHistoryCards';
 import { AlertPropertiesSummary } from '@/components/alerts/AlertPropertiesSummary';
 import { AlertRowMenu } from '@/components/alerts/AlertRowMenu';
 import { AlertStateBadge } from '@/components/alerts/AlertStateBadge';
-import { IS_ALERT_DETAILS_ENABLED } from '@/config';
+import { IS_ALERT_DETAILS_ENABLED, IS_SLOS_ENABLED } from '@/config';
 import type { AlertsPageItem } from '@/types';
 import { getAlertSourceLabel, getAlertSourceUrl } from '@/utils/alerts';
 
@@ -114,6 +115,8 @@ export const AlertDetails = React.memo(function AlertDetails({
         // Matches the chart explorer's nav icon: an inline alert's query is
         // authored and reopened there.
         return <IconChartDots size={14} aria-hidden="true" />;
+      case AlertSource.SLO:
+        return <IconTargetArrow size={14} aria-hidden="true" />;
       default:
         return <IconHelpCircle size={14} aria-hidden="true" />;
     }
@@ -146,9 +149,12 @@ export const AlertDetails = React.memo(function AlertDetails({
   // "Open <source>" and falls back to its own wording when blank.
   const linkTitle = alert.source ? sourceLabel : '';
 
-  const nameHref = IS_ALERT_DETAILS_ENABLED
-    ? `/alerts/${alert._id}`
-    : alertUrl || undefined;
+  // An SLO alert's status, history and settings live on its SLO.
+  const nameHref =
+    IS_ALERT_DETAILS_ENABLED &&
+    !(IS_SLOS_ENABLED && alert.source === AlertSource.SLO)
+      ? `/alerts/${alert._id}`
+      : alertUrl || undefined;
 
   return (
     <div data-testid={`alert-card-${alert._id}`} className={styles.alertRow}>
