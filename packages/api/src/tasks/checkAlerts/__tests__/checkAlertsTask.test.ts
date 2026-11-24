@@ -3,6 +3,7 @@ import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import * as config from '@/config';
+import { refreshDueSloStatuses } from '@/controllers/sloStatus';
 import { ObjectId } from '@/models';
 import {
   AlertSource,
@@ -25,6 +26,10 @@ import {
   loadProvider,
 } from '@/tasks/checkAlerts/providers';
 import { CheckAlertsTaskArgs, TaskName } from '@/tasks/types';
+
+jest.mock('@/controllers/sloStatus', () => ({
+  refreshDueSloStatuses: jest.fn(),
+}));
 
 jest.mock('@/tasks/checkAlerts/providers', () => {
   return {
@@ -217,6 +222,51 @@ describe('CheckAlertTask', () => {
       expect(mockAlertProvider.getAlertTasks).toHaveBeenCalled();
       expect(mockAlertProvider.getWebhooks).not.toHaveBeenCalled();
       expect(mockProcessAlert).not.toHaveBeenCalled();
+    });
+
+    // Each run opens the database connection in init and closes it at the
+    // end, so the SLO refresh can only start once init is done.
+    it('starts the SLO refresh once the provider has connected', async () => {
+      const slosEnabled = jest.replaceProperty(config, 'IS_SLOS_ENABLED', true);
+      const calls: string[] = [];
+      mockAlertProvider.init.mockImplementation(async () => {
+        calls.push('init');
+      });
+      jest.mocked(refreshDueSloStatuses).mockImplementation(async () => {
+        calls.push('slo refresh');
+      });
+      mockAlertProvider.getAlertTasks.mockResolvedValue([]);
+
+      try {
+        await new CheckAlertTask({ taskName: TaskName.CHECK_ALERTS }).execute();
+      } finally {
+        slosEnabled.restore();
+      }
+
+      expect(calls).toEqual(['init', 'slo refresh']);
+    });
+
+    it('closes the connection only after the SLO refresh, even when the run fails', async () => {
+      const slosEnabled = jest.replaceProperty(config, 'IS_SLOS_ENABLED', true);
+      const calls: string[] = [];
+      jest.mocked(refreshDueSloStatuses).mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        calls.push('slo refresh done');
+      });
+      mockAlertProvider.getAlertTasks.mockRejectedValue(new Error('no alerts'));
+      mockAlertProvider.asyncDispose.mockImplementation(async () => {
+        calls.push('dispose');
+      });
+
+      const task = new CheckAlertTask({ taskName: TaskName.CHECK_ALERTS });
+      try {
+        await expect(task.execute()).rejects.toThrow('no alerts');
+        await task.asyncDispose();
+      } finally {
+        slosEnabled.restore();
+      }
+
+      expect(calls).toEqual(['slo refresh done', 'dispose']);
     });
 
     it('should execute successfully with custom provider', async () => {
