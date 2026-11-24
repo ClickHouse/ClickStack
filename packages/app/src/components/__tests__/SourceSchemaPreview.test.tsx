@@ -68,10 +68,10 @@ describe('SourceSchemaPreview — controlled mode', () => {
       />,
     );
     // Mantine 9 CloseButton renders without aria-label; find by its class.
-    const closeBtn = document.querySelector(
-      '.mantine-Modal-close',
-    ) as HTMLElement;
-    expect(closeBtn).toBeTruthy();
+    const closeBtn = document.querySelector('.mantine-Modal-close');
+    if (!(closeBtn instanceof HTMLElement)) {
+      throw new Error('Modal close button not found');
+    }
     await userEvent.click(closeBtn);
     expect(onClose).toHaveBeenCalledTimes(1);
   });

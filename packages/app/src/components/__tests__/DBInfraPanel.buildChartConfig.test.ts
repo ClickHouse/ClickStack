@@ -2,8 +2,10 @@ import { Granularity } from '@hyperdx/common-utils/dist/core/utils';
 import {
   DisplayType,
   MetricsDataType,
+  SourceKind,
   TMetricSource,
 } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { buildChartConfig } from '@/components/DBInfraPanel';
 import { INFRA_CORRELATIONS } from '@/components/infraCorrelations';
@@ -14,9 +16,9 @@ jest.mock('@/components/Sources/SourceForm', () => ({
 }));
 jest.mock('@/components/KubeComponents', () => ({ KubeTimeline: () => null }));
 
-const METRIC_SOURCE = {
+const METRIC_SOURCE = fromPartial<TMetricSource>({
   id: 'metric-source-1',
-  kind: 'metric',
+  kind: SourceKind.Metric,
   name: 'Metrics',
   connection: 'conn-1',
   from: { databaseName: 'default', tableName: '' },
@@ -29,7 +31,7 @@ const METRIC_SOURCE = {
     summary: 'otel_metrics_summary',
     'exponential histogram': 'otel_metrics_exponential_histogram',
   },
-} as unknown as TMetricSource;
+});
 
 const DATE_RANGE: [Date, Date] = [
   new Date('2026-01-01T00:00:00Z'),

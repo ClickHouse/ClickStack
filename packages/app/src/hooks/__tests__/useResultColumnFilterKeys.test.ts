@@ -5,6 +5,7 @@ import {
 
 import {
   getBuilderFilterKeys,
+  getBuilderGroupByColumns,
   getPromqlFilterKeys,
   getRawSqlFilterKeys,
 } from '@/hooks/useResultColumnFilterKeys';
@@ -158,6 +159,45 @@ describe('getBuilderFilterKeys', () => {
     expect(
       getBuilderFilterKeys(builder({}), meta(['count()', 'UInt64'])).size,
     ).toBe(0);
+  });
+});
+
+describe('getBuilderGroupByColumns', () => {
+  it('pairs each group-by column with its expression and alias', () => {
+    const config: BuilderChartConfig = {
+      select: [{ aggFn: 'count', valueExpression: '' }],
+      from: { databaseName: 'default', tableName: 'logs' },
+      where: '',
+      timestampValueExpression: 'Timestamp',
+      connection: 'local',
+      groupBy: `ServiceName, LogAttributes['k'] AS "the k", toStartOfDay(Timestamp) AS day`,
+    };
+    expect(
+      getBuilderGroupByColumns(
+        config,
+        meta(
+          ['count()', 'UInt64'],
+          ['ServiceName', 'String'],
+          ['the k', 'String'],
+          ['day', 'DateTime'],
+        ),
+      ),
+    ).toEqual([
+      {
+        column: { name: 'ServiceName', type: 'String' },
+        expression: 'ServiceName',
+      },
+      {
+        column: { name: 'the k', type: 'String' },
+        expression: "LogAttributes['k']",
+        alias: 'the k',
+      },
+      {
+        column: { name: 'day', type: 'DateTime' },
+        expression: 'toStartOfDay(Timestamp)',
+        alias: 'day',
+      },
+    ]);
   });
 });
 

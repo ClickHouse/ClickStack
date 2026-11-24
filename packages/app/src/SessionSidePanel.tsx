@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'react';
 import { useQueryState } from 'nuqs';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {
   DateRange,
   SearchCondition,

@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import SHA256 from 'crypto-js/sha256';
 import SqlString from 'sqlstring';
-import z from 'zod';
+import z from 'zod/v3';
 import {
   ColumnMetaType,
   convertCHDataTypeToJSType,

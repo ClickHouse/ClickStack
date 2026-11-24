@@ -1,5 +1,5 @@
 import express from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { validateRequest } from 'zod-express-middleware';
 
 import {

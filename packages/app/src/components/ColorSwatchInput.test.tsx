@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import { CHART_PALETTE_TOKENS, ChartPaletteToken } from '@/utils';
 
@@ -118,7 +119,7 @@ describe('ColorSwatchInput', () => {
     renderWithMantine(
       <ColorSwatchInput
         // Simulate a legacy hex string surviving from before the palette refactor.
-        value={'#ff0000' as unknown as ChartPaletteToken}
+        value={fromAny<ChartPaletteToken, string>('#ff0000')}
         onChange={onChange}
       />,
     );
@@ -149,7 +150,7 @@ describe('ColorSwatchInput', () => {
     const user = userEvent.setup();
     renderWithMantine(
       <ColorSwatchInput
-        value={'chart-1' as unknown as ChartPaletteToken}
+        value={fromAny<ChartPaletteToken, string>('chart-1')}
         onChange={jest.fn()}
       />,
     );

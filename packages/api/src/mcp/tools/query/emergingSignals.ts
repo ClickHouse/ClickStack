@@ -3,7 +3,7 @@ import {
   TemplateMiner,
   TemplateMinerConfig,
 } from '@hyperdx/common-utils/dist/drain';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
@@ -144,8 +144,6 @@ export function registerEmergingSignals({
   context,
   registerTool,
 }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_emerging_signals',
     {
@@ -220,15 +218,12 @@ export function registerEmergingSignals({
       // counted only once (the baseline is usually first, but may come after).
       const baselineFirst = base.endDate <= cur.startDate;
       const [curSample, baseSample] = await Promise.all([
+        fetchWindowSample(context, input.sourceId, cur.startDate, cur.endDate, {
+          ...fetchOpts,
+          endExclusive: !baselineFirst,
+        }),
         fetchWindowSample(
-          teamId.toString(),
-          input.sourceId,
-          cur.startDate,
-          cur.endDate,
-          { ...fetchOpts, endExclusive: !baselineFirst },
-        ),
-        fetchWindowSample(
-          teamId.toString(),
+          context,
           input.sourceId,
           base.startDate,
           base.endDate,

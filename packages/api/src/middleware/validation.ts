@@ -1,5 +1,5 @@
 import express from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export function validateRequestHeaders<T extends z.Schema>(schema: T) {
   return function (

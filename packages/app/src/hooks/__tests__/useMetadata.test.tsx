@@ -9,9 +9,15 @@ import {
   MetadataCache,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { FilterState } from '@hyperdx/common-utils/dist/filters';
-import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
+import {
+  BuilderChartConfigWithDateRange,
+  MapKeyIndexPartSelection,
+  SourceKind,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import api from '@/api';
 import {
@@ -28,7 +34,7 @@ import { useSources } from '@/source';
 const createMockChartConfig = (
   overrides: Partial<BuilderChartConfigWithDateRange> = {},
 ): BuilderChartConfigWithDateRange =>
-  ({
+  fromPartial<BuilderChartConfigWithDateRange>({
     timestampValueExpression: '',
     connection: 'foo',
     from: {
@@ -36,10 +42,13 @@ const createMockChartConfig = (
       tableName: 'traces',
     },
     ...overrides,
-  }) as BuilderChartConfigWithDateRange;
+  });
 
 const createMockMetadata = () =>
-  new Metadata({} as ClickhouseClient, {} as MetadataCache);
+  new Metadata(
+    fromPartial<ClickhouseClient>({}),
+    fromPartial<MetadataCache>({}),
+  );
 
 jest.mock('@/source', () => ({
   useSources: jest.fn().mockReturnValue({
@@ -455,28 +464,30 @@ describe('useGetKeyValues', () => {
   });
 
   // Sources here only carry the fields the hook reads.
-  const mockSources = (data: Record<string, unknown>[]) =>
-    jest.mocked(useSources).mockReturnValue({
-      data,
-      isLoading: false,
-    } as unknown as ReturnType<typeof useSources>);
+  const mockSources = (data: Parameters<typeof fromPartial<TSource>>[0][]) =>
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data, isLoading: false }));
 
   it("passes log and trace sources' part settings to 'all' mode lookups, and no others", async () => {
     const defaultSources = jest.mocked(useSources)();
+    // Not a log or trace source, so its fields don't apply. Declared outside
+    // the array literal so the part settings, which metric sources don't
+    // define, aren't rejected as excess properties.
+    const metricsSource = {
+      id: 'metrics',
+      kind: SourceKind.Metric as const,
+      mapKeyIndexMaxParts: 9,
+      mapKeyIndexPartSelection: MapKeyIndexPartSelection.Smallest,
+    };
     mockSources([
       {
         id: 'logs',
-        kind: 'log',
+        kind: SourceKind.Log,
         mapKeyIndexMaxParts: 7,
-        mapKeyIndexPartSelection: 'largest',
+        mapKeyIndexPartSelection: MapKeyIndexPartSelection.Largest,
       },
-      // Not a log or trace source, so its fields don't apply.
-      {
-        id: 'metrics',
-        kind: 'metric',
-        mapKeyIndexMaxParts: 9,
-        mapKeyIndexPartSelection: 'smallest',
-      },
+      metricsSource,
     ]);
     const streamAllKeyValues = mockLookups.all([], []);
 
@@ -511,7 +522,7 @@ describe('useGetKeyValues', () => {
   it("refetches 'all' mode values when the source's part settings change", async () => {
     const defaultSources = jest.mocked(useSources)();
     const withParts = (mapKeyIndexMaxParts: number) =>
-      mockSources([{ id: 'logs', kind: 'log', mapKeyIndexMaxParts }]);
+      mockSources([{ id: 'logs', kind: SourceKind.Log, mapKeyIndexMaxParts }]);
     const streamAllKeyValues = mockLookups.all([], []);
 
     try {
@@ -738,11 +749,13 @@ describe('useGetKeyValues', () => {
   });
 
   it('should be in a loading state while fetching sources', async () => {
-    jest.mocked(useSources).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      isFetching: true,
-    } as any);
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: true,
+        isFetching: true,
+      }),
+    );
 
     // Arrange
     const mockChartConfig = createMockChartConfig();
@@ -816,12 +829,11 @@ describe('useMultipleAllFields', () => {
     team = {};
     mockMetadata = createMockMetadata();
     jest.spyOn(metadataModule, 'getMetadata').mockReturnValue(mockMetadata);
-    jest.spyOn(api, 'useMe').mockImplementation(
-      () =>
-        ({
-          data: { team },
-          isFetched: true,
-        }) as any,
+    jest.spyOn(api, 'useMe').mockImplementation(() =>
+      fromPartial({
+        data: { team },
+        isFetched: true,
+      }),
     );
     jest
       .spyOn(mockMetadata, 'getColumns')

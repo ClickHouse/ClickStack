@@ -1,4 +1,6 @@
+import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import { act, renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 // Local (temporary URL-state) dashboards never hit the backend, so setDashboard
 // must record the 'dashboard' onboarding task itself once a tile exists. These
@@ -39,19 +41,19 @@ jest.mock('../api', () => ({
   useCompleteOnboardingTask: () => ({ mutate }),
 }));
 
-import { useDashboard } from '@/dashboard';
+import { type Dashboard, type Tile, useDashboard } from '@/dashboard';
 
-const tile = {
+const tile: Tile = fromPartial({
   id: 't1',
   x: 0,
   y: 0,
   w: 1,
   h: 1,
-  config: { name: 'c', source: 's', displayType: 'line', select: [] },
-};
+  config: { name: 'c', source: 's', displayType: DisplayType.Line, select: [] },
+});
 
-function makeDashboard(tiles: unknown[]) {
-  return { id: '', name: 'Temp', tiles, tags: [] } as never;
+function makeDashboard(tiles: Tile[]): Dashboard {
+  return { id: '', name: 'Temp', tiles, tags: [] };
 }
 
 describe('useDashboard local-dashboard onboarding', () => {

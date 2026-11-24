@@ -34,6 +34,25 @@
     "jest.setup.ts"
   ],
   "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "zod",
+            "message": "Import from 'zod/v3'. Bare 'zod' is the v4 API; mixing v3 and v4 schemas breaks composition and ZodError checks."
+          },
+          {
+            "name": "zod/v4",
+            "message": "Import from 'zod/v3' until the codebase migrates to v4."
+          },
+          {
+            "name": "zod/mini",
+            "message": "Import from 'zod/v3' until the codebase migrates to v4."
+          }
+        ]
+      }
+    ],
     "typescript/no-empty-object-type": "warn",
     "typescript/no-floating-promises": "error",
     "typescript/no-unsafe-type-assertion": "error",

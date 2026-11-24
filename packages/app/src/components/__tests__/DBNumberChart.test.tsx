@@ -1,6 +1,7 @@
 import React from 'react';
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import { act, screen } from '@testing-library/react';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import DBNumberChart from '@/components/DBNumberChart';
@@ -13,7 +14,7 @@ import {
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
 import { useSource } from '@/source';
 import { NumberFormat } from '@/types';
-import { formatNumber, getColorFromCSSToken } from '@/utils';
+import { ChartPaletteToken, formatNumber, getColorFromCSSToken } from '@/utils';
 
 // Mock dependencies
 jest.mock('@/hooks/useChartConfig', () => ({
@@ -66,8 +67,8 @@ jest.mock('../NumberTileBackgroundChart', () => ({
 }));
 
 describe('DBNumberChart', () => {
-  const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
-  const mockFormatNumber = formatNumber as jest.Mock;
+  const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
+  const mockFormatNumber = jest.mocked(formatNumber);
 
   const baseTestConfig = {
     dateRange: [new Date(), new Date()] as [Date, Date],
@@ -81,15 +82,17 @@ describe('DBNumberChart', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: { data: [{ value: 1234 }] },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: { data: [{ value: 1234 }] },
+        isLoading: false,
+        isError: false,
+      }),
+    );
 
     // Mock formatNumber to isolate just testing the chart component
     mockFormatNumber.mockImplementation((value, format) => {
-      if (!format) return value.toString();
+      if (!format) return String(value);
 
       if (format.output === 'percent') return `${value}%`;
       if (format.output === 'currency') return `$${value}`;
@@ -155,7 +158,7 @@ describe('DBNumberChart', () => {
 
     const [queriedConfig, options] = mockUseQueriedChartConfig.mock.calls[0];
     expect(queriedConfig.numberFormat).toEqual(numberFormat);
-    expect(options.queryKeyPrefix).toBe('test');
+    expect(options?.queryKeyPrefix).toBe('test');
   });
 
   it('displays formatted number in the UI', () => {
@@ -173,11 +176,13 @@ describe('DBNumberChart', () => {
   });
 
   it('handles zero values correctly', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: { data: [{ value: 0 }] },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: { data: [{ value: 0 }] },
+        isLoading: false,
+        isError: false,
+      }),
+    );
 
     const config = {
       ...baseTestConfig,
@@ -192,22 +197,26 @@ describe('DBNumberChart', () => {
   });
 
   it('displays NaN for null or undefined values', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: { data: [{ value: null }] },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: { data: [{ value: null }] },
+        isLoading: false,
+        isError: false,
+      }),
+    );
 
     renderWithMantine(<DBNumberChart config={baseTestConfig} />);
     expect(screen.getByText('NaN')).toBeInTheDocument();
   });
 
   it('handles loading state correctly', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      }),
+    );
 
     renderWithMantine(<DBNumberChart config={baseTestConfig} />);
     expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
@@ -215,12 +224,14 @@ describe('DBNumberChart', () => {
 
   describe('refresh indicator', () => {
     it('pulses while a refetch is showing the previous value', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [{ value: 1234 }] },
-        isLoading: false,
-        isPlaceholderData: true,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [{ value: 1234 }] },
+          isLoading: false,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBNumberChart config={baseTestConfig} />);
       expect(
@@ -231,12 +242,14 @@ describe('DBNumberChart', () => {
     it('pulses while still loading with a value on screen', () => {
       // useQueriedChartConfig's isLoading also covers the MV-optimization
       // check, which can be pending while a value is shown
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [{ value: 1234 }] },
-        isLoading: true,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [{ value: 1234 }] },
+          isLoading: true,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBNumberChart config={baseTestConfig} />);
       expect(
@@ -245,12 +258,14 @@ describe('DBNumberChart', () => {
     });
 
     it('does not pulse once the fresh value has loaded', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [{ value: 1234 }] },
-        isLoading: false,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [{ value: 1234 }] },
+          isLoading: false,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBNumberChart config={baseTestConfig} />);
       expect(
@@ -259,12 +274,14 @@ describe('DBNumberChart', () => {
     });
 
     it('shows loading instead of the stale empty result during a refetch', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [] },
-        isLoading: false,
-        isPlaceholderData: true,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [] },
+          isLoading: false,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBNumberChart config={baseTestConfig} />);
       expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
@@ -273,12 +290,14 @@ describe('DBNumberChart', () => {
   });
 
   it('handles error state correctly', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: true,
-      error: new Error('Test error'),
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: false,
+        isError: true,
+        error: new Error('Test error'),
+      }),
+    );
 
     renderWithMantine(<DBNumberChart config={baseTestConfig} />);
     expect(screen.getByText(/Error loading chart/)).toBeInTheDocument();
@@ -286,9 +305,11 @@ describe('DBNumberChart', () => {
 
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial({
+        data: { id: 'test-source', name: 'Test Source' },
+      }),
+    );
 
     renderWithMantine(<DBNumberChart config={baseTestConfig} />);
 
@@ -325,25 +346,27 @@ describe('DBNumberChart', () => {
     };
 
     // Mock useMVOptimizationExplanation to return an optimized config with aligned date range
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: {
-          ...config,
-          dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
-        },
-        explanations: [
-          {
-            success: true,
-            mvConfig: {
-              minGranularity: '1 minute',
-              tableName: 'metrics_rollup_1m',
-            },
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: {
+            ...config,
+            dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
           },
-        ],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+          explanations: [
+            {
+              success: true,
+              mvConfig: {
+                minGranularity: '1 minute',
+                tableName: 'metrics_rollup_1m',
+              },
+            },
+          ],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBNumberChart config={config} />);
 
@@ -366,14 +389,16 @@ describe('DBNumberChart', () => {
 
   it('does not render DateRangeIndicator when MV optimization has no optimized date range', () => {
     // Mock useMVOptimizationExplanation to return data without an optimized config
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: undefined,
-        explanations: [],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: undefined,
+          explanations: [],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBNumberChart config={baseTestConfig} />);
 
@@ -382,7 +407,7 @@ describe('DBNumberChart', () => {
   });
 
   describe('colorRules (conditional colors)', () => {
-    const mockGetColorFromCSSToken = getColorFromCSSToken as jest.Mock;
+    const mockGetColorFromCSSToken = jest.mocked(getColorFromCSSToken);
 
     beforeEach(() => {
       // Each test controls the data value independently
@@ -390,11 +415,13 @@ describe('DBNumberChart', () => {
     });
 
     function setDataValue(v: number) {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [{ value: v }] },
-        isLoading: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [{ value: v }] },
+          isLoading: false,
+          isError: false,
+        }),
+      );
     }
 
     it('uses static color when no rule matches (value 50, threshold ≥ 100)', () => {
@@ -488,11 +515,13 @@ describe('DBNumberChart', () => {
 
     it('coerces string data values (ClickHouse UInt64) to numbers for rule evaluation', () => {
       // ClickHouse returns UInt64 as a JSON string when quote_64bit_integers is set
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [{ value: '1000' }] },
-        isLoading: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [{ value: '1000' }] },
+          isLoading: false,
+          isError: false,
+        }),
+      );
       mockFormatNumber.mockReturnValue('1000');
       const config = {
         ...baseTestConfig,
@@ -517,7 +546,7 @@ describe('DBNumberChart', () => {
   });
 
   describe('color', () => {
-    const mockGetColorFromCSSToken = getColorFromCSSToken as jest.Mock;
+    const mockGetColorFromCSSToken = jest.mocked(getColorFromCSSToken);
 
     it('resolves a palette token through getColorFromCSSToken when config.color is set', () => {
       const config = {
@@ -547,7 +576,7 @@ describe('DBNumberChart', () => {
         ...baseTestConfig,
         // Simulate a legacy or hand-edited dashboard with an unknown
         // value sneaking past the schema (e.g. an old hex code).
-        color: 'definitely-not-a-token' as any,
+        color: fromAny<ChartPaletteToken, string>('definitely-not-a-token'),
       };
 
       renderWithMantine(<DBNumberChart config={config} />);
@@ -566,7 +595,7 @@ describe('DBNumberChart', () => {
       // CSS-token lookup.
       const config = {
         ...baseTestConfig,
-        color: 'chart-1' as any,
+        color: fromAny<ChartPaletteToken, string>('chart-1'),
       };
 
       renderWithMantine(<DBNumberChart config={config} />);
@@ -656,11 +685,13 @@ describe('DBNumberChart', () => {
     it('shrinks the font for a narrow tile so the value fits without overflow', () => {
       const restore = installGeometryMocks(120, 80);
       try {
-        mockUseQueriedChartConfig.mockReturnValue({
-          data: { data: [{ value: 1234567890 }] },
-          isLoading: false,
-          isError: false,
-        });
+        mockUseQueriedChartConfig.mockReturnValue(
+          fromPartial({
+            data: { data: [{ value: 1234567890 }] },
+            isLoading: false,
+            isError: false,
+          }),
+        );
 
         renderWithMantine(<DBNumberChart config={baseTestConfig} />);
 
@@ -737,8 +768,7 @@ describe('DBNumberChart', () => {
   });
 
   describe('background chart', () => {
-    const mockBackgroundChart =
-      NumberTileBackgroundChart as unknown as jest.Mock;
+    const mockBackgroundChart = jest.mocked(NumberTileBackgroundChart);
 
     it('renders the background sparkline when backgroundChart is configured', () => {
       const config = {
@@ -789,11 +819,13 @@ describe('DBNumberChart', () => {
     ];
 
     const setInstantRows = (rows: { series_name: string; value: number }[]) => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: rows, meta: instantMeta, rows: rows.length },
-        isLoading: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: rows, meta: instantMeta, rows: rows.length },
+          isLoading: false,
+          isError: false,
+        }),
+      );
     };
 
     it("floors an auto granularity at the source's minimum", () => {
@@ -854,15 +886,17 @@ describe('DBNumberChart', () => {
     });
 
     it('does not warn for a non-PromQL config with several rows', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: {
-          data: [{ value: 1 }, { value: 2 }],
-          meta: [{ name: 'value', type: 'Float64' }],
-          rows: 2,
-        },
-        isLoading: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: {
+            data: [{ value: 1 }, { value: 2 }],
+            meta: [{ name: 'value', type: 'Float64' }],
+            rows: 2,
+          },
+          isLoading: false,
+          isError: false,
+        }),
+      );
       mockFormatNumber.mockReturnValue('1');
 
       renderWithMantine(<DBNumberChart config={baseTestConfig} />);

@@ -20,14 +20,18 @@ import type {
 import { DisplayType, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import {
   type McpErrorResult,
   mcpServerError,
   mcpUserError,
 } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 import { getCounter } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
@@ -106,15 +110,16 @@ type MinedWindow = {
 
 /** Sample rows and count the total for one window, without mining. */
 export async function fetchWindowSample(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   startDate: Date,
   endDate: Date,
   options?: WindowOptions,
 ): Promise<{ error: McpErrorResult } | WindowSample> {
+  const { teamId } = context;
   const sampleSize = options?.sampleSize ?? 10_000;
 
-  const source = await getSource(teamId, sourceId);
+  const source = await getMcpSource(context, sourceId);
   if (!source) {
     return {
       error: mcpUserError(
@@ -122,12 +127,14 @@ export async function fetchWindowSample(
       ),
     };
   }
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return {
       error: mcpUserError(
         `Connection not found for source: ${sourceId}. Call clickstack_list_sources to discover available source IDs.`,
@@ -173,11 +180,6 @@ export async function fetchWindowSample(
     ...filters.map(f => ('condition' in f ? f.condition : undefined)),
   );
 
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
   const tsExpr = getFirstTimestampValueExpression(
     source.timestampValueExpression,
@@ -379,14 +381,14 @@ export function mineWindowSample(
  * (template + counts), without MCP response formatting.
  */
 export async function mineWindowPatterns(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   startDate: Date,
   endDate: Date,
   options?: WindowOptions,
 ): Promise<{ error: McpErrorResult } | MinedWindow> {
   const sample = await fetchWindowSample(
-    teamId,
+    context,
     sourceId,
     startDate,
     endDate,
@@ -412,7 +414,7 @@ export const EVENT_PATTERNS_REDUCTIONS: Reduction[] = [
 ];
 
 export async function runEventPatterns(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   startDate: Date,
   endDate: Date,
@@ -440,16 +442,22 @@ export async function runEventPatterns(
   // conversion, sampleMultiplier usage). The helper wraps minePatterns in
   // try/catch and returns an {error} union, so a thrown Drain error surfaces as
   // a clean MCP error here rather than escaping.
-  const mined = await mineWindowPatterns(teamId, sourceId, startDate, endDate, {
-    where: options?.where,
-    whereLanguage: options?.whereLanguage,
-    bodyExpression: options?.bodyExpression,
-    sampleSize: options?.sampleSize,
-    trendBuckets,
-    abortSignal: options?.abortSignal,
-    variables: options?.variables,
-    includeDrilldownWhere: true,
-  });
+  const mined = await mineWindowPatterns(
+    context,
+    sourceId,
+    startDate,
+    endDate,
+    {
+      where: options?.where,
+      whereLanguage: options?.whereLanguage,
+      bodyExpression: options?.bodyExpression,
+      sampleSize: options?.sampleSize,
+      trendBuckets,
+      abortSignal: options?.abortSignal,
+      variables: options?.variables,
+      includeDrilldownWhere: true,
+    },
+  );
   if ('error' in mined) return mined.error;
 
   const {

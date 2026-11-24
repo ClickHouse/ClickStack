@@ -486,10 +486,10 @@ const FilterGroupBody = ({
 }) => {
   const [search, setSearch] = useState('');
   // "Show More" button when there's lots of options
-  const [shouldShowMore, setShowMore] = useState(false);
+  const [shouldShowMore, setShouldShowMore] = useState(false);
   // Track recently moved items for highlight animation
   const [recentlyMoved, setRecentlyMoved] = useState<Set<string | boolean>>(
-    new Set(),
+    () => new Set(),
   );
   // For live searches, don't refresh percentages when date range changes
   const [dateRange, setDateRange] = useState<[Date, Date]>(
@@ -770,7 +770,7 @@ const FilterGroupBody = ({
             }
             onClick={() => {
               // When show more is clicked, immediately show all and also fetch more from server.
-              setShowMore(!shouldShowMore);
+              setShouldShowMore(!shouldShowMore);
               if (!shouldShowMore) {
                 onLoadMore?.(name);
               }
