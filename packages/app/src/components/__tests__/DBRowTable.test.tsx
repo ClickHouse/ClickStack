@@ -283,6 +283,161 @@ describe('RawLogTable', () => {
     });
   });
 
+  describe('Fit column to content', () => {
+    const CHAR_WIDTH = 8;
+    const VIEWPORT_HEIGHT = 900;
+    const TABLE_WIDTH = 1000;
+
+    // jsdom does no layout. Give the scroll container a screenful of height so
+    // the virtualizer mounts the rows and a 1000px width, and report the
+    // hidden copies the fit measures as 8px per character of text.
+    let rectSpy: jest.SpyInstance;
+    let clientHeightSpy: jest.SpyInstance;
+    let clientWidthSpy: jest.SpyInstance;
+
+    beforeAll(() => {
+      rectSpy = jest
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          const width =
+            this.style.visibility === 'hidden'
+              ? (this.textContent ?? '').length * CHAR_WIDTH
+              : 0;
+          const height =
+            this.dataset.testid === 'search-results-table'
+              ? VIEWPORT_HEIGHT
+              : 23;
+          return {
+            width,
+            height,
+            top: 0,
+            left: 0,
+            right: width,
+            bottom: height,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+          };
+        });
+      clientHeightSpy = jest
+        .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+        .mockReturnValue(VIEWPORT_HEIGHT);
+      clientWidthSpy = jest
+        .spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+        .mockReturnValue(TABLE_WIDTH);
+    });
+
+    afterAll(() => {
+      rectSpy.mockRestore();
+      clientHeightSpy.mockRestore();
+      clientWidthSpy.mockRestore();
+    });
+
+    beforeEach(() => {
+      window.localStorage.clear();
+    });
+
+    const baseProps = {
+      displayedColumns: ['col1', 'col2'],
+      isLoading: false,
+      dedupRows: false,
+      hasNextPage: false,
+      onRowDetailsClick: () => {},
+      generateRowId: () => mockRowWhereResult,
+      columnTypeMap: new Map(),
+      showExpandButton: false,
+    };
+
+    const getHeaderCell = (container: HTMLElement, columnId: string) => {
+      const header = container.querySelector(
+        `th[data-column-id="${columnId}"]`,
+      );
+      if (!(header instanceof HTMLElement)) {
+        throw new Error(`No header cell for ${columnId}`);
+      }
+      return header;
+    };
+
+    const fitColumn = (container: HTMLElement, columnId: string) =>
+      userEvent.dblClick(
+        within(getHeaderCell(container, columnId)).getByTestId(
+          'column-resize-handle',
+        ),
+      );
+
+    const storedSizes = (): unknown =>
+      JSON.parse(window.localStorage.getItem('t1-column-sizes') ?? '{}');
+
+    it('narrows a column to its widest value when its resize handle is double-clicked', async () => {
+      const { container } = renderWithMantine(
+        <RawLogTable
+          {...baseProps}
+          tableId="t1"
+          rows={[
+            { col1: 'abc', col2: 'x' },
+            { col1: 'abcdefghij', col2: 'y' },
+          ]}
+        />,
+      );
+      expect(getHeaderCell(container, 'col1').style.width).toBe('160px');
+
+      await fitColumn(container, 'col1');
+
+      expect(getHeaderCell(container, 'col1').style.width).toBe(
+        `${'abcdefghij'.length * CHAR_WIDTH}px`,
+      );
+      expect(storedSizes()).toEqual({ col1: 80 });
+    });
+
+    it('caps a fitted column at half the visible table width', async () => {
+      const { container } = renderWithMantine(
+        <RawLogTable
+          {...baseProps}
+          tableId="t1"
+          rows={[{ col1: 'x'.repeat(100), col2: 'y' }]}
+        />,
+      );
+
+      await fitColumn(container, 'col1');
+
+      expect(storedSizes()).toEqual({ col1: TABLE_WIDTH / 2 });
+    });
+
+    it('returns the last column to filling the table', async () => {
+      window.localStorage.setItem(
+        't1-column-sizes',
+        JSON.stringify({ col1: 200, col2: 300 }),
+      );
+      const { container } = renderWithMantine(
+        <RawLogTable
+          {...baseProps}
+          tableId="t1"
+          rows={[{ col1: 'a', col2: 'y'.repeat(200) }]}
+        />,
+      );
+      expect(getHeaderCell(container, 'col2').style.width).toBe('300px');
+
+      await fitColumn(container, 'col2');
+
+      expect(storedSizes()).toEqual({ col1: 200 });
+      // What col1's 200px leaves of the 1000px table
+      expect(getHeaderCell(container, 'col2').style.width).toBe('800px');
+    });
+
+    it('fits a column of a table that does not save its widths', async () => {
+      const { container } = renderWithMantine(
+        <RawLogTable
+          {...baseProps}
+          rows={[{ col1: 'abcdefghij', col2: 'y' }]}
+        />,
+      );
+
+      await fitColumn(container, 'col1');
+
+      expect(getHeaderCell(container, 'col1').style.width).toBe('80px');
+    });
+  });
+
   describe('Row click behavior', () => {
     const ROW_ID = 'Timestamp = 1';
     const VIEWPORT_HEIGHT = 900;
