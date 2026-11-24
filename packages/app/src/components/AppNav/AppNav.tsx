@@ -17,6 +17,7 @@ import {
   IconSettings,
   IconSitemap,
   IconTable,
+  IconTargetArrow,
 } from '@tabler/icons-react';
 
 import api from '@/api';
@@ -25,7 +26,7 @@ import { AlertStatusIcon } from '@/components/AlertStatusIcon';
 import { InstanceLabel } from '@/components/AppNav/InstanceLabel';
 import { useMobileNavOverlay } from '@/components/AppNav/useMobileNavOverlay';
 import { useCompactViewport } from '@/components/CompactViewport/useCompactViewport';
-import { APP_VERSION, IS_LOCAL_MODE } from '@/config';
+import { APP_VERSION, IS_LOCAL_MODE, IS_SLOS_ENABLED } from '@/config';
 import { Dashboard, useDashboards } from '@/dashboard';
 import { useFavorites } from '@/favorites';
 import { setHdxIdentity } from '@/hdxDebug';
@@ -92,6 +93,18 @@ const NAV_LINKS: NavLinkConfig[] = [
     icon: <IconBell size={16} />,
     cloudOnly: true,
   },
+  ...(IS_SLOS_ENABLED
+    ? [
+        {
+          id: 'slos',
+          label: 'SLOs',
+          href: '/slos',
+          icon: <IconTargetArrow size={16} />,
+          cloudOnly: true,
+          isBeta: true,
+        },
+      ]
+    : []),
   {
     id: 'sessions',
     label: 'Client sessions',
