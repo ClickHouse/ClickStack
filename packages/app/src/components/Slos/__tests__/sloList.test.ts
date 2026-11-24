@@ -1,6 +1,8 @@
 import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
+import { AlertState } from '@hyperdx/common-utils/dist/types';
 
 import { compareSlos } from '@/components/Slos/sloListSort';
+import { getAlertEpisodes } from '@/components/Slos/SloRecentFirings';
 
 /** An SLO with only what the sort reads; no status means no update yet. */
 const slo = (
@@ -73,5 +75,30 @@ describe('SLO list sort', () => {
   it('sorts by name, or worst first', () => {
     expect(sorted('name')).toEqual(['a', 'b', 'c', 'pending']);
     expect(sorted('worst')[0]).toBe('a');
+  });
+});
+
+describe('SLO alert firings', () => {
+  const at = (minutes: number) =>
+    new Date(Date.UTC(2026, 10, 20, 0, minutes)).toISOString();
+  const change = (minutes: number, state: AlertState) => ({
+    createdAt: at(minutes),
+    state,
+  });
+
+  it('pairs each firing with the next recovery, newest first', () => {
+    expect(
+      getAlertEpisodes([
+        change(0, AlertState.ALERT),
+        change(30, AlertState.OK),
+        change(60, AlertState.ALERT),
+        // Repeated firing changes extend the open episode.
+        change(65, AlertState.ALERT),
+      ]),
+    ).toEqual([{ start: at(60) }, { start: at(0), end: at(30) }]);
+  });
+
+  it('ignores a recovery without a firing before it', () => {
+    expect(getAlertEpisodes([change(5, AlertState.OK)])).toEqual([]);
   });
 });
