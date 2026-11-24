@@ -22,6 +22,11 @@ import { performance } from 'perf_hooks';
 
 import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';
+import {
+  deleteSloAlerts,
+  syncSloAlerts,
+  validateSloAlerts,
+} from '@/controllers/sloAlert';
 import { getSource } from '@/controllers/sources';
 import Slo, { ISlo } from '@/models/slo';
 import { getClickHouseErrorType } from '@/utils/clickhouseErrors';
@@ -162,8 +167,9 @@ export async function createSlo(
     throw new Api400Error(`A team can have at most ${SLO_MAX_PER_TEAM} SLOs`);
   }
   await checkSloQuery(teamId, definition);
+  await validateSloAlerts(teamId, definition.alerts);
   // The status refresh picks up an SLO without a snapshot on its next run.
-  return (
+  const slo = (
     await Slo.create({
       ...definition,
       groupBy: definition.groupBy || null,
@@ -172,6 +178,8 @@ export async function createSlo(
       updatedBy: userId,
     })
   ).toObject();
+  await syncSloAlerts(slo, userId);
+  return slo;
 }
 
 export async function updateSlo(
@@ -183,6 +191,7 @@ export async function updateSlo(
   const existing = await getSlo(teamId, sloId);
   if (!existing) return null;
   await checkSloQuery(teamId, definition);
+  await validateSloAlerts(teamId, definition.alerts);
   // Every input of the stored numbers: a change makes the snapshot wrong,
   // and the refresh recomputes it on its next run.
   const changed =
@@ -191,28 +200,38 @@ export async function updateSlo(
     existing.window !== definition.window ||
     (existing.groupBy ?? null) !== (definition.groupBy ?? null) ||
     JSON.stringify(existing.indicator) !== JSON.stringify(definition.indicator);
-  return Slo.findOneAndUpdate(
+  const updated = await Slo.findOneAndUpdate(
     { _id: sloId, team: teamId },
     {
       $set: {
         ...definition,
         description: definition.description ?? '',
         groupBy: definition.groupBy || null,
+        alerts: definition.alerts ?? {},
         updatedBy: userId,
       },
       ...(changed ? { $unset: { status: 1 } } : {}),
     },
     { new: true },
   ).lean();
+  if (updated) await syncSloAlerts(updated, userId);
+  return updated;
 }
 
 export async function deleteSlo(teamId: string, sloId: string) {
   if (!mongoose.Types.ObjectId.isValid(sloId)) return false;
+  if (!(await Slo.exists({ _id: sloId, team: teamId }))) return false;
+  // The alerts go first: an SLO left without its alerts is mended by saving
+  // it again, while an alert left without its SLO would keep firing.
+  await deleteSloAlerts(teamId, sloId);
   const result = await Slo.deleteOne({ _id: sloId, team: teamId });
   return result.deletedCount > 0;
 }
 
-export function formatSlo(slo: ISlo): SloApiResponse {
+export function formatSlo(
+  slo: ISlo,
+  alertStates: SloApiResponse['alertStates'] = {},
+): SloApiResponse {
   return {
     id: slo._id.toString(),
     version: slo.version,
@@ -226,7 +245,7 @@ export function formatSlo(slo: ISlo): SloApiResponse {
     groupBy: slo.groupBy ?? null,
     alerts: slo.alerts ?? {},
     status: slo.status ?? null,
-    alertStates: {},
+    alertStates,
     createdAt: slo.createdAt.toISOString(),
     updatedAt: slo.updatedAt.toISOString(),
   };

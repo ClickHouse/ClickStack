@@ -42,6 +42,8 @@ const SloSchema = new Schema<ISlo>(
     window: { type: String, required: true },
     // Expression whose values each get their own numbers and alert.
     groupBy: { type: String, required: false },
+    // The burn alerts that are on; each has an Alert document mirroring it.
+    alerts: { type: Schema.Types.Mixed, required: false },
     status: { type: Schema.Types.Mixed, required: false },
     // Immutable: ownership attribution is set once at creation.
     createdBy: {

@@ -12,7 +12,10 @@ import {
   listSlos,
   updateSlo,
 } from '@/controllers/slo';
+import { getSloAlerts } from '@/controllers/sloAlert';
 import { getNonNullUserWithTeam } from '@/middleware/auth';
+import type { ObjectId } from '@/models';
+import type { ISlo } from '@/models/slo';
 import { setBusinessContext } from '@/utils/instrumentation';
 import { objectIdSchema } from '@/utils/zod';
 
@@ -31,12 +34,21 @@ const sloIdParams = z
   .transform(params => params);
 const sloBody = SloInputSchema.transform(definition => definition);
 
+async function formatSloWithAlerts(teamId: ObjectId, slo: ISlo) {
+  const alerts = await getSloAlerts(teamId, [slo._id]);
+  return formatSlo(slo, alerts.get(slo._id.toString()));
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { teamId } = getNonNullUserWithTeam(req);
     setBusinessContext({ teamId: teamId.toString() });
     const slos = await listSlos(teamId.toString());
-    res.json(slos.map(slo => formatSlo(slo)));
+    const alerts = await getSloAlerts(
+      teamId,
+      slos.map(slo => slo._id),
+    );
+    res.json(slos.map(slo => formatSlo(slo, alerts.get(slo._id.toString()))));
   } catch (e) {
     next(e);
   }
@@ -51,7 +63,7 @@ router.get(
       setBusinessContext({ teamId: teamId.toString() });
       const slo = await getSlo(teamId.toString(), req.params.id);
       if (!slo) return res.sendStatus(404);
-      res.json(formatSlo(slo));
+      res.json(await formatSloWithAlerts(teamId, slo));
     } catch (e) {
       next(e);
     }
@@ -67,7 +79,7 @@ router.post('/', processRequest({ body: sloBody }), async (req, res, next) => {
       userId?.toString(),
       req.body,
     );
-    res.json(formatSlo(slo));
+    res.json(await formatSloWithAlerts(teamId, slo));
   } catch (e) {
     next(e);
   }
@@ -87,7 +99,7 @@ router.put(
         req.body,
       );
       if (!slo) return res.sendStatus(404);
-      res.json(formatSlo(slo));
+      res.json(await formatSloWithAlerts(teamId, slo));
     } catch (e) {
       next(e);
     }

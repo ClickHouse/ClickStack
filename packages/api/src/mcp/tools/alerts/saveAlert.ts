@@ -6,6 +6,8 @@ import {
   type AlertInput,
   createAlert,
   getAlertById,
+  isSloAlert,
+  SLO_ALERT_MESSAGE,
   updateAlert,
   validateAlertInput,
 } from '@/controllers/alerts';
@@ -160,6 +162,9 @@ export function registerSaveAlert({
 
       // ── Update existing alert ──
       if (alertId) {
+        if (await isSloAlert(alertId, mongoTeamId)) {
+          return mcpUserError(SLO_ALERT_MESSAGE);
+        }
         const updated = await updateAlert(
           alertId,
           mongoTeamId,

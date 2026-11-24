@@ -212,6 +212,7 @@ export const ALERT_TYPE_BY_SOURCE: Record<AlertSource, string> = {
   // Detached alert: the chart config lives on the alert itself, so there is
   // no saved search or tile behind it to open.
   [AlertSource.INLINE]: 'inline_query',
+  [AlertSource.SLO]: 'slo_burn_rate',
 };
 
 const MAX_MESSAGE_LENGTH = 500;

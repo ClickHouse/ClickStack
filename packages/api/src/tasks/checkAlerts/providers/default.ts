@@ -400,7 +400,9 @@ async function resolveAlertDetails(
 async function loadAlerts(): Promise<AlertTask[]> {
   const groupedTasks = new Map<string, AlertTask>();
 
-  const alerts = await Alert.find({});
+  // SLO alerts are not evaluated yet: skip them rather than fail to load
+  // them.
+  const alerts = await Alert.find({ source: { $ne: AlertSource.SLO } });
 
   const now = new Date();
 
