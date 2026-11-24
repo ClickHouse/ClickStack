@@ -36,9 +36,10 @@ export function useSloNow(): Date {
 
 /**
  * Eligible and good events per bucket over the SLO window that ends at
- * `end`.
+ * `end`. The charts and the numbers above them share this query, so they
+ * describe the same moment and the page reads the window once.
  */
-function useSloHistory(slo: SloApiResponse, source: TSource, end: Date) {
+export function useSloHistory(slo: SloApiResponse, source: TSource, end: Date) {
   const granularity = getSloHistoryGranularity(slo.window);
   const config = useMemo(
     () =>
