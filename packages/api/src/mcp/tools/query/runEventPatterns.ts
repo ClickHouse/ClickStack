@@ -73,6 +73,8 @@ export async function mineWindowPatterns(
     where?: string;
     whereLanguage?: 'lucene' | 'sql';
     bodyExpression?: string;
+    /** Mine only the first maxBodyChars characters of each body. */
+    maxBodyChars?: number;
     sampleSize?: number;
     trendBuckets?: number;
     abortSignal?: AbortSignal;
@@ -158,6 +160,12 @@ export async function mineWindowPatterns(
           'Try specifying bodyExpression explicitly.',
       ),
     };
+  }
+  // Truncate in the query, so long bodies are not transferred, and in the
+  // drill-down predicate, so it matches the prefix the template came from.
+  // The tool schemas bound maxBodyChars to an integer from 1 to 1,000,000.
+  if (options?.maxBodyChars != null) {
+    bodyColumn = `leftUTF8(${bodyColumn}, ${options.maxBodyChars})`;
   }
 
   const filters = getSourceTableFilters(source);
@@ -394,6 +402,7 @@ export async function runEventPatterns(
     where?: string;
     whereLanguage?: 'lucene' | 'sql';
     bodyExpression?: string;
+    maxBodyChars?: number;
     sampleSize?: number;
     topN?: number;
     trendBuckets?: number;
@@ -423,6 +432,7 @@ export async function runEventPatterns(
       where: options?.where,
       whereLanguage: options?.whereLanguage,
       bodyExpression: options?.bodyExpression,
+      maxBodyChars: options?.maxBodyChars,
       sampleSize: options?.sampleSize,
       trendBuckets,
       abortSignal: options?.abortSignal,
