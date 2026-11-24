@@ -1,12 +1,21 @@
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
 import { ActionIcon, Menu } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconCopy, IconDots, IconPencil, IconTrash } from '@tabler/icons-react';
+import {
+  IconCopy,
+  IconDots,
+  IconPencil,
+  IconSearch,
+  IconTrash,
+} from '@tabler/icons-react';
 
 import { useDeleteSlo } from '@/slo';
 import { useConfirm } from '@/useConfirm';
 import { getApiErrorMessage } from '@/utils/apiErrors';
+
+import { getSloEventsRange } from './sloUtils';
 
 export function SloRowMenu({
   slo,
@@ -15,6 +24,7 @@ export function SloRowMenu({
   slo: SloApiResponse;
   onDeleted?: () => void;
 }) {
+  const router = useRouter();
   const confirm = useConfirm();
   const deleteSlo = useDeleteSlo();
 
@@ -46,6 +56,11 @@ export function SloRowMenu({
     }
   };
 
+  const viewBadEvents = () => {
+    const [from, to] = getSloEventsRange(slo, 'burn', Date.now());
+    void router.push(`/slos/${slo.id}?bad=burn&from=${from}&to=${to}`);
+  };
+
   return (
     <Menu position="bottom-end" withinPortal>
       <Menu.Target>
@@ -59,6 +74,12 @@ export function SloRowMenu({
         </ActionIcon>
       </Menu.Target>
       <Menu.Dropdown onClick={e => e.stopPropagation()}>
+        <Menu.Item
+          leftSection={<IconSearch size={14} />}
+          onClick={viewBadEvents}
+        >
+          View bad events
+        </Menu.Item>
         <Menu.Item
           component={Link}
           href={`/slos/${slo.id}/edit`}

@@ -1,9 +1,13 @@
-import type {
-  SloApiResponse,
-  SloBurnWindow,
-  SloState,
-  SloWindow,
+import { getSloBurnRule } from '@hyperdx/common-utils/dist/core/slo';
+import {
+  getSloBurnWindowMs,
+  getSloWindowMs,
+  type SloApiResponse,
+  type SloBurnWindow,
+  type SloState,
+  type SloWindow,
 } from '@hyperdx/common-utils/dist/slo';
+import type { TSource } from '@hyperdx/common-utils/dist/types';
 
 /** An SLO's state as shown: pending until the background computes it. */
 export type SloDisplayState = SloState | 'pending';
@@ -57,7 +61,7 @@ export function sloStateDescription(state: SloDisplayState): string {
 }
 
 /** "hour" or "5 minutes", as in "the last hour". */
-function formatBurnWindow(window: SloBurnWindow): string {
+export function formatBurnWindow(window: SloBurnWindow): string {
   switch (window) {
     case '5m':
       return '5 minutes';
@@ -116,9 +120,34 @@ export function formatSloWindow(window: SloWindow): string {
   return window === '7d' ? '7 days' : '30 days';
 }
 
+/**
+ * A bad-events view of the burn rule's first window (the last hour) or the
+ * SLO window, ending now.
+ */
+export function getSloEventsRange(
+  slo: SloApiResponse,
+  range: 'burn' | 'window',
+  nowMs: number,
+): [number, number] {
+  const lengthMs =
+    range === 'window'
+      ? getSloWindowMs(slo.window)
+      : getSloBurnWindowMs(getSloBurnRule(slo.window)[0].window);
+  return [nowMs - lengthMs, nowMs];
+}
+
 export function budgetColorVar(budget: number | null | undefined): string {
   if (budget == null) return 'var(--color-text-muted)';
   if (budget <= 0) return 'var(--color-text-danger)';
   if (budget < 0.25) return 'var(--color-text-warning)';
   return 'var(--color-text-success)';
+}
+
+/** Default Search columns of a log or trace source. */
+export function getSourceDefaultSelect(
+  source: TSource | undefined,
+): string | undefined {
+  return source && 'defaultTableSelectExpression' in source
+    ? source.defaultTableSelectExpression
+    : undefined;
 }
