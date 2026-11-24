@@ -103,6 +103,17 @@ describe('utils', () => {
         formatDate(date, { clock: '24h', timeZone: 'Asia/Tokyo' }),
       ).toEqual('Jan 1 21:00:00');
     });
+
+    it('formats only the date, in the given time zone', () => {
+      const date = new Date('2021-01-01T20:00:00Z');
+      expect(
+        formatDate(date, {
+          clock: '12h',
+          timeZone: 'Asia/Tokyo',
+          format: 'date',
+        }),
+      ).toEqual('Jan 2');
+    });
   });
 
   describe('toWallClock / fromWallClock', () => {
