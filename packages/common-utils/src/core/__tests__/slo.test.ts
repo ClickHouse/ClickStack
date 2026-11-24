@@ -2,7 +2,11 @@ import {
   buildSloLatencyGoodSql,
   getSloDefaultDuration,
 } from '@/core/sloLatency';
-import { SloInputSchema } from '@/slo';
+import {
+  describeSloAlertRule,
+  describeSloAlertRuleDetails,
+  SloInputSchema,
+} from '@/slo';
 import { SourceKind, TSource } from '@/types';
 
 const traceSource = {
@@ -56,6 +60,23 @@ describe('SLO schema', () => {
     ).toBe(false);
     expect(SloInputSchema.safeParse({ ...base, ...availability }).success).toBe(
       true,
+    );
+  });
+
+  it('describes each burn alert in one sentence', () => {
+    expect(describeSloAlertRule('fastBurn', '30d')).toBe(
+      '2% of the 30-day error budget is spent within 1 hour (14.4x the allowed rate)',
+    );
+    // The same share of a shorter window's budget is a slower burn.
+    expect(describeSloAlertRule('slowBurn', '7d')).toBe(
+      '5% of the 7-day error budget is spent within 6 hours (1.4x the allowed rate)',
+    );
+    expect(describeSloAlertRule('slowBurn')).toBe(
+      '5% of the error budget is spent within 6 hours',
+    );
+    expect(describeSloAlertRuleDetails('fastBurn')).toBe(
+      'Resolves once the last 5 minutes burn slower than that. Needs at ' +
+        'least 20 events in 1 hour. Checked every 5 minutes.',
     );
   });
 
