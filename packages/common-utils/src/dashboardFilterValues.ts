@@ -2,6 +2,7 @@ import {
   doesFilterApplyToSource,
   FilterState,
   filtersToQuery,
+  filterSupportsAllValue,
   getDashboardVariableFilters,
   getFilterExpression,
   getFilterVariableName,
@@ -26,6 +27,11 @@ import {
   VariableFilterValue,
 } from '@/types';
 import { isFilterSingleSelect } from '@/variables';
+import {
+  ALL_SELECTION,
+  selectionHasValue,
+  VariableSelection,
+} from '@/variableSelection';
 
 /**
  * A dashboards filter/variable state is persisted as an array of entries in one of two
@@ -205,16 +211,36 @@ function resolveUncappedFilterSelection(
   return new Map(Object.entries(parsed.byExpression)).get(expression);
 }
 
+/**
+ * The selection of a filter that can hold "all" (`filterSupportsAllValue`), or
+ * undefined for any other filter or when nothing is stored for it. Use this
+ * rather than `resolveFilterSelection` for such filters, since that can't
+ * represent "all".
+ */
+export function resolveVariableSelection(
+  filter: DashboardFilter,
+  parsed: { byVariable: ReadonlyMap<string, VariableEntryValue> },
+): VariableSelection | undefined {
+  if (!filterSupportsAllValue(filter)) return undefined;
+  const name = getFilterVariableName(filter);
+  const entry = name ? parsed.byVariable.get(name) : undefined;
+  if (entry?.type !== 'variable') return undefined;
+  return entry.all ? ALL_SELECTION : entry.values;
+}
+
 /** The required filters that have nothing selected, in filter order. */
 export function getUnsatisfiedRequiredFilters<
   T extends { id: string; minSelections?: number },
 >(
   filters: T[] | undefined,
   selectionByFilterId: ReadonlyMap<string, FilterSelection>,
+  /** Selections of filters that can hold "all", which counts as selected. */
+  variableSelectionByFilterId?: ReadonlyMap<string, VariableSelection>,
 ): T[] {
   return (filters ?? []).filter(
     filter =>
       isFilterRequired(filter) &&
+      !selectionHasValue(variableSelectionByFilterId?.get(filter.id)) &&
       (selectionByFilterId.get(filter.id)?.included.size ?? 0) === 0,
   );
 }

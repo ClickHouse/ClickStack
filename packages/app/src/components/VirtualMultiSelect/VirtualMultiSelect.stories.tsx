@@ -1,5 +1,9 @@
 import { useState } from 'react';
 import { sample, times } from 'lodash';
+import {
+  isAllSelection,
+  VariableSelection,
+} from '@hyperdx/common-utils/dist/variableSelection';
 import { Box } from '@mantine/core';
 import { Meta, StoryObj } from '@storybook/nextjs';
 
@@ -31,15 +35,25 @@ const meta: Meta<typeof VirtualMultiSelect> = {
   argTypes: {
     data: { table: { disable: true } },
     values: { table: { disable: true } },
+    isAllOptionSelected: { table: { disable: true } },
     onChange: { table: { disable: true } },
   },
 
   decorators: [
     (Story, ctx) => {
-      const [values, setValues] = useState<string[]>([]);
+      const [selection, setSelection] = useState<VariableSelection>([]);
+      const isAllOptionSelected = isAllSelection(selection);
       return (
         <Box maw={128}>
-          <Story args={{ ...ctx.args, data, values, onChange: setValues }} />
+          <Story
+            args={{
+              ...ctx.args,
+              data,
+              values: isAllOptionSelected ? [] : selection,
+              isAllOptionSelected,
+              onChange: setSelection,
+            }}
+          />
         </Box>
       );
     },
@@ -50,3 +64,5 @@ export default meta;
 type Story = StoryObj<typeof VirtualMultiSelect>;
 
 export const Primary: Story = {};
+
+export const WithAllOption: Story = { args: { enableAllOption: true } };

@@ -7,6 +7,7 @@ import {
   getUnsatisfiedRequiredFilters,
   parseDashboardFilterValues,
   resolveFilterSelection,
+  resolveVariableSelection,
   serializeDashboardFilterValues,
   VariableEntryValue,
 } from '@/dashboardFilterValues';
@@ -674,6 +675,50 @@ describe('dashboardFilterValues', () => {
       expect(
         getUnsatisfiedRequiredFilters(filters, new Map()).map(f => f.name),
       ).toEqual(['A', 'C']);
+    });
+
+    it('omits a required filter with "All" selected', () => {
+      expect(
+        getUnsatisfiedRequiredFilters(
+          [required()],
+          new Map([['f1', included()]]),
+          new Map([['f1', { all: true }]]),
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe('resolveVariableSelection', () => {
+    const allCapable = staticFilter({ allowAll: true });
+    const parse = (...entries: DashboardFilterValue[]) =>
+      parseDashboardFilterValues(entries);
+
+    it('reads "All" and explicit values for a filter that offers "All"', () => {
+      expect(
+        resolveVariableSelection(
+          allCapable,
+          parse({ type: 'variable', name: 'env', values: [], all: true }),
+        ),
+      ).toEqual({ all: true });
+      expect(
+        resolveVariableSelection(
+          allCapable,
+          parse({ type: 'variable', name: 'env', values: ['prod'] }),
+        ),
+      ).toEqual(['prod']);
+    });
+
+    it('is undefined for a filter that does not offer "All"', () => {
+      expect(
+        resolveVariableSelection(
+          staticFilter(),
+          parse({ type: 'variable', name: 'env', values: [], all: true }),
+        ),
+      ).toBeUndefined();
+    });
+
+    it('is undefined when nothing is stored for the filter', () => {
+      expect(resolveVariableSelection(allCapable, parse())).toBeUndefined();
     });
   });
 

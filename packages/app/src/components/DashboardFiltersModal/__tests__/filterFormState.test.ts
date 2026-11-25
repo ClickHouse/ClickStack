@@ -638,3 +638,39 @@ describe('maxSelections', () => {
     expect(saved).toMatchObject({ minSelections: 1, maxSelections: 1 });
   });
 });
+
+describe('allowAll', () => {
+  const allCapable = [
+    ['STATIC_LIST', byType.STATIC_LIST],
+    ['SQL_QUERY', byType.SQL_QUERY],
+  ] as const;
+
+  it.each(allCapable)(
+    'round-trips allowAll on a %s filter',
+    (_type, filter) => {
+      const saved = toSavedFilter(formValues({ ...filter, allowAll: true }));
+
+      expect(saved).toMatchObject({ allowAll: true });
+      expect(toFormValues(saved).allowAll).toBe(true);
+    },
+  );
+
+  it.each(allCapable)(
+    'stores nothing for allowAll on a single-select %s filter',
+    (_type, filter) => {
+      const saved = toSavedFilter(
+        formValues({ ...filter, allowAll: true, isSingleSelect: true }),
+      );
+
+      expect(saved).toMatchObject({ allowAll: undefined });
+    },
+  );
+
+  it('stores nothing for allowAll when it is off', () => {
+    const saved = toSavedFilter(
+      formValues({ ...byType.STATIC_LIST, allowAll: false }),
+    );
+
+    expect(saved).toMatchObject({ allowAll: undefined });
+  });
+});

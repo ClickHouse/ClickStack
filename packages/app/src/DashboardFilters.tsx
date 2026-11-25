@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { FilterSelection } from '@hyperdx/common-utils/dist/dashboardFilterValues';
 import {
+  filterSupportsAllValue,
   getFilterBroadcastTarget,
   getFilterVariableName,
   getPendingFilterValuesVariables,
@@ -22,6 +23,7 @@ import {
   DashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
+import { VariableSelection } from '@hyperdx/common-utils/dist/variableSelection';
 import { Group, Stack, Text } from '@mantine/core';
 import { IconRefresh } from '@tabler/icons-react';
 
@@ -43,8 +45,10 @@ import { useDashboardFilterValues } from './hooks/useDashboardFilterValues';
 
 interface DashboardFilterSelectProps {
   filter: DashboardFilter;
-  onChange: (values: string[]) => void;
+  onChange: (selection: VariableSelection) => void;
+  /** Concrete selected values. Empty when "All" is selected. */
   value: string[];
+  isAllSelected?: boolean;
   values?: string[];
   isLoading?: boolean;
   isError?: boolean;
@@ -106,6 +110,7 @@ const DashboardFilterSelect = ({
   filter,
   onChange,
   value,
+  isAllSelected = false,
   values,
   isLoading,
   isError,
@@ -114,7 +119,8 @@ const DashboardFilterSelect = ({
 }: DashboardFilterSelectProps) => {
   const valuesOrEmptyMemo = useMemo(() => values ?? [], [values]);
   const effect = getFilterEffect(filter);
-  const isMissingRequiredValue = isFilterRequired(filter) && value.length === 0;
+  const hasSelection = isAllSelected || value.length > 0;
+  const isMissingRequiredValue = isFilterRequired(filter) && !hasSelection;
 
   return (
     <Stack gap={2}>
@@ -144,8 +150,10 @@ const DashboardFilterSelect = ({
       </DashboardFilterLabel>
       <div style={{ width: 250 }}>
         <VirtualMultiSelect
-          placeholder={value.length === 0 ? filter.name : undefined}
+          placeholder={hasSelection ? undefined : filter.name}
           values={value}
+          enableAllOption={filterSupportsAllValue(filter)}
+          isAllOptionSelected={isAllSelected}
           data={valuesOrEmptyMemo}
           // Surface loading as a dropdown hint rather than disabling the control,
           // so a completed/empty/failed query stays interactive and the user can
@@ -169,7 +177,7 @@ const EMPTY_SELECTIONS: ReadonlyMap<string, FilterSelection> = new Map();
 interface DashboardFilterProps {
   filters: DashboardFilter[];
   selectionByFilterId: ReadonlyMap<string, FilterSelection>;
-  onSetFilterValue: (filterId: string, values: string[]) => void;
+  onSetFilterValue: (filterId: string, selection: VariableSelection) => void;
   adhocConditionsByFilterId?: ReadonlyMap<string, AdhocFilterCondition[]>;
   onSetAdhocConditions?: (
     filterId: string,
@@ -240,6 +248,15 @@ const DashboardFilters = ({
     // Only narrow by sibling selections when linked.
     selectionByFilterId: linked ? selectionByFilterId : EMPTY_SELECTIONS,
   });
+
+  // "All" is carried on the variable, since the regular selection can't hold it
+  const allSelectedVariableNames = useMemo(
+    () =>
+      new Set(
+        variables?.filter(variable => variable.all).map(({ name }) => name),
+      ),
+    [variables],
+  );
 
   // Linking narrows queried dropdowns by sibling selections; a static
   // list can neither constrain nor be constrained, so it doesn't count.
@@ -342,9 +359,12 @@ const DashboardFilters = ({
                 : filterErrorMessages?.get(filter.id)
             }
             pendingVariables={pendingVariables}
-            onChange={values => onSetFilterValue(filter.id, values)}
+            onChange={selection => onSetFilterValue(filter.id, selection)}
             values={queriedFilterValues?.values}
             value={selectedValues}
+            isAllSelected={allSelectedVariableNames.has(
+              getFilterVariableName(filter) ?? '',
+            )}
           />
         );
       })}

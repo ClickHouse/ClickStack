@@ -6157,34 +6157,55 @@ describe('External API v2 Dashboards - new format', () => {
       });
     });
 
-    // Held back until the dashboard UI offers "All".
     describe('"All" option', () => {
-      it.each([
-        ['STATIC_LIST', () => staticFilterInput({ allowAll: true })],
-        [
-          'SQL_QUERY',
-          () => ({
-            id: new ObjectId().toString(),
-            type: 'SQL_QUERY' as const,
-            name: 'Environment',
-            connectionId: connection._id.toString(),
-            sqlTemplate: 'SELECT DISTINCT env FROM envs',
-            allowAll: true,
-          }),
-        ],
-      ] as const)(
-        'rejects allowAll on a %s filter',
-        async (_type, makeFilter) => {
-          await expectFilters([makeFilter()], 400);
-        },
-      );
+      const allValue = { type: 'variable', name: 'env', values: [], all: true };
 
-      it('rejects a saved "all" value', async () => {
+      it('accepts allowAll and a saved "all" value on a static list filter', async () => {
         const response = await sendFilters(
-          [staticFilterInput()],
-          [{ type: 'variable', name: 'env', values: [], all: true }],
+          [staticFilterInput({ allowAll: true })],
+          [allValue],
         );
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.filters[0].allowAll).toBe(true);
+        expect(response.body.data.savedFilterValues).toEqual([allValue]);
+      });
+
+      it('rejects allowAll on a single-select filter', async () => {
+        const response = await sendFilters([
+          staticFilterInput({ allowAll: true, maxSelections: 1 }),
+        ]);
+
         expect(response.status).toBe(400);
+        expect(JSON.stringify(response.body)).toContain(
+          'sets allowAll but is single-select',
+        );
+      });
+
+      it('rejects a saved "all" value for a filter without allowAll', async () => {
+        const response = await sendFilters([staticFilterInput()], [allValue]);
+
+        expect(response.status).toBe(400);
+        expect(JSON.stringify(response.body)).toContain(
+          'sets all: true, but its filter does not offer',
+        );
+      });
+
+      // Held back until SQL query filters expand "All".
+      it('rejects allowAll on a SQL query filter', async () => {
+        await expectFilters(
+          [
+            {
+              id: new ObjectId().toString(),
+              type: 'SQL_QUERY' as const,
+              name: 'Environment',
+              connectionId: connection._id.toString(),
+              sqlTemplate: 'SELECT DISTINCT env FROM envs',
+              allowAll: true,
+            },
+          ],
+          400,
+        );
       });
     });
 

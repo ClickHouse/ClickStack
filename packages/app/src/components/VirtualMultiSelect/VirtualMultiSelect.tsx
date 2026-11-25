@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { VariableSelection } from '@hyperdx/common-utils/dist/variableSelection';
 import {
   CheckIcon,
   CloseButton,
@@ -18,6 +19,12 @@ import {
 } from '@mantine/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
+// UI-internal routing token for the "All" combobox row. Never stored or emitted.
+const ALL_ROW_VALUE = '__hdx_all_row__';
+
+// UI-visible label for the "All" combobox row.
+const ALL_ROW_LABEL = 'All';
+
 type VirtualMultiSelectProps = {
   data: string[];
   disabled?: boolean;
@@ -27,8 +34,14 @@ type VirtualMultiSelectProps = {
   /** Whether to sort options before rendering. True by default */
   sort?: boolean;
   isMultiSelect?: boolean;
+  /** Concrete selected values. Empty when "all" is selected. */
   values: string[];
-  onChange: (values: string[]) => void;
+  /** Whether to show the "All" option. */
+  enableAllOption?: boolean;
+  /** Whether the "All" option is currently selected. */
+  isAllOptionSelected?: boolean;
+  /** Emits an explicit list of values, or `{ all: true }` for "All". */
+  onChange: (next: VariableSelection) => void;
   'data-testid'?: string;
 };
 
@@ -42,10 +55,18 @@ export function VirtualMultiSelect({
   values,
   onChange,
   'data-testid': dataTestId,
+  enableAllOption = false,
+  isAllOptionSelected: allSelected,
 }: VirtualMultiSelectProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
 
   const [search, setSearch] = useState('');
+
+  const isAllSelected = enableAllOption && !!allSelected;
+  const concreteValues = isAllSelected ? [] : values;
+  const showAllOption =
+    enableAllOption &&
+    ALL_ROW_LABEL.toLowerCase().includes(search.trim().toLowerCase());
 
   const sorted = useMemo(() => {
     return sort ? data.toSorted((a, b) => a.localeCompare(b)) : data;
@@ -80,26 +101,44 @@ export function VirtualMultiSelect({
   const handleRemoveAllValues = () => onChange([]);
 
   const handleAddValue = (val: string) => {
+    if (isAllSelected) {
+      onChange([val]);
+      return;
+    }
     if (!values.includes(val)) {
       onChange(isMultiSelect ? [...values, val] : [val]);
     }
   };
 
   const handleSelectValue = (val: string) => {
-    if (values.includes(val)) {
+    if (enableAllOption && val === ALL_ROW_VALUE) {
+      // Toggle the "All" row: selecting it emits the structural marker and
+      // clears any concrete selection; selecting it again clears everything.
+      onChange(isAllSelected ? [] : { all: true });
+    } else if (!isAllSelected && values.includes(val)) {
       handleRemoveValue(val);
     } else {
+      // Picking a concrete value while "All" is active narrows to that value.
       handleAddValue(val);
     }
+    // Clear the search input after a value is selected, matching the behavior
+    // of a non-virtualized Mantine MultiSelect with search.
     setSearch('');
     if (!isMultiSelect) combobox.closeDropdown();
   };
 
   const handleKeyDown: KeyboardEventHandler<HTMLInputElement> = event => {
-    if (event.key === 'Backspace' && search.length === 0 && values.length > 0) {
-      event.preventDefault();
-      handleRemoveValue(values[values.length - 1]);
-      return;
+    if (event.key === 'Backspace' && search.length === 0) {
+      if (isAllSelected) {
+        event.preventDefault();
+        onChange([]);
+        return;
+      }
+      if (values.length > 0) {
+        event.preventDefault();
+        handleRemoveValue(values[values.length - 1]);
+        return;
+      }
     }
 
     if (event.key === 'Enter') {
@@ -140,7 +179,7 @@ export function VirtualMultiSelect({
           disabled={disabled}
           size="xs"
           data-testid={dataTestId}
-          {...(values.length
+          {...(isAllSelected || values.length
             ? {
                 rightSection: (
                   <CloseButton
@@ -158,17 +197,30 @@ export function VirtualMultiSelect({
               })}
         >
           <Pill.Group>
-            {values.map(item => (
+            {(isAllSelected
+              ? [
+                  {
+                    key: ALL_ROW_VALUE,
+                    label: ALL_ROW_LABEL,
+                    onRemove: () => onChange([]),
+                  },
+                ]
+              : concreteValues.map(item => ({
+                  key: item,
+                  label: item,
+                  onRemove: () => handleRemoveValue(item),
+                }))
+            ).map(({ key, label, onRemove }) => (
               <Pill
-                key={item}
+                key={key}
                 withRemoveButton
-                onRemove={() => handleRemoveValue(item)}
+                onRemove={onRemove}
                 // manually disabling instead of using `disabled` prop
                 // `disabled` prop hides remove button which can cause layout to jump
                 aria-disabled={disabled}
                 styles={{ root: { pointerEvents: disabled ? 'none' : 'auto' } }}
               >
-                {item}
+                {label}
               </Pill>
             ))}
 
@@ -182,6 +234,9 @@ export function VirtualMultiSelect({
                 placeholder={placeholder}
                 onChange={handleChange}
                 onKeyDown={handleKeyDown}
+                data-has-values={
+                  isAllSelected || values.length > 0 ? 'true' : 'false'
+                }
               />
             </Combobox.EventsTarget>
           </Pill.Group>
@@ -190,6 +245,16 @@ export function VirtualMultiSelect({
 
       <Combobox.Dropdown>
         <Combobox.Options>
+          {showAllOption && (
+            <Combobox.Option value={ALL_ROW_VALUE} active={isAllSelected}>
+              <Group gap="xs">
+                {isAllSelected && <CheckIcon size={10} />}
+                <Text size="xs" fw={500}>
+                  {ALL_ROW_LABEL}
+                </Text>
+              </Group>
+            </Combobox.Option>
+          )}
           {options.length > 0 ? (
             <ScrollArea.Autosize
               type="scroll"
@@ -205,6 +270,7 @@ export function VirtualMultiSelect({
               >
                 {virtualItems.map(virtualItem => {
                   const item = options[virtualItem.index];
+                  const isSelected = concreteValues.includes(item);
 
                   return (
                     <div
@@ -219,12 +285,9 @@ export function VirtualMultiSelect({
                         transform: `translateY(${virtualItem.start}px)`,
                       }}
                     >
-                      <Combobox.Option
-                        value={item}
-                        active={values.includes(item)}
-                      >
+                      <Combobox.Option value={item} active={isSelected}>
                         <Group gap="xs">
-                          {values.includes(item) && <CheckIcon size={10} />}
+                          {isSelected && <CheckIcon size={10} />}
                           <Text size="xs">{item}</Text>
                         </Group>
                       </Combobox.Option>
@@ -234,9 +297,13 @@ export function VirtualMultiSelect({
               </div>
             </ScrollArea.Autosize>
           ) : (
-            <Combobox.Empty>
-              {loading ? 'Loading…' : 'Nothing found...'}
-            </Combobox.Empty>
+            // The "All" row is rendered above the (empty) list, so only fall
+            // back to the empty/loading hint when there is nothing at all.
+            !showAllOption && (
+              <Combobox.Empty>
+                {loading ? 'Loading…' : 'Nothing found...'}
+              </Combobox.Empty>
+            )
           )}
         </Combobox.Options>
       </Combobox.Dropdown>

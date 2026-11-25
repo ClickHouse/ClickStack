@@ -8,7 +8,7 @@ import { expect, type Page } from '@playwright/test';
 
 export type FilterEntry =
   | { type: 'sql'; condition: string }
-  | { type: 'variable'; name: string; values: string[] }
+  | { type: 'variable'; name: string; values: string[]; all?: true }
   | {
       type: 'adhoc';
       name: string;

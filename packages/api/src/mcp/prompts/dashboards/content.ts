@@ -982,9 +982,10 @@ For configType: "sql" tiles, write ClickHouse SQL with template macros:
     $__filter(<expression>, $<var>)    Matches the expression against the variable's selected
                                        values (e.g \`<expression> IN ('a', 'b')\`). Expands to
                                        1=1 when nothing is selected.
-    $__conditionalAll(<cond>, $<var>)  Applies the condition only while the variable has a
-                                       selection, and expands to 1=1 otherwise. Use it for
-                                       operators IN cannot express, such as NOT IN or LIKE.
+    $__conditionalAll(<cond>, $<var>)  Applies the condition only while specific values are
+                                       selected, and expands to 1=1 when nothing or "All" is
+                                       selected. Use it for operators IN cannot express, such
+                                       as NOT IN or LIKE.
     The variable argument carries the leading $, exactly as a bare reference would.
 
   QUERY PARAMETERS (ClickHouse parameterized syntax):
@@ -1201,9 +1202,10 @@ Query-expression filter shape:
   variableName         The token tiles reference. Must match [a-zA-Z][a-zA-Z0-9_]* and be at most 64 characters, and must be unique across the dashboard's variable-enabled filters. Defaults to the display name with whitespace turned into underscores and remaining illegal characters dropped, so "Service Name" becomes $Service_Name and a label with nothing token-safe in it (a non-ASCII name, for instance) must set this field explicitly. Rejected when isVariableEnabled is not true.
 
 Static filter shape:
-  { type: "STATIC_LIST", name, options, variableName? }
+  { type: "STATIC_LIST", name, options, allowAll?, variableName? }
 
   options              1-1000 unique, non-empty strings the dropdown offers, in display order.
+  allowAll             Set true to add an "All" choice to the dropdown, which selects every option. Multi-select filters only (rejected with maxSelections: 1). With "All" selected, $variableName and $__filter use every option, and $__conditionalAll expands to 1=1.
 
   No expression, sourceId, where, or appliesToSourceIds: the list is hand-authored, nothing is queried. It has no mode flags either. A static filter is always variable-only, so tiles must reference $variableName for the selection to have any effect. Pass the column explicitly in macros ($__filter(<expression>, $<variableName>)); the one-argument $__filter($var) form fails because the filter has no expression of its own.
 
@@ -1280,7 +1282,7 @@ THREE WAYS TO REFERENCE A VARIABLE
     The one-argument form $__filter($service) reuses the filter's own expression, but it fails when the filter does not carry one, so pass the expression explicitly whenever the tile's column differs from the filter's.
 
   $__conditionalAll(<condition>, $<variableName>)
-    Applies the condition verbatim while something is selected, and 1=1 otherwise. Use it for anything IN cannot express. The condition itself should reference the variable.
+    Applies the condition verbatim while specific values are selected, and 1=1 when nothing or "All" (allowAll filters) is selected. Use it for anything IN cannot express. The condition itself should reference the variable.
       where: "$__conditionalAll(ServiceName NOT IN ($service), $service)"
 
   $variableName / \${variableName} / \${variableName:format}
@@ -1350,6 +1352,7 @@ VALIDATING
 clickstack_query_tile and clickstack_query_tiles expand variables with an EMPTY selection by default, which is what a freshly-opened dashboard looks like. Optionally, pass variableValues to check that a tile narrows correctly once something is picked:
   variableValues: [{ name: "service", values: ["checkout"] }]
 For a STATIC_LIST filter's variable, every supplied value must be one of the filter's declared options; the dashboard UI can never select anything else, so other values are rejected.
+For a filter with allowAll, simulate "All" with { name, values: [], all: true }.
 Both tools report variable problems under "warnings". Alerts on a tile always evaluate with every variable empty, so a tile carrying an alert must stay correct with nothing selected.
 
 == TABLE TILE LINKING (config.onClick) ==

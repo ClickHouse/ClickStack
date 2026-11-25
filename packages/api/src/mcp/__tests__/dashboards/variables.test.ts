@@ -194,6 +194,34 @@ describe('resolveDashboardVariables', () => {
     });
   });
 
+  it('expands a simulated "All" to every option of a static filter', () => {
+    expect(
+      resolveDashboardVariables(
+        [staticFilter({ allowAll: true })],
+        [{ name: 'env', values: [], all: true }],
+      ),
+    ).toEqual({
+      variables: [
+        {
+          name: 'env',
+          expression: undefined,
+          values: ['dev', 'prod', 'staging'],
+          all: true,
+        },
+      ],
+    });
+  });
+
+  it('rejects a simulated "All" on a filter that does not offer it', () => {
+    const resolved = resolveDashboardVariables(
+      [staticFilter()],
+      [{ name: 'env', values: [], all: true }],
+    );
+
+    if (!('error' in resolved)) throw new Error('expected an error');
+    expect(resolved.error).toContain('does not offer "All"');
+  });
+
   it('rejects a value outside a static filter options', () => {
     const resolved = resolveDashboardVariables(
       [staticFilter()],

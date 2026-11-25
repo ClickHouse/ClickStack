@@ -105,6 +105,9 @@ export const toFormValues = (
     // STATIC_LIST fields
     options: staticList?.options ?? [],
 
+    // STATIC_LIST and SQL_QUERY fields
+    allowAll: staticList?.allowAll ?? sqlQuery?.allowAll ?? false,
+
     // PROMETHEUS_LABEL fields
     label: promqlLabel?.label ?? '',
     match: promqlLabel?.match ?? '',
@@ -137,11 +140,14 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       : {}),
     ...(isSingleSelect ? { maxSelections: 1 } : {}),
   };
+  // Single-select filters don't offer "All", and false isn't stored
+  const allowAll = values.allowAll && !isSingleSelect ? true : undefined;
 
   if (values.type === 'STATIC_LIST') {
     return DashboardFilterSchema.parse({
       ...rest,
       options: values.options.map(option => option.trim()),
+      allowAll,
       isBroadcastEnabled: false,
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),
@@ -166,6 +172,7 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       ...rest,
       source: values.source || undefined,
       sqlTemplate: values.sqlTemplate.trim(),
+      allowAll,
       isBroadcastEnabled: false,
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),

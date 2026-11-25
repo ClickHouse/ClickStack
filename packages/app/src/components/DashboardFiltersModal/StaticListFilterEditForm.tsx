@@ -2,6 +2,7 @@ import { Controller, useFormState } from 'react-hook-form';
 import { DashboardFilter } from '@hyperdx/common-utils/dist/types';
 import { TagsInput } from '@mantine/core';
 
+import { AllOptionCheckbox } from './AllOptionCheckbox';
 import { CustomInputWrapper } from './CustomInputWrapper';
 import { FilterFormControl } from './filterFormState';
 import { VariableNameInput } from './VariableNameInput';
@@ -46,6 +47,8 @@ export const StaticListFilterEditForm = ({
           )}
         />
       </CustomInputWrapper>
+
+      <AllOptionCheckbox control={control} />
 
       <VariableNameInput control={control} otherFilters={otherFilters} />
     </>

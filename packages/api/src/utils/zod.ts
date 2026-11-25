@@ -200,11 +200,8 @@ const externalQueryExpressionFilterShape =
   });
 
 // A static filter's mode flags each accept exactly one value, so callers may
-// omit them and get that value. `allowAll` is held back until the dashboard UI
-// offers "All".
-const externalStaticListFilterShape = StaticListDashboardFilterSchema.omit({
-  allowAll: true,
-}).extend({
+// omit them and get that value.
+const externalStaticListFilterShape = StaticListDashboardFilterSchema.extend({
   isBroadcastEnabled: z.literal(false).default(false),
   isVariableEnabled: z.literal(true).default(true),
 });
@@ -218,7 +215,7 @@ const externalPromqlLabelFilterShape = PromqlLabelDashboardFilterSchema.omit({
 });
 
 // `connectionId`/`sourceId` rather than `connection`/`source`, matching raw SQL
-// tiles. `allowAll` is held back until the dashboard UI offers "All".
+// tiles. `allowAll` is held back until SQL query filters expand "All".
 const externalSqlQueryFilterShape = SqlQueryDashboardFilterSchema.omit({
   connection: true,
   source: true,
@@ -304,9 +301,8 @@ export const externalSqlSavedFilterValueSchema = z.object({
   condition: z.string().max(10000),
 });
 
-// `all` is held back until the dashboard UI offers "All".
 export const externalVariableSavedFilterValueSchema =
-  VariableFilterValueSchema.omit({ all: true }).strict();
+  VariableFilterValueSchema.strict();
 
 export const externalAdhocSavedFilterValueSchema =
   AdhocFilterValueSchema.strict();

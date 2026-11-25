@@ -7,6 +7,7 @@ import {
   DashboardFilterValue,
   QueryExpressionDashboardFilter,
   SourceKind,
+  StaticListDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { act, renderHook } from '@testing-library/react';
 
@@ -989,6 +990,90 @@ describe('useDashboardFilters', () => {
         { type: 'sql', condition: "service.name IN ('api')" },
         { type: 'variable', name: 'env', values: ['staging'] },
       ]);
+    });
+  });
+
+  describe('"All" selection', () => {
+    const envFilter: StaticListDashboardFilter = {
+      id: 'env',
+      type: 'STATIC_LIST',
+      name: 'Environment',
+      options: ['staging', 'prod'],
+      allowAll: true,
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'env',
+    };
+    const allEntry: DashboardFilterValue = {
+      type: 'variable',
+      name: 'env',
+      values: [],
+      all: true,
+    };
+
+    it('stores "All" as an all entry', () => {
+      const { result } = renderHook(() => useDashboardFilters([envFilter]));
+
+      act(() => {
+        result.current.setFilterValue('env', { all: true });
+      });
+
+      expect(mockState).toEqual([allEntry]);
+    });
+
+    it('keeps "All" when a sibling filter changes', () => {
+      mockState = [allEntry];
+      const filters = [envFilter, mockFilters[1]];
+      const { result } = renderHook(() => useDashboardFilters(filters));
+
+      act(() => {
+        result.current.setFilterValue('filter2', ['api']);
+      });
+
+      expect(mockState).toEqual([
+        { type: 'sql', condition: "service.name IN ('api')" },
+        allEntry,
+      ]);
+    });
+
+    it('drops "All" for a filter that does not offer it', () => {
+      mockState = [allEntry];
+      const filters = [{ ...envFilter, allowAll: false }, mockFilters[1]];
+      const { result } = renderHook(() => useDashboardFilters(filters));
+
+      act(() => {
+        result.current.setFilterValue('filter2', ['api']);
+      });
+
+      expect(mockState).toEqual([
+        { type: 'sql', condition: "service.name IN ('api')" },
+      ]);
+    });
+
+    it('expands a static list to every option on the variable', () => {
+      mockState = [allEntry];
+
+      const { result } = renderHook(() => useDashboardFilters([envFilter]));
+
+      expect(result.current.variables).toEqual([
+        {
+          name: 'env',
+          expression: undefined,
+          values: ['prod', 'staging'],
+          maxSelections: undefined,
+          all: true,
+        },
+      ]);
+    });
+
+    it('satisfies a required filter', () => {
+      mockState = [allEntry];
+
+      const { result } = renderHook(() =>
+        useDashboardFilters([{ ...envFilter, minSelections: 1 }]),
+      );
+
+      expect(result.current.unsatisfiedRequiredFilters).toEqual([]);
     });
   });
 
