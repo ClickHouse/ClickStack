@@ -75,6 +75,17 @@ const emergingSignalsSchema = z.object({
         'if omitted (Body for logs, SpanName for traces). ' +
         'Example: "Body", "SpanName", "SpanAttributes[\'http.url\']".',
     ),
+  maxBodyChars: z
+    .number()
+    .int()
+    .min(1)
+    .max(1_000_000)
+    .optional()
+    .describe(
+      'Mine only the first maxBodyChars characters of each value, e.g. 1000 for long ' +
+        'stack traces or request dumps. Long values are cut in the query, so less data ' +
+        'is read, and each sample is the cut value.',
+    ),
   currentStartTime: z
     .string()
     .describe(
@@ -202,6 +213,7 @@ export function registerEmergingSignals({
         where: input.where,
         whereLanguage: input.whereLanguage,
         bodyExpression: input.bodyExpression,
+        maxBodyChars: input.maxBodyChars,
         sampleSize: input.sampleSize,
         trendBuckets: 0,
       };
