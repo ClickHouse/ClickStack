@@ -346,6 +346,54 @@ describe('rewriteSqlFilterWithKvItems', () => {
     });
   });
 
+  describe('toString() wrapper', () => {
+    // Ad hoc and dashboard filters render keys as toString(<key>).
+    it.each([
+      [
+        "toString(LogAttributes['k']) = 'v'",
+        "has(`LogAttributeItems`, concat('k', '=', 'v'))",
+      ],
+      [
+        "toString(LogAttributes['k']) IN ('a')",
+        "has(`LogAttributeItems`, concat('k', '=', 'a'))",
+      ],
+      [
+        "toString(LogAttributes['k']) IN ('a', 'b')",
+        "hasAny(`LogAttributeItems`, array(concat('k', '=', 'a'), concat('k', '=', 'b')))",
+      ],
+    ])('rewrites %s', (condition, expected) => {
+      expect(rewriteSqlFilterWithKvItems(condition, defaultLookup)).toBe(
+        expected,
+      );
+    });
+
+    it('rewrites wrapped and bare subscripts in the same condition', () => {
+      expect(
+        rewriteSqlFilterWithKvItems(
+          "toString(LogAttributes['a']) = 'x' AND LogAttributes['b'] = 'y'",
+          defaultLookup,
+        ),
+      ).toBe(
+        "has(`LogAttributeItems`, concat('a', '=', 'x')) AND has(`LogAttributeItems`, concat('b', '=', 'y'))",
+      );
+    });
+
+    it.each([
+      ["toString(LogAttributes['k']) = ''", 'empty value'],
+      ["toString(LogAttributes['k']) != 'v'", '!='],
+      ["toString(LogAttributes['k']) NOT IN ('a')", 'NOT IN'],
+      ["toString(LogAttributes['k']) LIKE '%v%'", 'LIKE'],
+      ["toString(ServiceName) = 'v'", 'no subscript'],
+      ["toString(OtherMap['k']) = 'v'", 'map not in lookup'],
+      ["toString(LogAttributes['k'], 'UTC') = 'v'", 'two arguments'],
+      ["lower(LogAttributes['k']) = 'v'", 'other function'],
+    ])('leaves %s untouched (%s)', condition => {
+      expect(rewriteSqlFilterWithKvItems(condition, defaultLookup)).toBe(
+        condition,
+      );
+    });
+  });
+
   describe('hasAny fallback (useHasAny: false)', () => {
     it("still rewrites Map['key'] = 'value' to has(...)", () => {
       const result = rewriteSqlFilterWithKvItems(

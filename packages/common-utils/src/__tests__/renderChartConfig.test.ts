@@ -6,11 +6,12 @@ import {
   timeFilterExpr,
 } from '@/core/renderChartConfig';
 import { convertToCategoricalChartConfig } from '@/core/utils';
-import { adhocConditionsToFilters } from '@/filters';
+import { adhocConditionsToFilters, filtersToQuery } from '@/filters';
 import {
   BuilderChartConfig,
   ChartConfigWithOptDateRange,
   DisplayType,
+  Filter,
   MetricsDataType,
   QuerySettings,
 } from '@/types';
@@ -1964,17 +1965,22 @@ describe('renderChartConfig', () => {
         .mockResolvedValue(new Map());
     };
 
-    const buildConfig = (condition: string): ChartConfigWithOptDateRange => ({
+    const buildFiltersConfig = (
+      filters: Filter[],
+    ): ChartConfigWithOptDateRange => ({
       connection: 'test-connection',
       from: { databaseName: 'default', tableName: 'otel_logs' },
       select: [{ aggFn: 'count', valueExpression: '' }],
       where: '',
       whereLanguage: 'sql',
-      filters: [{ type: 'sql', condition }],
+      filters,
       timestampValueExpression: 'Timestamp',
       dateRange: [new Date('2025-01-01'), new Date('2025-01-02')],
       granularity: '1 minute',
     });
+
+    const buildConfig = (condition: string) =>
+      buildFiltersConfig([{ type: 'sql', condition }]);
 
     it('rewrites `Map[key] = value` to has() when a KV items column exists', async () => {
       stubKvItemsMetadata();
@@ -2094,6 +2100,52 @@ describe('renderChartConfig', () => {
         "has(`LogAttributeItems`, concat('service.name', '=', 'api'))",
       );
       expect(sql).toContain("SeverityText = 'error'");
+    });
+
+    it('rewrites ad hoc filter conditions on a Map key', async () => {
+      stubKvItemsMetadata();
+      const sql = parameterizedQueryToSql(
+        await renderChartConfig(
+          buildFiltersConfig(
+            adhocConditionsToFilters([
+              { key: "LogAttributes['country']", operator: '=', value: 'US' },
+              { key: "LogAttributes['env']", operator: 'IN', value: 'prod' },
+              { key: "LogAttributes['env']", operator: 'IN', value: 'dev' },
+            ]),
+          ),
+          mockMetadata,
+          querySettings,
+        ),
+      );
+      expect(sql).toContain(
+        "(has(`LogAttributeItems`, concat('country', '=', 'US'))) AND (hasAny(`LogAttributeItems`, array(concat('env', '=', 'prod'), concat('env', '=', 'dev'))))",
+      );
+      expect(sql).not.toContain("toString(LogAttributes['");
+    });
+
+    it('rewrites dashboard filter selections on a Map key', async () => {
+      stubKvItemsMetadata();
+      const sql = parameterizedQueryToSql(
+        await renderChartConfig(
+          buildFiltersConfig(
+            filtersToQuery(
+              {
+                "LogAttributes['env']": {
+                  included: new Set(['prod', 'dev']),
+                  excluded: new Set(),
+                },
+              },
+              { stringifyKeys: true },
+            ),
+          ),
+          mockMetadata,
+          querySettings,
+        ),
+      );
+      expect(sql).toContain(
+        "hasAny(`LogAttributeItems`, array(concat('env', '=', 'prod'), concat('env', '=', 'dev')))",
+      );
+      expect(sql).not.toContain("toString(LogAttributes['env'])");
     });
 
     const buildWhereConfig = (where: string): ChartConfigWithOptDateRange => ({
