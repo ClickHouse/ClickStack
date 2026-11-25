@@ -159,6 +159,80 @@ describe('DBDeltaChart', () => {
     });
   });
 
+  describe('trace scope', () => {
+    const traceConfig: BuilderChartConfigWithDateRange = {
+      ...baseConfig,
+      filtersScope: 'trace',
+      traceIdExpression: 'TraceId',
+    };
+
+    // The builder guard narrows to the persisted config type, which does not
+    // carry the runtime-only traceScopeOuterFilters, so read it structurally.
+    const outerConditionsOf = (cfg: object): string[] | undefined =>
+      'traceScopeOuterFilters' in cfg &&
+      Array.isArray(cfg.traceScopeOuterFilters)
+        ? cfg.traceScopeOuterFilters.map(
+            (f: { condition?: string }) => f.condition ?? '',
+          )
+        : undefined;
+
+    it('keeps the search trace-scoped and puts only its own predicates on the outer rows', () => {
+      // The heatmap beside the delta runs trace-scoped, so the delta must
+      // compare the same population: the user's filters keep the scope (and
+      // become membership subqueries), while the selection box, the aggregate
+      // timestamps and `indexHint` stay span-level via traceScopeOuterFilters.
+      renderChart({
+        config: traceConfig,
+        xMin: 1,
+        xMax: 2,
+        yMin: 1,
+        yMax: 2,
+      });
+
+      const calls = mockUseQueriedChartConfig.mock.calls;
+      expect(calls).toHaveLength(3);
+      [0, 1].forEach(callIndex => {
+        const cfg = getBuilderConfig(callIndex);
+        expect(calls[callIndex][0].filtersScope).toBe('trace');
+        expect(cfg.filters).toEqual([sentinelFilter]);
+        const outer = outerConditionsOf(cfg) ?? [];
+        expect(outer.some(c => c.includes('Duration'))).toBe(true);
+        expect(outer).toContain('indexHint((_part, _part_offset) IN PartIds)');
+        for (const withClause of cfg.with ?? []) {
+          if (
+            withClause.chartConfig &&
+            isBuilderChartConfig(withClause.chartConfig)
+          ) {
+            expect(withClause.chartConfig.filters).toEqual([sentinelFilter]);
+            expect(
+              (outerConditionsOf(withClause.chartConfig) ?? []).length,
+            ).toBeGreaterThan(0);
+          }
+        }
+      });
+    });
+
+    it('runs the no-selection sample over the same trace-scoped search', () => {
+      renderChart({ config: traceConfig });
+
+      const allSpansConfig = getBuilderConfig(2);
+      expect(mockUseQueriedChartConfig.mock.calls[2][0].filtersScope).toBe(
+        'trace',
+      );
+      expect(allSpansConfig.filters).toEqual([sentinelFilter]);
+      expect(outerConditionsOf(allSpansConfig)).toBeUndefined();
+    });
+
+    it('leaves span-scoped searches on plain filters', () => {
+      renderChart({ xMin: 1, xMax: 2, yMin: 1, yMax: 2 });
+
+      const outlierConfig = getBuilderConfig(0);
+      expect(outerConditionsOf(outlierConfig)).toBeUndefined();
+      expect(outlierConfig.filters?.[0]).toEqual(sentinelFilter);
+      expect(outlierConfig.filters?.length).toBeGreaterThan(1);
+    });
+  });
+
   describe('partial-null selection coordinates', () => {
     // The four-null conditional that originally gated <DBDeltaChart>
     // used `&&` across xMin/xMax/yMin/yMax. A regression weakening the

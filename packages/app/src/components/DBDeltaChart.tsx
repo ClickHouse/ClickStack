@@ -104,6 +104,25 @@ export default function DBDeltaChart({
     config.timestampValueExpression,
   );
 
+  // The heatmap next to this chart runs the (possibly trace-scoped) search
+  // config, so the user's predicates keep that scope here and the delta
+  // compares the same population of spans. The delta's own predicates
+  // (selection box, aggregate timestamps, `indexHint`) are span-level: under
+  // trace scope they go to `traceScopeOuterFilters`, which renderWhere applies
+  // to the returned spans and never folds into a trace-membership subquery,
+  // where the box would turn into "any trace with one span in the box".
+  const isTraceScoped = config.filtersScope === 'trace';
+  const withDeltaFilters = (
+    userFilters: Filter[],
+    deltaFilters: Filter[],
+  ): Pick<
+    BuilderChartConfigWithDateRange,
+    'filters' | 'traceScopeOuterFilters'
+  > =>
+    isTraceScoped
+      ? { filters: userFilters, traceScopeOuterFilters: deltaFilters }
+      : { filters: [...userFilters, ...deltaFilters] };
+
   /** Distributed (and Merge) tables need different subquery handling:
    * - An `IN <subquery>` over a Distributed table is rejected under the
    *   default `distributed_product_mode = 'deny'`, so subqueries whose values
@@ -132,25 +151,29 @@ export default function DBDeltaChart({
             ...config,
             from: config.from,
             select: timestampExpr,
-            filters: [
-              ...(config.filters ?? []),
-              {
-                type: 'sql',
-                condition: `${timestampExpr} >= ${xMin}`,
-              } satisfies Filter,
-              {
-                type: 'sql',
-                condition: `${timestampExpr} <= ${xMax}`,
-              } satisfies Filter,
-              ...(config.where
-                ? [
-                    {
-                      type: config.whereLanguage,
-                      condition: config.where,
-                    } as Filter,
-                  ]
-                : []),
-            ],
+            ...withDeltaFilters(
+              [
+                ...(config.filters ?? []),
+                ...(config.where
+                  ? [
+                      {
+                        type: config.whereLanguage,
+                        condition: config.where,
+                      } as Filter,
+                    ]
+                  : []),
+              ],
+              [
+                {
+                  type: 'sql',
+                  condition: `${timestampExpr} >= ${xMin}`,
+                } satisfies Filter,
+                {
+                  type: 'sql',
+                  condition: `${timestampExpr} <= ${xMax}`,
+                } satisfies Filter,
+              ],
+            ),
             groupBy: timestampExpr,
             having: `(${valueExpr}) >= ${yMin} AND (${valueExpr}) <= ${yMax}`,
           },
@@ -183,8 +206,7 @@ export default function DBDeltaChart({
           chartConfig: {
             ...config,
             select: 'tuple(_part, _part_offset)',
-            filters: [
-              ...(config.filters ?? []),
+            ...withDeltaFilters(config.filters ?? [], [
               {
                 type: 'sql',
                 condition: buildSqlCondition(),
@@ -197,7 +219,7 @@ export default function DBDeltaChart({
                     } satisfies Filter,
                   ]
                 : []),
-            ],
+            ]),
             orderBy: [
               { ordering: 'DESC' as const, valueExpression: stableSampleExpr },
             ],
@@ -230,8 +252,7 @@ export default function DBDeltaChart({
       }
     };
 
-    return [
-      ...(config.filters ?? []),
+    return withDeltaFilters(config.filters ?? [], [
       {
         type: 'sql',
         condition: buildSqlCondition(),
@@ -252,7 +273,7 @@ export default function DBDeltaChart({
             } as { type: 'sql'; condition: string },
           ]
         : []),
-    ];
+    ]);
   };
 
   const {
@@ -264,7 +285,7 @@ export default function DBDeltaChart({
       ...config,
       with: buildWithClauses(true),
       select: selectExpression,
-      filters: buildFilters(true),
+      ...buildFilters(true),
       orderBy: [{ ordering: 'DESC', valueExpression: stableSampleExpr }],
       limit: { limit: SAMPLE_SIZE },
     },
@@ -277,7 +298,7 @@ export default function DBDeltaChart({
         ...config,
         with: buildWithClauses(false),
         select: selectExpression,
-        filters: buildFilters(false),
+        ...buildFilters(false),
         orderBy: [{ ordering: 'DESC', valueExpression: stableSampleExpr }],
         limit: { limit: SAMPLE_SIZE },
       },

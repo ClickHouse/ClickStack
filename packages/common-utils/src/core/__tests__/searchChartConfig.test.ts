@@ -452,6 +452,121 @@ describe('buildSearchChartConfig', () => {
     });
   });
 
+  describe('filtersScope pass-through', () => {
+    it('sets filtersScope to "trace" when searchScope is "trace"', () => {
+      // @AC-FR002-01
+      const config = buildSearchChartConfig(makeTraceSource(), {
+        where: '',
+        searchScope: 'trace',
+      });
+
+      expect(config.filtersScope).toBe('trace');
+    });
+
+    it('sets filtersScope to "span" when searchScope is "span"', () => {
+      // @AC-FR002-01
+      const config = buildSearchChartConfig(makeTraceSource(), {
+        where: '',
+        searchScope: 'span',
+      });
+
+      expect(config.filtersScope).toBe('span');
+    });
+
+    it('omits filtersScope entirely when searchScope is not provided', () => {
+      // @AC-FR003-02
+      const config = buildSearchChartConfig(makeTraceSource(), { where: '' });
+
+      expect(config.filtersScope).toBeUndefined();
+      expect('filtersScope' in config).toBe(false);
+    });
+
+    it('does not alter merged filters when searchScope is set', () => {
+      // @AC-FR003-02
+      const source = makeLogSource({
+        tableFilterExpression: "ServiceName != 'noisy'",
+      });
+      const userFilters: Filter[] = [
+        { type: 'sql', condition: "Environment = 'prod'" },
+      ];
+
+      const config = buildSearchChartConfig(source, {
+        where: '',
+        filters: userFilters,
+        searchScope: 'trace',
+      });
+
+      expect(config.filters).toEqual([
+        { type: 'sql', condition: "ServiceName != 'noisy'" },
+        ...userFilters,
+      ]);
+    });
+
+    it('threads the resolved traceIdExpression onto the config for a trace source', () => {
+      // @AC-FR002-01
+      const source = makeTraceSource({ traceIdExpression: 'TraceId' });
+
+      const config = buildSearchChartConfig(source, {
+        where: '',
+        searchScope: 'trace',
+      });
+
+      expect(config.filtersScope).toBe('trace');
+      expect(config.traceIdExpression).toBe('TraceId');
+    });
+
+    it('omits traceIdExpression for a non-trace source even when searchScope is trace', () => {
+      // @AC-FR005-04
+      const source = makeLogSource({ traceIdExpression: 'TraceId' });
+
+      const config = buildSearchChartConfig(source, {
+        where: '',
+        searchScope: 'trace',
+      });
+
+      expect(config.filtersScope).toBe('trace');
+      expect(config.traceIdExpression).toBeUndefined();
+      expect('traceIdExpression' in config).toBe(false);
+    });
+
+    it('omits traceIdExpression when a trace source has no trace-id expression', () => {
+      // @AC-FR005-04
+      const source = makeTraceSource({ traceIdExpression: undefined });
+
+      const config = buildSearchChartConfig(source, {
+        where: '',
+        searchScope: 'trace',
+      });
+
+      expect(config.traceIdExpression).toBeUndefined();
+      expect('traceIdExpression' in config).toBe(false);
+    });
+
+    it('omits traceIdExpression when a trace source has a blank trace-id expression', () => {
+      // @AC-FR005-04
+      const source = makeTraceSource({ traceIdExpression: '   ' });
+
+      const config = buildSearchChartConfig(source, {
+        where: '',
+        searchScope: 'trace',
+      });
+
+      expect(config.traceIdExpression).toBeUndefined();
+    });
+
+    it('trims the resolved traceIdExpression before threading it onto the config', () => {
+      // @AC-FR002-01
+      const source = makeTraceSource({ traceIdExpression: '  TraceId  ' });
+
+      const config = buildSearchChartConfig(source, {
+        where: '',
+        searchScope: 'trace',
+      });
+
+      expect(config.traceIdExpression).toBe('TraceId');
+    });
+  });
+
   // Locks in the exact shape of the shared count() default SELECT used by
   // both the alert task and the alert preview chart. Drift here would mean
   // the two paths render queries differently for the same alert.

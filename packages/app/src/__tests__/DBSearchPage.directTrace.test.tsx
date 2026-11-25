@@ -4,6 +4,7 @@ import { MantineProvider } from '@mantine/core';
 import { act, render, screen, waitFor } from '@testing-library/react';
 
 import { DBSearchPage } from '@/DBSearchPage';
+import { TRACE_ZERO_EMPTY_DESCRIPTION } from '@/searchScope';
 
 const mockRouterPush = jest.fn();
 const mockSetSearchedConfig = jest.fn();
@@ -20,6 +21,7 @@ let mockSources: any[] = [];
 // exercise what the page does before and after the source list arrives.
 let mockSourcesLoading = false;
 let latestDirectTracePanelProps: Record<string, any> | null = null;
+let mockLatestRowTableProps: Record<string, any> | null = null;
 
 jest.mock('@/layout', () => ({
   withAppNav: (component: unknown) => component,
@@ -215,7 +217,10 @@ jest.mock('@/components/TimePicker', () => ({
 jest.mock('../components/ChartSQLPreview', () => ({
   SQLPreview: () => <div />,
 }));
-jest.mock('../components/DBSqlRowTableWithSidebar', () => () => <div />);
+jest.mock('../components/DBSqlRowTableWithSidebar', () => (props: any) => {
+  mockLatestRowTableProps = props;
+  return <div />;
+});
 jest.mock('../components/PatternTable', () => () => <div />);
 jest.mock('../components/Search/DBSearchHeatmapChart', () => ({
   DBSearchHeatmapChart: () => <div />,
@@ -567,5 +572,46 @@ describe('DBSearchPage direct trace flow', () => {
       expect(config).not.toMatchObject({ select: '' });
       expect(config).not.toMatchObject({ orderBy: '' });
     }
+  });
+
+  describe('trace scope indicator', () => {
+    const renderResults = (source: string, searchScope: 'span' | 'trace') => {
+      mockDirectTraceId = null;
+      mockLatestRowTableProps = null;
+      mockSearchedConfig = { ...mockSearchedConfig, source, searchScope };
+      window.history.pushState({}, '', `/search?source=${source}`);
+      renderWithMantine(<DBSearchPage />);
+    };
+
+    it('@AC-FR004-01 @AC-FR004-02 labels results that ran at trace scope', async () => {
+      renderResults('trace-source', 'trace');
+
+      await screen.findByTestId('search-results-panel');
+      expect(await screen.findByLabelText('Scope: Trace')).toHaveTextContent(
+        'Scope: Trace',
+      );
+      // A trace-scoped zero result says so instead of the generic empty state.
+      expect(mockLatestRowTableProps?.noResultsMessage).toBe(
+        TRACE_ZERO_EMPTY_DESCRIPTION,
+      );
+    });
+
+    it('shows no indicator when trace scope cannot apply to the source', async () => {
+      // A log source has no trace-id expression, so the query falls back to
+      // span scope and the page must not claim Trace.
+      renderResults('log-source', 'trace');
+
+      await screen.findByTestId('search-results-panel');
+      expect(screen.queryByLabelText('Scope: Trace')).not.toBeInTheDocument();
+      expect(mockLatestRowTableProps?.noResultsMessage).toBeUndefined();
+    });
+
+    it('shows no indicator for a span-scoped search', async () => {
+      renderResults('trace-source', 'span');
+
+      await screen.findByTestId('search-results-panel');
+      expect(screen.queryByLabelText('Scope: Trace')).not.toBeInTheDocument();
+      expect(mockLatestRowTableProps?.noResultsMessage).toBeUndefined();
+    });
   });
 });

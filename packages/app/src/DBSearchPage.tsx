@@ -34,6 +34,7 @@ import {
 } from '@hyperdx/common-utils/dist/clickhouse';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { buildSearchChartConfig } from '@hyperdx/common-utils/dist/core/searchChartConfig';
+import { resolveTraceScope } from '@hyperdx/common-utils/dist/core/traceScope';
 import {
   aliasMapToWithClauses,
   getReferencedWithClauses,
@@ -48,12 +49,15 @@ import {
   Filter,
   isPersistableUserId,
   isTraceSource,
+  SearchScope,
+  SearchScopeSchema,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
   Anchor,
+  Badge,
   Box,
   Breadcrumbs,
   Button,
@@ -144,6 +148,12 @@ import {
   useUpdateSavedSearch,
 } from '@/savedSearch';
 import { useSearchPageFilterState } from '@/searchFilters';
+import {
+  resolveSearchScope,
+  SEARCH_SCOPE_PARAM,
+  TRACE_SCOPE_LABEL,
+  TRACE_ZERO_EMPTY_DESCRIPTION,
+} from '@/searchScope';
 import { getEventBody, useSource, useSources } from '@/source';
 import {
   parseRelativeTimeQuery,
@@ -213,11 +223,12 @@ const LIVE_TAIL_REFRESH_FREQUENCY_OPTIONS = [
 const DEFAULT_REFRESH_FREQUENCY = 10000;
 
 const ALLOWED_SOURCE_KINDS = [SourceKind.Log, SourceKind.Trace];
-const SearchConfigSchema = z.object({
+export const SearchConfigSchema = z.object({
   select: z.string(),
   source: z.string(),
   where: z.string(),
   whereLanguage: z.enum(['sql', 'lucene']),
+  searchScope: SearchScopeSchema.default('span'),
   orderBy: z.string(),
   filters: z.array(
     z.union([
@@ -569,6 +580,7 @@ function SaveSearchModalComponent({
             source: searchedConfig.source ?? '',
             orderBy: searchedConfig.orderBy ?? '',
             filters: searchedConfig.filters ?? [],
+            searchScope: resolveSearchScope(searchedConfig.searchScope),
             tags: tags,
           },
           {
@@ -597,6 +609,7 @@ function SaveSearchModalComponent({
             source: searchedConfig.source ?? '',
             orderBy: searchedConfig.orderBy ?? '',
             filters: searchedConfig.filters ?? [],
+            searchScope: resolveSearchScope(searchedConfig.searchScope),
             tags: tags,
           });
 
@@ -819,7 +832,15 @@ function useLiveUpdate({
  * and returns a chart config.
  */
 function useSearchedConfigToChartConfig(
-  { select, source, whereLanguage, where, filters, orderBy }: SearchConfig,
+  {
+    select,
+    source,
+    whereLanguage,
+    searchScope,
+    where,
+    filters,
+    orderBy,
+  }: SearchConfig,
   defaultSearchConfig?: Partial<SearchConfig>,
 ) {
   const { data: sourceObj, isLoading } = useSource({
@@ -836,6 +857,7 @@ function useSearchedConfigToChartConfig(
       const chartConfig = buildSearchChartConfig(sourceObj, {
         where,
         whereLanguage,
+        searchScope: resolveSearchScope(searchScope),
         filters,
         select: select || defaultSearchConfig?.select || null,
         displayType: DisplayType.Search,
@@ -856,6 +878,7 @@ function useSearchedConfigToChartConfig(
     defaultSearchConfig,
     where,
     whereLanguage,
+    searchScope,
     defaultOrderBy,
     orderBy,
   ]);
@@ -935,6 +958,7 @@ const queryStateMap = {
   where: parseAsStringEncoded,
   select: parseAsStringEncoded,
   whereLanguage: parseAsStringEnum<'sql' | 'lucene'>(['sql', 'lucene']),
+  searchScope: SEARCH_SCOPE_PARAM,
   filters: parseAsJsonEncoded<Filter[]>(),
   orderBy: parseAsStringEncoded,
 };
@@ -1252,6 +1276,7 @@ function DBSearchPageContent() {
         where: searchedConfig.where || '',
         whereLanguage:
           searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
+        searchScope: resolveSearchScope(searchedConfig.searchScope),
         // When source is provided in the URL or in the saved search, don't
         // fallback to the default source.
         source:
@@ -1338,6 +1363,7 @@ function DBSearchPageContent() {
         source: searchedConfig?.source ?? undefined,
         filters: searchedConfig?.filters ?? [],
         orderBy: searchedConfig?.orderBy ?? '',
+        searchScope: resolveSearchScope(searchedConfig?.searchScope),
       });
     }
   }, [searchedConfig, reset, prevSearched]);
@@ -1368,6 +1394,7 @@ function DBSearchPageContent() {
         whereLanguage: savedSearch.whereLanguage as 'sql' | 'lucene',
         filters: savedSearch.filters ?? [],
         orderBy: savedSearch.orderBy ?? '',
+        searchScope: resolveSearchScope(savedSearch.searchScope),
       });
       return;
     }
@@ -1438,11 +1465,20 @@ function DBSearchPageContent() {
         onSearch(displayedTimeInputValue);
       }
       handleSubmit(
-        ({ select, where, whereLanguage, source, filters, orderBy }) => {
+        ({
+          select,
+          where,
+          whereLanguage,
+          searchScope,
+          source,
+          filters,
+          orderBy,
+        }) => {
           setSearchedConfig({
             select,
             where,
             whereLanguage,
+            searchScope,
             source,
             filters,
             orderBy,
@@ -1735,6 +1771,7 @@ function DBSearchPageContent() {
       where: searchedConfig.where ?? '',
       whereLanguage:
         searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
+      searchScope: resolveSearchScope(searchedConfig.searchScope),
       filters: searchedConfig.filters ?? [],
       orderBy: searchedConfig.orderBy ?? '',
     }),
@@ -1745,6 +1782,7 @@ function DBSearchPageContent() {
       searchedConfig.select,
       searchedConfig.where,
       searchedConfig.whereLanguage,
+      searchedConfig.searchScope,
     ],
   );
 
@@ -1759,8 +1797,24 @@ function DBSearchPageContent() {
       : null;
     return { hasQueryError, queryError };
   }, [_queryErrors]);
+  const executedSearchScope = resolveSearchScope(searchedConfig.searchScope);
+  // Reflect what the query actually did: trace scope only takes effect on a
+  // trace source that exposes a trace-id expression. The badge/copy key off
+  // this so they never claim Trace when the rewrite silently fell back to span
+  // (e.g. scope left at trace while the sidebar was collapsed on a log source).
+  const traceScopeActive =
+    executedSearchScope === 'trace' &&
+    searchedSource != null &&
+    resolveTraceScope(searchedSource).applicable;
   const inputWhere = useWatch({ name: 'where', control });
   const inputWhereLanguage = useWatch({ name: 'whereLanguage', control });
+  const inputSearchScope = useWatch({ name: 'searchScope', control });
+  const onSearchScopeChange = useCallback(
+    (scope: SearchScope) => {
+      setValue('searchScope', scope, { shouldDirty: true });
+    },
+    [setValue],
+  );
   // query suggestion for 'where' if error
   const whereSuggestions = useSqlSuggestions({
     input: inputWhere,
@@ -2928,6 +2982,8 @@ function DBSearchPageContent() {
                     displayedColumns={displayedColumns}
                     onCollapse={isCompact ? undefined : collapseFilters}
                     fill={isCompact}
+                    searchScope={resolveSearchScope(inputSearchScope)}
+                    onSearchScopeChange={onSearchScopeChange}
                     {...searchFilters}
                   />
                 </ErrorBoundary>
@@ -3062,6 +3118,16 @@ function DBSearchPageContent() {
                                 : histogramGroupBySelect}
                             </SearchResultsCountGroup>
                             <Group gap="sm" align="center">
+                              {traceScopeActive && (
+                                <Badge
+                                  variant="light"
+                                  color="blue"
+                                  radius="sm"
+                                  aria-label={TRACE_SCOPE_LABEL}
+                                >
+                                  {TRACE_SCOPE_LABEL}
+                                </Badge>
+                              )}
                               {traceChartsSource != null && (
                                 <SegmentedControl
                                   size="xs"
@@ -3308,6 +3374,11 @@ function DBSearchPageContent() {
                             selectionResetKey={selectionResetKey}
                             onSelectedRowsChange={onSelectedRowsChange}
                             onResolvedColumnsChange={onResolvedColumnsChange}
+                            noResultsMessage={
+                              traceScopeActive
+                                ? TRACE_ZERO_EMPTY_DESCRIPTION
+                                : undefined
+                            }
                           />
                         )}
                     </Box>

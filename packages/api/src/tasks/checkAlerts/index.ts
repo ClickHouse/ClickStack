@@ -878,6 +878,7 @@ const getChartConfigFromAlert = (
       where: savedSearch.where,
       whereLanguage: savedSearch.whereLanguage,
       filters: savedSearch.filters?.map(f => ({ ...f })),
+      searchScope: savedSearch.searchScope,
       groupBy: alert.groupBy,
       select: ALERT_COUNT_DEFAULT_SELECT,
       displayType: DisplayType.Line,

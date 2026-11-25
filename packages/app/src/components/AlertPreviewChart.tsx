@@ -14,6 +14,7 @@ import {
   isTraceSource,
   SearchCondition,
   SearchConditionLanguage,
+  SearchScope,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import { Paper } from '@mantine/core';
@@ -30,6 +31,7 @@ type AlertPreviewChartProps = {
   where?: SearchCondition | null;
   whereLanguage?: SearchConditionLanguage | null;
   filters?: Filter[] | null;
+  searchScope?: SearchScope | null;
   interval: AlertInterval;
   groupBy?: string;
   thresholdType: AlertThresholdType;
@@ -48,6 +50,7 @@ export const AlertPreviewChart = ({
   where,
   whereLanguage,
   filters,
+  searchScope,
   interval,
   groupBy,
   threshold,
@@ -92,6 +95,7 @@ export const AlertPreviewChart = ({
       where,
       whereLanguage,
       filters,
+      searchScope: searchScope ?? undefined,
       groupBy,
       select: ALERT_COUNT_DEFAULT_SELECT,
       displayType: DisplayType.Line,
@@ -104,6 +108,7 @@ export const AlertPreviewChart = ({
     where,
     whereLanguage,
     filters,
+    searchScope,
     groupBy,
     interval,
     aliasWith,
