@@ -117,7 +117,7 @@ export function useOnboardingCompletion(
         description: 'Set up your database connection',
         isComplete: hasConnections,
         isLoading: isConnectionsLoading,
-        href: hasConnections ? undefined : '/team',
+        href: hasConnections ? undefined : '/team?tab=connections',
       },
       {
         id: 'sources',
@@ -125,7 +125,7 @@ export function useOnboardingCompletion(
         description: 'Configure where your data comes from',
         isComplete: hasSources,
         isLoading: isSourcesLoading,
-        href: hasSources ? undefined : '/team',
+        href: hasSources ? undefined : '/team?tab=sources',
       },
       {
         id: 'data',

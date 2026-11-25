@@ -1,8 +1,6 @@
 /**
  * TeamPage - Page object for the /team settings page
- * Encapsulates all interactions with team settings sections:
- * Sources, Connections, Integrations/Webhooks, Team Name,
- * ClickHouse Settings, API Keys, and Team Members.
+ * Each setting has its own page, picked from the sidebar nav.
  */
 import { Locator, Page } from '@playwright/test';
 
@@ -10,12 +8,9 @@ export class TeamPage {
   readonly page: Page;
 
   private readonly pageContainer: Locator;
-  private readonly dataTabButton: Locator;
-  private readonly teamTabButton: Locator;
-  private readonly accessTabButton: Locator;
-  private readonly apiAndAgentsTabButton: Locator;
-  private readonly integrationsTabButton: Locator;
-  private readonly advancedTabButton: Locator;
+  private readonly settingsNav: Locator;
+  private readonly settingsSearch: Locator;
+  private readonly pageTitle: Locator;
 
   // Section containers
   private readonly sourcesSection: Locator;
@@ -25,8 +20,8 @@ export class TeamPage {
   private readonly apiKeysSection: Locator;
   private readonly mcpServerSection: Locator;
   private readonly teamMembersSection: Locator;
-  private readonly securityPoliciesHeading: Locator;
-  private readonly querySettingsHeading: Locator;
+  private readonly securityPoliciesPage: Locator;
+  private readonly querySettingsPage: Locator;
 
   // Team name elements
   private readonly teamNameDisplay: Locator;
@@ -61,27 +56,9 @@ export class TeamPage {
   constructor(page: Page) {
     this.page = page;
     this.pageContainer = page.getByTestId('team-page');
-    this.dataTabButton = page.getByRole('tab', { name: 'Data', exact: true });
-    this.teamTabButton = page.getByRole('tab', {
-      name: 'Members',
-      exact: true,
-    });
-    this.accessTabButton = page.getByRole('tab', {
-      name: 'Access',
-      exact: true,
-    });
-    this.apiAndAgentsTabButton = page.getByRole('tab', {
-      name: 'API & Agents',
-      exact: true,
-    });
-    this.integrationsTabButton = page.getByRole('tab', {
-      name: 'Integrations',
-      exact: true,
-    });
-    this.advancedTabButton = page.getByRole('tab', {
-      name: 'Query Settings',
-      exact: true,
-    });
+    this.settingsNav = page.getByRole('navigation', { name: 'Team settings' });
+    this.settingsSearch = page.getByTestId('team-settings-search');
+    this.pageTitle = page.locator('#team-settings-page-title');
 
     this.sourcesSection = page.getByTestId('sources-section');
     this.connectionsSection = page.getByTestId('connections-section');
@@ -90,12 +67,12 @@ export class TeamPage {
     this.apiKeysSection = page.getByTestId('api-keys-section');
     this.mcpServerSection = page.getByTestId('mcp-server-section');
     this.teamMembersSection = page.getByTestId('team-members-section');
-    this.securityPoliciesHeading = page.getByText('Security Policies', {
-      exact: true,
-    });
-    this.querySettingsHeading = page.getByText('ClickHouse Client Settings', {
-      exact: true,
-    });
+    this.securityPoliciesPage = page.getByTestId(
+      'team-settings-page-security-policies',
+    );
+    this.querySettingsPage = page.getByTestId(
+      'team-settings-page-query-settings',
+    );
 
     this.teamNameDisplay = page.getByTestId('team-name-display');
     this.teamNameChangeButton = page.getByTestId('team-name-change-button');
@@ -126,37 +103,49 @@ export class TeamPage {
     await this.pageContainer.waitFor({ state: 'visible', timeout: 10000 });
   }
 
-  private async openTab(tab: Locator, section: Locator) {
-    await tab.click();
-    await section.waitFor({ state: 'visible' });
+  navLink(label: string) {
+    return this.settingsNav.getByRole('link', { name: label, exact: true });
   }
 
-  async openDataTab() {
-    await this.openTab(this.dataTabButton, this.sourcesSection);
+  private async openPage(label: string, content: Locator) {
+    await this.navLink(label).click();
+    await content.waitFor({ state: 'visible' });
   }
 
-  async openTeamTab() {
-    await this.openTab(this.teamTabButton, this.teamMembersSection);
+  async openSourcesPage() {
+    await this.openPage('Sources', this.sourcesSection);
   }
 
-  async openApiAndAgentsTab() {
-    await this.openTab(this.apiAndAgentsTabButton, this.apiKeysSection);
+  async openConnectionsPage() {
+    await this.openPage('Connections', this.connectionsSection);
   }
 
-  async openIntegrationsTab() {
-    await this.openTab(this.integrationsTabButton, this.integrationsSection);
+  async openMembersPage() {
+    await this.openPage('Members', this.teamMembersSection);
   }
 
-  async openAdvancedTab() {
-    await this.openTab(this.advancedTabButton, this.querySettingsHeading);
+  async openSecurityPoliciesPage() {
+    await this.openPage('Security policies', this.securityPoliciesPage);
   }
 
-  async openAccessTab() {
-    await this.openTab(this.accessTabButton, this.securityPoliciesHeading);
+  async openApiKeysPage() {
+    await this.openPage('API keys', this.apiKeysSection);
   }
 
-  async hasAccessTab() {
-    return this.accessTabButton.isVisible();
+  async openAiAgentsPage() {
+    await this.openPage('AI agents', this.mcpServerSection);
+  }
+
+  async openWebhooksPage() {
+    await this.openPage('Webhooks', this.integrationsSection);
+  }
+
+  async openQuerySettingsPage() {
+    await this.openPage('Query settings', this.querySettingsPage);
+  }
+
+  async searchSettings(query: string) {
+    await this.settingsSearch.fill(query);
   }
 
   // --- Team Name ---
@@ -336,28 +325,16 @@ export class TeamPage {
     return this.pageContainer;
   }
 
-  get dataTab() {
-    return this.dataTabButton;
+  get nav() {
+    return this.settingsNav;
   }
 
-  get teamTab() {
-    return this.teamTabButton;
+  get search() {
+    return this.settingsSearch;
   }
 
-  get accessTab() {
-    return this.accessTabButton;
-  }
-
-  get apiAndAgentsTab() {
-    return this.apiAndAgentsTabButton;
-  }
-
-  get integrationsTab() {
-    return this.integrationsTabButton;
-  }
-
-  get advancedTab() {
-    return this.advancedTabButton;
+  get title() {
+    return this.pageTitle;
   }
 
   get sources() {
@@ -434,11 +411,11 @@ export class TeamPage {
   }
 
   get securityPolicies() {
-    return this.securityPoliciesHeading;
+    return this.securityPoliciesPage;
   }
 
   get querySettings() {
-    return this.querySettingsHeading;
+    return this.querySettingsPage;
   }
 
   get connectionForm() {

@@ -16,8 +16,6 @@ export default function ConnectionsSection() {
 
   return (
     <Box id="connections" data-testid="connections-section">
-      <Text size="md">Connections</Text>
-      <Separator size="lg" />
       <Card>
         <Stack mb="md">
           {connections?.map(connection => (

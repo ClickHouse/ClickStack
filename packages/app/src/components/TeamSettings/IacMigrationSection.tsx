@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { Badge, Separator } from '@clickhouse/click-ui';
 import {
   buildImportFile,
   collectImportableResources,
@@ -8,16 +7,7 @@ import {
   type IacResourceType,
   providerEndpoint,
 } from '@hyperdx/common-utils/dist/iac';
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  Checkbox,
-  Group,
-  Stack,
-  Text,
-} from '@mantine/core';
+import { Alert, Box, Button, Card, Checkbox, Stack, Text } from '@mantine/core';
 import { IconDownload } from '@tabler/icons-react';
 
 import api from '@/api';
@@ -228,11 +218,6 @@ export default function IacMigrationSection({
 
   return (
     <Box id="iac_migration" data-testid="iac-migration-section">
-      <Group gap="xs">
-        <Text size="md">Export to Terraform</Text>
-        <Badge size="sm" text="Experimental" state="info" />
-      </Group>
-      <Separator size="lg" />
       <Card>
         <Text size="sm" style={{ color: 'var(--color-text-muted)' }} mb="md">
           Download a Terraform import file for this team&apos;s resources. Add

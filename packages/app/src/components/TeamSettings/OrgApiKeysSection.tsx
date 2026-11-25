@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Badge, Separator } from '@clickhouse/click-ui';
+import { Badge } from '@clickhouse/click-ui';
 import type { OrgApiKeyApiResponse } from '@hyperdx/common-utils/dist/types';
-import { Box, Button, Card, Group, Table, Text } from '@mantine/core';
+import { Box, Button, Card, Table, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { IconPlus } from '@tabler/icons-react';
 
 import api from '@/api';
 import EmptyState from '@/components/EmptyState';
@@ -12,6 +13,7 @@ import { useConfirm } from '@/useConfirm';
 import { useFormatTime } from '@/useFormatTime';
 
 import CreateOrgApiKeyModal from './CreateOrgApiKeyModal';
+import SettingsBlock from './SettingsBlock';
 
 // A minute tick is close enough for flipping the Expired badge.
 const EXPIRY_TICK_MS = 60_000;
@@ -112,52 +114,59 @@ export default function OrgApiKeysSection() {
   const now = useNow();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const keys = data?.data ?? [];
+  const createButton = (
+    <Button
+      variant="primary"
+      size="xs"
+      leftSection={<IconPlus size={14} />}
+      onClick={() => setIsCreateOpen(true)}
+    >
+      Create API key
+    </Button>
+  );
 
   return (
     <Box id="org_api_keys" data-testid="org-api-keys-section">
-      <Group justify="space-between">
-        <Box>
-          <Text size="md">Organization API keys</Text>
-          <Text size="sm" c="dimmed">
-            Keys owned by the team.
+      <SettingsBlock
+        id="setting-org-api-keys"
+        title="Organization API keys"
+        description="Team-owned keys for CI and automation."
+        actions={!isError && keys.length > 0 ? createButton : undefined}
+      >
+        {isError ? (
+          <Text size="sm" variant="danger">
+            Couldn&apos;t load organization API keys
           </Text>
-        </Box>
-        <Button variant="primary" onClick={() => setIsCreateOpen(true)}>
-          Create API key
-        </Button>
-      </Group>
-      <Separator size="lg" />
-      {isError ? (
-        <Text size="sm" variant="danger">
-          Couldn&apos;t load organization API keys
-        </Text>
-      ) : !isLoading && keys.length === 0 ? (
-        <EmptyState
-          variant="card"
-          fullWidth
-          title="No organization API keys yet"
-        />
-      ) : (
-        <Card>
-          <Table horizontalSpacing="md" verticalSpacing="xs">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Description</Table.Th>
-                <Table.Th>Created by</Table.Th>
-                <Table.Th>Created</Table.Th>
-                <Table.Th>Last used</Table.Th>
-                <Table.Th>Expires</Table.Th>
-                <Table.Th />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {keys.map(apiKey => (
-                <OrgApiKeyRow key={apiKey.id} apiKey={apiKey} now={now} />
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Card>
-      )}
+        ) : !isLoading && keys.length === 0 ? (
+          <EmptyState
+            variant="card"
+            fullWidth
+            title="No organization API keys yet"
+          >
+            {createButton}
+          </EmptyState>
+        ) : (
+          <Card>
+            <Table horizontalSpacing="md" verticalSpacing="xs">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Description</Table.Th>
+                  <Table.Th>Created by</Table.Th>
+                  <Table.Th>Created</Table.Th>
+                  <Table.Th>Last used</Table.Th>
+                  <Table.Th>Expires</Table.Th>
+                  <Table.Th />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {keys.map(apiKey => (
+                  <OrgApiKeyRow key={apiKey.id} apiKey={apiKey} now={now} />
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Card>
+        )}
+      </SettingsBlock>
       <CreateOrgApiKeyModal
         opened={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
