@@ -14,11 +14,11 @@ feature-specific test suites.
 
 ### Default: Full-Stack Mode
 
-By default, `make e2e` runs tests in **full-stack mode** with MongoDB + API +
+By default, `make e2e` runs tests in **full-stack mode** with DocumentDB + API +
 local Docker ClickHouse for maximum consistency and real backend features:
 
 ```bash
-# Run all tests (full-stack with MongoDB + API + local Docker ClickHouse)
+# Run all tests (full-stack with DocumentDB + API + local Docker ClickHouse)
 make e2e
 
 # For UI, specific tests, or other options, use the script from repo root:
@@ -31,10 +31,10 @@ make e2e
 ### Optional: Local Mode (Frontend Only)
 
 For faster iteration during development, use the script with `--local` to skip
-MongoDB and run frontend-only tests:
+DocumentDB and run frontend-only tests:
 
 ```bash
-# From repo root - run local tests (no MongoDB, frontend only)
+# From repo root - run local tests (no DocumentDB, frontend only)
 ./scripts/test-e2e.sh --local
 ./scripts/test-e2e.sh --local --ui
 ./scripts/test-e2e.sh --local --grep "@search"
@@ -95,12 +95,13 @@ In the Playwright UI sidebar, click the **eye icon** next to a test (or file/des
 
 #### Full-Stack Mode (Default)
 
-**Default behavior** - runs with real backend (MongoDB + API) and demo
+**Default behavior** - runs with real backend (DocumentDB + API) and demo
 ClickHouse data.
 
 **What it includes:**
 
-- MongoDB (port 29998) - authentication, teams, users, persistence
+- DocumentDB (`HDX_E2E_MONGO_PORT`, 21100 + slot) - authentication, teams,
+  users, persistence. The API reaches it over the Mongo wire protocol
 - API Server (port 29000) - full backend logic
 - App Server (port 28081) - frontend
 - **Local Docker ClickHouse** (localhost:8123) - seeded E2E test data (logs/traces/metrics/K8s). Seeded timestamps span a past+future window (~1h past, ~2h future from seed time) so relative ranges like "last 5 minutes" keep finding data. If you run tests more than ~2 hours after the last seed, re-run the global setup (or full test run) to re-seed.
@@ -121,7 +122,7 @@ make e2e
 
 #### Local Mode (for testing frontend-only features)
 
-**Frontend + ClickHouse mode** - skips MongoDB/API, uses local Docker ClickHouse
+**Frontend + ClickHouse mode** - skips DocumentDB/API, uses local Docker ClickHouse
 with seeded test data.
 
 **Use for:**
@@ -394,21 +395,19 @@ Tests use the extended base test from `utils/base-test.ts` which provides:
 
 **Local Environment (make e2e):**
 
-- MongoDB: 29998 (custom port to avoid conflicts)
+- DocumentDB: `HDX_E2E_MONGO_PORT` (21100 + slot), mapped to the gateway's
+  port 10260
 - API Server: 29000
 - App Server: 28081
 
 **CI Environment (GitHub Actions):**
 
-- MongoDB: 27017 (default, accessed via service name `mongodb`)
+- DocumentDB: 21100, from the same compose file (`.github/actions/e2e-setup`)
 - API Server: 29000
 - App Server: 28081
 
-The MongoDB port differs between local and CI to:
-
-- Avoid conflicts with existing MongoDB instances locally (port 27017)
-- Use standard ports in isolated CI containers (port 27017)
-- CI accesses MongoDB via hostname `mongodb` instead of `localhost`
+Locally the port is offset by the worktree slot so several worktrees can run
+e2e at once; CI runs one stack per runner at slot 0.
 
 ### Playwright Configuration
 
@@ -428,13 +427,12 @@ multiple servers:
 - Check development server started successfully
 - Verify environment variables in `.env.e2e`
 
-**MongoDB connection issues (full-stack mode):**
+**DocumentDB connection issues (full-stack mode):**
 
-- Check port 29998 is available locally: `lsof -i :29998`
-- View MongoDB logs:
-  `docker compose -p e2e -f tests/e2e/docker-compose.yml logs`
-- MongoDB is auto-managed by `make e2e` (default)
-- Note: CI uses port 27017 internally (accessed via service name)
+- Check the slot's port is free: `lsof -i :$HDX_E2E_MONGO_PORT`
+- View DocumentDB logs (a failed Postgres start prints its log here):
+  `docker compose -p e2e-<slot> -f tests/e2e/docker-compose.yml logs db`
+- DocumentDB is started by `make e2e`, which waits for its healthcheck
 
 **Sources don't appear in UI:**
 
@@ -462,7 +460,7 @@ For intermittent failures:
 
 Tests run in **full-stack mode** on CI (GitHub Actions) with:
 
-- MongoDB service container for authentication and persistence
+- DocumentDB container for authentication and persistence
 - Local Docker ClickHouse for telemetry data (same as local mode)
 - 60-second test timeout (same as local)
 - Multiple retry attempts (2 retries on CI vs 1 locally)

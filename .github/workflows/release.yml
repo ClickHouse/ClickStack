@@ -462,7 +462,8 @@ jobs:
         # own temp are denied outright in case a later Read rule widens.
         # No Bash at all: a prefix allowlist over git is not read-only.
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.INFERENCE_GATEWAY_KEY }}
+          ANTHROPIC_BASE_URL: https://inference-internal.clickhouse.cloud
           VERSION: ${{ steps.meta.outputs.version }}
           REPO: ${{ github.repository }}
         # Three separate mechanisms, because they do different jobs:

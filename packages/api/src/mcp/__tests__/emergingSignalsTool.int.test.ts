@@ -218,6 +218,24 @@ describe('MCP Emerging Signals Tool', () => {
       expect(checkoutEmerging).toBeUndefined();
     });
 
+    it('mines only the first maxBodyChars characters of each body', async () => {
+      const result = await callTool(client, 'clickstack_emerging_signals', {
+        sourceId: logSource._id.toString(),
+        currentStartTime: new Date(now - 5 * 60_000).toISOString(),
+        currentEndTime: new Date(now).toISOString(),
+        baselineStartTime: new Date(now - 10 * 60_000).toISOString(),
+        baselineEndTime: new Date(now - 5 * 60_000).toISOString(),
+        sampleSize: 2000,
+        maxBodyChars: 12,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const output = JSON.parse(getFirstText(result));
+      expect(output.summary.bodyColumn).toBe('leftUTF8(Body, 12)');
+      const emerging: EmergingPattern[] = output.emerging;
+      expect(emerging.map(p => p.sample)).toEqual(['shadow-eval ']);
+    });
+
     it('reports nothing novel when both windows share the same patterns', async () => {
       // Two non-overlapping halves of the baseline-only region (now-10min ..
       // now-5min). Both contain only the steady-state checkout template and

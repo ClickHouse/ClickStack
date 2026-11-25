@@ -1,12 +1,13 @@
+import { fromPartial } from '@total-typescript/shoehorn';
 import type { LanguageModel } from 'ai';
 
-const mockAnthropicModel = {
-  modelId: 'claude-sonnet-4-5-20250929',
-} as unknown as LanguageModel;
+const mockAnthropicModel: LanguageModel = fromPartial({
+  modelId: 'claude-sonnet-5-5',
+});
 
-const mockOpenAIModel = {
+const mockOpenAIModel: LanguageModel = fromPartial({
   modelId: 'gpt-4o',
-} as unknown as LanguageModel;
+});
 
 const mockAnthropicFactory = jest.fn((_model?: string) => mockAnthropicModel);
 const mockCreateAnthropic = jest.fn(
@@ -150,9 +151,7 @@ describe('anthropic provider', () => {
       AI_API_KEY: 'sk-test',
     });
     getAIModel();
-    expect(mockAnthropicFactory).toHaveBeenCalledWith(
-      'claude-sonnet-4-5-20250929',
-    );
+    expect(mockAnthropicFactory).toHaveBeenCalledWith('claude-sonnet-5-5');
   });
 
   it('uses custom model name when AI_MODEL_NAME is set', () => {

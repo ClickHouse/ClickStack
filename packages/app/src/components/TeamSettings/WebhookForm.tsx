@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { HTTPError } from 'ky';
 import { Controller, SubmitHandler, useForm, useWatch } from 'react-hook-form';
-import { ZodIssue } from 'zod';
+import { ZodIssue } from 'zod/v3';
 import { json, jsonParseLinter } from '@codemirror/lang-json';
 import { linter } from '@codemirror/lint';
 import { getWebhookTemplateError } from '@hyperdx/common-utils/dist/core/handlebarsEnv';

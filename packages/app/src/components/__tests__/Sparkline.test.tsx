@@ -4,26 +4,22 @@ import { Sparkline, type SparklinePoint } from '@/components/Sparkline';
 
 // recharts `ResponsiveContainer` sizes itself from its parent via a
 // ResizeObserver, which is a no-op in jsdom (see setupTests), so it never
-// reports a size and the chart never paints. Swap it for a fixed-size
-// pass-through so the SVG renders and the variant can be asserted, and record
-// the requested height so its forwarding can be asserted. The `mock` prefix
-// lets the hoisted jest.mock factory reference it.
+// reports a size and the chart never paints. Give it a fixed pixel size so the
+// SVG renders and the variant can be asserted, and record the requested height
+// so its forwarding can be asserted. The `mock` prefix lets the hoisted
+// jest.mock factory reference it.
 const mockResponsiveContainerHeights: Array<number | string | undefined> = [];
 
 jest.mock('recharts', () => {
   const actual = jest.requireActual<typeof import('recharts')>('recharts');
-  const { cloneElement } = jest.requireActual<typeof import('react')>('react');
+  const ActualResponsiveContainer = actual.ResponsiveContainer;
   return {
     ...actual,
-    ResponsiveContainer: ({
-      children,
-      height,
-    }: {
-      children: React.ReactElement<{ width?: number; height?: number }>;
-      height?: number | string;
-    }) => {
-      mockResponsiveContainerHeights.push(height);
-      return cloneElement(children, { width: 300, height: 80 });
+    ResponsiveContainer: (
+      props: React.ComponentProps<typeof ActualResponsiveContainer>,
+    ) => {
+      mockResponsiveContainerHeights.push(props.height);
+      return <ActualResponsiveContainer {...props} width={300} height={80} />;
     },
   };
 });

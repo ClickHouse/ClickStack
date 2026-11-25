@@ -6,7 +6,7 @@ import {
 } from '@opentelemetry/sdk-trace-base';
 import { generateText, isStepCount, tool } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   createAITelemetry,

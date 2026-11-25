@@ -2,7 +2,7 @@ import Ajv2020 from 'ajv/dist/2020';
 
 import { McpContext } from '@/mcp/tools/types';
 
-import { createTestClient } from './mcpTestUtils';
+import { callTool, createTestClient, getFirstText } from './mcpTestUtils';
 
 /**
  * Every MCP tool's `inputSchema` must be valid JSON Schema draft 2020-12.
@@ -115,6 +115,29 @@ describe('MCP tool input schemas', () => {
     );
 
     expect(offenders).toEqual([]);
+  });
+
+  // The schemas tell clients extra keys aren't allowed. A tool that drops one
+  // anyway answers as if the option was never sent, and the agent can't tell.
+  // Arguments are validated before the handler runs, so this needs no database
+  // either.
+  it('reject unknown top-level arguments', async () => {
+    const client = await createTestClient(context);
+    const { tools } = await client.listTools();
+
+    expect(tools.length).toBeGreaterThan(0);
+
+    const accepted: string[] = [];
+    for (const tool of tools) {
+      const result = await callTool(client, tool.name, {
+        notARealOption: true,
+      });
+      if (!result.isError || !getFirstText(result).includes('notARealOption')) {
+        accepted.push(tool.name);
+      }
+    }
+
+    expect(accepted).toEqual([]);
   });
 });
 

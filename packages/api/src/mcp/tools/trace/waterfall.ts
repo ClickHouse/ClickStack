@@ -8,25 +8,29 @@ import {
   type QuerySettings,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ClickhouseClient } from '@/clickhouse';
-import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
   MCP_CLICKHOUSE_SETTINGS,
+  MCP_REQUEST_TIMEOUT,
   parseTimeRange,
 } from '@/mcp/tools/query/helpers';
 import {
   durationDivisor,
-  getMcpClickhouseClient,
   inclusiveTimeFilter,
   mcpQuerySettings,
   type TimeFilterParams,
 } from '@/mcp/tools/trace/shared';
 import type { ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import logger from '@/utils/logger';
 
 // ─── Schema ──────────────────────────────────────────────────────────────────
@@ -343,7 +347,7 @@ export function registerTraceWaterfall({
       }
       const { startDate, endDate } = timeRange;
 
-      const source = await getSource(teamId.toString(), input.sourceId);
+      const source = await getMcpSource(context, input.sourceId);
       if (!source) {
         return mcpUserError(
           `Source not found: ${input.sourceId}. Call clickstack_list_sources to find available source IDs.`,
@@ -355,11 +359,15 @@ export function registerTraceWaterfall({
         );
       }
 
-      const clickhouseClient = await getMcpClickhouseClient(
-        teamId.toString(),
-        source.connection.toString(),
-      );
-      if (!clickhouseClient) {
+      let clickhouseClient: ClickhouseClient;
+      try {
+        clickhouseClient = await getMcpClickhouseClient(
+          context,
+          source.connection.toString(),
+          { requestTimeout: MCP_REQUEST_TIMEOUT },
+        );
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection not found for source: ${input.sourceId}`,
         );
@@ -666,10 +674,7 @@ export function registerTraceWaterfall({
       let logsTruncated = false;
       let logsNote: string | undefined;
       if (input.includeLogs && source.logSourceId) {
-        const logSource = await getSource(
-          teamId.toString(),
-          source.logSourceId,
-        );
+        const logSource = await getMcpSource(context, source.logSourceId);
         if (!logSource) {
           logsNote = `logSourceId ${source.logSourceId} configured but source not found`;
         } else if (logSource.kind !== SourceKind.Log) {
@@ -686,10 +691,16 @@ export function registerTraceWaterfall({
           if (
             logSource.connection.toString() !== source.connection.toString()
           ) {
-            logClient = await getMcpClickhouseClient(
-              teamId.toString(),
-              logSource.connection.toString(),
-            );
+            try {
+              logClient = await getMcpClickhouseClient(
+                context,
+                logSource.connection.toString(),
+                { requestTimeout: MCP_REQUEST_TIMEOUT },
+              );
+            } catch (e) {
+              if (!(e instanceof McpConnectionNotFoundError)) throw e;
+              logClient = null;
+            }
           }
           if (!logClient) {
             logsNote = `connection for log source ${source.logSourceId} not found`;

@@ -1,9 +1,13 @@
 import React from 'react';
+import type { TableMetadata } from '@hyperdx/common-utils/dist/core/metadata';
+import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import {
+  BuilderChartConfig,
   BuilderChartConfigWithDateRange,
   Filter,
 } from '@hyperdx/common-utils/dist/types';
 import { screen } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import DBDeltaChart from '@/components/DBDeltaChart';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
@@ -31,8 +35,25 @@ jest.mock('../PropertyComparisonChart', () => ({
   ),
 }));
 
-const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
-const mockUseTableMetadata = useTableMetadata as jest.Mock;
+const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
+const mockUseTableMetadata = jest.mocked(useTableMetadata);
+
+function mockTableMetadata(
+  data: Pick<TableMetadata, 'engine' | 'isPointerTable'> | undefined,
+) {
+  mockUseTableMetadata.mockReturnValue(
+    fromPartial({ data: data && fromPartial(data), isLoading: false }),
+  );
+}
+
+// DBDeltaChart only issues builder queries; narrowing exposes `with`/`filters`.
+function getBuilderConfig(callIndex: number) {
+  const config = mockUseQueriedChartConfig.mock.calls[callIndex]?.[0];
+  if (config == null || !isBuilderChartConfig(config)) {
+    throw new Error(`Expected call ${callIndex} to use a builder chart config`);
+  }
+  return config;
+}
 
 // Sentinel filter on baseConfig so the allSpans assertion can prove
 // the branch passes user-supplied filters through unchanged. Without
@@ -70,15 +91,14 @@ function renderChart(
 describe('DBDeltaChart', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: { data: [], meta: [] },
-      error: undefined,
-      isLoading: false,
-    });
-    mockUseTableMetadata.mockReturnValue({
-      data: { engine: 'MergeTree', isPointerTable: false },
-      isLoading: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: { data: [], meta: [] },
+        error: undefined,
+        isLoading: false,
+      }),
+    );
+    mockTableMetadata({ engine: 'MergeTree', isPointerTable: false });
   });
 
   describe('distribution mode (no heatmap selection)', () => {
@@ -133,9 +153,9 @@ describe('DBDeltaChart', () => {
       // Sanity: the outlier branch DOES inject extra filters built from
       // the (defaulted-to-zero) coords, so its filters array is strictly
       // longer than baseConfig.filters.
-      const outlierConfig = calls[0][0];
-      expect(outlierConfig.filters.length).toBeGreaterThan(1);
-      expect(outlierConfig.filters[0]).toEqual(sentinelFilter);
+      const outlierConfig = getBuilderConfig(0);
+      expect(outlierConfig.filters?.length).toBeGreaterThan(1);
+      expect(outlierConfig.filters?.[0]).toEqual(sentinelFilter);
     });
   });
 
@@ -192,14 +212,14 @@ describe('DBDeltaChart', () => {
 
   describe('selection queries by table engine', () => {
     const selection = { xMin: 1, xMax: 2, yMin: 1, yMax: 2 };
-    const conditions = (config: BuilderChartConfigWithDateRange) =>
+    const conditions = (config: Pick<BuilderChartConfig, 'filters'>) =>
       (config.filters ?? []).map(f => ('condition' in f ? f.condition : ''));
 
     it('uses the PartIds prefetch hint on local MergeTree tables', () => {
       renderChart(selection);
 
-      const [[outlierConfig], [inlierConfig]] =
-        mockUseQueriedChartConfig.mock.calls;
+      const outlierConfig = getBuilderConfig(0);
+      const inlierConfig = getBuilderConfig(1);
       for (const config of [outlierConfig, inlierConfig]) {
         expect(config.with?.map((cte: { name: string }) => cte.name)).toEqual([
           'PartIds',
@@ -213,8 +233,8 @@ describe('DBDeltaChart', () => {
     it('uses plain IN for the aggregated-timestamps subquery on local MergeTree tables', () => {
       renderChart({ ...selection, valueExpr: 'count()' });
 
-      const [[outlierConfig], [inlierConfig]] =
-        mockUseQueriedChartConfig.mock.calls;
+      const outlierConfig = getBuilderConfig(0);
+      const inlierConfig = getBuilderConfig(1);
       expect(conditions(outlierConfig)).toContain(
         'Timestamp IN (SELECT Timestamp FROM AggregatedTimestamps)',
       );
@@ -224,14 +244,11 @@ describe('DBDeltaChart', () => {
     });
 
     it('skips the PartIds hint on Distributed tables', () => {
-      mockUseTableMetadata.mockReturnValue({
-        data: { engine: 'MergeTree', isPointerTable: true },
-        isLoading: false,
-      });
+      mockTableMetadata({ engine: 'MergeTree', isPointerTable: true });
       renderChart(selection);
 
-      const [[outlierConfig], [inlierConfig]] =
-        mockUseQueriedChartConfig.mock.calls;
+      const outlierConfig = getBuilderConfig(0);
+      const inlierConfig = getBuilderConfig(1);
       for (const config of [outlierConfig, inlierConfig]) {
         expect(config.with).toBeUndefined();
         expect(conditions(config).join(' ')).not.toContain('_part');
@@ -239,14 +256,11 @@ describe('DBDeltaChart', () => {
     });
 
     it('uses GLOBAL IN for the aggregated-timestamps subquery on Distributed tables', () => {
-      mockUseTableMetadata.mockReturnValue({
-        data: { engine: 'MergeTree', isPointerTable: true },
-        isLoading: false,
-      });
+      mockTableMetadata({ engine: 'MergeTree', isPointerTable: true });
       renderChart({ ...selection, valueExpr: 'count()' });
 
-      const [[outlierConfig], [inlierConfig]] =
-        mockUseQueriedChartConfig.mock.calls;
+      const outlierConfig = getBuilderConfig(0);
+      const inlierConfig = getBuilderConfig(1);
       expect(
         outlierConfig.with?.map((cte: { name: string }) => cte.name),
       ).toEqual(['AggregatedTimestamps']);
@@ -259,10 +273,9 @@ describe('DBDeltaChart', () => {
     });
 
     it('waits for table metadata before running selection queries', () => {
-      mockUseTableMetadata.mockReturnValue({
-        data: undefined,
-        isLoading: true,
-      });
+      mockUseTableMetadata.mockReturnValue(
+        fromPartial({ data: undefined, isLoading: true }),
+      );
       renderChart(selection);
 
       const [outlierCall, inlierCall] = mockUseQueriedChartConfig.mock.calls;
@@ -271,27 +284,21 @@ describe('DBDeltaChart', () => {
     });
 
     it('falls back to the hint-free query when table metadata is unavailable', () => {
-      mockUseTableMetadata.mockReturnValue({
-        data: undefined,
-        isLoading: false,
-      });
+      mockTableMetadata(undefined);
       renderChart(selection);
 
-      const [[outlierConfig, outlierOptions]] =
-        mockUseQueriedChartConfig.mock.calls;
+      const outlierOptions = mockUseQueriedChartConfig.mock.calls[0][1];
+      const outlierConfig = getBuilderConfig(0);
       expect(outlierOptions).toMatchObject({ enabled: true });
       expect(outlierConfig.with).toBeUndefined();
     });
 
     it('uses GLOBAL IN for aggregate selections when table metadata is unavailable', () => {
-      mockUseTableMetadata.mockReturnValue({
-        data: undefined,
-        isLoading: false,
-      });
+      mockTableMetadata(undefined);
       renderChart({ ...selection, valueExpr: 'count()' });
 
-      const [[outlierConfig], [inlierConfig]] =
-        mockUseQueriedChartConfig.mock.calls;
+      const outlierConfig = getBuilderConfig(0);
+      const inlierConfig = getBuilderConfig(1);
       expect(conditions(outlierConfig)).toContain(
         'Timestamp GLOBAL IN (SELECT Timestamp FROM AggregatedTimestamps)',
       );

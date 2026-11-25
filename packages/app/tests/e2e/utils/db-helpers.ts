@@ -1,55 +1,48 @@
 /**
- * Direct MongoDB and ClickHouse access helpers for full-stack E2E tests. Only usable in
- * full-stack mode (real Mongo via docker-compose) — there is no database in
+ * Direct metadata-store and ClickHouse access helpers for full-stack E2E tests. Only
+ * usable in full-stack mode (DocumentDB via docker-compose); there is no database in
  * local mode, so callers must gate on `{ tag: ['@full-stack'] }`.
  */
-import { execFileSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
+import { type Db, MongoClient, MongoServerError } from 'mongodb';
 
-/**
- * Run a mongosh script against the e2e MongoDB container by piping the script
- * through stdin. Using stdin (rather than `--eval "<...>"`) avoids having to
- * escape quotes in the script body, so callers can pass multi-line JavaScript
- * with string literals verbatim.
- *
- * `execFileSync` with an argument array rather than a shell string: the project
- * slug comes from an env var, and with no shell nothing in it can be read as a
- * metacharacter.
- *
- * Throws if the docker-compose file can't be found (meaning we're not running
- * in the expected Docker-backed e2e environment).
- */
-export function runMongoshScript(script: string): string {
-  const dockerComposeFile = path.join(__dirname, '..', 'docker-compose.yml');
-  if (!fs.existsSync(dockerComposeFile)) {
-    throw new Error(
-      `docker-compose.yml not found at ${dockerComposeFile} — e2e Docker stack unavailable`,
-    );
+export { ObjectId } from 'mongodb';
+
+const E2E_DB_NAME = 'hyperdx-e2e';
+// Matches DOCDB_USER/DOCDB_PASSWORD in the e2e compose file and MONGO_URI in packages/api/.env.e2e.
+const DOCDB_AUTH = 'hyperdx:hyperdx';
+const DOCDB_OPTIONS =
+  'tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256';
+// DocumentDB's transient dropDatabase failures: WriteConflict and InternalError.
+const TRANSIENT_DROP_CODES = [112, 1];
+
+// Built from the e2e slot port rather than MONGO_URI, so a MONGO_URI exported in a
+// developer's shell can never point these destructive helpers at another database.
+function e2eMongoUri(): string {
+  return `mongodb://${DOCDB_AUTH}@localhost:${process.env.HDX_E2E_MONGO_PORT || '21100'}/${E2E_DB_NAME}?${DOCDB_OPTIONS}`;
+}
+
+/** Runs `fn` against the e2e database over the Mongo wire protocol. */
+export async function withE2eDb<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  const client = await MongoClient.connect(e2eMongoUri());
+  try {
+    return await fn(client.db(E2E_DB_NAME));
+  } finally {
+    await client.close();
   }
+}
 
-  const e2eSlot = process.env.HDX_E2E_SLOT || '0';
-
-  return execFileSync(
-    'docker',
-    [
-      'compose',
-      '-p',
-      `e2e-${e2eSlot}`,
-      '-f',
-      dockerComposeFile,
-      'exec',
-      '-T',
-      'db',
-      'mongosh',
-      '--quiet',
-    ],
-    {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      input: script,
-    },
-  );
+/** Drops the e2e database, retrying while the API's background index builds run. */
+export async function dropE2eDatabase(): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await withE2eDb(db => db.dropDatabase());
+      return;
+    } catch (e: unknown) {
+      const code = e instanceof MongoServerError ? e.code : undefined;
+      if (attempt >= 5 || !TRANSIENT_DROP_CODES.includes(Number(code))) throw e;
+      await new Promise(resolve => setTimeout(resolve, 200 * attempt));
+    }
+  }
 }
 
 /**
@@ -64,11 +57,13 @@ export function runMongoshScript(script: string): string {
  * racing each other — e.g. via `test.describe.serial(...)` — since
  * `fullyParallel: true` lets tests in the same file run concurrently.
  */
-export function setTeamFlag(flagName: string, value: boolean): void {
-  runMongoshScript(`
-use('hyperdx-e2e');
-db.teams.updateOne({}, { $set: { [${JSON.stringify(flagName)}]: ${JSON.stringify(value)} } });
-`);
+export async function setTeamFlag(
+  flagName: string,
+  value: boolean,
+): Promise<void> {
+  await withE2eDb(db =>
+    db.collection('teams').updateOne({}, { $set: { [flagName]: value } }),
+  );
 }
 
 const CLICKHOUSE_HOST =

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { parseTimeRange, runConfigTile } from '@/mcp/tools/query/helpers';
@@ -104,20 +104,16 @@ export function registerQueryTile({
         externalDashboard.filters,
         variableValues,
         externalDashboard.savedFilterValues,
-        await getReferenceTargets(teamId.toString()),
+        await getReferenceTargets(context),
       );
       if ('error' in resolvedTile) {
         return mcpUserError(resolvedTile.error);
       }
       const { tile } = resolvedTile;
 
-      const result = await runConfigTile(
-        teamId.toString(),
-        tile,
-        startDate,
-        endDate,
-        { variables: resolvedVariables.variables },
-      );
+      const result = await runConfigTile(context, tile, startDate, endDate, {
+        variables: resolvedVariables.variables,
+      });
 
       // Surface non-blocking missing macro and variable warnings alongside
       // the successful result so the agent can spot a tile that runs but

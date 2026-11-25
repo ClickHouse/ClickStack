@@ -244,9 +244,7 @@ export default function SessionSubpanel({
   );
   const prevTsQuery = usePrevious(tsQuery);
 
-  const [focus, _setFocus] = useState<
-    { ts: number; setBy: string } | undefined
-  >(
+  const [focus, setFocus] = useState<{ ts: number; setBy: string } | undefined>(
     initialTs != null
       ? {
           ts: initialTs,
@@ -257,7 +255,7 @@ export default function SessionSubpanel({
 
   useEffect(() => {
     if (prevTsQuery == null && tsQuery != null) {
-      _setFocus({ ts: tsQuery, setBy: 'url' });
+      setFocus({ ts: tsQuery, setBy: 'url' });
     }
   }, [prevTsQuery, tsQuery]);
 
@@ -273,16 +271,16 @@ export default function SessionSubpanel({
     };
   }, [setTsQuery]);
 
-  const setFocus = useCallback(
+  const updateFocus = useCallback(
     (focus: { ts: number; setBy: string }) => {
       if (focus.setBy === 'player') {
         debouncedSetTsQuery(focus.ts);
       } else {
         setTsQuery(focus.ts);
       }
-      _setFocus(focus);
+      setFocus(focus);
     },
-    [_setFocus, setTsQuery, debouncedSetTsQuery],
+    [setFocus, setTsQuery, debouncedSetTsQuery],
   );
   const [playerState, setPlayerState] = useState<'paused' | 'playing'>(
     'paused',
@@ -400,18 +398,18 @@ export default function SessionSubpanel({
   }, [setPlayerState]);
 
   const skipBackward = useCallback(() => {
-    setFocus({
+    updateFocus({
       ts: Math.max((focus?.ts ?? minTs) - 15000, minTs),
       setBy: 'skip-backward',
     });
-  }, [setFocus, focus?.ts, minTs]);
+  }, [updateFocus, focus?.ts, minTs]);
 
   const skipForward = useCallback(() => {
-    setFocus({
+    updateFocus({
       ts: Math.min((focus?.ts ?? minTs) + 15000, maxTs),
       setBy: 'skip-forward',
     });
-  }, [setFocus, focus?.ts, minTs, maxTs]);
+  }, [updateFocus, focus?.ts, minTs, maxTs]);
 
   const { control, handleSubmit } = useForm({
     values: {
@@ -433,17 +431,17 @@ export default function SessionSubpanel({
   );
   const onSessionEventTimeClick = useCallback(
     (ts: number) => {
-      setFocus({ ts, setBy: 'timeline' });
+      updateFocus({ ts, setBy: 'timeline' });
     },
-    [setFocus],
+    [updateFocus],
   );
   const setPlayerTime = useCallback(
     (ts: number) => {
       if (focus?.setBy !== 'player' || focus?.ts !== ts) {
-        setFocus({ ts, setBy: 'player' });
+        updateFocus({ ts, setBy: 'player' });
       }
     },
-    [focus, setFocus],
+    [focus, updateFocus],
   );
 
   return (
@@ -538,7 +536,7 @@ export default function SessionSubpanel({
               playerState={playerState}
               setPlayerState={setPlayerState}
               focus={focus}
-              setFocus={setFocus}
+              setFocus={updateFocus}
               playbackRange={playbackRange}
               queriedConfig={eventsConfig}
               logEvents={logEvents.events}

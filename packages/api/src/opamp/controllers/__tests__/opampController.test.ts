@@ -5,6 +5,7 @@ const configState = {
   IS_LOCAL_APP_MODE: false,
   IS_DEV: false,
   INGESTION_API_KEY: '' as string,
+  ENABLE_INGESTION_API_KEY: false,
   IS_PROMQL_ENABLED: false,
   ENABLE_DATADOG_RECEIVER: false,
 };
@@ -21,6 +22,9 @@ jest.mock('@/config', () => ({
   },
   get INGESTION_API_KEY() {
     return configState.INGESTION_API_KEY;
+  },
+  get ENABLE_INGESTION_API_KEY() {
+    return configState.ENABLE_INGESTION_API_KEY;
   },
   get IS_PROMQL_ENABLED() {
     return configState.IS_PROMQL_ENABLED;
@@ -40,6 +44,7 @@ const resetConfig = () => {
   configState.IS_LOCAL_APP_MODE = false;
   configState.IS_DEV = false;
   configState.INGESTION_API_KEY = '';
+  configState.ENABLE_INGESTION_API_KEY = false;
   configState.IS_PROMQL_ENABLED = false;
   configState.ENABLE_DATADOG_RECEIVER = false;
 };
@@ -171,6 +176,58 @@ describe('opampController', () => {
       );
     });
 
+    it('ignores INGESTION_API_KEY outside all-in-one and dev unless opted in', () => {
+      configState.INGESTION_API_KEY = 'ingest-key';
+
+      const cfg = buildOtelCollectorConfig([
+        { apiKey: 'k1', collectorAuthenticationEnforced: true },
+      ]);
+
+      const tokens = cfg.extensions['bearertokenauth/hyperdx'].tokens;
+      expect(tokens).toEqual(bearerTokenVariants(['k1']));
+    });
+
+    it('includes INGESTION_API_KEY alongside the team key when ENABLE_INGESTION_API_KEY is set', () => {
+      configState.ENABLE_INGESTION_API_KEY = true;
+      configState.INGESTION_API_KEY = 'ingest-key';
+
+      const cfg = buildOtelCollectorConfig([
+        { apiKey: 'k1', collectorAuthenticationEnforced: true },
+      ]);
+
+      const tokens = cfg.extensions['bearertokenauth/hyperdx'].tokens;
+      expect(tokens).toEqual(bearerTokenVariants(['k1', 'ingest-key']));
+    });
+
+    it('enforces INGESTION_API_KEY before any team exists when ENABLE_INGESTION_API_KEY is set', () => {
+      configState.ENABLE_INGESTION_API_KEY = true;
+      configState.INGESTION_API_KEY = 'ingest-key';
+
+      const cfg = buildOtelCollectorConfig([]);
+
+      expect(cfg.extensions['bearertokenauth/hyperdx'].tokens).toEqual(
+        bearerTokenVariants(['ingest-key']),
+      );
+      expect(cfg.receivers['otlp/hyperdx']?.protocols.grpc.auth).toEqual({
+        authenticator: 'bearertokenauth/hyperdx',
+      });
+      expect(cfg.receivers['otlp/hyperdx']?.protocols.http.auth).toEqual({
+        authenticator: 'bearertokenauth/hyperdx',
+      });
+      expect(cfg.service.extensions).toContain('bearertokenauth/hyperdx');
+    });
+
+    it('adds nothing when ENABLE_INGESTION_API_KEY is set but INGESTION_API_KEY is empty', () => {
+      configState.ENABLE_INGESTION_API_KEY = true;
+
+      const cfg = buildOtelCollectorConfig([
+        { apiKey: 'k1', collectorAuthenticationEnforced: true },
+      ]);
+
+      const tokens = cfg.extensions['bearertokenauth/hyperdx'].tokens;
+      expect(tokens).toEqual(bearerTokenVariants(['k1']));
+    });
+
     it('bearerTokenVariants emits the bare token plus the bearer scheme case variants', () => {
       expect(bearerTokenVariants(['tok'])).toEqual([
         'tok',
@@ -208,6 +265,24 @@ describe('opampController', () => {
       expect(cfg.service.pipelines.traces.receivers).toContain('datadog');
       expect(cfg.service.pipelines.metrics.receivers).toContain('datadog');
       expect(cfg.service.pipelines['logs/in'].receivers).toContain('datadog');
+    });
+
+    it('requires INGESTION_API_KEY on the datadog receiver before any team exists when ENABLE_INGESTION_API_KEY is set', () => {
+      configState.ENABLE_DATADOG_RECEIVER = true;
+      configState.ENABLE_INGESTION_API_KEY = true;
+      configState.INGESTION_API_KEY = 'ingest-key';
+
+      const cfg = buildOtelCollectorConfig([]);
+
+      expect(cfg.extensions['bearertokenauth/datadog']).toEqual({
+        header: 'DD-API-KEY',
+        scheme: '',
+        tokens: ['ingest-key'],
+      });
+      expect(cfg.receivers.datadog?.auth).toEqual({
+        authenticator: 'bearertokenauth/datadog',
+      });
+      expect(cfg.service.extensions).toContain('bearertokenauth/datadog');
     });
 
     it('leaves the datadog receiver unauthenticated when no team API keys exist', () => {

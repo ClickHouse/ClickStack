@@ -1,4 +1,5 @@
 import type uPlot from 'uplot';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import {
   gridToPlotData,
@@ -29,7 +30,8 @@ function hover(
     over: { offsetLeft: 5, offsetTop: 7, ...plotSize },
     valToPos,
     posToVal,
-    data: [
+    // uPlot's AlignedData typing doesn't model the heatmap's nested series.
+    data: fromAny<uPlot['data'], unknown[]>([
       [],
       gridToPlotData({
         times: [100],
@@ -37,11 +39,11 @@ function hover(
         yAxis: { type: 'numeric', scale: 'linear', edges: [0, 1, 3] },
         cells,
       }),
-    ],
+    ]),
   };
   const setCursor = plugin.hooks.setCursor;
   if (typeof setCursor !== 'function') throw new Error('no setCursor hook');
-  setCursor(u as unknown as uPlot);
+  setCursor(fromPartial(u));
   return onPointHighlight;
 }
 

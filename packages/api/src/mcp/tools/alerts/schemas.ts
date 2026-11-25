@@ -10,7 +10,7 @@ import {
   SearchConditionTrimmedLanguageSchema,
   tagsSchema,
 } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   mcpBarTileSchema,

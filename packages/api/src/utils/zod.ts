@@ -49,7 +49,7 @@ import {
   zAlertChannels,
 } from '@hyperdx/common-utils/dist/types';
 import { Types } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { AlertSource } from '@/models/alert';
 

@@ -4,7 +4,6 @@ import {
   getSavedSearch,
   updateSavedSearch,
 } from '@/controllers/savedSearch';
-import { getSource } from '@/controllers/sources';
 import { UPSERT_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import {
@@ -12,6 +11,7 @@ import {
   mcpUserError,
   validateObjectId,
 } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 
 import { mcpSaveSavedSearchSchema } from './schemas';
 
@@ -50,7 +50,7 @@ export function registerSaveSavedSearch({
       }
 
       // ── Validate sourceId (format validated by Zod schema, check existence) ──
-      const source = await getSource(teamId, input.sourceId);
+      const source = await getMcpSource(context, input.sourceId);
       if (!source) {
         return mcpUserError('Source not found');
       }

@@ -5,6 +5,7 @@ import {
   SourceKind,
   Tile,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import {
@@ -32,7 +33,7 @@ const TEST_TEAM_ID = new mongoose.Types.ObjectId().toString();
 // Test fixtures only need a handful of IWebhook fields — a single narrowing
 // point instead of an `as unknown as IWebhook` suppression-worthy cast at
 // every call site.
-const castWebhook = (over: Record<string, unknown>): IWebhook => over as any;
+const castWebhook = (over: Record<string, unknown>): IWebhook => fromAny(over);
 
 // A dispatcher that records jobs instead of delivering them, so these tests
 // assert on fan-out (who got a job) without exercising real transports.
@@ -138,8 +139,8 @@ const makeSearchView = (
     defaultTableSelectExpression: 'Timestamp, Body',
   },
   savedSearch: {
-    _id: 'fake-saved-search-id' as any,
-    team: 'team-123' as any,
+    _id: fromAny('fake-saved-search-id'),
+    team: fromAny('team-123'),
     id: 'fake-saved-search-id',
     name: 'My Search',
     select: 'Body',
@@ -147,7 +148,7 @@ const makeSearchView = (
     whereLanguage: 'lucene',
     ...(overrides.filters != null && { filters: overrides.filters }),
     orderBy: 'timestamp',
-    source: 'fake-source-id' as any,
+    source: fromAny('fake-source-id'),
     tags: ['test'],
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -179,7 +180,7 @@ const makeTileView = (
     id: 'id-123',
     name: 'My Dashboard',
     tiles: [overrides.tile ?? testTile],
-    team: 'team-123' as any,
+    team: fromAny('team-123'),
     tags: ['test'],
     createdAt: new Date(),
     updatedAt: new Date(),

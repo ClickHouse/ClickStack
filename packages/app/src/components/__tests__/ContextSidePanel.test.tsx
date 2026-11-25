@@ -33,7 +33,6 @@ jest.mock('@/components/DBRowTable', () => ({
 }));
 
 jest.mock('@/components/SearchInput/SearchWhereInput', () => {
-  const React = jest.requireActual('react');
   const { useController } = jest.requireActual('react-hook-form');
 
   function MockSearchWhereInput({

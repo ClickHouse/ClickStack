@@ -24,7 +24,7 @@ import {
   useQueryStates,
 } from 'nuqs';
 import { useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   ClickHouseQueryError,
@@ -36,6 +36,7 @@ import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { buildSearchChartConfig } from '@hyperdx/common-utils/dist/core/searchChartConfig';
 import {
   aliasMapToWithClauses,
+  getReferencedWithClauses,
   isBrowser,
   splitAndTrimWithBracket,
 } from '@hyperdx/common-utils/dist/core/utils';
@@ -76,9 +77,9 @@ import {
 } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowBarToRight,
   IconBolt,
   IconCode,
+  IconLayoutSidebarLeftExpand,
   IconPlayerPlay,
   IconPlus,
   IconStack2,
@@ -356,7 +357,7 @@ function ExpandFiltersButton({ onExpand }: { onExpand: () => void }) {
         onClick={onExpand}
         aria-label="Show filters"
       >
-        <IconArrowBarToRight size={14} />
+        <IconLayoutSidebarLeftExpand size={14} />
       </ActionIcon>
     </Tooltip>
   );
@@ -763,7 +764,6 @@ function useLiveUpdate({
   const [refreshOnVisible, setRefreshOnVisible] = useState(false);
 
   const refresh = useCallback(() => {
-    // eslint-disable-next-line no-restricted-syntax
     onTimeRangeSelect(new Date(Date.now() - interval), new Date(), null);
   }, [onTimeRangeSelect, interval]);
 
@@ -1305,13 +1305,22 @@ function DBSearchPageContent() {
 
   const [displayedTimeInputValue, setDisplayedTimeInputValue] =
     useState('Live Tail');
+  // The last time input the time query wrote, i.e. the applied range. User
+  // typing goes through setDisplayedTimeInputValue, so it differs once edited.
+  const [appliedTimeInputValue, setAppliedTimeInputValue] =
+    useState('Live Tail');
+  const setAppliedTimeInput = useCallback((value: string) => {
+    setDisplayedTimeInputValue(value);
+    setAppliedTimeInputValue(value);
+  }, []);
+  const isTimeInputEdited = displayedTimeInputValue !== appliedTimeInputValue;
 
   const { isReady, searchedTimeRange, onSearch, onTimeRangeSelect } =
     useNewTimeQuery({
       initialDisplayValue: 'Live Tail',
       initialTimeRange: defaultTimeRange,
       showRelativeInterval: isLive ?? true,
-      setDisplayedTimeInputValue,
+      setDisplayedTimeInputValue: setAppliedTimeInput,
       updateInput: !isLive,
     });
 
@@ -1421,8 +1430,13 @@ function DBSearchPageContent() {
   // completes "Explore your data". An explicit arg, not a shared ref, so
   // concurrent submits can't consume each other's suppression.
   const onSubmit = useCallback(
-    ({ recordExploration = true }: { recordExploration?: boolean } = {}) => {
-      onSearch(displayedTimeInputValue);
+    ({
+      recordExploration = true,
+      resolveTimeRange = true,
+    }: { recordExploration?: boolean; resolveTimeRange?: boolean } = {}) => {
+      if (resolveTimeRange) {
+        onSearch(displayedTimeInputValue);
+      }
       handleSubmit(
         ({ select, where, whereLanguage, source, filters, orderBy }) => {
           setSearchedConfig({
@@ -1859,12 +1873,15 @@ function DBSearchPageContent() {
     parseAsInteger.withDefault(DEFAULT_REFRESH_FREQUENCY),
   );
 
-  const updateRelativeTimeInputValue = useCallback((interval: number) => {
-    const label = getRelativeTimeOptionLabel(interval);
-    if (label) {
-      setDisplayedTimeInputValue(label);
-    }
-  }, []);
+  const updateRelativeTimeInputValue = useCallback(
+    (interval: number) => {
+      const label = getRelativeTimeOptionLabel(interval);
+      if (label) {
+        setAppliedTimeInput(label);
+      }
+    },
+    [setAppliedTimeInput],
+  );
 
   useEffect(() => {
     if (isReady && isLive) {
@@ -1996,7 +2013,11 @@ function DBSearchPageContent() {
           setValue('orderBy', nextOrderBy);
         }
       }
-      onSubmit();
+      // Keep the current time range unless the user typed a new one:
+      // re-resolving a relative range would refetch the histogram for a
+      // column change. Live tail refetches on every tick anyway, so it always
+      // re-resolves.
+      onSubmit({ resolveTimeRange: !!isLive || isTimeInputEdited });
     },
     [
       displayedColumns,
@@ -2005,6 +2026,8 @@ function DBSearchPageContent() {
       getValues,
       defaultSearchConfig.orderBy,
       onSubmit,
+      isLive,
+      isTimeInputEdited,
     ],
   );
 
@@ -2142,6 +2165,7 @@ function DBSearchPageContent() {
       return undefined;
     }
 
+    const groupBy = resolveSearchGroupBy(groupByParam, searchedSource);
     return {
       ...chartConfig,
       select: [
@@ -2155,8 +2179,14 @@ function DBSearchPageContent() {
       granularity: 'auto',
       dateRange: searchedTimeRange,
       displayType: DisplayType.StackedBar,
-      with: aliasWith,
-      // Preserve the original table select string for "View Events" links
+      // Everything but the table's select and sort can reference an alias,
+      // including the body, timestamp and sample-weight expressions.
+      with: getReferencedWithClauses(aliasWith, [
+        JSON.stringify({ ...chartConfig, select: '', orderBy: '' }),
+        groupBy ?? '',
+      ]),
+      // Preserve the original table select string for "View Events" links.
+      // convertToTimeChartConfig drops it from the query key.
       eventTableSelect: searchedConfig.select ?? undefined,
       // Never align to granularity boundaries on the search page: the histogram
       // and total count must reflect the user's exact selected range so they
@@ -2167,7 +2197,7 @@ function DBSearchPageContent() {
       alignDateRangeToGranularity: false,
       // Make sure the end date is inclusive so that the histogram and table counts match
       dateRangeEndInclusive: true,
-      groupBy: resolveSearchGroupBy(groupByParam, searchedSource),
+      groupBy,
     } satisfies BuilderChartConfigWithDateRange;
   }, [
     chartConfig,
@@ -2326,7 +2356,7 @@ function DBSearchPageContent() {
     setNewSourceModalOpened(true);
   }, []);
 
-  const [isDrawerChildModalOpen, setDrawerChildModalOpen] = useState(false);
+  const [isDrawerChildModalOpen, setIsDrawerChildModalOpen] = useState(false);
 
   const rowTableContext = useMemo(
     () => ({
@@ -2336,7 +2366,7 @@ function DBSearchPageContent() {
       generateSearchUrl,
       dbSqlRowTableConfig,
       isChildModalOpen: isDrawerChildModalOpen,
-      setChildModalOpen: setDrawerChildModalOpen,
+      setChildModalOpen: setIsDrawerChildModalOpen,
       source: searchedSource,
     }),
     [
@@ -2572,7 +2602,8 @@ function DBSearchPageContent() {
               {savedSearch.createdBy && (
                 <span>
                   Created by{' '}
-                  {savedSearch.createdBy.name || savedSearch.createdBy.email}.{' '}
+                  {savedSearch.createdBy.name || savedSearch.createdBy.email}
+                  .{' '}
                 </span>
               )}
               {savedSearch.updatedAt && (

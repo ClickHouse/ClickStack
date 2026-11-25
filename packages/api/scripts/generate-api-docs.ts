@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import swaggerJsdoc from 'swagger-jsdoc';
 
-// eslint-disable-next-line no-restricted-imports -- run via ts-node without tsconfig-paths, so @/ does not resolve here
+// Relative import: run via ts-node without tsconfig-paths, so @/ does not resolve here
 import { swaggerOptions } from '../src/utils/swagger';
 
 const specs = swaggerJsdoc(swaggerOptions);

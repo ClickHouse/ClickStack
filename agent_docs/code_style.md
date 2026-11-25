@@ -173,7 +173,7 @@ The project uses Mantine UI with **custom variants** defined in `packages/app/sr
 </ActionIcon>
 ```
 
-This pattern cannot be enforced by ESLint and requires manual code review.
+This pattern cannot be enforced by the linter and requires manual code review.
 
 ### Semantic component variants (Alert / Text / danger controls)
 

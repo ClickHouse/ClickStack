@@ -8,22 +8,25 @@ import {
 } from '@hyperdx/common-utils/dist/clickhouse';
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import {
   clickHouseErrorResult,
   parseTimeRange,
 } from '@/mcp/tools/query/helpers';
-import type { ToolRegistrar } from '@/mcp/tools/types';
+import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import {
   mcpServerError,
   mcpUserError,
   sanitizeFetchError,
 } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_TOOL_TIMEOUT_MS, runWithTimeout } from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
 import { trimToolResponse } from '@/utils/trimToolResponse';
@@ -468,11 +471,11 @@ async function sampleAttributeValues({
 }
 
 async function describeMetricImpl(
-  teamId: string,
+  context: McpContext,
   input: z.infer<typeof describeMetricSchema>,
   signal: AbortSignal,
 ) {
-  const source = await getSource(teamId, input.sourceId);
+  const source = await getMcpSource(context, input.sourceId);
   if (!source) {
     return mcpUserError(
       `Source "${input.sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,
@@ -494,20 +497,16 @@ async function describeMetricImpl(
   }
   const { startDate, endDate } = timeRange;
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(`Connection not found for source "${input.sourceId}".`);
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
   const databaseName = source.from.databaseName;
   const connectionId = source.connection.toString();
@@ -746,7 +745,7 @@ export function registerDescribeMetric({
       // the typed shape we need for downstream calls.
       const input = describeMetricSchema.parse(rawInput);
       const outcome = await runWithTimeout(
-        signal => describeMetricImpl(teamId.toString(), input, signal),
+        signal => describeMetricImpl(context, input, signal),
         { timeoutMs: DESCRIBE_TIMEOUT_MS },
       );
       if (!outcome.timedOut) {

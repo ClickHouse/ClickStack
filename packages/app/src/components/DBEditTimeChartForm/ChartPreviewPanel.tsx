@@ -48,16 +48,14 @@ import {
   isSingleExpression,
   useSource,
 } from '@/source';
-import {
-  orderByStringToSortingState,
-  sortingStateToOrderByString,
-} from '@/utils';
 
 import { QueryPreviewAccordion } from './QueryPreviewAccordion';
 import {
   buildRenderedPromqlExpression,
   buildSampleEventsConfig,
   isQueryReady,
+  orderByToTableSortState,
+  tableSortStateToOrderBy,
   tabQueriesData,
 } from './utils';
 
@@ -228,7 +226,7 @@ export function ChartPreviewPanel({
 
   const onTableSortingChange = useCallback(
     (sortState: SortingState | null) => {
-      setValue('orderBy', sortingStateToOrderByString(sortState) ?? '');
+      setValue('orderBy', tableSortStateToOrderBy(sortState));
       onSubmit();
     },
     [setValue, onSubmit],
@@ -240,8 +238,8 @@ export function ChartPreviewPanel({
       isBuilderChartConfig(queriedConfig) &&
       queriedConfig.orderBy &&
       typeof queriedConfig.orderBy === 'string'
-        ? orderByStringToSortingState(queriedConfig.orderBy)
-        : undefined,
+        ? orderByToTableSortState(queriedConfig.orderBy)
+        : [],
     [queriedConfig],
   );
 

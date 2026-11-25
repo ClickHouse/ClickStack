@@ -10,15 +10,17 @@ import {
 import { type MetricTable, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import SqlString from 'sqlstring';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { McpContext, ToolRegistrar, ToolResult } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
-import { isHiddenSource } from '@/mcp/utils/promql';
+import { getVisibleMcpSource } from '@/mcp/utils/sources';
 import {
   MCP_QUERY_MAX_EXECUTION_SEC,
   MCP_TIMEOUT_GRACE_MS,
@@ -94,12 +96,12 @@ type DescribeProgress = {
 async function describeSourceSchema(
   context: McpContext,
   sourceId: string,
+  metricName: string | undefined,
   signal: AbortSignal,
   progress: DescribeProgress,
 ): Promise<ToolResult> {
-  const { teamId } = context;
-  const source = await getSource(teamId, sourceId);
-  if (!source || isHiddenSource(context, source)) {
+  const source = await getVisibleMcpSource(context, sourceId);
+  if (!source) {
     return mcpUserError(
       `Source "${sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,
     );
@@ -121,7 +123,14 @@ async function describeSourceSchema(
   }
 
   if (source.kind === SourceKind.Promql) {
-    return describePromqlSource({ teamId, source, meta, signal, progress });
+    return describePromqlSource({
+      context,
+      source,
+      metricName,
+      meta,
+      signal,
+      progress,
+    });
   }
 
   if (
@@ -203,20 +212,16 @@ async function describeSourceSchema(
     };
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(`Connection not found for source "${sourceId}".`);
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
   const databaseName = source.from.databaseName;
   const tableName = discoveryTableName;
@@ -600,9 +605,17 @@ export function registerDescribeSource({
           .describe(
             'The source ID to describe. Get this from clickstack_list_sources.',
           ),
+        metricName: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'PromQL sources only: list the label names of this metric. ' +
+              'Without it, a PromQL source on a ClickHouse table lists metric names only.',
+          ),
       }),
     },
-    async ({ sourceId }) => {
+    async ({ sourceId, metricName }) => {
       const progress: DescribeProgress = {};
 
       const span = trace.getActiveSpan();
@@ -636,7 +649,14 @@ export function registerDescribeSource({
       let outcome: TimeoutOutcome<ToolResult>;
       try {
         outcome = await runWithTimeout(
-          signal => describeSourceSchema(context, sourceId, signal, progress),
+          signal =>
+            describeSourceSchema(
+              context,
+              sourceId,
+              metricName,
+              signal,
+              progress,
+            ),
           { timeoutMs: DESCRIBE_TIMEOUT_MS, graceMs: DESCRIBE_BACKSTOP_MS },
         );
       } catch (e) {

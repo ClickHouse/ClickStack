@@ -12,7 +12,7 @@ import {
   type SQLInterval,
 } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';
@@ -254,92 +254,92 @@ async function fetchPrometheusData<T extends z.ZodTypeAny>(
   return data.data;
 }
 
+type PromqlConnection = NonNullable<
+  Awaited<ReturnType<typeof getConnectionById>>
+>;
+
+/** Looks up a connection by ID. Defaults to the team-scoped controller lookup. */
+export type PromqlConnectionLookup = (
+  connectionId: string,
+  options: { selectPassword: boolean },
+) => PromiseLike<PromqlConnection | null>;
+
+const teamConnectionLookup =
+  (teamId: string): PromqlConnectionLookup =>
+  (connectionId, { selectPassword }) =>
+    getConnectionById(teamId, connectionId, selectPassword);
+
 export type PromqlLabelCatalog = {
   backend: PromqlBackend;
-  labelNames: string[];
+  /** Without `metricName`, only a Prometheus endpoint lists label names. */
+  labelNames?: string[];
   metricNames: string[];
 };
 
 /**
- * Lists the label names and metric names a PromQL source holds in
- * [startMs, endMs], at most `limit` of each. Returns `limit + 1` entries when
- * there are more, so callers can tell the list was cut. A ClickHouse source
- * reads them through the Prometheus HTTP API where resolveClickhouseLabelBackend
- * allows it, and with SQL otherwise.
+ * Lists the metric names a PromQL source holds, and label names: of
+ * `metricName` when given, else of every series on a Prometheus endpoint. At
+ * most `limit` of each; returns `limit + 1` entries when there are more, so
+ * callers can tell the list was cut.
+ *
+ * A Prometheus endpoint answers for [startMs, endMs]. A ClickHouse TimeSeries
+ * table is read with SQL on its tags table, without the window, whatever
+ * backend evaluates its queries: the window costs a pass over every series
+ * id, on the HTTP API too, which large tables can't afford (#3648).
  */
 export async function getPromqlLabelCatalog({
   teamId,
   source,
   startMs,
   endMs,
+  metricName,
   limit,
   signal,
+  getConnection = teamConnectionLookup(teamId),
 }: {
   teamId: string;
   source: {
     connection: { toString(): string };
     from: { databaseName: string; tableName: string };
-    promqlBackend?: PromqlSourceBackend;
   };
   startMs: number;
   endMs: number;
+  metricName?: string;
   limit: number;
   signal?: AbortSignal;
+  getConnection?: PromqlConnectionLookup;
 }): Promise<PromqlLabelCatalog> {
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
+  const connection = await getConnection(source.connection.toString(), {
+    selectPassword: true,
+  });
   if (!connection) {
     throw new Error('Connection not found');
   }
 
-  const params = {
-    start: String(startMs / 1000),
-    end: String(endMs / 1000),
-    limit: String(limit + 1),
-  };
-  const fetchCatalog = (fetchLabels: (path: string) => Promise<string[]>) =>
-    Promise.all([
-      fetchLabels('/labels'),
-      fetchLabels('/label/__name__/values'),
-    ]);
-
   if (connection.isPrometheusEndpoint) {
-    const [labelNames, metricNames] = await fetchCatalog(path =>
+    const params = {
+      start: String(startMs / 1000),
+      end: String(endMs / 1000),
+      limit: String(limit + 1),
+    };
+    const fetchLabels = (path: string, extra: Record<string, string> = {}) =>
       fetchPrometheusData(
         connection.host,
         `/api/v1${path}`,
-        params,
+        { ...params, ...extra },
         labelListSchema,
         signal,
-      ),
-    );
-    return { backend: 'prometheus', labelNames, metricNames };
-  }
-
-  const { databaseName, tableName } = source.from;
-  const labelBackend = await resolveClickhouseLabelBackend({
-    connection,
-    databaseName,
-    tableName,
-    promqlBackend: source.promqlBackend,
-  });
-  if (labelBackend === 'clickhouse-http') {
-    const [labelNames, metricNames] = await fetchCatalog(path => {
-      const { upstream, headers } = clickhousePrometheusRequest(connection);
-      return fetchPrometheusData(
-        upstream,
-        `${CLICKHOUSE_PROMETHEUS_API_PREFIX}${path}`,
-        { ...params, database: databaseName, table: tableName },
-        labelListSchema,
-        signal,
-        headers,
-        CLICKHOUSE_HTTP_API_UNAVAILABLE_MESSAGE,
       );
-    });
-    return { backend: 'clickhouse', labelNames, metricNames };
+    const [labelNames, metricNames] = await Promise.all([
+      fetchLabels(
+        '/labels',
+        metricName != null
+          ? { 'match[]': `{__name__=${JSON.stringify(metricName)}}` }
+          : {},
+      ),
+      fetchLabels('/label/__name__/values'),
+    ]);
+    return { backend: 'prometheus', labelNames, metricNames };
   }
 
   const args = {
@@ -350,22 +350,21 @@ export async function getPromqlLabelCatalog({
       requestTimeout: PROMETHEUS_FETCH_TIMEOUT_MS,
     }),
     connectionId: connection.id,
-    databaseName,
-    tableName,
-    startMs,
-    endMs,
+    databaseName: source.from.databaseName,
+    tableName: source.from.tableName,
     limit: limit + 1,
     signal,
   };
+  // No startMs/endMs: without them neither lookup reads the time ranges.
   const [labelNames, metricNames] = await Promise.all([
-    queryLabelNames(args),
+    metricName != null ? queryLabelNames({ ...args, metricName }) : undefined,
     queryLabelValues({ ...args, labelName: '__name__' }),
   ]);
   return { backend: 'clickhouse', labelNames, metricNames };
 }
 
 type PromqlTarget = {
-  connection: NonNullable<Awaited<ReturnType<typeof getConnectionById>>>;
+  connection: PromqlConnection;
   databaseName: string;
   tableName: string;
   /** The source's scrape interval floor, e.g. "1 minute". */
@@ -382,7 +381,10 @@ type PromqlTarget = {
 export async function resolvePromqlTarget(
   teamId: string,
   sourceId: string | undefined,
-  { selectPassword }: { selectPassword: boolean },
+  {
+    selectPassword,
+    getConnection = teamConnectionLookup(teamId),
+  }: { selectPassword: boolean; getConnection?: PromqlConnectionLookup },
 ): Promise<PromqlTarget | { status: 400 | 404; error: string }> {
   if (!sourceId) {
     return { status: 400, error: 'missing required parameter: sourceId' };
@@ -394,11 +396,9 @@ export async function resolvePromqlTarget(
     return { status: 404, error: 'Source not found' };
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
+  const connection = await getConnection(source.connection.toString(), {
     selectPassword,
-  );
+  });
 
   if (!connection) {
     return { status: 404, error: 'Connection not found' };

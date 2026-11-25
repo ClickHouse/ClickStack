@@ -54,8 +54,8 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial,
-    sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
@@ -321,6 +321,86 @@ body {
 .stack-header .stack-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.stack-header-toggle {
+  cursor: pointer;
+  gap: 16px;
+  transition: background 0.1s;
+}
+
+.stack-header-toggle:hover {
+  background: var(--row-hover);
+}
+
+.stack-card.collapsed .stack-header {
+  border-bottom: none;
+}
+
+.stack-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stack-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.stack-toggle .chevron {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.stack-card.collapsed .stack-toggle .chevron {
+  rotate: -90deg;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stack-toggle .chevron {
+    transition: rotate 0.15s;
+  }
+}
+
+.stack-title {
+  display: block;
+  min-width: 0;
+}
+
+.stack-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stack-header .worktree {
+  display: block;
+}
+
+.slot-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--text-muted);
+  background: var(--card-surface);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 .stack-header .open-btn {

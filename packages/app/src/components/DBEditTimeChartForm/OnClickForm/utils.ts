@@ -1,5 +1,5 @@
 import { Control } from 'react-hook-form';
-import z from 'zod';
+import z from 'zod/v3';
 import { OnClick, OnClickSchema } from '@hyperdx/common-utils/dist/types';
 
 export const DrawerSchema = z.object({ onClick: OnClickSchema.nullish() });

@@ -1651,6 +1651,18 @@ export class DashboardPage {
     return this.getFilterForm().getByTestId('filter-sql-preview-values');
   }
 
+  /** The SQL query filter form's generated SQL section. */
+  getSqlQueryFilterGeneratedSql(): Locator {
+    return this.getFilterForm().getByTestId('filter-sql-generated-sql');
+  }
+
+  /** Expand the generated SQL section, which starts collapsed. */
+  async openSqlQueryFilterGeneratedSql() {
+    await this.getSqlQueryFilterGeneratedSql()
+      .getByRole('button', { name: 'Generated SQL' })
+      .click();
+  }
+
   /** Run the SQL query filter form's query and show its values. */
   async previewSqlQueryFilter() {
     await this.getFilterForm().getByTestId('filter-sql-preview-button').click();
@@ -2129,6 +2141,30 @@ export class DashboardPage {
       .locator('table tbody tr')
       .first()
       .waitFor({ state: 'visible', timeout: 15000 });
+  }
+
+  /** The sort button in the header of column `name` in a table tile. */
+  getTileSortButton(tileIndex: number, name: string) {
+    return this.getTile(tileIndex)
+      .getByTestId('raw-log-table-sort-button')
+      .filter({ hasText: name });
+  }
+
+  /** Cell values of column `name` in a table tile, top to bottom. */
+  async getTileColumnValues(
+    tileIndex: number,
+    name: string,
+  ): Promise<string[]> {
+    const table = this.getTile(tileIndex).locator('table').first();
+    const headers = (await table.locator('thead th').allTextContents()).map(h =>
+      h.trim(),
+    );
+    const index = headers.findIndex(h => h === name);
+    if (index === -1) return [];
+    const cells = table.locator(
+      `tbody tr[data-index] td:nth-child(${index + 1})`,
+    );
+    return (await cells.allTextContents()).map(c => c.trim());
   }
 
   /**

@@ -1,5 +1,8 @@
 import React from 'react';
+import { ColumnMeta } from '@hyperdx/common-utils/dist/clickhouse';
+import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import {
+  ChartConfigWithOptTimestamp,
   SourceKind,
   TLogSource,
   TTraceSource,
@@ -7,6 +10,7 @@ import {
 import { screen, waitFor } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { RowSidePanelContext } from '@/components/DBRowSidePanel';
 import {
@@ -20,7 +24,6 @@ import {
   TraceTotalDurationStat,
   useEventsAroundFocus,
 } from '@/components/DBTraceWaterfallChart';
-import { TimelineChart } from '@/components/TimelineChart';
 import { TRACE_WATERFALL_ROW_LIMIT } from '@/components/traceWaterfallLimits';
 import {
   TraceTriggerRow,
@@ -36,6 +39,10 @@ jest.mock('@/components/traceWaterfallLimits', () => ({
   TRACE_WATERFALL_ROW_LIMIT: 3,
   TRACE_WATERFALL_FETCH_LIMIT: 4,
 }));
+
+// Read at render time, so the hoisted mock factory can reference it.
+const mockTimelineChartProps: { latest: any } = { latest: {} };
+
 jest.mock('@/components/TimelineChart', () => {
   const flattenText = (value: React.ReactNode): string => {
     if (value == null || typeof value === 'boolean') {
@@ -58,7 +65,7 @@ jest.mock('@/components/TimelineChart', () => {
   };
 
   const mockComponent = function MockTimelineChart(props: any) {
-    mockComponent.latestProps = props;
+    mockTimelineChartProps.latest = props;
     return (
       <div data-testid="timeline-chart">
         TimelineChart
@@ -70,7 +77,6 @@ jest.mock('@/components/TimelineChart', () => {
       </div>
     );
   };
-  mockComponent.latestProps = {};
 
   const MockTimelineMinimap = function MockTimelineMinimap(props: any) {
     MockTimelineMinimap.latestProps = props;
@@ -131,18 +137,30 @@ jest.mock('@/hooks/useWaterfallSearchState', () => ({
   default: (...args: any[]) => mockUseWaterfallSearchState(...args),
 }));
 
-const mockUseOffsetPaginatedQuery = useOffsetPaginatedQuery as jest.Mock;
-const mockUseRowWhere = useRowWhere as jest.Mock;
-const mockUseColumns = useColumns as jest.Mock;
-const MockTimelineChart = TimelineChart as any;
+const mockUseOffsetPaginatedQuery = jest.mocked(useOffsetPaginatedQuery);
+const mockUseRowWhere = jest.mocked(useRowWhere);
+const mockUseColumns = jest.mocked(useColumns);
 
 // Mirrors useColumns, which is disabled, so never loading, without a table.
-const setupColumnsMock = (state: { data?: object[]; isLoading?: boolean }) =>
-  mockUseColumns.mockImplementation(({ tableName }: { tableName: string }) =>
-    tableName ? { isLoading: false, ...state } : { isLoading: false },
+// A loading query result carries no data, so the two states are built apart.
+const setupColumnsMock = ({
+  data,
+  isLoading = false,
+}: {
+  data?: Partial<ColumnMeta>[];
+  isLoading?: boolean;
+}) =>
+  mockUseColumns.mockImplementation(({ tableName }) =>
+    fromPartial(
+      tableName && isLoading
+        ? { isLoading: true }
+        : { isLoading: false, data: tableName ? data : undefined },
+    ),
   );
 
-const selectsSeverityNumber = (query: { select: Array<{ alias?: string }> }) =>
+const selectsSeverityNumber = (query: ChartConfigWithOptTimestamp) =>
+  isBuilderChartConfig(query) &&
+  Array.isArray(query.select) &&
   query.select.some(s => s.alias === 'SeverityNumber');
 
 describe('DBTraceWaterfallChartContainer', () => {
@@ -228,7 +246,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     jest.clearAllMocks();
     mockUseBrowserTraceEvents.mockImplementation(passBrowserTraceEventsThrough);
     mockUseRowWhere.mockReturnValue(() => ({ where: 'row-id', aliasWith: [] }));
-    MockTimelineChart.latestProps = {};
+    mockTimelineChartProps.latest = {};
     mockUseWaterfallSearchState.mockReturnValue(makeWaterfallSearchState());
     setupColumnsMock({ data: [] });
   });
@@ -294,7 +312,11 @@ describe('DBTraceWaterfallChartContainer', () => {
     mockUseOffsetPaginatedQuery.mockImplementation((query: any, opts: any) => {
       // Disabled queries never fire (mirrors react-query).
       if (opts?.enabled === false) {
-        return { data: undefined, isFetching: false, error: undefined };
+        return fromPartial({
+          data: undefined,
+          isFetching: false,
+          error: undefined,
+        });
       }
       const isLog = query?.from?.tableName === 'log_table';
       const isBefore = query?.dateRangeStartInclusive === true;
@@ -304,28 +326,30 @@ describe('DBTraceWaterfallChartContainer', () => {
 
       const fatal = isLog ? logError : traceError;
       if (fatal) {
-        return { data: undefined, isFetching, error: fatal };
+        return fromPartial({ data: undefined, isFetching, error: fatal });
       }
       const filterErr = isLog ? logFilterError : traceFilterError;
       if (filterErr && isFiltered) {
-        return { data: undefined, isFetching, error: filterErr };
+        return fromPartial({ data: undefined, isFetching, error: filterErr });
       }
 
       const data = isLog ? logData : traceData;
-      return {
+      return fromPartial({
         data: isBefore ? data : emptyData,
         isFetching,
         error: undefined,
-      };
+      });
     });
   };
 
   // Test cases
   it('renders loading state when data is being fetched', () => {
-    mockUseOffsetPaginatedQuery.mockReturnValue({
-      data: undefined,
-      isFetching: true,
-    });
+    mockUseOffsetPaginatedQuery.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isFetching: true,
+      }),
+    );
     renderComponent();
     expect(screen.getByText('Loading Traces...')).toBeInTheDocument();
   });
@@ -336,8 +360,8 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Verify the chart received the correct data
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
-    expect(MockTimelineChart.latestProps.rows[0]).toBeTruthy();
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows[0]).toBeTruthy();
   });
 
   it('renders TimelineChart with both trace and log data', async () => {
@@ -350,9 +374,9 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Verify both trace and log data are present
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
-    expect(MockTimelineChart.latestProps.rows[0]).toBeTruthy(); // Trace row
-    expect(MockTimelineChart.latestProps.rows[1]).toBeTruthy(); // Log row
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows[0]).toBeTruthy(); // Trace row
+    expect(mockTimelineChartProps.latest.rows[1]).toBeTruthy(); // Log row
   });
 
   it.each([
@@ -367,7 +391,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
   });
 
   it.each([
@@ -385,7 +409,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    const logRow = MockTimelineChart.latestProps.rows.find(
+    const logRow = mockTimelineChartProps.latest.rows.find(
       (row: { type?: string }) => row.type === SourceKind.Log,
     );
     expect(logRow.events[0].backgroundColor).toBe(expectedColor());
@@ -525,7 +549,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     expect(screen.queryByTestId('trace-total-stats')).not.toBeInTheDocument();
   });
 
@@ -726,10 +750,12 @@ describe('DBTraceWaterfallChartContainer', () => {
     );
   });
   it('renders empty state when no data is available', async () => {
-    mockUseOffsetPaginatedQuery.mockReturnValue({
-      data: emptyData,
-      isFetching: false,
-    });
+    mockUseOffsetPaginatedQuery.mockReturnValue(
+      fromPartial({
+        data: emptyData,
+        isFetching: false,
+      }),
+    );
 
     renderComponent();
 
@@ -746,9 +772,9 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent(mockLogTableSource, "trace'with-quote");
 
     expect(mockUseOffsetPaginatedQuery).toHaveBeenCalled();
-    expect(mockUseOffsetPaginatedQuery.mock.calls[0][0].where).toBe(
-      "TraceId = 'trace\\'with-quote'",
-    );
+    expect(mockUseOffsetPaginatedQuery.mock.calls[0]?.[0]).toMatchObject({
+      where: "TraceId = 'trace\\'with-quote'",
+    });
   });
 
   it('renders HTTP spans with URL information', async () => {
@@ -779,9 +805,9 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Verify the chart received the HTTP span with URL
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
 
-    expect(MockTimelineChart.latestProps.rows[0]).toBeTruthy();
+    expect(mockTimelineChartProps.latest.rows[0]).toBeTruthy();
     expect(
       screen.getByText('http span https://example-api.clickhouse.com/users'),
     ).toBeInTheDocument();
@@ -806,7 +832,7 @@ describe('DBTraceWaterfallChartContainer', () => {
   });
 
   const findRow = (type: string) =>
-    MockTimelineChart.latestProps.rows.find(
+    mockTimelineChartProps.latest.rows.find(
       (row: { type?: string }) => row.type === type,
     );
 
@@ -867,7 +893,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     expect(screen.getByText(errors)).toBeInTheDocument();
-    const logRow = MockTimelineChart.latestProps.rows.find(
+    const logRow = mockTimelineChartProps.latest.rows.find(
       (row: { type?: string }) => row.type === SourceKind.Log,
     );
     const label = renderWithMantine(logRow.label);
@@ -907,7 +933,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent(null);
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows).toHaveLength(1);
+    expect(mockTimelineChartProps.latest.rows).toHaveLength(1);
   });
 
   it('renders Spans and Logs chips when log source is present', async () => {
@@ -934,13 +960,13 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
 
     const showLogsChip = screen.getByTestId('show-logs-chip');
     await user.click(showLogsChip);
 
     await waitFor(() => {
-      expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+      expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     });
   });
 
@@ -950,13 +976,13 @@ describe('DBTraceWaterfallChartContainer', () => {
     renderComponent();
     await waitForLoading();
 
-    expect(MockTimelineChart.latestProps.rows.length).toBe(2);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(2);
 
     const showSpansChip = screen.getByTestId('show-spans-chip');
     await user.click(showSpansChip);
 
     await waitFor(() => {
-      expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+      expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     });
   });
 
@@ -1030,7 +1056,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Valid spans still render — the log failure did not blank the chart.
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     // The full-chart error block is NOT shown.
     expect(
       screen.queryByText('An error occurred while fetching trace data:'),
@@ -1057,7 +1083,7 @@ describe('DBTraceWaterfallChartContainer', () => {
     await waitForLoading();
 
     // Spans still render (unfiltered fallback) — chart is not blanked.
-    expect(MockTimelineChart.latestProps.rows.length).toBe(1);
+    expect(mockTimelineChartProps.latest.rows.length).toBe(1);
     expect(
       screen.queryByText('An error occurred while fetching trace data:'),
     ).not.toBeInTheDocument();
@@ -1198,7 +1224,7 @@ describe('DBTraceWaterfallChartContainer', () => {
       renderComponent();
       await waitForLoading();
 
-      expect(MockTimelineChart.latestProps.rows).toHaveLength(1);
+      expect(mockTimelineChartProps.latest.rows).toHaveLength(1);
       expect(screen.getByText('1 span,')).toBeInTheDocument();
     });
 
@@ -1325,7 +1351,7 @@ describe('DBTraceWaterfallChartContainer', () => {
           triggerRow,
         }));
       const rowTypes = () =>
-        MockTimelineChart.latestProps.rows.map(
+        mockTimelineChartProps.latest.rows.map(
           (row: { id: string; type?: string }) => `${row.type}:${row.id}`,
         );
 
@@ -1341,7 +1367,7 @@ describe('DBTraceWaterfallChartContainer', () => {
           'trace:row-id',
           'log:row-id',
         ]);
-        const [row] = MockTimelineChart.latestProps.rows;
+        const [row] = mockTimelineChartProps.latest.rows;
         expect(row.events[0].tooltip).toBe(
           `${triggeredBy} | Started at Jan 1 1:00:00.000 AM`,
         );
@@ -1436,13 +1462,19 @@ describe('useEventsAroundFocus', () => {
 
     if (enabled) {
       mockUseOffsetPaginatedQuery
-        .mockReturnValueOnce({ data: beforeData, isFetching: false })
-        .mockReturnValueOnce({ data: afterData, isFetching: false });
+        .mockReturnValueOnce(
+          fromPartial({ data: beforeData, isFetching: false }),
+        )
+        .mockReturnValueOnce(
+          fromPartial({ data: afterData, isFetching: false }),
+        );
     } else {
-      mockUseOffsetPaginatedQuery.mockReturnValue({
-        data: { data: [], meta: [] },
-        isFetching: false,
-      });
+      mockUseOffsetPaginatedQuery.mockReturnValue(
+        fromPartial({
+          data: { data: [], meta: [] },
+          isFetching: false,
+        }),
+      );
     }
 
     const { result } = renderHook(() =>
@@ -1508,8 +1540,8 @@ describe('useEventsAroundFocus', () => {
 
     // Verify results were combined correctly
     expect(result.rows.length).toBe(2);
-    expect((result.rows[0] as any).Body).toBe('before focus');
-    expect((result.rows[1] as any).Body).toBe('after focus');
+    expect(result.rows[0]).toMatchObject({ Body: 'before focus' });
+    expect(result.rows[1]).toMatchObject({ Body: 'after focus' });
   });
 
   it('handles empty data correctly', () => {

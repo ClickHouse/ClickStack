@@ -2,7 +2,7 @@ import { sanitizeUrl } from '@braintree/sanitize-url';
 import express, { RequestHandler, Response } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { performance } from 'perf_hooks';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { validateRequest } from 'zod-express-middleware';
 
 import { CODE_VERSION } from '@/config';
