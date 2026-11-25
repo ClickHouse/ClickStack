@@ -8,6 +8,7 @@ import {
   leftUtf8Prefix,
 } from '@hyperdx/common-utils/dist/core/utils';
 import { renderHook } from '@testing-library/react';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import useRowWhere, { processRowToWhereClause } from '@/hooks/useRowWhere';
 
@@ -496,7 +497,7 @@ describe('processRowToWhereClause', () => {
         {
           name: 'test',
           type: 'String',
-          valueExpr: null as any,
+          valueExpr: fromAny<string, null>(null),
           jsType: JSDataType.String,
         },
       ],

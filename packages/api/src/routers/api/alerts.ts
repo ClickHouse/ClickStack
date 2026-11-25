@@ -9,7 +9,7 @@ import type {
 import express from 'express';
 import { pick } from 'lodash';
 import { ObjectId } from 'mongodb';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { processRequest, validateRequest } from 'zod-express-middleware';
 
 import {

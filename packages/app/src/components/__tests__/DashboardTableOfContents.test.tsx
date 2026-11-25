@@ -113,7 +113,7 @@ describe('DashboardTableOfContents', () => {
         .spyOn(window, 'requestAnimationFrame')
         .mockImplementation(cb => {
           cb(0);
-          return 0 as unknown as number;
+          return 0;
         });
     });
 

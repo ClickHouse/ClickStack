@@ -41,11 +41,16 @@ import { ChartAnnotation } from '@/components/charts/chartAnnotations';
 import { ChartOverlayControls } from '@/components/charts/ChartOverlayControls';
 import { toViewportPoint } from '@/components/charts/ChartTooltip';
 import type { NumberFormat } from '@/types';
+import { useDisplayTimeZone } from '@/useDisplayTimeZone';
 import { useFormatTime } from '@/useFormatTime';
 import { useContentFontSize } from '@/useUserPreferences';
 import { COLORS } from '@/utils';
 
-import { compactTickAnchor, formatAxisTick } from './axisTicks';
+import {
+  compactTickAnchor,
+  formatAxisTick,
+  getXAxisTickDateFormat,
+} from './axisTicks';
 import {
   type ActiveClickPayload,
   buildActiveClickSeries,
@@ -200,8 +205,8 @@ export const MemoChart = memo(function MemoChart({
    */
   yAxisMaxDomain?: number;
 }) {
-  const _id = useId();
-  const id = _id.replace(/:/g, '');
+  const reactId = useId();
+  const id = reactId.replace(/:/g, '');
 
   // The y-axis width budget is expressed in characters (see MAX_AXIS_MANTISSA),
   // so it has to grow with the tick font or the widest labels clip.
@@ -455,13 +460,19 @@ export const MemoChart = memo(function MemoChart({
   }, [displayType, graphResults.length, containerWidth, yAxisWidth]);
 
   const formatTime = useFormatTime();
+  const displayTimeZone = useDisplayTimeZone();
   const xTickFormatter = useCallback(
     (value: number, index: number) => {
       return formatTime(value * 1000, {
-        format: index === 0 ? 'normal' : 'time',
+        format: getXAxisTickDateFormat({
+          tickSeconds: value,
+          index,
+          granularity,
+          timeZone: displayTimeZone,
+        }),
       });
     },
-    [formatTime],
+    [formatTime, granularity, displayTimeZone],
   );
 
   // Compact mode: anchor the first label to the start and the last to the end

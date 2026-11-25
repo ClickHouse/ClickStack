@@ -7,8 +7,9 @@ import {
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 import { act, renderHook } from '@testing-library/react';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
-import { MetricsDataType, NumberFormat } from '@/types';
+import { NumberFormat } from '@/types';
 import * as utils from '@/utils';
 import {
   COLORS,
@@ -128,104 +129,94 @@ describe('getMetricTableName', () => {
     name: 'test-source',
     timestampValueExpression: 'timestamp',
     connection: 'test-connection',
-    kind: 'metric' as const,
+    kind: SourceKind.Metric,
   });
 
   // Source with metric tables
-  const createSourceWithMetrics = () => ({
-    ...createBaseSource(),
-    metricTables: {
-      gauge: 'gauge_table',
-      counter: 'counter_table',
-    },
-  });
+  // `counter` is not a MetricsDataType, so this source is deliberately invalid.
+  const createSourceWithMetrics = (): TSource =>
+    fromAny({
+      ...createBaseSource(),
+      metricTables: {
+        gauge: 'gauge_table',
+        counter: 'counter_table',
+      },
+    });
 
   it('returns the default table name when metricType is null', () => {
-    const source = createSourceWithMetrics() as unknown as TSource;
+    const source = createSourceWithMetrics();
 
     expect(getMetricTableName(source)).toBe('');
     expect(getMetricTableName(source, undefined)).toBe('');
   });
 
   it('returns the specific metric table when metricType is provided', () => {
-    const source = createSourceWithMetrics() as unknown as TSource;
+    const source = createSourceWithMetrics();
 
-    expect(getMetricTableName(source, 'gauge' as MetricsDataType)).toBe(
-      'gauge_table',
-    );
-    expect(getMetricTableName(source, 'counter' as MetricsDataType)).toBe(
-      'counter_table',
-    );
+    expect(getMetricTableName(source, 'gauge')).toBe('gauge_table');
+    expect(getMetricTableName(source, 'counter')).toBe('counter_table');
   });
 
   it('handles case insensitivity for metric types', () => {
-    const source = createSourceWithMetrics() as unknown as TSource;
+    const source = createSourceWithMetrics();
 
-    expect(getMetricTableName(source, 'GAUGE' as MetricsDataType)).toBe(
-      'gauge_table',
-    );
-    expect(getMetricTableName(source, 'Counter' as MetricsDataType)).toBe(
-      'counter_table',
-    );
+    expect(getMetricTableName(source, 'GAUGE')).toBe('gauge_table');
+    expect(getMetricTableName(source, 'Counter')).toBe('counter_table');
   });
 
   it('returns undefined when the requested metric type does not exist', () => {
-    const source = {
+    const source = fromPartial<TSource>({
       ...createBaseSource(),
       metricTables: {
         gauge: 'gauge_table',
       },
-    } as unknown as TSource;
+    });
 
-    expect(
-      getMetricTableName(source, 'histogram' as MetricsDataType),
-    ).toBeUndefined();
+    expect(getMetricTableName(source, 'histogram')).toBeUndefined();
   });
 
   it('handles sources without metricTables property', () => {
-    const source = createBaseSource() as unknown as TSource;
+    const source = fromPartial<TSource>(createBaseSource());
 
     expect(getMetricTableName(source)).toBe('');
-    expect(
-      getMetricTableName(source, 'gauge' as MetricsDataType),
-    ).toBeUndefined();
+    expect(getMetricTableName(source, 'gauge')).toBeUndefined();
   });
 });
 
 describe('getAllMetricTables', () => {
   const createMetricSource = (metricTables: Record<string, string>): TSource =>
-    ({
-      kind: 'metric' as const,
+    fromAny({
+      kind: SourceKind.Metric,
       from: { databaseName: 'test_db', tableName: '' },
       connection: 'test-conn',
       id: 'test-id',
       name: 'test',
       timestampValueExpression: 'timestamp',
       metricTables,
-    }) as unknown as TSource;
+    });
 
   it('returns empty array for non-metric source', () => {
-    const source = {
-      kind: 'log' as const,
+    const source = fromPartial<TSource>({
+      kind: SourceKind.Log,
       from: { databaseName: 'test_db', tableName: 'logs' },
       connection: 'test-conn',
       id: 'test-id',
       name: 'test',
       timestampValueExpression: 'timestamp',
-    } as unknown as TSource;
+    });
 
     expect(getAllMetricTables(source)).toEqual([]);
   });
 
   it('returns empty array when metricTables is undefined', () => {
-    const source = {
-      kind: 'metric' as const,
+    const source = fromPartial<TSource>({
+      kind: SourceKind.Metric,
       from: { databaseName: 'test_db', tableName: '' },
       connection: 'test-conn',
       id: 'test-id',
       name: 'test',
       timestampValueExpression: 'timestamp',
-    } as unknown as TSource;
+    });
 
     expect(getAllMetricTables(source)).toEqual([]);
   });
@@ -360,7 +351,7 @@ describe('getTableConnectionsForConnection', () => {
 describe('formatNumber', () => {
   it('handles undefined/null values', () => {
     expect(formatNumber(undefined)).toBe('N/A');
-    expect(formatNumber(null as any)).toBe('N/A');
+    expect(formatNumber(fromAny(null))).toBe('N/A');
   });
 
   it('returns string representation when no format options provided', () => {
@@ -1111,10 +1102,10 @@ describe('stripTrailingSlash', () => {
   });
 
   it('should throw an error for non-string values', () => {
-    expect(() => stripTrailingSlash(123 as any)).toThrow(
+    expect(() => stripTrailingSlash(fromAny(123))).toThrow(
       'URL must be a non-empty string',
     );
-    expect(() => stripTrailingSlash({} as any)).toThrow(
+    expect(() => stripTrailingSlash(fromAny({}))).toThrow(
       'URL must be a non-empty string',
     );
   });
@@ -1618,19 +1609,23 @@ describe('getColorFromCSSToken', () => {
     // value (and shouldn't be relied upon by JS callers).
     const getComputedStyleSpy = jest
       .spyOn(global, 'getComputedStyle')
-      .mockReturnValue({
-        getPropertyValue: () => '#should-be-ignored',
-      } as unknown as CSSStyleDeclaration);
+      .mockReturnValue(
+        fromPartial<CSSStyleDeclaration>({
+          getPropertyValue: () => '#should-be-ignored',
+        }),
+      );
 
     expect(getColorFromCSSToken('chart-blue')).toBe(COLORS[0]);
     expect(getComputedStyleSpy).not.toHaveBeenCalled();
   });
 
   it('returns the CSS variable value for semantic tokens when provided', () => {
-    jest.spyOn(global, 'getComputedStyle').mockReturnValue({
-      getPropertyValue: (name: string) =>
-        name === '--color-chart-success' ? '#theme-green' : '',
-    } as unknown as CSSStyleDeclaration);
+    jest.spyOn(global, 'getComputedStyle').mockReturnValue(
+      fromPartial<CSSStyleDeclaration>({
+        getPropertyValue: (name: string) =>
+          name === '--color-chart-success' ? '#theme-green' : '',
+      }),
+    );
 
     expect(getColorFromCSSToken('chart-success')).toBe('#theme-green');
   });

@@ -1011,7 +1011,9 @@ export function DBTraceWaterfallChartContainer({
     aliasWith: WithClause[];
   };
 
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const { nodesMap, flattenedNodes, parentIdsByLevel } = useMemo(() => {
     const rootNodes: Node[] = [];

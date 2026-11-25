@@ -472,8 +472,8 @@ export default function PodDetailsSidePanel(props: {
 
   return (
     <PodDetailsSidePanelInner
-      {...props}
       key={podName || 'empty'}
+      {...props}
       podName={podName}
       setPodName={setPodName}
     />

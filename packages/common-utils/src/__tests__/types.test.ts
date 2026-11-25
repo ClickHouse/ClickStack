@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { MAX_FORMULA_EXPRESSION_LENGTH } from '@/core/formula';
 import {

@@ -13,7 +13,7 @@ import { configUsesReferenceVariable } from '@hyperdx/common-utils/dist/referenc
 import { isRangeThresholdType } from '@hyperdx/common-utils/dist/types';
 import { groupBy } from 'lodash';
 import { type FilterQuery, Types } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { recordOnboardingTaskCompletion } from '@/controllers/user';
 import type { ObjectId } from '@/models';

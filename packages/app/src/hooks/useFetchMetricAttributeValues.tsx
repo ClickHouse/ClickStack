@@ -3,6 +3,7 @@ import {
   ResponseJSON,
   tableExpr,
 } from '@hyperdx/common-utils/dist/clickhouse';
+import { querySettingsToClickHouseSettings } from '@hyperdx/common-utils/dist/core/utils';
 import { SourceKind, TMetricSource } from '@hyperdx/common-utils/dist/types';
 import { useQuery } from '@tanstack/react-query';
 
@@ -97,6 +98,7 @@ export const useFetchMetricAttributeValues = ({
           abort_signal: signal,
           connectionId: tableSource!.connection,
           clickhouse_settings: {
+            ...querySettingsToClickHouseSettings(tableSource?.querySettings),
             max_execution_time: 60,
             timeout_overflow_mode: 'break',
           },

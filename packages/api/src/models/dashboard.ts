@@ -1,6 +1,6 @@
 import { DashboardSchema } from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ObjectId } from '.';
 

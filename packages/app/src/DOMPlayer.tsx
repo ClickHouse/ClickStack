@@ -143,9 +143,9 @@ export default function DOMPlayer({
   const initialEventsRef = useRef<any[]>([]);
 
   const lastEventTsLoadedRef = useRef(0);
-  const [lastEventTsLoaded, _setLastEventTsLoaded] = useState(0);
+  const [lastEventTsLoaded, setLastEventTsLoaded] = useState(0);
   const setLastEventTsLoadedRef = useRef(
-    throttle(_setLastEventTsLoaded, 100, { leading: true, trailing: true }),
+    throttle(setLastEventTsLoaded, 100, { leading: true, trailing: true }),
   );
   const [isInitialEventsLoaded, setIsInitialEventsLoaded] = useState(false);
   const [isReplayFullyLoaded, setIsReplayFullyLoaded] = useState(false);

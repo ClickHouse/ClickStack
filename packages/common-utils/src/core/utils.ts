@@ -1,8 +1,9 @@
 // Port from ChartUtils + source.ts
+import type { ClickHouseSettings } from '@clickhouse/client-common';
 import { add as fnsAdd, format as fnsFormat } from 'date-fns';
 import { formatInTimeZone, zonedTimeToUtc } from 'date-fns-tz';
 import { omit } from 'lodash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export { default as objectHash } from 'object-hash';
 
@@ -59,6 +60,15 @@ import {
 import { validateVariableReferencesInTemplate } from '@/variables';
 
 import { SkipIndexMetadata, TableMetadata } from './metadata';
+
+/** Source `querySettings` in the shape the ClickHouse client expects. */
+export function querySettingsToClickHouseSettings(
+  querySettings: QuerySettings | undefined,
+): ClickHouseSettings {
+  return Object.fromEntries(
+    (querySettings ?? []).map(({ setting, value }) => [setting, value]),
+  );
+}
 
 /** The default maximum number of buckets setting when determining a bucket duration for 'auto' granularity */
 export const DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS = 60;
@@ -835,6 +845,10 @@ const TIME_TOKENS = {
     '12h': 'h:mm:ss a',
     '24h': 'HH:mm:ss',
   },
+  date: {
+    '12h': 'MMM d',
+    '24h': 'MMM d',
+  },
 };
 
 export const UTC_TIME_ZONE = 'Etc/UTC';
@@ -848,7 +862,7 @@ export const formatDate = (
     clock = '12h',
   }: {
     timeZone?: string;
-    format?: 'normal' | 'short' | 'withMs' | 'time' | 'withYear';
+    format?: 'normal' | 'short' | 'withMs' | 'time' | 'withYear' | 'date';
     clock?: '12h' | '24h';
   },
 ) => {
@@ -1694,6 +1708,38 @@ export function aliasMapToWithClauses(
     }));
 
   return withClauses.length > 0 ? withClauses : undefined;
+}
+
+/**
+ * Keeps only the WITH clauses that `texts` reference, directly or through
+ * another kept clause. Lets a query that doesn't select a config's columns
+ * (e.g. a count histogram) skip the aliases it never uses, so adding or
+ * removing a column doesn't change its query key.
+ */
+export function getReferencedWithClauses(
+  withClauses: BuilderChartConfig['with'],
+  texts: string[],
+): BuilderChartConfig['with'] {
+  if (!withClauses) return undefined;
+
+  const kept = new Set<string>();
+  let haystack = texts.join('\n');
+  let added = true;
+  while (added) {
+    added = false;
+    for (const clause of withClauses) {
+      // Substring match over-includes (e.g. `svc` in `svc_name`), which only
+      // costs a refetch; under-including would break the query.
+      if (!kept.has(clause.name) && haystack.includes(clause.name)) {
+        kept.add(clause.name);
+        haystack += `\n${clause.sql?.sql ?? ''}`;
+        added = true;
+      }
+    }
+  }
+
+  const referenced = withClauses.filter(clause => kept.has(clause.name));
+  return referenced.length > 0 ? referenced : undefined;
 }
 
 const stripQuotes = (s: string) => s.replace(/^["'`]|["'`]$/g, '');

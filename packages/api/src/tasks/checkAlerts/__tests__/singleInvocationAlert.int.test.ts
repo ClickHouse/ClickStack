@@ -1,4 +1,5 @@
 import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/node';
+import { fromAny } from '@total-typescript/shoehorn';
 import { createServer } from 'http';
 import mongoose from 'mongoose';
 import ms from 'ms';
@@ -93,7 +94,7 @@ describe('Single Invocation Alert Test', () => {
 
   it('should trigger alert and send webhook notification - happy path', async () => {
     // Mock slack webhook to avoid external calls
-    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(fromAny(null));
 
     // Create team
     const team = await createTeam({ name: 'Test Team' });
@@ -256,7 +257,7 @@ describe('Single Invocation Alert Test', () => {
   });
 
   it('should include saved search filters in alert ClickHouse query', async () => {
-    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(fromAny(null));
 
     const team = await createTeam({ name: 'Test Team' });
 
@@ -397,7 +398,7 @@ describe('Single Invocation Alert Test', () => {
   });
 
   it('should not trigger alert when filters exclude all matching logs', async () => {
-    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(fromAny(null));
 
     const team = await createTeam({ name: 'Test Team' });
 
@@ -519,7 +520,7 @@ describe('Single Invocation Alert Test', () => {
   });
 
   it('should apply both where clause and filters together in alert query', async () => {
-    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(fromAny(null));
 
     const team = await createTeam({ name: 'Test Team' });
 
@@ -658,7 +659,7 @@ describe('Single Invocation Alert Test', () => {
 
   it('should use correct tile name in alert title when alerting tile is not first', async () => {
     // Mock slack webhook to avoid external calls
-    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(fromAny(null));
 
     // Create team
     const team = await createTeam({ name: 'Test Team' });
@@ -847,7 +848,7 @@ describe('Single Invocation Alert Test', () => {
 
     // Get the webhook call to inspect the title
     expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(1);
-    const webhookCall = (slack.postMessageToWebhook as jest.Mock).mock.calls[0];
+    const webhookCall = jest.mocked(slack.postMessageToWebhook).mock.calls[0];
     const messageText = webhookCall[1].text;
 
     // This assertion SHOULD pass but WILL FAIL due to the bug
@@ -864,7 +865,7 @@ describe('Single Invocation Alert Test', () => {
   });
 
   it('should trigger alert for raw SQL Number chart tile', async () => {
-    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+    jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(fromAny(null));
 
     const team = await createTeam({ name: 'Test Team' });
 

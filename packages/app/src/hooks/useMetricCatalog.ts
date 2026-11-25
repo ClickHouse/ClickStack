@@ -6,6 +6,7 @@ import {
   ResponseJSON,
   tableExpr,
 } from '@hyperdx/common-utils/dist/clickhouse';
+import { querySettingsToClickHouseSettings } from '@hyperdx/common-utils/dist/core/utils';
 import {
   DateRange,
   SourceKind,
@@ -98,6 +99,7 @@ export function useMetricCatalog({
       tables,
       timestampExpression,
       dateRange,
+      source.querySettings,
     ],
     queryFn: async ({ signal }) => {
       // dayjs() rather than `new Date()`: the lint rule bans the latter to stop
@@ -149,6 +151,7 @@ export function useMetricCatalog({
               abort_signal: signal,
               connectionId,
               clickhouse_settings: {
+                ...querySettingsToClickHouseSettings(source.querySettings),
                 max_execution_time: MAX_EXEC_SECONDS,
                 timeout_overflow_mode: 'break',
               },

@@ -214,7 +214,7 @@ describe('clickstack_query_tiles handler — dashboard variables', () => {
     });
 
     expect(mockRunConfigTile).toHaveBeenCalledWith(
-      'team-1',
+      expect.objectContaining({ teamId: 'team-1' }),
       expect.objectContaining({ id: 't1' }),
       expect.any(Date),
       expect.any(Date),
@@ -239,7 +239,7 @@ describe('clickstack_query_tiles handler — dashboard variables', () => {
     });
 
     expect(mockRunConfigTile).toHaveBeenCalledWith(
-      'team-1',
+      expect.objectContaining({ teamId: 'team-1' }),
       expect.anything(),
       expect.any(Date),
       expect.any(Date),

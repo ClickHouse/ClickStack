@@ -1,0 +1,12 @@
+diff --git a/lib/index.d.ts b/lib/index.d.ts
+index 1f78e88a306195f14fc83bf8801a5f1c299d7193..355a4e40c9d2a17fe06677d1c314497acf1c6a60 100644
+--- a/lib/index.d.ts
++++ b/lib/index.d.ts
+@@ -1,6 +1,6 @@
+ import { Request, RequestHandler, Response } from 'express';
+ import { ParamsDictionary } from 'express-serve-static-core';
+-import { z, ZodEffects, ZodError, ZodSchema, ZodType, ZodTypeDef } from 'zod';
++import { z, ZodEffects, ZodError, ZodSchema, ZodType, ZodTypeDef } from 'zod/v3';
+ declare type NonReadOnly<T> = {
+     -readonly [P in keyof T]: NonReadOnly<T[P]>;
+ };

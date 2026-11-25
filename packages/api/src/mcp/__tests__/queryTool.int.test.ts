@@ -1301,6 +1301,36 @@ describe('MCP Query Tools', () => {
         expect(p.drilldownUnavailable).toContain('longer than 4000');
       });
 
+      it('mines the start of long bodies with maxBodyChars and drills by that prefix', async () => {
+        await bulkInsertLogs(
+          [101, 202, 303].map(id => ({
+            Body: `Error: job ${id} failed ${'at frame '.repeat(1000)}${id}`,
+            ServiceName: 'trace',
+            SeverityText: 'ERROR',
+            Timestamp: base,
+          })),
+        );
+        const output = await mine({
+          where: 'ServiceName:trace',
+          maxBodyChars: 27,
+        });
+        expect(output.summary.bodyColumn).toBe('leftUTF8(Body, 27)');
+        expect(output.patterns).toHaveLength(1);
+        const [p] = output.patterns;
+        expect(p.pattern).toBe('Error: job <*> failed at fr');
+        for (const sample of p.samples) expect(sample).toHaveLength(27);
+        const rows = await drill(output, p);
+        expect(rows).toHaveLength(3);
+        for (const r of rows) expect(r.Body.length).toBeGreaterThan(9000);
+
+        const result = await callTool(client, 'clickstack_event_patterns', {
+          sourceId: logSource._id.toString(),
+          ...window,
+          maxBodyChars: 2.5,
+        });
+        expect(result.isError).toBe(true);
+      });
+
       it('separates sampled counts from estimates', async () => {
         const output = await mine({
           where: 'ServiceName:svc-a',

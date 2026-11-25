@@ -9,6 +9,7 @@ export {
   formatAxisTick,
   getExpandableYAxisTicks,
   getNiceYAxisTicks,
+  getXAxisTickDateFormat,
   getYAxisTicks,
 } from './axisTicks';
 export {

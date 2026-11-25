@@ -19,7 +19,7 @@ import type {
   Message,
   WebhookChannel,
 } from '@/tasks/checkAlerts/transports/types';
-import { escapeJsonString } from '@/tasks/util';
+import { escapeJsonString, WEBHOOK_USER_AGENT } from '@/tasks/util';
 import { getCounter, getHistogram } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import { withRetry } from '@/utils/retry';
@@ -208,9 +208,16 @@ const sendGenericWebhook = async (
   // TODO: handle real webhook security and signage after v0
   // X-HyperDX-Signature FROM PRIVATE SHA-256 HMAC, time based nonces, caching functionality etc
 
+  const userHeaders = toStringHeaderRecord(webhook.headers?.toJSON());
+  // Without this undici sends `User-Agent: undici`, which some receiver WAFs
+  // block. Checked case-insensitively so a user's `user-agent` isn't sent twice.
+  const hasUserAgent = Object.keys(userHeaders).some(
+    k => k.toLowerCase() === 'user-agent',
+  );
   const headers: Record<string, string> = {
     'Content-Type': 'application/json', // default, will be overwritten if user has set otherwise
-    ...toStringHeaderRecord(webhook.headers?.toJSON()),
+    ...(hasUserAgent ? {} : { 'User-Agent': WEBHOOK_USER_AGENT }),
+    ...userHeaders,
     // Stable per-alert key for receivers that honour Idempotency-Key; delivery is at-least-once.
     'Idempotency-Key': objectHash({
       eventId: message.eventId,

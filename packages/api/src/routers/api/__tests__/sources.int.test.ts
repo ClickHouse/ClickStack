@@ -3,6 +3,7 @@ import {
   TSource,
   UseTextIndex,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 import express from 'express';
 import mongoose, { Types } from 'mongoose';
 import request from 'supertest';
@@ -1319,11 +1320,11 @@ describe('sources router', () => {
       const app = express();
       app.use(express.json());
       app.use((req, _res, next) => {
-        req.user = {
+        req.user = fromAny({
           _id: '_local_user_',
           email: 'local-user@hyperdx.io',
           team: LOCAL_APP_TEAM_ID,
-        } as unknown as Express.User;
+        });
         next();
       });
       app.use('/sources', sourcesRouter);

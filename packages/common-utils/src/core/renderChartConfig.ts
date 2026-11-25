@@ -138,6 +138,20 @@ export const hasMetricFormulas = (
   chartConfig: BuilderChartConfigWithOptDateRange,
 ): boolean => (chartConfig.formulas?.length ?? 0) > 0;
 
+/**
+ * Whether a metric config renders as one composed query (see
+ * renderMultiSeriesMetricChartConfig): more than one series, or any formula.
+ * Every output column of a composed query is an explicit alias of the outer
+ * SELECT.
+ */
+export const isComposedMetricChartConfig = (
+  chartConfig: BuilderChartConfigWithOptDateRange,
+): boolean =>
+  isMetricChartConfig(chartConfig) &&
+  Array.isArray(chartConfig.select) &&
+  (chartConfig.select.length > 1 ||
+    (chartConfig.select.length === 1 && hasMetricFormulas(chartConfig)));
+
 // TODO: apply this to all chart configs
 export const setChartSelectsAlias = (
   config: BuilderChartConfigWithOptDateRange,
@@ -186,7 +200,8 @@ const MULTI_SERIES_SORT_ALIAS_PREFIX = '__hdx_sort_';
  * early. Escaping happens only at SQL-emission time — collision dedup and
  * the meta column names consumers see keep the raw name.
  */
-const quotedColumnName = (name: string) => `"${name.replace(/"/g, '""')}"`;
+export const quotedColumnName = (name: string) =>
+  `"${name.replace(/"/g, '""')}"`;
 
 // Histogram translations bake the group-by dimensions into a single Array
 // column named GROUP_ALIAS instead of projecting them as individual columns
@@ -3484,13 +3499,7 @@ export async function renderChartConfig(
   // (and without formulas). A single-series chart with a formula (e.g.
   // `A * 100`) also takes the composed path — the formula projects over the
   // pivoted value columns, which only the composed shape produces.
-  if (
-    isMetricChartConfig(substitutedChartConfig) &&
-    Array.isArray(substitutedChartConfig.select) &&
-    (substitutedChartConfig.select.length > 1 ||
-      (substitutedChartConfig.select.length === 1 &&
-        hasMetricFormulas(substitutedChartConfig)))
-  ) {
+  if (isComposedMetricChartConfig(substitutedChartConfig)) {
     return renderMultiSeriesMetricChartConfig(
       substitutedChartConfig,
       metadata,
