@@ -71,6 +71,11 @@ function isMarkdownTile(tile: ExternalDashboardTileWithId): boolean {
   return tile.config.displayType === 'markdown';
 }
 
+const readStatisticsSchema = z.object({
+  rows_read: z.number(),
+  bytes_read: z.number(),
+});
+
 /**
  * Derive a compact data summary from a successful tile query payload. The
  * payload shape is `{ result: <data>, ... }` where `<data>` is either an array
@@ -83,6 +88,8 @@ function isMarkdownTile(tile: ExternalDashboardTileWithId): boolean {
 export function summarizeRows(text: string): {
   hasData?: boolean;
   rowCount?: number;
+  rowsRead?: number;
+  bytesRead?: number;
 } {
   let parsed: unknown;
   try {
@@ -106,7 +113,19 @@ export function summarizeRows(text: string): {
     rows = result.data;
   }
   if (rows == null) return {};
-  return { hasData: rows.length > 0, rowCount: rows.length };
+  // ClickHouse's own read counts, present on builder and raw SQL tiles.
+  const stats = readStatisticsSchema.safeParse(
+    result != null && typeof result === 'object' && 'statistics' in result
+      ? result.statistics
+      : undefined,
+  );
+  return {
+    hasData: rows.length > 0,
+    rowCount: rows.length,
+    ...(stats.success
+      ? { rowsRead: stats.data.rows_read, bytesRead: stats.data.bytes_read }
+      : {}),
+  };
 }
 
 type TileSummary = {
@@ -116,6 +135,10 @@ type TileSummary = {
   status: 'ok' | 'error' | 'skipped';
   hasData?: boolean;
   rowCount?: number;
+  /** Wall time of the tile's query, from when it started (not queued). */
+  elapsedMs?: number;
+  rowsRead?: number;
+  bytesRead?: number;
   error?: string;
   warnings?: string[];
 };
@@ -144,7 +167,10 @@ export function registerQueryTiles({
         'unrecognized tile IDs come back as unknownTileIds rather than failing. ' +
         'At most 50 tiles run per call; any beyond that are returned as ' +
         'unrunTileIds — call again with those as tileIds to run the remainder. ' +
-        'Drill into a specific failing tile with clickstack_query_tile.',
+        'Drill into a specific failing tile with clickstack_query_tile. ' +
+        'Each tile that ran reports elapsedMs, its wall time; builder and SQL ' +
+        'tiles also report rowsRead and bytesRead. PromQL tiles report only ' +
+        'elapsedMs: the Prometheus API returns no read counts.',
       inputSchema: z.object({
         dashboardId: objectIdSchema.describe(
           'Dashboard ID, from clickstack_get_dashboard (no id lists dashboards) ' +
@@ -278,6 +304,8 @@ export function registerQueryTiles({
             // results; the try/catch covers an unexpected throw or a deadline
             // timeout, folding either into a status:'error' entry so one
             // misbehaving tile never rejects the whole batch.
+            const started = Date.now();
+            const elapsed = () => ({ elapsedMs: Date.now() - started });
             try {
               const result = await withDeadline(
                 signal =>
@@ -295,6 +323,7 @@ export function registerQueryTiles({
                 return {
                   ...base,
                   status: 'error',
+                  ...elapsed(),
                   error: result.content?.[0]?.text ?? 'Unknown error',
                 };
               }
@@ -310,6 +339,7 @@ export function registerQueryTiles({
               return {
                 ...base,
                 status: 'ok',
+                ...elapsed(),
                 ...summarizeRows(text),
                 ...(warnings.length > 0 ? { warnings } : {}),
               };
@@ -317,6 +347,7 @@ export function registerQueryTiles({
               return {
                 ...base,
                 status: 'error',
+                ...elapsed(),
                 error: err instanceof Error ? err.message : String(err),
               };
             }

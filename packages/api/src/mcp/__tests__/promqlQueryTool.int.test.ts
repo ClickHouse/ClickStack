@@ -104,7 +104,8 @@ describe('MCP clickstack_promql', () => {
     });
 
     expect(result.isError ? getFirstText(result) : '').toBe('');
-    const { data, seriesLabels } = parseResult(result);
+    const { data, seriesLabels, elapsedMs } = parseResult(result);
+    expect(elapsedMs).toEqual(expect.any(Number));
     expect(seriesLabels).toEqual({
       '{instance="checkout-0"}': { instance: 'checkout-0' },
       '{instance="checkout-1"}': { instance: 'checkout-1' },
