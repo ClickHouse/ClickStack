@@ -478,16 +478,17 @@ function isMidnightIn(seconds: number, timeZone: string | undefined) {
  */
 export function getTooltipDateFormat({
   labelSeconds,
-  dateRange,
+  yearScale,
   granularity,
   timeZone,
 }: {
   labelSeconds: number;
-  dateRange: readonly [Date, Date] | Readonly<[Date, Date]>;
+  /** See isYearScaleRange. */
+  yearScale: boolean;
   granularity: string;
   timeZone: string | undefined;
 }): DateFormat {
-  if (!isYearScaleRange(dateRange)) {
+  if (!yearScale) {
     return 'normal';
   }
   return convertGranularityToSeconds(granularity) >= SECONDS_PER_DAY &&

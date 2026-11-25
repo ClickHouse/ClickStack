@@ -493,8 +493,8 @@ export const MemoChart = memo(function MemoChart({
   );
 
   // Compact mode: anchor the first label to the start and the last to the end
-  // so neither is clipped on a narrow chart. Month-start ticks sit inside the
-  // plot rather than on its edges, so those stay centered on their marks.
+  // so neither is clipped on a narrow chart. Month-start ticks usually sit
+  // inside the plot, so only those on a domain bound are anchored to it.
   // Renders every tick through one
   // path (axis color, mono) so the axis stays visually consistent. `fill` is
   // the color Recharts gives every tick, so these match the y-axis labels.
@@ -507,9 +507,13 @@ export const MemoChart = memo(function MemoChart({
       visibleTicksCount,
       fill,
     }: XAxisTickContentProps) => {
-      const textAnchor = xAxisTicks
-        ? 'middle'
-        : compactTickAnchor(index, visibleTicksCount);
+      const tickSeconds = Number(payload.value);
+      const textAnchor =
+        xAxisTicks &&
+        tickSeconds !== xAxisDomain[0] &&
+        tickSeconds !== xAxisDomain[1]
+          ? 'middle'
+          : compactTickAnchor(index, visibleTicksCount);
       return (
         <Text
           x={x}
@@ -525,7 +529,7 @@ export const MemoChart = memo(function MemoChart({
         </Text>
       );
     },
-    [xTickFormatter, axisTickFontSize, xAxisTicks],
+    [xTickFormatter, axisTickFontSize, xAxisTicks, xAxisDomain],
   );
 
   const tickFormatter = useCallback(
@@ -604,11 +608,11 @@ export const MemoChart = memo(function MemoChart({
     (labelSeconds: number) =>
       getTooltipDateFormat({
         labelSeconds,
-        dateRange,
+        yearScale,
         granularity,
         timeZone: displayTimeZone,
       }),
-    [dateRange, granularity, displayTimeZone],
+    [yearScale, granularity, displayTimeZone],
   );
   // Memoize the tooltip `content` element: recharts re-evaluates it every hover
   // frame, so a fresh element each render defeats HDXLineChartTooltip's memo.

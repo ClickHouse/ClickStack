@@ -30,6 +30,7 @@ import {
 import {
   type ActiveClickPayload,
   getTooltipDateFormat,
+  isYearScaleRange,
   MemoChart,
 } from '@/HDXMultiSeriesTimeChart';
 import {
@@ -665,7 +666,7 @@ function DBTimeChartComponent({
               activeClickPayload?.activeLabel != null
                 ? getTooltipDateFormat({
                     labelSeconds: Number(activeClickPayload.activeLabel),
-                    dateRange,
+                    yearScale: isYearScaleRange(dateRange),
                     granularity,
                     timeZone: displayTimeZone,
                   })

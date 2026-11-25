@@ -1478,17 +1478,13 @@ describe('isYearScaleRange', () => {
 
 describe('getTooltipDateFormat', () => {
   const seconds = (iso: string) => new Date(iso).getTime() / 1000;
-  const twoYears: [Date, Date] = [
-    new Date('2024-11-25T00:00:00Z'),
-    new Date('2026-11-25T00:00:00Z'),
-  ];
   const utcMidnight = seconds('2025-11-08T00:00:00Z');
 
   it('keeps the default format below a year', () => {
     expect(
       getTooltipDateFormat({
         labelSeconds: utcMidnight,
-        dateRange: [new Date('2026-10-01'), new Date('2026-11-01')],
+        yearScale: false,
         granularity: '1 day',
         timeZone: 'Etc/UTC',
       }),
@@ -1501,7 +1497,7 @@ describe('getTooltipDateFormat', () => {
       expect(
         getTooltipDateFormat({
           labelSeconds: utcMidnight,
-          dateRange: twoYears,
+          yearScale: true,
           granularity,
           timeZone: 'Etc/UTC',
         }),
@@ -1514,7 +1510,7 @@ describe('getTooltipDateFormat', () => {
     expect(
       getTooltipDateFormat({
         labelSeconds: utcMidnight,
-        dateRange: twoYears,
+        yearScale: true,
         granularity: '1 day',
         timeZone: 'America/New_York',
       }),
@@ -1522,7 +1518,7 @@ describe('getTooltipDateFormat', () => {
     expect(
       getTooltipDateFormat({
         labelSeconds: seconds('2025-11-08T05:00:00Z'),
-        dateRange: twoYears,
+        yearScale: true,
         granularity: '1 day',
         timeZone: 'America/New_York',
       }),
@@ -1533,7 +1529,7 @@ describe('getTooltipDateFormat', () => {
     expect(
       getTooltipDateFormat({
         labelSeconds: utcMidnight,
-        dateRange: twoYears,
+        yearScale: true,
         granularity: '1 hour',
         timeZone: 'Etc/UTC',
       }),
