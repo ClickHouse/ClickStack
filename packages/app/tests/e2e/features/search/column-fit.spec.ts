@@ -47,6 +47,24 @@ test.describe('Search results column fit', { tag: '@search' }, () => {
   );
 
   test(
+    'shows the whole header label of a column whose header is wider than its values',
+    { tag: ['@local-mode'] },
+    async () => {
+      const { table } = searchPage;
+      await table.dragColumnResizeHandle('SeverityText', -40);
+      await expect
+        .poll(() => table.isColumnHeaderLabelTruncated('SeverityText'))
+        .toBe(true);
+
+      await table.fitColumnToContent('SeverityText');
+
+      await expect
+        .poll(() => table.isColumnHeaderLabelTruncated('SeverityText'))
+        .toBe(false);
+    },
+  );
+
+  test(
     'returns the last column to filling the table',
     { tag: ['@local-mode'] },
     async () => {

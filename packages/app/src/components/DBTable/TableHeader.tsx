@@ -36,6 +36,9 @@ export default function TableHeader({
         minWidth: header.getSize() === UNDEFINED_WIDTH ? 0 : header.getSize(),
         textAlign: 'left',
       }}
+      // measureColumnContentWidth finds the header by this id and measures its
+      // first child, the whole row, since the remove button and resize handle
+      // take space the label needs to show in full
       data-column-id={header.column.id}
     >
       <Group wrap="nowrap" gap={0} align="center">

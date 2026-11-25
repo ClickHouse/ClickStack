@@ -104,6 +104,21 @@ describe('measureColumnContentWidth', () => {
     expect(table.innerHTML).toBe(html);
   });
 
+  it('removes its copies even when reading a width throws', () => {
+    const table = renderTable(
+      `<tbody><tr>${bodyCell('service', 'api')}</tr></tbody>`,
+    );
+    const html = table.innerHTML;
+    rectSpy.mockImplementation(() => {
+      throw new Error('layout failed');
+    });
+
+    expect(() => measureColumnContentWidth(table, 'service')).toThrow(
+      'layout failed',
+    );
+    expect(table.innerHTML).toBe(html);
+  });
+
   it('returns 0 when the column has no cells', () => {
     const table = renderTable(
       `<tbody><tr>${bodyCell('service', 'api')}</tr></tbody>`,

@@ -14,41 +14,45 @@ export function measureColumnContentWidth(
   table: HTMLTableElement,
   columnId: string,
 ): number {
-  const measured = Array.from(
-    table.querySelectorAll('[data-column-id]'),
-  ).flatMap(cell => {
-    const content = cell.firstElementChild;
-    if (
-      !(cell instanceof HTMLElement) ||
-      cell.dataset.columnId !== columnId ||
-      cell.closest('table') !== table ||
-      !(content instanceof HTMLElement)
-    ) {
-      return [];
-    }
-    // A hidden copy at max-content width reports the width the content
-    // needs, whatever width the column has now.
-    const probe = content.cloneNode(true);
-    if (!(probe instanceof HTMLElement)) return [];
-    probe.style.position = 'absolute';
-    probe.style.visibility = 'hidden';
-    probe.style.width = 'max-content';
-    cell.append(probe);
-    return [{ cell, content, probe }];
-  });
+  const probes: HTMLElement[] = [];
+  try {
+    const measured = Array.from(
+      table.querySelectorAll('[data-column-id]'),
+    ).flatMap(cell => {
+      const content = cell.firstElementChild;
+      if (
+        !(cell instanceof HTMLElement) ||
+        cell.dataset.columnId !== columnId ||
+        cell.closest('table') !== table ||
+        !(content instanceof HTMLElement)
+      ) {
+        return [];
+      }
+      // A hidden copy at max-content width reports the width the content
+      // needs, whatever width the column has now.
+      const probe = content.cloneNode(true);
+      if (!(probe instanceof HTMLElement)) return [];
+      probe.style.position = 'absolute';
+      probe.style.visibility = 'hidden';
+      probe.style.width = 'max-content';
+      cell.append(probe);
+      probes.push(probe);
+      return [{ cell, content, probe }];
+    });
 
-  // Every copy is in place before the first read, so the browser lays the
-  // table out once rather than once per cell.
-  const widths = measured.map(
-    ({ cell, content, probe }) =>
-      probe.getBoundingClientRect().width +
-      // The padding and border the cell keeps around its content
-      cell.getBoundingClientRect().width -
-      content.getBoundingClientRect().width,
-  );
-  measured.forEach(({ probe }) => probe.remove());
-
-  return Math.max(0, ...widths);
+    // Every copy is in place before the first read, so the browser lays the
+    // table out once rather than once per cell.
+    const widths = measured.map(
+      ({ cell, content, probe }) =>
+        probe.getBoundingClientRect().width +
+        // The padding and border the cell keeps around its content
+        cell.getBoundingClientRect().width -
+        content.getBoundingClientRect().width,
+    );
+    return Math.max(0, ...widths);
+  } finally {
+    probes.forEach(probe => probe.remove());
+  }
 }
 
 /**

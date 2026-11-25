@@ -403,6 +403,26 @@ describe('RawLogTable', () => {
       expect(storedSizes()).toEqual({ col1: TABLE_WIDTH / 2 });
     });
 
+    it('caps a fitted column by the table width at the time of the double-click', async () => {
+      const { container } = renderWithMantine(
+        <RawLogTable
+          {...baseProps}
+          tableId="t1"
+          rows={[{ col1: 'x'.repeat(100), col2: 'y' }]}
+        />,
+      );
+
+      // The table narrowed after the width the component last recorded.
+      clientWidthSpy.mockReturnValue(600);
+      try {
+        await fitColumn(container, 'col1');
+      } finally {
+        clientWidthSpy.mockReturnValue(TABLE_WIDTH);
+      }
+
+      expect(storedSizes()).toEqual({ col1: 300 });
+    });
+
     it('returns the last column to filling the table', async () => {
       window.localStorage.setItem(
         't1-column-sizes',

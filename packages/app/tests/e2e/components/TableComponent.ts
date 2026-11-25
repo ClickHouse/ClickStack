@@ -380,4 +380,14 @@ export class TableComponent {
           }).length,
       );
   }
+
+  /**
+   * Whether a column's header label is cut off
+   */
+  isColumnHeaderLabelTruncated(columnId: string) {
+    return this.getColumnHeaderCell(columnId)
+      .locator('.mantine-Text-root')
+      .first()
+      .evaluate(label => label.scrollWidth > label.clientWidth);
+  }
 }

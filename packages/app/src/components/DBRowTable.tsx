@@ -868,14 +868,16 @@ export const RawLogTable = memo(
         table.getColumn(columnId)?.resetSize();
         return;
       }
-      if (tableRef.current == null) return;
+      if (tableRef.current == null || tableContainerRef == null) return;
       const contentWidth = measureColumnContentWidth(
         tableRef.current,
         columnId,
       );
-      if (contentWidth === 0) return;
-
-      const width = getFittedColumnWidth(contentWidth, containerWidth);
+      // The width now, not the last one the resize observer reported
+      const width = getFittedColumnWidth(
+        contentWidth,
+        tableContainerRef.clientWidth,
+      );
       table.setColumnSizing(sizes => ({ ...sizes, [columnId]: width }));
     };
 
@@ -1326,6 +1328,8 @@ export const RawLogTable = memo(
                               return (
                                 <div
                                   key={cell.id}
+                                  // measureColumnContentWidth finds the cell by
+                                  // this id and measures its first child
                                   data-column-id={cell.column.id}
                                   className={cx(
                                     'flex-shrink-0 overflow-hidden position-relative',
