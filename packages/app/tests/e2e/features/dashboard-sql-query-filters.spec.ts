@@ -133,6 +133,22 @@ test.describe(
         }).toPass({ timeout: 20000 });
         await page.keyboard.press('Escape');
       });
+
+      await test.step('The editor shows the SQL with the selection and source table filled in', async () => {
+        await dashboardPage.openEditFiltersModal();
+        await dashboardPage.openEditFilterForm('Service');
+        await dashboardPage.previewSqlQueryFilter();
+        await dashboardPage.openSqlQueryFilterGeneratedSql();
+
+        const generatedSql = dashboardPage.getSqlQueryFilterGeneratedSql();
+        await expect(generatedSql).toContainText(
+          `FROM \`${E2E_CLICKHOUSE_DATABASE}\`.\`${E2E_LOGS_TABLE}\``,
+        );
+        await expect(generatedSql).toContainText(
+          "(ServiceName IN ('frontend'))",
+        );
+        await expect(generatedSql).not.toContainText('$');
+      });
     });
 
     test('runs on the connection a connection variable selects', async ({
