@@ -304,20 +304,24 @@ export function registerQueryTiles({
             // results; the try/catch covers an unexpected throw or a deadline
             // timeout, folding either into a status:'error' entry so one
             // misbehaving tile never rejects the whole batch.
-            const started = Date.now();
-            const elapsed = () => ({ elapsedMs: Date.now() - started });
+            // Set when the query starts, so a tile the deadline skipped
+            // reports no time rather than 0.
+            let started: number | undefined;
+            const elapsed = () =>
+              started === undefined
+                ? {}
+                : { elapsedMs: Math.round(performance.now() - started) };
             try {
-              const result = await withDeadline(
-                signal =>
-                  runConfigTile(
-                    context,
-                    resolvedTile.tile,
-                    startDate,
-                    endDate,
-                    { abortSignal: signal, variables },
-                  ),
-                deadlineAt,
-              );
+              const result = await withDeadline(signal => {
+                started = performance.now();
+                return runConfigTile(
+                  context,
+                  resolvedTile.tile,
+                  startDate,
+                  endDate,
+                  { abortSignal: signal, variables },
+                );
+              }, deadlineAt);
 
               if ('isError' in result && result.isError) {
                 return {

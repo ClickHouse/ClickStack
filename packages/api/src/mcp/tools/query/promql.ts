@@ -65,7 +65,7 @@ export function registerPromql({ context, registerTool }: ToolRegistrar) {
         'series_name, value } plus seriesLabels, which maps each series_name to ' +
         'its labels once. An instant query returns one row per series with a ' +
         'column per label plus Value, capped at 10,000 series. Both carry ' +
-        "elapsedMs, the query's wall time; the Prometheus API returns no rows " +
+        "elapsedMs, the call's wall time; the Prometheus API returns no rows " +
         'or bytes read.\n\n' +
         'Counters need rate() or increase(), e.g. ' +
         'sum by (job) (rate(http_requests_total[$__rate_interval])). Percentiles ' +

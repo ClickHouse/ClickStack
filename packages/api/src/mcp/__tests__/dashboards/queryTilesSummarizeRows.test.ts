@@ -26,6 +26,13 @@ describe('summarizeRows', () => {
     });
   });
 
+  it('omits both read counts when statistics are incomplete', () => {
+    const text = JSON.stringify({
+      result: { data: [{ a: 1 }], statistics: { rows_read: 50 } },
+    });
+    expect(summarizeRows(text)).toEqual({ hasData: true, rowCount: 1 });
+  });
+
   it('reports hasData=false and rowCount=0 for an empty result set', () => {
     expect(summarizeRows(JSON.stringify({ result: [] }))).toEqual({
       hasData: false,

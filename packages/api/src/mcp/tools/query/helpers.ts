@@ -746,7 +746,7 @@ export async function runConfigTile(
   // PromQL is evaluated by the Prometheus API, not the SQL renderer.
   if (isPromqlSavedChartConfig(savedConfig)) {
     try {
-      const started = Date.now();
+      const started = performance.now();
       const result = await runPromqlTile({
         context,
         config: savedConfig,
@@ -755,8 +755,12 @@ export async function runConfigTile(
         signal: options?.abortSignal,
       });
       // The Prometheus API returns no read counts (unlike the JSON statistics
-      // of a SQL query), so wall time is the cost signal.
-      return formatQueryResult({ ...result, elapsedMs: Date.now() - started });
+      // of a SQL query), so wall time is the cost signal. It covers the whole
+      // tile: the source lookup and backend probe as well as the queries.
+      return formatQueryResult({
+        ...result,
+        elapsedMs: Math.round(performance.now() - started),
+      });
     } catch (e) {
       if (e instanceof PromQLQueryError) {
         return e.category === 'user'

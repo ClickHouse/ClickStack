@@ -179,6 +179,8 @@ describe('clickstack_query_tiles handler — per-tile failure isolation', () => 
       );
       expect(overflow.status).toBe('error');
       expect(overflow.error).toContain('deadline');
+      // It never ran, so it reports no time (0 would read as cheap).
+      expect(overflow).not.toHaveProperty('elapsedMs');
       const queriedIds = mockRunConfigTile.mock.calls.map((call: unknown[]) => {
         const t = call[1];
         return t && typeof t === 'object' && 'id' in t ? t.id : undefined;
