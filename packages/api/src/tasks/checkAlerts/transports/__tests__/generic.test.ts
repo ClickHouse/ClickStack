@@ -13,6 +13,7 @@ import {
   handleSendGenericWebhook,
 } from '@/tasks/checkAlerts/transports/generic';
 import type { Message } from '@/tasks/checkAlerts/transports/types';
+import { WEBHOOK_USER_AGENT } from '@/tasks/util';
 import { WebhookUrlValidationError } from '@/utils/validators';
 
 const message: Message = {
@@ -308,6 +309,45 @@ describe('the default incident.io body', () => {
       value: '',
       tags: '',
     });
+  });
+});
+
+describe('the User-Agent header', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const sentHeaders = async (headers?: Record<string, string>) => {
+    const fetchMock: any = jest.fn(async () => new Response('ok'));
+    global.fetch = fetchMock;
+    const headerChannel: any = {
+      type: 'webhook',
+      channel: {
+        ...webhook,
+        url: 'https://example.test/hook',
+        headers: headers && { toJSON: () => headers },
+      },
+    };
+    await handleSendGenericWebhook(headerChannel, message);
+    return fetchMock.mock.calls[0][1].headers;
+  };
+
+  it('defaults to ClickStack-Alerts instead of undici', async () => {
+    expect((await sentHeaders())['User-Agent']).toBe(WEBHOOK_USER_AGENT);
+    expect(WEBHOOK_USER_AGENT.startsWith('ClickStack-Alerts')).toBe(true);
+  });
+
+  it('is replaced by a user-set User-Agent', async () => {
+    expect(
+      (await sentHeaders({ 'User-Agent': 'custom/1.0' }))['User-Agent'],
+    ).toBe('custom/1.0');
+  });
+
+  it('is replaced by a user-set user-agent of any case', async () => {
+    const headers = await sentHeaders({ 'user-agent': 'custom/1.0' });
+    expect(headers['user-agent']).toBe('custom/1.0');
+    expect(headers).not.toHaveProperty('User-Agent');
   });
 });
 

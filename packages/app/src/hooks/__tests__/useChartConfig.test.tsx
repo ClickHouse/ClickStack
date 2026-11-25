@@ -4,7 +4,6 @@ import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/browser'
 import { DEFAULT_PROMQL_REDUCER } from '@hyperdx/common-utils/dist/core/promql';
 import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import {
-  ChartConfigWithDateRange,
   ChartConfigWithOptDateRange,
   DisplayType,
   MetricsDataType,
@@ -14,6 +13,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { prometheusApi } from '@/api';
 import { useClickhouseClient } from '@/clickhouse';
@@ -92,7 +92,7 @@ jest.mock('@/api', () => ({
 const createMockChartConfig = (
   overrides: Partial<ChartConfigWithOptDateRange> = {},
 ): ChartConfigWithOptDateRange =>
-  ({
+  fromPartial<ChartConfigWithOptDateRange>({
     connection: 'foo',
     from: {
       databaseName: 'default',
@@ -103,7 +103,7 @@ const createMockChartConfig = (
     timestampValueExpression: 'TimestampTime',
     groupBy: 'SeverityText',
     ...overrides,
-  }) as ChartConfigWithOptDateRange;
+  });
 
 const createMockQueryResponse = (data: any[]): ResponseJSON<any> => {
   return {
@@ -131,14 +131,14 @@ describe('useChartConfig', () => {
     it('returns windows aligned to the granularity if the granularity is auto', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:00'),
               new Date('2023-01-10 01:00:00'),
             ],
             granularity: 'auto', // will be 1 minute
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             30, // 30s
             5 * 60, // 5m
@@ -173,14 +173,14 @@ describe('useChartConfig', () => {
     it('returns windows aligned to the granularity if the granularity is larger than the window size', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:00'),
               new Date('2023-01-10 00:10:00'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             30, // 30s
             60, // 1m
@@ -222,14 +222,14 @@ describe('useChartConfig', () => {
     it('Skips windows that would be double-queried due to alignment', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:08:00'),
               new Date('2023-01-10 00:10:00'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             15, // 15s
           ],
@@ -255,7 +255,7 @@ describe('useChartConfig', () => {
     it('returns windows aligned to the granularity if the granularity is smaller than the window size', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-09 22:00:40'),
               new Date('2023-01-10 00:00:30'),
@@ -263,7 +263,7 @@ describe('useChartConfig', () => {
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
             dateRangeEndInclusive: true,
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             15 * 60, // 15m
             30 * 60, // 30m
@@ -311,14 +311,14 @@ describe('useChartConfig', () => {
     it('does not return a window that starts before the overall start date', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:30'),
               new Date('2023-01-10 00:02:00'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             60, // 1m
           ],
@@ -344,14 +344,14 @@ describe('useChartConfig', () => {
     it('returns a single window matching the input date range if the input date range is empty', () => {
       expect(
         getGranularityAlignedTimeWindows(
-          {
+          fromPartial({
             dateRange: [
               new Date('2023-01-10 00:00:30'),
               new Date('2023-01-10 00:00:30'),
             ],
             granularity: '1 minute',
             timestampValueExpression: 'TimestampTime',
-          } as ChartConfigWithDateRange & { granularity: string },
+          }),
           [
             60, // 1m
             5 * 60, // 5m
@@ -390,9 +390,9 @@ describe('useChartConfig', () => {
         </QueryClientProvider>
       );
 
-      mockClickhouseClient = {
+      mockClickhouseClient = fromPartial({
         queryChartConfig: jest.fn(),
-      } as unknown as jest.Mocked<ClickhouseClient>;
+      });
 
       jest.mocked(useClickhouseClient).mockReturnValue(mockClickhouseClient);
     });
@@ -401,7 +401,7 @@ describe('useChartConfig', () => {
       const createPromqlConfig = (
         overrides: Partial<ChartConfigWithOptDateRange> = {},
       ): ChartConfigWithOptDateRange =>
-        ({
+        fromPartial<ChartConfigWithOptDateRange>({
           configType: 'promql',
           promqlExpression: 'e2e_service_up',
           connection: 'foo',
@@ -411,7 +411,7 @@ describe('useChartConfig', () => {
             new Date('2023-01-10 01:00:00'),
           ],
           ...overrides,
-        }) as ChartConfigWithOptDateRange;
+        });
 
       /** The server resolves the connection and table from the source alone. */
       const expectOnlySourceNamed = (params: object) => {
@@ -2190,20 +2190,26 @@ describe('useChartConfig', () => {
       let resolvePromise2: (value: any) => void;
       let resolvePromise1: (value: any) => void;
 
-      const promise1 = new Promise(resolve => {
+      const promise1 = new Promise<
+        ResponseJSON<Record<string, string | number>>
+      >(resolve => {
         resolvePromise1 = resolve;
       });
-      const promise2 = new Promise(resolve => {
+      const promise2 = new Promise<
+        ResponseJSON<Record<string, string | number>>
+      >(resolve => {
         resolvePromise2 = resolve;
       });
-      const promise3 = new Promise(resolve => {
+      const promise3 = new Promise<
+        ResponseJSON<Record<string, string | number>>
+      >(resolve => {
         resolvePromise3 = resolve;
       });
 
       mockClickhouseClient.queryChartConfig
-        .mockReturnValueOnce(promise1 as any)
-        .mockReturnValueOnce(promise2 as any)
-        .mockReturnValueOnce(promise3 as any);
+        .mockReturnValueOnce(promise1)
+        .mockReturnValueOnce(promise2)
+        .mockReturnValueOnce(promise3);
 
       const { result } = renderHook(
         () =>
@@ -2324,12 +2330,17 @@ describe('useChartConfig', () => {
           },
         ],
       });
+      if (!isBuilderChartConfig(optimizedConfig)) {
+        throw new Error('Expected a BuilderChartConfig');
+      }
 
       // Mock useMVOptimizationExplanation to be in loading state
-      jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-        data: undefined,
-        isLoading: true, // MV optimization is still loading
-      } as any);
+      jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+        fromPartial({
+          data: undefined,
+          isLoading: true, // MV optimization is still loading
+        }),
+      );
 
       renderHook(
         () => useQueriedChartConfig(config, { enableQueryChunking: true }),
@@ -2345,21 +2356,23 @@ describe('useChartConfig', () => {
       expect(mockClickhouseClient.queryChartConfig).not.toHaveBeenCalled();
 
       // Now mock the MV optimization to finish loading with an optimized config
-      jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-        data: {
-          optimizedConfig: optimizedConfig,
-          explanations: [
-            {
-              success: true,
-              mvConfig: {
-                minGranularity: '1 hour',
-                tableName: 'metrics_rollup_1h',
+      jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+        fromPartial({
+          data: {
+            optimizedConfig: optimizedConfig,
+            explanations: [
+              {
+                success: true,
+                mvConfig: {
+                  minGranularity: '1 hour',
+                  tableName: 'metrics_rollup_1h',
+                },
               },
-            },
-          ],
-        },
-        isLoading: false, // MV optimization finished loading
-      } as any);
+            ],
+          },
+          isLoading: false, // MV optimization finished loading
+        }),
+      );
 
       const mockResponse = createMockQueryResponse([
         {

@@ -1,3 +1,5 @@
+import { fromAny } from '@total-typescript/shoehorn';
+
 import {
   calcAlertDateRange,
   escapeJsonString,
@@ -74,10 +76,10 @@ describe('util', () => {
     });
 
     it('should handle null and undefined values', () => {
-      expect(unflattenObject({ 'foo.bar': null as any })).toEqual({
+      expect(unflattenObject({ 'foo.bar': fromAny(null) })).toEqual({
         foo: { bar: null },
       });
-      expect(unflattenObject({ 'foo.bar': undefined as any })).toEqual({
+      expect(unflattenObject({ 'foo.bar': fromAny(undefined) })).toEqual({
         foo: { bar: undefined },
       });
     });

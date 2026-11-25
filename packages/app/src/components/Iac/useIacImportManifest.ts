@@ -1,4 +1,4 @@
-import { ZodError } from 'zod';
+import { ZodError } from 'zod/v3';
 import { IacImportManifestSchema } from '@hyperdx/common-utils/dist/types';
 import { useQuery } from '@tanstack/react-query';
 

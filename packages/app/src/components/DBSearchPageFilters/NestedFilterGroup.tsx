@@ -98,7 +98,7 @@ export const NestedFilterGroup = ({
   );
 
   const hasSelections = totalFiltersSize > 0;
-  const [isExpanded, setExpanded] = useState(
+  const [isExpanded, setIsExpanded] = useState(
     isDefaultExpanded ?? hasSelections,
   );
 
@@ -151,7 +151,7 @@ export const NestedFilterGroup = ({
       chevronPosition="left"
       classNames={{ chevron: classes.chevron }}
       value={isExpanded ? name : null}
-      onChange={v => setExpanded(v === name)}
+      onChange={v => setIsExpanded(v === name)}
     >
       <Accordion.Item value={name} data-testid={dataTestId}>
         <div className={classes.filterGroup}>

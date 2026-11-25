@@ -8,8 +8,7 @@ import { render } from '@testing-library/react';
 import structuredClone from '@ungap/structured-clone';
 
 import '@testing-library/jest-dom';
-global.TextEncoder = TextEncoder as any;
-global.TextDecoder = TextDecoder as any;
+Object.assign(global, { TextEncoder, TextDecoder });
 
 /* Mocks for mantine */
 class ResizeObserver {

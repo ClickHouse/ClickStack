@@ -2,7 +2,9 @@ import {
   AlertChartConfig,
   AlertChartConfigSchema,
   DisplayType,
+  MetricsDataType,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
 
 import {
   convertAlertChartConfigToExternal,
@@ -142,13 +144,13 @@ describe('convertExternalAlertChartConfigToInternal', () => {
           where: 'level:error',
           whereLanguage: 'lucene',
           alias: 'CPU',
-          metricType: 'gauge',
+          metricType: MetricsDataType.Gauge,
           metricName: 'system.cpu.utilization',
           periodAggFn: 'delta',
         },
         countItem(),
       ],
-    } as ExternalAlertChartConfig);
+    });
 
     expect(internal).toMatchObject({
       displayType: DisplayType.Line,
@@ -189,7 +191,7 @@ describe('convertExternalAlertChartConfigToInternal', () => {
 
 describe('external <-> internal round-trip', () => {
   it('round-trips a builder line config, including alert-only and metric fields', () => {
-    const external = {
+    const external: ExternalAlertChartConfig = {
       displayType: DisplayType.Line,
       sourceId: SOURCE_ID,
       name: 'Error Rate Query',
@@ -207,13 +209,13 @@ describe('external <-> internal round-trip', () => {
           where: 'level:error',
           whereLanguage: 'lucene' as const,
           alias: 'CPU',
-          metricType: 'gauge' as const,
+          metricType: MetricsDataType.Gauge,
           metricName: 'system.cpu.utilization',
           periodAggFn: 'delta' as const,
         },
         countItem(),
       ],
-    } as ExternalAlertChartConfig;
+    };
 
     const roundTripped = convertAlertChartConfigToExternal(
       convertExternalAlertChartConfigToInternal(external),
@@ -618,11 +620,13 @@ describe('convertAlertChartConfigToExternal', () => {
       ),
     ).toBeUndefined();
     expect(
-      convertAlertChartConfigToExternal({
-        configType: 'promql',
-        promqlQuery: 'up',
-        source: SOURCE_ID,
-      } as unknown as AlertChartConfig),
+      convertAlertChartConfigToExternal(
+        fromAny({
+          configType: 'promql',
+          promqlQuery: 'up',
+          source: SOURCE_ID,
+        }),
+      ),
     ).toBeUndefined();
   });
 });

@@ -85,7 +85,26 @@
     "scripts/**"
   ],
   "rules": {
-    "typescript/no-unsafe-function-type": "warn",
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "zod",
+            "message": "Import from 'zod/v3'. Bare 'zod' is the v4 API; mixing v3 and v4 schemas breaks composition and ZodError checks."
+          },
+          {
+            "name": "zod/v4",
+            "message": "Import from 'zod/v3' until the codebase migrates to v4."
+          },
+          {
+            "name": "zod/mini",
+            "message": "Import from 'zod/v3' until the codebase migrates to v4."
+          }
+        ]
+      }
+    ],
+    "typescript/no-unsafe-function-type": "error",
     "typescript/no-unsafe-type-assertion": "warn",
     "no-unused-expressions": "warn",
     "no-console": [
@@ -116,7 +135,7 @@
     "nextjs/no-duplicate-head": "error",
     "nextjs/no-head-import-in-document": "error",
     "nextjs/no-script-component-in-head": "error",
-    "@eslint-react/jsx-key-before-spread": "warn",
+    "@eslint-react/jsx-key-before-spread": "error",
     "@eslint-react/jsx-no-comment-textnodes": "warn",
     "@eslint-react/no-access-state-in-setstate": "error",
     "@eslint-react/no-array-index-key": "warn",
@@ -125,7 +144,7 @@
     "@eslint-react/no-children-map": "warn",
     "@eslint-react/no-children-only": "warn",
     "@eslint-react/no-children-to-array": "warn",
-    "@eslint-react/no-clone-element": "warn",
+    "@eslint-react/no-clone-element": "error",
     "@eslint-react/no-component-will-mount": "error",
     "@eslint-react/no-component-will-receive-props": "error",
     "@eslint-react/no-component-will-update": "error",
@@ -141,10 +160,10 @@
     "@eslint-react/no-unsafe-component-will-mount": "warn",
     "@eslint-react/no-unsafe-component-will-receive-props": "warn",
     "@eslint-react/no-unsafe-component-will-update": "warn",
-    "@eslint-react/no-unnecessary-use-prefix": "warn",
+    "@eslint-react/no-unnecessary-use-prefix": "error",
     "@eslint-react/no-unused-class-component-members": "warn",
     "@eslint-react/no-use-context": "error",
-    "@eslint-react/use-state": "warn",
+    "@eslint-react/use-state": "error",
     "@eslint-react/rsc/function-definition": "error",
     "@eslint-react/dom/no-dangerously-set-innerhtml": "warn",
     "@eslint-react/dom/no-dangerously-set-innerhtml-with-children": "error",
@@ -163,7 +182,7 @@
     "@eslint-react/web-api/no-leaked-resize-observer": "warn",
     "@eslint-react/web-api/no-leaked-timeout": "warn",
     "@eslint-react/naming-convention/context-name": "warn",
-    "@eslint-react/naming-convention/id-name": "warn",
+    "@eslint-react/naming-convention/id-name": "error",
     "@eslint-react/naming-convention/ref-name": "error",
     "@eslint-react/no-unstable-default-props": "error",
     "react-hook-form/no-use-watch": "error",

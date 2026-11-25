@@ -1,5 +1,5 @@
 import PQueue from '@esm2cjs/p-queue';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { parseTimeRange, runConfigTile } from '@/mcp/tools/query/helpers';
@@ -235,7 +235,7 @@ export function registerQueryTiles({
         .slice(MAX_TILES_PER_CALL)
         .map(t => t.id);
 
-      const referenceTargets = await getReferenceTargets(teamId.toString());
+      const referenceTargets = await getReferenceTargets(context);
 
       // Fix one shared deadline for the whole batch that every tile races.
       const deadlineAt = Date.now() + BATCH_DEADLINE_MS;
@@ -282,7 +282,7 @@ export function registerQueryTiles({
               const result = await withDeadline(
                 signal =>
                   runConfigTile(
-                    teamId.toString(),
+                    context,
                     resolvedTile.tile,
                     startDate,
                     endDate,

@@ -351,9 +351,12 @@ jobs:
       - name: Run Claude Code Review
         id: claude-review
         if: steps.gate.outputs.should_review == 'true'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b # v1.0.289
+        env:
+          ANTHROPIC_BASE_URL: https://inference-internal.clickhouse.cloud
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic_api_key: ${{ secrets.INFERENCE_GATEWAY_KEY }}
+          allow_fork_prs: 'true'
           allowed_bots: dependabot,dependabot[bot],kodiakhq,kodiakhq[bot],github-actions,github-actions[bot],cursor,cursor[bot],claude,claude[bot]
           # Bypasses OIDC, which is why this job grants no `id-token: write`: that
           # permission would put ACTIONS_ID_TOKEN_REQUEST_TOKEN/_URL in the reviewer's
@@ -515,9 +518,13 @@ jobs:
         id: grade
         if: steps.grade-input.outcome == 'success'
         continue-on-error: true
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@eb56b6666facdbd501035f4a0269d8caee2e7a8b # v1.0.289
+        env:
+          ANTHROPIC_BASE_URL: https://inference-internal.clickhouse.cloud
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic_api_key: ${{ secrets.INFERENCE_GATEWAY_KEY }}
+          # v1.0.288 flipped this default to skip fork PRs; keep running on them.
+          allow_fork_prs: 'true'
           allowed_bots: dependabot,dependabot[bot],kodiakhq,kodiakhq[bot],github-actions,github-actions[bot],cursor,cursor[bot],claude,claude[bot]
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_non_write_users: '*'
@@ -571,7 +578,7 @@ jobs:
         env:
           # Compared against, never printed. Named canary so a stray log of the env block
           # does not read like the secret itself.
-          ANTHROPIC_KEY_CANARY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_KEY_CANARY: ${{ secrets.INFERENCE_GATEWAY_KEY }}
           GITHUB_TOKEN_CANARY: ${{ secrets.GITHUB_TOKEN }}
           # GitHub injects this into every step, so it is readable from
           # /proc/self/environ like the others and must be canaried too.

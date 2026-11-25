@@ -26,12 +26,16 @@ import {
 import { ObjectId } from 'mongodb';
 import ms from 'ms';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
+import type { ClickhouseClient } from '@/clickhouse';
 import { PromQLQueryError } from '@/controllers/promql';
-import { getSource } from '@/controllers/sources';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import {
   MCP_QUERY_MAX_EXECUTION_SEC,
   MCP_TIMEOUT_GRACE_MS,
@@ -471,7 +475,7 @@ export function assertSourceKindMatchesSelect(
 // ─── Tile execution ──────────────────────────────────────────────────────────
 
 /**
- * `getSource` returns a hydrated Mongoose document, so `source.metricTables`
+ * `getMcpSource` returns a hydrated Mongoose document, so `source.metricTables`
  * is a live subdocument rather than a plain object. Downstream render paths
  * may clone the chart config — notably `convertToCategoricalChartConfig`
  * (pie/bar) runs it through `structuredClone`, which cannot clone a Mongoose
@@ -489,7 +493,7 @@ function toPlainMetricTables(
 }
 
 export async function runConfigTile(
-  teamId: string,
+  context: McpContext,
   tile: ExternalDashboardTileWithId,
   startDate: Date,
   endDate: Date,
@@ -506,7 +510,7 @@ export async function runConfigTile(
     /** SQL LIMIT for builder tiles that aren't searches (MCP table tool). */
     limit?: number;
     /** Source lookup for raw SQL tiles, so a batch can share one per-call cache. */
-    lookupSource?: (sourceId: string) => ReturnType<typeof getSource>;
+    lookupSource?: (sourceId: string) => ReturnType<typeof getMcpSource>;
     /**
      * Search tiles only: scan newest-first under a time budget and return
      * partial rows instead of a timeout (MCP search tool).
@@ -545,7 +549,7 @@ export async function runConfigTile(
       const selectStr =
         typeof builderConfig.select === 'string' ? builderConfig.select : '';
       return runEventPatterns(
-        teamId,
+        context,
         builderConfig.source,
         startDate,
         endDate,
@@ -564,7 +568,7 @@ export async function runConfigTile(
       );
     }
 
-    const source = await getSource(teamId, builderConfig.source);
+    const source = await getMcpSource(context, builderConfig.source);
     if (!source) {
       return mcpUserError(
         `Source not found: ${builderConfig.source}. Call clickstack_list_sources to discover available source IDs.`,
@@ -579,23 +583,19 @@ export async function runConfigTile(
     );
     if (kindMismatch) return kindMismatch;
 
-    const connection = await getConnectionById(
-      teamId,
-      source.connection.toString(),
-      true,
-    );
-    if (!connection) {
+    let clickhouseClient: ClickhouseClient;
+    try {
+      clickhouseClient = await getMcpClickhouseClient(
+        context,
+        source.connection.toString(),
+        { requestTimeout: MCP_REQUEST_TIMEOUT },
+      );
+    } catch (e) {
+      if (!(e instanceof McpConnectionNotFoundError)) throw e;
       return mcpUserError(
         `Connection not found for source: ${builderConfig.source}`,
       );
     }
-
-    const clickhouseClient = new ClickhouseClient({
-      host: connection.host,
-      username: connection.username,
-      password: connection.password,
-      requestTimeout: MCP_REQUEST_TIMEOUT,
-    });
 
     const isSearch = builderConfig.displayType === DisplayType.Search;
     const isMetricSource = source.kind === SourceKind.Metric;
@@ -748,7 +748,7 @@ export async function runConfigTile(
     try {
       return formatQueryResult(
         await runPromqlTile({
-          teamId,
+          context,
           config: savedConfig,
           dateRange: [startDate, endDate],
           variables: options?.variables,
@@ -780,7 +780,7 @@ export async function runConfigTile(
   if (savedConfig.source) {
     const source = await (options?.lookupSource
       ? options.lookupSource(savedConfig.source)
-      : getSource(teamId, savedConfig.source));
+      : getMcpSource(context, savedConfig.source));
     if (source) {
       sourceFields = {
         from: source.from,
@@ -802,23 +802,19 @@ export async function runConfigTile(
     }
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    savedConfig.connection,
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      savedConfig.connection,
+      { requestTimeout: MCP_REQUEST_TIMEOUT },
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return mcpUserError(
       `Connection not found: ${savedConfig.connection}. Call clickstack_list_sources to discover available connection IDs.`,
     );
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-    requestTimeout: MCP_REQUEST_TIMEOUT,
-  });
 
   const chartConfig = {
     ...savedConfig,

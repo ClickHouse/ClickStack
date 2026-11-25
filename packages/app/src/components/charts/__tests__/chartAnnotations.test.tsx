@@ -1,5 +1,5 @@
-import { ReactElement } from 'react';
-import { ReferenceLine } from 'recharts';
+import { isValidElement, ReactElement } from 'react';
+import { ReferenceLine, type ReferenceLineProps } from 'recharts';
 
 import {
   type ChartAnnotation,
@@ -11,17 +11,19 @@ import {
   resolveAnnotationSeries,
 } from '@/components/charts/chartAnnotations';
 
-// ReferenceLine element props are typed loosely; narrow for assertions.
-const lineProps = (el: ReactElement) =>
-  el.props as {
-    stroke: string;
-    strokeDasharray?: string;
-    strokeOpacity?: number;
-    x: number;
-    label?: { props: { value: string } };
-  };
+const lineProps = (el: ReactElement) => {
+  if (!isValidElement<ReferenceLineProps>(el) || el.type !== ReferenceLine) {
+    throw new Error('expected a ReferenceLine element');
+  }
+  return el.props;
+};
 
-const labelOf = (el: ReactElement) => lineProps(el).label?.props.value;
+const labelOf = (el: ReactElement) => {
+  const { label } = lineProps(el);
+  return isValidElement<{ value: string }>(label)
+    ? label.props.value
+    : undefined;
+};
 
 // A domain wide enough that no marker clamps, and one bounded window for the
 // clamp cases.

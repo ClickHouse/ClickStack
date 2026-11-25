@@ -27,7 +27,7 @@ import Handlebars, { HelperOptions } from 'handlebars';
 import _ from 'lodash';
 import PromisedHandlebars from 'promised-handlebars';
 import { serializeError } from 'serialize-error';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { AlertInput } from '@/controllers/alerts';
 import {

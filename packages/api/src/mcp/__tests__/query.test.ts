@@ -688,7 +688,7 @@ describe('isServerError', () => {
     const a = new Error('a');
     const b = new Error('b', { cause: a });
     // Create circular reference: a.cause -> b -> a -> ...
-    (a as any).cause = b;
+    a.cause = b;
     // Should terminate and return false (no server error codes)
     expect(isServerError(a)).toBe(false);
   });

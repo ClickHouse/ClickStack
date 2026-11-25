@@ -260,7 +260,7 @@ export function useDashboard({
       enabled: dashboardId != null,
     });
 
-  const [isSetting, setIsSettingDashboard] = useState(false);
+  const [isSetting, setIsSetting] = useState(false);
 
   const isLocalDashboard = dashboardId == null;
 
@@ -299,14 +299,14 @@ export function useDashboard({
         }
         onSuccess?.();
       } else {
-        setIsSettingDashboard(true);
+        setIsSetting(true);
         return updateDashboard.mutate(newDashboard, {
           onSuccess: () => {
-            setIsSettingDashboard(false);
+            setIsSetting(false);
             onSuccess?.();
           },
           onError: e => {
-            setIsSettingDashboard(false);
+            setIsSetting(false);
             notifications.show({
               color: 'red',
               title: 'Unable to save dashboard',

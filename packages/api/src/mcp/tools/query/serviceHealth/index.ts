@@ -2,15 +2,20 @@ import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { splitAndTrimWithBracket } from '@hyperdx/common-utils/dist/core/utils';
 import { trace } from '@opentelemetry/api';
 
+import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { PREFER_BUILDER_OVER_SQL_NUDGE } from '@/mcp/tools/query/builderCatalog';
 import {
   clickHouseErrorResult,
   isQueryOutOfTime,
+  MCP_REQUEST_TIMEOUT,
   parseTimeRange,
 } from '@/mcp/tools/query/helpers';
-import { getMcpClickhouseClient } from '@/mcp/tools/trace/shared';
 import type { ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 
@@ -63,8 +68,6 @@ export function registerServiceHealth({
   context,
   registerTool,
 }: ToolRegistrar) {
-  const teamId = context.teamId.toString();
-
   registerTool(
     TOOL_NAME,
     {
@@ -90,10 +93,15 @@ export function registerServiceHealth({
         );
       }
 
-      const source = await loadHealthSource(teamId, input.sourceId, TOOL_NAME);
+      const source = await loadHealthSource(context, input.sourceId, TOOL_NAME);
       if ('isError' in source) return source;
-      const client = await getMcpClickhouseClient(teamId, source.connection);
-      if (!client) {
+      let client: ClickhouseClient;
+      try {
+        client = await getMcpClickhouseClient(context, source.connection, {
+          requestTimeout: MCP_REQUEST_TIMEOUT,
+        });
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection not found for source: ${input.sourceId}`,
         );

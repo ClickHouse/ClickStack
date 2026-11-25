@@ -1,5 +1,5 @@
 import objectHash from 'object-hash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 // Basic Enums
 export enum MetricsDataType {

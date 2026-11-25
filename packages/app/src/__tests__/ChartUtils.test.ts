@@ -1,4 +1,5 @@
 import { DEFAULT_PROMQL_REDUCER } from '@hyperdx/common-utils/dist/core/promql';
+import { isBuilderChartConfig } from '@hyperdx/common-utils/dist/guards';
 import {
   BuilderChartConfigWithDateRange,
   DisplayType,
@@ -6,6 +7,7 @@ import {
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import {
   ChartKeyJoiner,
@@ -421,10 +423,10 @@ describe('ChartUtils', () => {
         ],
       };
 
-      const source = {
+      const source = fromPartial<TSource>({
         kind: SourceKind.Log,
         severityTextExpression: 'SeverityText',
-      } as TSource;
+      });
 
       const actual = formatResponseForTimeChart({
         currentPeriodResponse: res,
@@ -1339,13 +1341,13 @@ describe('ChartUtils', () => {
 
   describe('convertToTimeChartConfig', () => {
     it('should set granularity when granularity is auto', () => {
-      const config = {
+      const config = fromPartial<BuilderChartConfigWithDateRange>({
         granularity: 'auto',
         dateRange: [
           new Date('2025-11-26T00:00:00Z'),
           new Date('2025-11-27T00:00:00Z'),
         ],
-      } as BuilderChartConfigWithDateRange;
+      });
 
       const granularityFromFunction =
         convertToTimeChartConfig(config).granularity;
@@ -1354,12 +1356,12 @@ describe('ChartUtils', () => {
     });
 
     it('should set granularity when granularity is undefined', () => {
-      const config = {
+      const config = fromPartial<BuilderChartConfigWithDateRange>({
         dateRange: [
           new Date('2025-11-26T00:00:00Z'),
           new Date('2025-11-27T00:00:00Z'),
         ],
-      } as BuilderChartConfigWithDateRange;
+      });
 
       const granularityFromFunction =
         convertToTimeChartConfig(config).granularity;
@@ -1368,13 +1370,13 @@ describe('ChartUtils', () => {
     });
 
     it('should retain the specified granularity when not auto', () => {
-      const config = {
+      const config = fromPartial<BuilderChartConfigWithDateRange>({
         granularity: '5 minute',
         dateRange: [
           new Date('2025-11-26T00:00:00Z'),
           new Date('2025-11-27T00:00:00Z'),
         ],
-      } as BuilderChartConfigWithDateRange;
+      });
 
       const granularityFromFunction =
         convertToTimeChartConfig(config).granularity;
@@ -1382,20 +1384,45 @@ describe('ChartUtils', () => {
       expect(granularityFromFunction).toBe('5 minute');
     });
 
+    it('drops eventTableSelect so table column changes do not change the query key', () => {
+      const config: BuilderChartConfigWithDateRange = {
+        select: 'count()',
+        from: { databaseName: 'test', tableName: 'logs' },
+        where: '',
+        timestampValueExpression: 'timestamp',
+        connection: 'test-connection',
+        granularity: '5 minute',
+        dateRange: [
+          new Date('2025-11-26T00:00:00Z'),
+          new Date('2025-11-27T00:00:00Z'),
+        ],
+        eventTableSelect: 'Timestamp, Body',
+      };
+
+      expect(convertToTimeChartConfig(config)).toMatchObject({
+        eventTableSelect: undefined,
+      });
+    });
+
     // seriesLimit lives on the builder member of the ChartConfigWithDateRange
     // union, so narrow the result before reading it. The per-tile value is
     // read from the config itself (no team override anymore).
-    const seriesLimitOf = (seriesLimit?: number | null) =>
-      (
-        convertToTimeChartConfig({
+    const seriesLimitOf = (seriesLimit?: number | null) => {
+      const result = convertToTimeChartConfig(
+        fromPartial<BuilderChartConfigWithDateRange>({
           granularity: '5 minute',
           dateRange: [
             new Date('2025-11-26T00:00:00Z'),
             new Date('2025-11-27T00:00:00Z'),
           ],
           ...(seriesLimit !== undefined ? { seriesLimit } : {}),
-        } as BuilderChartConfigWithDateRange) as BuilderChartConfigWithDateRange
-      ).seriesLimit;
+        }),
+      );
+      if (!isBuilderChartConfig(result)) {
+        throw new Error('Expected builder chart config');
+      }
+      return result.seriesLimit;
+    };
 
     it('omits seriesLimit (capping disabled) when the tile has no limit', () => {
       expect(seriesLimitOf()).toBeUndefined();
@@ -1416,14 +1443,14 @@ describe('ChartUtils', () => {
 
   describe('convertToNumberChartConfig', () => {
     it('should remove granularity and groupBy from the config', () => {
-      const config = {
+      const config = fromPartial<BuilderChartConfigWithDateRange>({
         granularity: '5 minute',
         groupBy: 'ServiceName',
         dateRange: [
           new Date('2025-11-26T00:00:00Z'),
           new Date('2025-11-27T00:00:00Z'),
         ],
-      } as BuilderChartConfigWithDateRange;
+      });
 
       const convertedConfig = convertToNumberChartConfig(config);
 
@@ -1619,13 +1646,13 @@ describe('ChartUtils', () => {
 
   describe('convertToTableChartConfig', () => {
     it('should remove granularity from the config', () => {
-      const config = {
+      const config = fromPartial<BuilderChartConfigWithDateRange>({
         granularity: '5 minute',
         dateRange: [
           new Date('2025-11-26T00:00:00Z'),
           new Date('2025-11-27T00:00:00Z'),
         ],
-      } as BuilderChartConfigWithDateRange;
+      });
 
       const convertedConfig = convertToTableChartConfig(config);
 
@@ -1633,13 +1660,13 @@ describe('ChartUtils', () => {
     });
 
     it('should apply a default sort if none is provided', () => {
-      const config = {
+      const config = fromPartial<BuilderChartConfigWithDateRange>({
         groupBy: 'ServiceName',
         dateRange: [
           new Date('2025-11-26T00:00:00Z'),
           new Date('2025-11-27T00:00:00Z'),
         ],
-      } as BuilderChartConfigWithDateRange;
+      });
 
       const convertedConfig = convertToTableChartConfig(config);
 
@@ -1647,13 +1674,13 @@ describe('ChartUtils', () => {
     });
 
     it('should apply a default limit if none is provided', () => {
-      const config = {
+      const config = fromPartial<BuilderChartConfigWithDateRange>({
         groupBy: 'ServiceName',
         dateRange: [
           new Date('2025-11-26T00:00:00Z'),
           new Date('2025-11-27T00:00:00Z'),
         ],
-      } as BuilderChartConfigWithDateRange;
+      });
 
       const convertedConfig = convertToTableChartConfig(config);
 
@@ -1679,7 +1706,7 @@ describe('ChartUtils', () => {
     it('throws when meta is missing', () => {
       expect(() =>
         formatResponseForCategoricalChart(
-          { data: [{ 'count()': 10 }] } as any,
+          fromAny({ data: [{ 'count()': 10 }] }),
           getColor,
         ),
       ).toThrow('No meta data found in response');
@@ -2116,19 +2143,20 @@ describe('getSelectSeriesColors', () => {
 });
 
 describe('convertV1ChartConfigToV2', () => {
-  const metricSource = {
-    id: 'metric-source',
-    kind: SourceKind.Metric,
-    connection: 'connection-id',
-    from: { databaseName: 'default', tableName: '' },
-    timestampValueExpression: 'TimeUnix',
-    resourceAttributesExpression: 'ResourceAttributes',
-    metricTables: {
-      gauge: 'otel_metrics_gauge',
-      histogram: 'otel_metrics_histogram',
-      sum: 'otel_metrics_sum',
-    },
-  } as unknown as Parameters<typeof convertV1ChartConfigToV2>[1]['metric'];
+  const metricSource: Parameters<typeof convertV1ChartConfigToV2>[1]['metric'] =
+    fromPartial({
+      id: 'metric-source',
+      kind: SourceKind.Metric,
+      connection: 'connection-id',
+      from: { databaseName: 'default', tableName: '' },
+      timestampValueExpression: 'TimeUnix',
+      resourceAttributesExpression: 'ResourceAttributes',
+      metricTables: {
+        gauge: 'otel_metrics_gauge',
+        histogram: 'otel_metrics_histogram',
+        sum: 'otel_metrics_sum',
+      },
+    });
 
   const convertMetricSeries = (aggFn: 'p95' | 'p99_rate' | 'avg') =>
     convertV1ChartConfigToV2(

@@ -696,7 +696,7 @@ interface ResolvedNumberFormats {
  * multi-series query and event (log/trace) formulas compile inline, but both
  * project the same column shape (operands unless hidden, then formulas).
  */
-function getFormulaConfig(
+export function getFormulaConfig(
   config: ChartConfig | ChartConfigWithOptDateRange,
 ): { formulas: MetricFormula[]; operandsHidden: boolean } | undefined {
   if (!isBuilderChartConfig(config) || !config.formulas?.length) {

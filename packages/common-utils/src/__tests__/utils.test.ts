@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   aliasMapToWithClauses,
@@ -15,6 +15,7 @@ import {
   getDistributedTableArgs,
   getFirstOrderingItem,
   getPercentileAggFnLevel,
+  getReferencedWithClauses,
   getTextIndexDictionaryBlockSize,
   hasNonEmptyOrderBy,
   hasPositiveSeriesLimit,
@@ -102,6 +103,17 @@ describe('utils', () => {
       expect(
         formatDate(date, { clock: '24h', timeZone: 'Asia/Tokyo' }),
       ).toEqual('Jan 1 21:00:00');
+    });
+
+    it('formats only the date, in the given time zone', () => {
+      const date = new Date('2021-01-01T20:00:00Z');
+      expect(
+        formatDate(date, {
+          clock: '12h',
+          timeZone: 'Asia/Tokyo',
+          format: 'date',
+        }),
+      ).toEqual('Jan 2');
     });
   });
 
@@ -3382,6 +3394,45 @@ describe('utils', () => {
       expect(result).toHaveLength(2);
       expect(result![0].name).toBe('body');
       expect(result![1].name).toBe('service');
+    });
+  });
+
+  describe('getReferencedWithClauses', () => {
+    const clause = (name: string, sql: string) => ({
+      name,
+      sql: { sql, params: {} },
+      isSubquery: false,
+    });
+    const withClauses = [
+      clause('service', 'ServiceName'),
+      clause('body', 'toString(Body)'),
+      clause('shout', 'upper(body)'),
+    ];
+
+    it('returns undefined when nothing is referenced', () => {
+      expect(
+        getReferencedWithClauses(withClauses, ['level:error', '[]']),
+      ).toBeUndefined();
+    });
+
+    it('keeps clauses the texts reference', () => {
+      expect(
+        getReferencedWithClauses(withClauses, ["service = 'api'", '[]'])?.map(
+          c => c.name,
+        ),
+      ).toEqual(['service']);
+    });
+
+    it('keeps clauses that a referenced clause depends on', () => {
+      expect(
+        getReferencedWithClauses(withClauses, ['shout:ERROR'])?.map(
+          c => c.name,
+        ),
+      ).toEqual(['body', 'shout']);
+    });
+
+    it('handles missing clauses', () => {
+      expect(getReferencedWithClauses(undefined, ['service'])).toBeUndefined();
     });
   });
 

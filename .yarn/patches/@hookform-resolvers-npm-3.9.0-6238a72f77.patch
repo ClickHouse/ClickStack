@@ -1,0 +1,11 @@
+diff --git a/zod/dist/types.d.ts b/zod/dist/types.d.ts
+index 033484e0c93b5d927ad2bb3023b2bffe22a281a9..2994f3b4c2a887fd88ca0bffedd3f9bf1f2a7892 100644
+--- a/zod/dist/types.d.ts
++++ b/zod/dist/types.d.ts
+@@ -1,5 +1,5 @@
+ import { FieldValues, ResolverOptions, ResolverResult } from 'react-hook-form';
+-import { z } from 'zod';
++import { z } from 'zod/v3';
+ export type Resolver = <T extends z.Schema<any, any>>(schema: T, schemaOptions?: Partial<z.ParseParams>, factoryOptions?: {
+     /**
+      * @default async

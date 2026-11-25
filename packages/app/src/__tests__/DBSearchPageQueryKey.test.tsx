@@ -7,6 +7,7 @@ import {
 
 import { DBTimeChart } from '@/components/DBTimeChart';
 import SearchTotalCountChart from '@/components/SearchTotalCountChart';
+import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 
 // Mock the API and hooks
 jest.mock('@/hooks/useResultColumnFilterKeys', () => ({
@@ -79,11 +80,11 @@ jest.mock('@/ChartUtils', () => ({
 }));
 
 describe('DBSearchPage QueryKey Consistency', () => {
-  let mockUseQueriedChartConfig: jest.Mock;
+  const mockUseQueriedChartConfig: jest.Mock = jest.mocked(
+    useQueriedChartConfig,
+  );
 
-  beforeEach(async () => {
-    mockUseQueriedChartConfig = (await import('@/hooks/useChartConfig'))
-      .useQueriedChartConfig as any;
+  beforeEach(() => {
     mockUseQueriedChartConfig.mockClear();
   });
 
