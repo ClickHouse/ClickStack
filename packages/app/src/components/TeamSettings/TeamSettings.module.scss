@@ -198,7 +198,7 @@ $nav-width: 224px;
   min-width: 0;
 }
 
-@media (max-width: 860px) {
+@media (width <= 860px) {
   .row {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
