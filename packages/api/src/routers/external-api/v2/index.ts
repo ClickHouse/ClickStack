@@ -3,6 +3,7 @@ import omit from 'lodash/omit';
 
 import { EXTERNAL_API_RATE_LIMIT_MAX } from '@/config';
 import { validateUserAccessKey } from '@/middleware/auth';
+import { parseBody } from '@/middleware/bodyParser';
 import alertsRouter from '@/routers/external-api/v2/alerts';
 import chartsRouter from '@/routers/external-api/v2/charts';
 import connectionsRouter from '@/routers/external-api/v2/connections';
@@ -33,14 +34,27 @@ router.get('/', validateUserAccessKey, (req, res) => {
   });
 });
 
-router.use('/alerts', defaultRateLimiter, validateUserAccessKey, alertsRouter);
+router.use(
+  '/alerts',
+  defaultRateLimiter,
+  validateUserAccessKey,
+  parseBody,
+  alertsRouter,
+);
 
-router.use('/charts', defaultRateLimiter, validateUserAccessKey, chartsRouter);
+router.use(
+  '/charts',
+  defaultRateLimiter,
+  validateUserAccessKey,
+  parseBody,
+  chartsRouter,
+);
 
 router.use(
   '/connections',
   defaultRateLimiter,
   validateUserAccessKey,
+  parseBody,
   connectionsRouter,
 );
 
@@ -48,6 +62,7 @@ router.use(
   '/dashboards',
   defaultRateLimiter,
   validateUserAccessKey,
+  parseBody,
   dashboardRouter,
 );
 
@@ -55,6 +70,7 @@ router.use(
   '/sources',
   defaultRateLimiter,
   validateUserAccessKey,
+  parseBody,
   sourcesRouter,
 );
 
@@ -62,18 +78,32 @@ router.use(
   '/saved-searches',
   defaultRateLimiter,
   validateUserAccessKey,
+  parseBody,
   savedSearchesRouter,
 );
 
-router.use('/search', defaultRateLimiter, validateUserAccessKey, searchRouter);
+router.use(
+  '/search',
+  defaultRateLimiter,
+  validateUserAccessKey,
+  parseBody,
+  searchRouter,
+);
 
 router.use(
   '/webhooks',
   defaultRateLimiter,
   validateUserAccessKey,
+  parseBody,
   webhooksRouter,
 );
 
-router.use('/team', defaultRateLimiter, validateUserAccessKey, teamRouter);
+router.use(
+  '/team',
+  defaultRateLimiter,
+  validateUserAccessKey,
+  parseBody,
+  teamRouter,
+);
 
 export default router;

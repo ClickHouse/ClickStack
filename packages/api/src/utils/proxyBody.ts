@@ -14,11 +14,14 @@ type ProxyRequest = Pick<
 >;
 
 export function captureProxyBody(
-  req: IncomingMessage & ParsedRequest & { path?: string },
+  req: IncomingMessage & ParsedRequest & { baseUrl?: string; path?: string },
   _res: ServerResponse,
   body: Buffer,
 ) {
-  if (/^\/clickhouse-proxy(?:\/|$)/i.test(req.path ?? '')) {
+  // The parser runs inside the router mount, where req.path drops the mount path.
+  if (
+    /^\/clickhouse-proxy(?:\/|$)/i.test(`${req.baseUrl ?? ''}${req.path ?? ''}`)
+  ) {
     // verify receives inflated bytes before parsing can change their values.
     req._hdxProxyBody = body;
   }
