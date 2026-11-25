@@ -458,21 +458,40 @@ export function getMonthStartTicks({
   return ticks.length > 0 ? ticks : undefined;
 }
 
+function isMidnightIn(seconds: number, timeZone: string | undefined) {
+  const wallClock = toWallClock(
+    new Date(seconds * 1000),
+    timeZone ?? getLocalTimeZone(),
+  );
+  return (
+    wallClock.getUTCHours() === 0 &&
+    wallClock.getUTCMinutes() === 0 &&
+    wallClock.getUTCSeconds() === 0
+  );
+}
+
 /**
- * Format for the tooltip header timestamp. Year-scale ranges carry the year,
- * and drop the time of day when buckets are a day or longer.
+ * Format for the tooltip header timestamp at `labelSeconds`. Year-scale ranges
+ * carry the year, and drop the time of day when buckets are a day or longer
+ * and the bucket starts at midnight in `timeZone`. Buckets are UTC-aligned, so
+ * elsewhere a date alone would name the previous or next day without saying so.
  */
 export function getTooltipDateFormat({
+  labelSeconds,
   dateRange,
   granularity,
+  timeZone,
 }: {
+  labelSeconds: number;
   dateRange: readonly [Date, Date] | Readonly<[Date, Date]>;
   granularity: string;
+  timeZone: string | undefined;
 }): DateFormat {
   if (!isYearScaleRange(dateRange)) {
     return 'normal';
   }
-  return convertGranularityToSeconds(granularity) >= SECONDS_PER_DAY
+  return convertGranularityToSeconds(granularity) >= SECONDS_PER_DAY &&
+    isMidnightIn(labelSeconds, timeZone)
     ? 'isoDate'
     : 'withYear';
 }
@@ -504,13 +523,5 @@ export function getXAxisTickDateFormat({
   if (convertGranularityToSeconds(granularity) < SECONDS_PER_DAY) {
     return index === 0 ? 'normal' : 'time';
   }
-  const wallClock = toWallClock(
-    new Date(tickSeconds * 1000),
-    timeZone ?? getLocalTimeZone(),
-  );
-  const isMidnight =
-    wallClock.getUTCHours() === 0 &&
-    wallClock.getUTCMinutes() === 0 &&
-    wallClock.getUTCSeconds() === 0;
-  return isMidnight ? 'date' : 'short';
+  return isMidnightIn(tickSeconds, timeZone) ? 'date' : 'short';
 }

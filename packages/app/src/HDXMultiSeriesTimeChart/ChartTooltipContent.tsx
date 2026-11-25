@@ -24,7 +24,7 @@ import styles from '@styles/HDXLineChart.module.scss';
 type HDXLineChartTooltipProps = {
   lineDataMap: { [keyName: string]: LineData };
   previousPeriodOffsetSeconds?: number;
-  dateFormat?: DateFormat;
+  getDateFormat?: (labelSeconds: number) => DateFormat;
   numberFormat?: NumberFormat;
   numberFormatByKey: Map<string, NumberFormat>;
   /** Per-series active-point pixel Y, captured by the Area active dots. */
@@ -55,7 +55,7 @@ export const HDXLineChartTooltip = withErrorBoundary(
       numberFormatByKey,
       lineDataMap,
       previousPeriodOffsetSeconds,
-      dateFormat,
+      getDateFormat,
       activePointYByKeyRef,
       containerRef,
     } = props;
@@ -79,7 +79,7 @@ export const HDXLineChartTooltip = withErrorBoundary(
         <ChartTooltipHeader
           labelSeconds={label}
           previousPeriodOffsetSeconds={previousPeriodOffsetSeconds}
-          dateFormat={dateFormat}
+          dateFormat={getDateFormat?.(Number(label))}
         />
       );
 

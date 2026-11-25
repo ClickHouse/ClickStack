@@ -1477,32 +1477,66 @@ describe('isYearScaleRange', () => {
 });
 
 describe('getTooltipDateFormat', () => {
+  const seconds = (iso: string) => new Date(iso).getTime() / 1000;
   const twoYears: [Date, Date] = [
     new Date('2024-11-25T00:00:00Z'),
     new Date('2026-11-25T00:00:00Z'),
   ];
+  const utcMidnight = seconds('2025-11-08T00:00:00Z');
 
   it('keeps the default format below a year', () => {
     expect(
       getTooltipDateFormat({
+        labelSeconds: utcMidnight,
         dateRange: [new Date('2026-10-01'), new Date('2026-11-01')],
         granularity: '1 day',
+        timeZone: 'Etc/UTC',
       }),
     ).toBe('normal');
   });
 
-  it('shows only the date with the year for daily or coarser buckets', () => {
+  it.each(['1 day', '30 day'])(
+    'shows only the date with the year for a midnight %s bucket',
+    granularity => {
+      expect(
+        getTooltipDateFormat({
+          labelSeconds: utcMidnight,
+          dateRange: twoYears,
+          granularity,
+          timeZone: 'Etc/UTC',
+        }),
+      ).toBe('isoDate');
+    },
+  );
+
+  it('keeps the time when a daily bucket does not start at local midnight', () => {
+    // A UTC-aligned bucket starts at 7 PM the previous day in New York.
     expect(
-      getTooltipDateFormat({ dateRange: twoYears, granularity: '30 day' }),
-    ).toBe('isoDate');
+      getTooltipDateFormat({
+        labelSeconds: utcMidnight,
+        dateRange: twoYears,
+        granularity: '1 day',
+        timeZone: 'America/New_York',
+      }),
+    ).toBe('withYear');
     expect(
-      getTooltipDateFormat({ dateRange: twoYears, granularity: '1 day' }),
+      getTooltipDateFormat({
+        labelSeconds: seconds('2025-11-08T05:00:00Z'),
+        dateRange: twoYears,
+        granularity: '1 day',
+        timeZone: 'America/New_York',
+      }),
     ).toBe('isoDate');
   });
 
   it('keeps the time, with the year, for sub-day buckets', () => {
     expect(
-      getTooltipDateFormat({ dateRange: twoYears, granularity: '1 hour' }),
+      getTooltipDateFormat({
+        labelSeconds: utcMidnight,
+        dateRange: twoYears,
+        granularity: '1 hour',
+        timeZone: 'Etc/UTC',
+      }),
     ).toBe('withYear');
   });
 });
