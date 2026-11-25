@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { Controller, useForm, useWatch } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import {
   UnknownTemplateHelperError,
   validateTemplate,
@@ -21,7 +22,6 @@ import {
   Box,
   Button,
   Checkbox,
-  Divider,
   Drawer,
   Group,
   Input,
@@ -461,7 +461,7 @@ export default function ChartDisplaySettingsDrawer({
                 />
               </Box>
             )}
-            <Divider />
+            <Separator size="xs" />
           </>
         )}
 
@@ -477,7 +477,7 @@ export default function ChartDisplaySettingsDrawer({
                 />
               )}
             />
-            <Divider />
+            <Separator size="xs" />
           </>
         )}
 
@@ -511,7 +511,7 @@ export default function ChartDisplaySettingsDrawer({
                 }}
               />
             </Box>
-            <Divider />
+            <Separator size="xs" />
           </>
         )}
 
@@ -537,7 +537,7 @@ export default function ChartDisplaySettingsDrawer({
                 )}
               />
             </Box>
-            <Divider />
+            <Separator size="xs" />
           </>
         )}
 
@@ -557,7 +557,7 @@ export default function ChartDisplaySettingsDrawer({
               size="xs"
               label="Alternate Row Background"
             />
-            <Divider />
+            <Separator size="xs" />
           </>
         )}
 
@@ -588,7 +588,7 @@ export default function ChartDisplaySettingsDrawer({
                 )}
               />
             </Box>
-            <Divider />
+            <Separator size="xs" />
           </>
         )}
 
@@ -606,7 +606,7 @@ export default function ChartDisplaySettingsDrawer({
                 />
               )}
             />
-            <Divider />
+            <Separator size="xs" />
           </>
         )}
 
@@ -623,7 +623,7 @@ export default function ChartDisplaySettingsDrawer({
             ) : undefined
           }
         />
-        <Divider />
+        <Separator size="xs" />
         <Group gap="xs" mt="xs" justify="space-between">
           <Button type="submit" variant="secondary" onClick={resetToDefaults}>
             Reset to Defaults

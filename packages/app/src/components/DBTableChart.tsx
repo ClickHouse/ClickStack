@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from 'react';
-import cx from 'classnames';
 import { inferNumericColumn } from '@hyperdx/common-utils/dist/clickhouse';
 import { isRatioChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
@@ -35,6 +34,7 @@ import type { TileFilterHandler } from '@/types';
 import { useIntersectionObserver } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
@@ -75,6 +75,18 @@ export default function DBTableChart({
   onFilter?: TileFilterHandler;
 }) {
   const [sort, setSort] = useState<SortingState>([]);
+
+  // A header sort only overrides the Order By it was clicked against. Clear it
+  // when the config's own Order By changes (e.g. the tile was edited), so it
+  // can't come back if the Order By is later changed back.
+  const configOrderByKey = JSON.stringify(
+    isBuilderChartConfig(config) ? (config.orderBy ?? null) : null,
+  );
+  const [sortOrderByKey, setSortOrderByKey] = useState(configOrderByKey);
+  if (sortOrderByKey !== configOrderByKey) {
+    setSortOrderByKey(configOrderByKey);
+    setSort([]);
+  }
 
   const { data: source } = useSource({
     id: config.source,
@@ -335,20 +347,11 @@ export default function DBTableChart({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Table
           data={data?.data ?? []}

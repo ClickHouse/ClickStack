@@ -3,6 +3,7 @@ import {
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { buildSeriesSearchUrl } from '@/components/DBTimeChart';
 
@@ -59,19 +60,19 @@ const configWith = (
     dateRange: [clicked, clicked],
   }) as ChartConfigWithDateRange;
 
-const rawSqlConfig = {
+const rawSqlConfig = fromPartial<ChartConfigWithDateRange>({
   connection: 'conn-1',
   configType: 'sql',
   sqlTemplate: 'SELECT 1',
   dateRange: [clicked, clicked],
-} satisfies Partial<ChartConfigWithDateRange> as ChartConfigWithDateRange;
+});
 
-const promqlConfig = {
+const promqlConfig = fromPartial<ChartConfigWithDateRange>({
   connection: 'conn-1',
   configType: 'promql',
   promqlExpression: 'up',
   dateRange: [clicked, clicked],
-} satisfies Partial<ChartConfigWithDateRange> as ChartConfigWithDateRange;
+});
 
 beforeEach(() => jest.clearAllMocks());
 

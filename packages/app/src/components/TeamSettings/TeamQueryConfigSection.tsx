@@ -1,12 +1,12 @@
 import { useCallback, useState } from 'react';
 import { SubmitHandler, useForm } from 'react-hook-form';
+import { Separator } from '@clickhouse/click-ui';
 import { DEFAULT_METADATA_MAX_ROWS_TO_READ } from '@hyperdx/common-utils/dist/core/metadata';
 import { type TeamClickHouseSettings } from '@hyperdx/common-utils/dist/types';
 import {
   Box,
   Button,
   Card,
-  Divider,
   Group,
   InputLabel,
   Stack,
@@ -18,6 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { IconHelpCircle, IconPencil } from '@tabler/icons-react';
 
 import api from '@/api';
+import { useBrandDisplayName } from '@/brand';
 import SelectControlled from '@/components/SelectControlled';
 import { IS_EXEMPLARS_ENABLED } from '@/config';
 import {
@@ -26,7 +27,6 @@ import {
   DEFAULT_QUERY_TIMEOUT,
   DEFAULT_SEARCH_ROW_LIMIT,
 } from '@/defaults';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 
 type ClickhouseSettingType = 'number' | 'boolean';
 
@@ -284,7 +284,7 @@ export default function TeamQueryConfigSection() {
   return (
     <Box id="team_query_config">
       <Text size="md">ClickHouse Client Settings</Text>
-      <Divider my="md" />
+      <Separator size="lg" />
       <Card>
         <Stack>
           <ClickhouseSettingForm
@@ -326,7 +326,7 @@ export default function TeamQueryConfigSection() {
             defaultValue={DEFAULT_FILTER_KEYS_FETCH_LIMIT}
             placeholder={`default = ${DEFAULT_FILTER_KEYS_FETCH_LIMIT}`}
             min={1}
-            max={1000}
+            max={10000}
             displayValue={displayValueWithUnit('keys')}
             description={`Default is ${DEFAULT_FILTER_KEYS_FETCH_LIMIT}`}
           />
@@ -343,6 +343,13 @@ export default function TeamQueryConfigSection() {
               displayValue={displayValueWithUnit('markers')}
             />
           )}
+          <ClickhouseSettingForm
+            settingKey="filterValuesExactByDefault"
+            label="Default filter values"
+            tooltip="Default for the search page's Show All Values filter setting. All shows every known value; Exact shows only values matching the current query. Users can still override this in their filter settings."
+            type="boolean"
+            displayValue={value => (value ? 'Exact' : 'All')}
+          />
           <ClickhouseSettingForm
             settingKey="fieldMetadataDisabled"
             label="Field Metadata Queries"

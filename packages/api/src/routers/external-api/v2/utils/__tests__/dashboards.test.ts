@@ -8,6 +8,7 @@ import {
   MetricsDataType,
   PromqlReducer,
   PromqlSavedChartConfig,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 import { z } from 'zod';
@@ -461,7 +462,7 @@ describe('convertToExternalDashboard orphan-ref heal', () => {
     expect(ext.tiles[0].tabId).toBe('errors');
   });
 
-  it('returns PromQL tiles unless hidePromqlTiles is set', () => {
+  it('returns PromQL tiles and label filters unless hidePromql is set', () => {
     const doc = makeDoc({
       tiles: [
         makeTile({
@@ -476,16 +477,91 @@ describe('convertToExternalDashboard orphan-ref heal', () => {
         }),
         makeTile({ id: 'normal-tile' }),
       ],
+      filters: [
+        {
+          id: 'label-filter',
+          type: 'PROMETHEUS_LABEL',
+          name: 'Job',
+          source: new mongoose.Types.ObjectId().toString(),
+          label: 'job',
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
+        {
+          id: 'static-filter',
+          type: 'STATIC_LIST',
+          name: 'Env',
+          options: ['prod'],
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
+      ],
     });
-    expect(convertToExternalDashboard(doc).tiles.map(t => t.id)).toEqual([
-      'promql-tile',
-      'normal-tile',
+    const shown = convertToExternalDashboard(doc);
+    expect(shown.tiles.map(t => t.id)).toEqual(['promql-tile', 'normal-tile']);
+    expect(shown.filters?.map(f => f.id)).toEqual([
+      'label-filter',
+      'static-filter',
     ]);
+
+    const hidden = convertToExternalDashboard(doc, { hidePromql: true });
+    expect(hidden.tiles.map(t => t.id)).toEqual(['normal-tile']);
+    expect(hidden.filters?.map(f => f.id)).toEqual(['static-filter']);
+  });
+
+  it('returns ad hoc filters and their saved conditions, hiding PromQL ones with PromQL', () => {
+    const adhoc = (sourceType: 'sql' | 'promql') => ({
+      id: `${sourceType}-adhoc`,
+      type: 'ADHOC' as const,
+      name: sourceType,
+      sourceType,
+      sources: ['65f5e4a3b9e77c001a111111'],
+      isBroadcastEnabled: true as const,
+      isVariableEnabled: true as const,
+    });
+    const adhocValue = {
+      type: 'adhoc' as const,
+      name: 'sql',
+      conditions: [
+        { key: 'ServiceName', operator: '=' as const, value: 'api' },
+      ],
+    };
+    const doc = makeDoc({
+      filters: [adhoc('sql'), adhoc('promql')],
+      savedFilterValues: [adhocValue],
+    });
+
+    const shown = convertToExternalDashboard(doc);
+    expect(shown.filters).toEqual([adhoc('sql'), adhoc('promql')]);
+    expect(shown.savedFilterValues).toEqual([adhocValue]);
+
+    const hidden = convertToExternalDashboard(doc, { hidePromql: true });
+    expect(hidden.filters).toEqual([adhoc('sql')]);
+    expect(hidden.savedFilterValues).toEqual([adhocValue]);
+  });
+
+  it('keeps data source variables that offer promql sources with hidePromql', () => {
+    const doc = makeDoc({
+      filters: [
+        {
+          id: 'mixed',
+          type: 'DATA_SOURCE',
+          name: 'mixed',
+          variableName: 'mixed',
+          allowedSourceKinds: [SourceKind.Metric, SourceKind.Promql],
+          minSelections: 1,
+          maxSelections: 1,
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
+      ],
+    });
+
     expect(
-      convertToExternalDashboard(doc, { hidePromqlTiles: true }).tiles.map(
-        t => t.id,
+      convertToExternalDashboard(doc, { hidePromql: true }).filters?.map(
+        f => f.id,
       ),
-    ).toEqual(['normal-tile']);
+    ).toEqual(['mixed']);
   });
 
   // seriesLimit is three-state (matching the internal schema): omitted =

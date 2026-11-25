@@ -406,12 +406,29 @@ function formatExternalSource(source: SourceDocument) {
  *           description: For Distributed table sources whose target tables have non-matching column sets. A list of columns supported across all target tables, used instead of SELECT * when fetching full row data. Leave blank to select all columns.
  *           nullable: true
  *           example: Timestamp, Body, ServiceName
+ *         rowKeyExpression:
+ *           type: string
+ *           description: Comma-separated expressions that together identify one row, e.g. the partition key, primary key, _block_number and _block_offset. When set, row details are looked up by these columns only. Leave blank to detect keys from table metadata.
+ *           nullable: true
+ *           example: toDate(Timestamp), ServiceName, Timestamp, _block_number, _block_offset
  *         useTextIndexForImplicitColumn:
  *           type: string
  *           enum: [auto, enabled, disabled]
  *           description: Controls whether lucene rendering uses ClickHouse text indices via hasAllTokens() against the implicit column. "auto" detects a covering index at query time, "enabled" forces text index usage, "disabled" forces a LIKE/hasToken fallback.
  *           nullable: true
  *           example: auto
+ *         mapKeyIndexMaxParts:
+ *           type: integer
+ *           minimum: 1
+ *           description: How many data parts are read from text indexes to discover attribute keys and filter values, chosen by mapKeyIndexPartSelection. Raise it if keys or values are missing from filters; lower it if they load slowly. Defaults to 20.
+ *           nullable: true
+ *           example: 20
+ *         mapKeyIndexPartSelection:
+ *           type: string
+ *           enum: [median, smallest, largest]
+ *           description: Which data parts, by row count, are read from text indexes to discover attribute keys and filter values. "median" (the default) balances coverage and cost, "smallest" reads the newest unmerged parts, "largest" reads the most merged data.
+ *           nullable: true
+ *           example: median
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.
@@ -607,12 +624,29 @@ function formatExternalSource(source: SourceDocument) {
  *           description: For Distributed table sources whose target tables have non-matching column sets. A list of columns supported across all target tables, used instead of SELECT * when fetching full row data. Leave blank to select all columns.
  *           nullable: true
  *           example: Timestamp, Body, ServiceName
+ *         rowKeyExpression:
+ *           type: string
+ *           description: Comma-separated expressions that together identify one row, e.g. the partition key, primary key, _block_number and _block_offset. When set, row details are looked up by these columns only. Leave blank to detect keys from table metadata.
+ *           nullable: true
+ *           example: toDate(Timestamp), SpanName, Timestamp, _block_number, _block_offset
  *         useTextIndexForImplicitColumn:
  *           type: string
  *           enum: [auto, enabled, disabled]
  *           description: Controls whether lucene rendering uses ClickHouse text indices via hasAllTokens() against the implicit column. "auto" detects a covering index at query time, "enabled" forces text index usage, "disabled" forces a LIKE/hasToken fallback.
  *           nullable: true
  *           example: auto
+ *         mapKeyIndexMaxParts:
+ *           type: integer
+ *           minimum: 1
+ *           description: How many data parts are read from text indexes to discover attribute keys and filter values, chosen by mapKeyIndexPartSelection. Raise it if keys or values are missing from filters; lower it if they load slowly. Defaults to 20.
+ *           nullable: true
+ *           example: 20
+ *         mapKeyIndexPartSelection:
+ *           type: string
+ *           enum: [median, smallest, largest]
+ *           description: Which data parts, by row count, are read from text indexes to discover attribute keys and filter values. "median" (the default) balances coverage and cost, "smallest" reads the newest unmerged parts, "largest" reads the most merged data.
+ *           nullable: true
+ *           example: median
  *         highlightedTraceAttributeExpressions:
  *           type: array
  *           description: Expressions defining trace-level attributes which are displayed in the trace view for the selected trace.
@@ -720,6 +754,11 @@ function formatExternalSource(source: SourceDocument) {
  *           description: HyperDX Source for logs associated with metrics. Optional
  *           nullable: true
  *           example: 507f1f77bcf86cd799439011
+ *         minAutoGranularity:
+ *           type: string
+ *           description: Floor for the auto-inferred chart granularity. Set it to the scrape/report interval of the metrics so a short time range does not produce buckets smaller than that interval (sparse, steppy series). Only constrains "Auto" granularity; an explicit granularity picked on a tile is never overridden. Omit for no minimum. Uses the SQL interval format (a positive integer followed by second, minute, hour, or day), not the short form of the materialized view granularity fields.
+ *           pattern: '^\d+ (second|minute|hour|day)$'
+ *           example: 1 minute
  *     SessionSource:
  *       type: object
  *       required:
@@ -830,6 +869,16 @@ function formatExternalSource(source: SourceDocument) {
  *           type: string
  *           description: Required by the API for all source kinds; not used by PromQL queries.
  *           example: timestamp
+ *         minAutoGranularity:
+ *           type: string
+ *           description: Floor for the auto-inferred chart granularity, and the scrape interval that `$__rate_interval` is computed from. Set it to the Prometheus scrape interval so a short time range does not produce buckets smaller than that interval. Only constrains "Auto" granularity; an explicit granularity picked on a tile is never overridden. Omit for no minimum. Uses the SQL interval format (a positive integer followed by second, minute, hour, or day), not the short form of the materialized view granularity fields.
+ *           pattern: '^\d+ (second|minute|hour|day)$'
+ *           example: 1 minute
+ *         promqlBackend:
+ *           type: string
+ *           enum: [auto, clickhouse-http, table-function]
+ *           description: How PromQL is evaluated on a ClickHouse connection. "clickhouse-http" uses ClickHouse's Prometheus HTTP API, which needs ClickHouse 26.6+ with the prometheus_api_v1 handler configured; queries fail with an error when the server does not serve it. "table-function" uses the prometheusQuery table functions. "auto" (the default when omitted) checks the server and prefers the HTTP API. Ignored when the connection is a Prometheus-compatible endpoint.
+ *           example: auto
  *     Source:
  *       oneOf:
  *         - $ref: '#/components/schemas/LogSource'

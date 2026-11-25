@@ -98,6 +98,10 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     serviceName: 'service1',
     resourceAttrValue: 'value1',
     jsonValue: 'value1',
+    // Top-level JSON key that is NOT a bare identifier (`@` prefix). Selecting
+    // it (`ResourceAttributesJSON.`@request_id``) and opening the row must keep
+    // the key backtick-quoted in the detail WHERE clause (HDX-5867).
+    jsonAtKeyValue: 'request-A',
     clusterName: 'cluster1',
     serviceNameHyphen: 'svc-one',
     mapHyphenValue: 'mapval1',
@@ -108,6 +112,7 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     serviceName: 'service2',
     resourceAttrValue: 'value2',
     jsonValue: 'value2',
+    jsonAtKeyValue: 'request-B',
     clusterName: 'cluster2',
     serviceNameHyphen: 'svc-two',
     mapHyphenValue: 'mapval2',
@@ -118,6 +123,7 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     serviceName: 'service3',
     resourceAttrValue: 'value3',
     jsonValue: 'value3',
+    jsonAtKeyValue: 'request-C',
     clusterName: 'cluster3',
     serviceNameHyphen: 'svc-three',
     mapHyphenValue: 'mapval3',
@@ -125,6 +131,10 @@ export const INTERESTING_FILTER_KEYS_ROWS = [
     body: 'log body 3',
   },
 ] as const;
+
+// The at-prefixed JSON key seeded into `ResourceAttributesJSON`. Exported so the
+// row-details spec selects and asserts against the same key/values.
+export const INTERESTING_FILTER_KEYS_JSON_AT_KEY = '@request_id';
 
 // A single log whose Body is a JSON string with a flat, dotted key. It lives in
 // the default E2E Logs table (so it shares the E2E Logs source); the unique
@@ -414,8 +424,11 @@ function generateTraceData(
         Math.floor(Math.random() * 500000000) +
         (spansPerTrace - spanIdx) * 100000000;
 
+      // Two pods per service so the service map can be split by pod.
+      const podName = `${service}-pod-${traceIdx % 2}`;
+
       rows.push(
-        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
+        `('${timestampNs}', '${traceId}', '${spanId}', '${parentSpanId}', '', '${spanName}', '${spanKind}', '${service}', {'service.name':'${service}','environment':'test','k8s.pod.name':'${podName}'}, '', '', {'http.method':'GET','http.status_code':'${httpStatusCode}'}, ${duration}, '${statusCode}', '', [], [], [], [], [], [], [])`,
       );
 
       // Stop if we've generated enough spans
@@ -793,7 +806,7 @@ function generateK8sEventLogs(
 function generateInterestingFilterKeyLogData(seedRef: number): string {
   return INTERESTING_FILTER_KEYS_ROWS.map((row, i) => {
     const timestampNs = (seedRef - (i + 1) * 1000) * 1000000;
-    const json = `{"key": {"subKey": {"subSubKey": "${row.jsonValue}"}}}`;
+    const json = `{"key": {"subKey": {"subSubKey": "${row.jsonValue}"}}, "${INTERESTING_FILTER_KEYS_JSON_AT_KEY}": "${row.jsonAtKeyValue}"}`;
     // JSON column with a hyphenated name AND hyphenated nested keys.
     const jsonHyphen = `{"key-1": {"key-2": "${row.jsonHyphenValue}"}}`;
     return (
@@ -1165,7 +1178,7 @@ async function insertPromqlMetric(
     .join('\n    UNION ALL\n    ');
 
   await client.query(`
-    INSERT INTO ${table} (metric_name, tags, time_series)
+    INSERT INTO ${table} (metric_name, tags, samples)
     ${rows}
   `);
 }

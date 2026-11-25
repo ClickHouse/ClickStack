@@ -1,5 +1,71 @@
 # @hyperdx/otel-collector
 
+## 2.46.0
+
+### Minor Changes
+
+- 4b66d1f9a: chore(otel-collector): bump base collector to v0.165.0
+
+  Upgrade the custom OTel Collector base from contrib v0.155.0 (core 1.61.0) to
+  v0.165.0 (core 1.71.0), picking up upstream Go and dependency CVE fixes in the
+  collector and OpAMP supervisor binaries.
+
+  A custom supervisor config that sets `reports_remote_config` must drop it: the
+  supervisor refuses to start with it from v0.163.0, and `accepts_remote_config`
+  now covers both.
+
+  `k8sattributes` now emits the stable Kubernetes semantic conventions only. Pod,
+  node and namespace `labels.*` and `annotations.*` become `label.*` and
+  `annotation.*`, and `container.image.tag` becomes `container.image.tags`. Set
+  `OTEL_AGENT_FEATURE_GATE_ARG=--feature-gates=-processor.k8sattributes.DontEmitV0K8sConventions`
+  to keep emitting the legacy names alongside the new ones while you migrate.
+
+### Patch Changes
+
+- 61999b48f: fix: clear the critical CVEs from the app and collector images by moving the
+  collector to Alpine 3.24, upgrading gomplate to v5 and dropping the unused goose
+  and esbuild binaries. Custom entrypoints that called `goose` directly should
+  call `migrate` with the same schema directory instead.
+
+## 2.45.0
+
+## 2.44.0
+
+### Patch Changes
+
+- 5b0d07441: fix: let browsers cache the collector's CORS preflights for 10 minutes
+
+  The OTLP receiver now answers preflights with `Access-Control-Max-Age: 600`.
+  Without it, browsers cached a preflight for only 5 seconds, which is how often
+  the browser SDK exports, so about half of its requests were preflights.
+
+- 8384fe675: perf: compress the seed schemas with `ZSTD(3)` instead of `ZSTD(1)`
+
+  The seed schemas pinned `ZSTD(1)` on almost every column. Level 3 gives a better
+  compression ratio at a small insert-time CPU cost, without affecting reads, and
+  it is the default codec of ClickHouse since 26.9. It is pinned explicitly so
+  that older ClickHouse versions, whose default is `LZ4`, get it too. `Delta`
+  codecs drop their byte-size argument, which ClickHouse infers from the column
+  type. Only newly created tables are affected; existing tables keep their codecs.
+
+- 702181002: feat: session ID columns, `session.id` from `rum.sessionId`, severity text
+
+  The `hyperdx_sessions` seed adds materialized `rum.sessionId` and `session.id`
+  columns with skip indexes, and the `otel_logs` seed adds a materialized
+  `session.id` column with a skip index, so session queries no longer read the
+  attribute maps. Only newly created tables get them; existing tables need an
+  `ALTER TABLE ... ADD COLUMN` to benefit.
+
+  Spans, logs and session replay events from older `@hyperdx/browser` SDKs, which
+  carry the session id only in the `rum.sessionId` resource attribute, now also
+  get the OpenTelemetry `session.id` attribute. An existing `session.id` is never
+  overwritten and `rum.sessionId` is kept. If you override pipeline `processors:`
+  lists in `CUSTOM_OTELCOL_CONFIG_FILE`, add `transform/session_id` to keep this.
+
+  Logs that carry a severity number but no severity text, such as those from the
+  new browser SDK, now get the matching level text (`info`, `error`, ...) instead
+  of an empty level. Severity text set by the producer is never overwritten.
+
 ## 2.43.1
 
 ### Patch Changes

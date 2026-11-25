@@ -134,6 +134,7 @@ function makeAdhocFilterTemplate({
       {
         id: 'filter-1',
         type: 'ADHOC',
+        isBroadcastEnabled: true,
         name: 'Conditions',
         sourceType: 'sql',
         sources,
@@ -748,6 +749,7 @@ test.describe('Dashboard Template Import', { tag: ['@dashboard'] }, () => {
         expect(dashboard.filters).toHaveLength(1);
         expect(dashboard.filters[0]).toMatchObject({
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           sources: [logsSourceId, tracesSourceId],
           appliesToSourceIds: [tracesSourceId],
         });
@@ -841,6 +843,7 @@ test.describe('Dashboard Template Import', { tag: ['@dashboard'] }, () => {
         );
         expect(dashboard.filters[0]).toMatchObject({
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           sources: [logsSourceId],
           appliesToSourceIds: [tracesSourceId],
         });
@@ -897,6 +900,7 @@ test.describe('Dashboard Template Import', { tag: ['@dashboard'] }, () => {
         );
         expect(dashboard.filters[0]).toMatchObject({
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           sources: [tracesSourceId],
         });
       });
@@ -990,6 +994,7 @@ test.describe('Dashboard Template Import', { tag: ['@dashboard'] }, () => {
         );
         expect(dashboard.filters[0]).toMatchObject({
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           sources: [tracesSourceId, logsSourceId, sessionsSourceId],
         });
       });
@@ -1047,6 +1052,7 @@ test.describe('Dashboard Template Import', { tag: ['@dashboard'] }, () => {
         );
         expect(dashboard.filters[0]).toMatchObject({
           type: 'ADHOC',
+          isBroadcastEnabled: true,
           sources: [logsSourceId],
           appliesToSourceIds: [logsSourceId],
         });

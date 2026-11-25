@@ -123,7 +123,6 @@ describe('DBNumberChart', () => {
       const [numberFormat, setNumberFormat] = React.useState<
         NumberFormat | undefined
       >(undefined);
-      // eslint-disable-next-line react-hooks/globals
       setNumberFormatFn = setNumberFormat;
       return <DBNumberChart config={{ ...baseTestConfig, numberFormat }} />;
     };
@@ -259,7 +258,7 @@ describe('DBNumberChart', () => {
       ).toBeNull();
     });
 
-    it('pulses the empty state while a refetch is running', () => {
+    it('shows loading instead of the stale empty result during a refetch', () => {
       mockUseQueriedChartConfig.mockReturnValue({
         data: { data: [] },
         isLoading: false,
@@ -268,9 +267,8 @@ describe('DBNumberChart', () => {
       });
 
       renderWithMantine(<DBNumberChart config={baseTestConfig} />);
-      expect(screen.getByText('No data found within time range.')).toHaveClass(
-        'effect-pulse',
-      );
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
     });
   });
 

@@ -83,7 +83,6 @@ export const HDXLineChartTooltip = withErrorBoundary(
       // active-dot Y. The dots write their positions earlier in this same render
       // (Recharts draws graphical items before the tooltip), so it's current.
       const pointerY: number | undefined = props.coordinate?.y;
-      // eslint-disable-next-line react-hooks/refs
       const activePointYByKey = activePointYByKeyRef?.current ?? undefined;
       const nearestSeriesKey =
         typedPayload.length > 1
@@ -98,7 +97,6 @@ export const HDXLineChartTooltip = withErrorBoundary(
       // Anchor at the active point (see the component docblock for why fixed).
       const pointX = props.coordinate?.x;
       const pointY = props.coordinate?.y;
-      // eslint-disable-next-line react-hooks/refs
       const containerRect = containerRef?.current?.getBoundingClientRect();
       const anchor =
         typeof pointX === 'number' &&

@@ -54,6 +54,7 @@ type UseChartScalesArgs = {
    * switched off for the whole deployment.
    */
   hasExemplars: boolean;
+  yAxisMaxDomain: number | undefined;
   /** Already scaled for the content font size preference (see MemoChart). */
   yAxisWidth: number;
 };
@@ -76,6 +77,32 @@ export function scanYAxisValueRange(
     });
   });
   return { min, max };
+}
+
+// Mirrors Recharts' stackOffset="none": each series sits on the running sum
+// of the ones before it, starting from a zero baseline, and the axis must
+// cover every one of those running sums.
+export function scanStackedYAxisValueRange(
+  graphResults: any[],
+  lineData: LineData[],
+): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  graphResults.forEach(dataPoint => {
+    let sum = 0;
+    lineData.forEach(ld => {
+      const value = dataPoint[ld.dataKey];
+      if (typeof value === 'number' && !isNaN(value)) {
+        sum += value;
+        min = Math.min(min, sum);
+        max = Math.max(max, sum);
+      }
+    });
+  });
+  if (max === -Infinity) {
+    return { min, max };
+  }
+  return { min: Math.min(min, 0), max: Math.max(max, 0) };
 }
 
 export interface YAxisBounds {
@@ -108,9 +135,6 @@ export function getLineCurveType(
   ];
 }
 
-// A stacked bar's rendered height sums its series at each timestamp - leave
-// that entirely to Recharts, regardless of selection/fit-to-data state. Same
-// for a stacked line's filled bands.
 export function computeYAxisBounds(
   graphResults: any[],
   visibleLineData: LineData[],
@@ -119,22 +143,57 @@ export function computeYAxisBounds(
   displayType: DisplayType,
   referenceLineValues: number[],
   axisNumberFormat?: NumberFormat,
+  yAxisMaxDomain?: number,
 ): YAxisBounds {
-  if (
+  const isStacked =
     displayType === DisplayType.StackedBar ||
-    displayType === DisplayType.StackedLine
-  ) {
-    return DEFAULT_Y_AXIS_BOUNDS;
-  }
+    displayType === DisplayType.StackedLine;
   const shouldFitYAxis = fitYAxisToData;
 
-  if (!hasSelection && !shouldFitYAxis) {
+  if (yAxisMaxDomain != null && !isStacked) {
+    // A capped axis (e.g. a 0-100% rate tile): pin the lower bound at 0 and
+    // scale the upper bound to the data peak with headroom but never above the
+    // cap, so a flat or near-zero series can't auto-scale to a nonsense range.
+    // Applied on every path (selection and fit included) so selecting the sole
+    // series can't collapse the axis to [0, 0]; a numeric bound (not a function
+    // domain) lets the nice-tick logic dedupe labels instead of Recharts
+    // repeating "0%" at very small rates. Stacked charts skip the cap: their
+    // axis follows the stack height, sized below.
+    const { max } = scanYAxisValueRange(graphResults, visibleLineData);
+    const upperBound = cappedYAxisUpperBound(max, yAxisMaxDomain);
+    const expanded = getExpandableYAxisTicks(
+      0,
+      upperBound,
+      5,
+      axisNumberFormat,
+    );
+    if (expanded.ticks.length === 0) {
+      const baseFormat = (value: number) =>
+        formatAxisTick(value, axisNumberFormat);
+      return {
+        domain: [0, upperBound],
+        ticks: getYAxisTicks(0, upperBound, baseFormat),
+        tickFormatter: baseFormat,
+      };
+    }
+    return {
+      domain: [0, expanded.max],
+      ticks: expanded.ticks,
+      tickFormatter: expanded.tickFormatter,
+    };
+  }
+
+  // Stacked charts always stay zero-pinned: fit-to-data is line-only, and a
+  // selection already narrows visibleLineData, so it changes the stack sums.
+  if (isStacked || (!hasSelection && !shouldFitYAxis)) {
     // A fully numeric domain skips Recharts' own nice rounding, and a
     // reference line can extend it further - defer to Recharts entirely.
     if (referenceLineValues.length > 0) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }
-    const { min, max } = scanYAxisValueRange(graphResults, visibleLineData);
+    const { min, max } = isStacked
+      ? scanStackedYAxisValueRange(graphResults, visibleLineData)
+      : scanYAxisValueRange(graphResults, visibleLineData);
     if (max === -Infinity) {
       return DEFAULT_Y_AXIS_BOUNDS;
     }
@@ -245,6 +304,19 @@ export function computeYAxisBounds(
 }
 
 /**
+ * Upper bound for a y-axis that has an explicit cap (`yAxisMaxDomain`). Recharts
+ * calls this with the data's max value. Auto-scale up to the data max with 10%
+ * headroom, but never above the cap; a flat or zero/non-finite series uses the
+ * cap instead of a degenerate auto-domain (which recharts otherwise renders as
+ * e.g. 0-400% for a 0% error rate).
+ */
+export function cappedYAxisUpperBound(dataMax: number, cap: number): number {
+  return Number.isFinite(dataMax) && dataMax > 0
+    ? Math.min(dataMax * 1.1, cap)
+    : cap;
+}
+
+/**
  * Derive the chart's axis domains, the exemplar clamp range, and the annotation
  * elements that hang off the x-domain.
  *
@@ -269,6 +341,7 @@ export function useChartScales({
   referenceLineValues,
   axisNumberFormat,
   hasExemplars,
+  yAxisMaxDomain,
   yAxisWidth,
 }: UseChartScalesArgs) {
   // Max value across the visible series. Used as the exemplar clamp's upper
@@ -304,6 +377,7 @@ export function useChartScales({
         displayType,
         referenceLineValues,
         axisNumberFormat,
+        yAxisMaxDomain,
       ),
     [
       graphResults,
@@ -313,6 +387,7 @@ export function useChartScales({
       displayType,
       referenceLineValues,
       axisNumberFormat,
+      yAxisMaxDomain,
     ],
   );
 

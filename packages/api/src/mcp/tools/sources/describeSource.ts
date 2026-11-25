@@ -3,7 +3,10 @@ import {
   filterColumnMetaByType,
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
+import {
+  getMetadata,
+  tcFromSource,
+} from '@hyperdx/common-utils/dist/core/metadata';
 import { type MetricTable, SourceKind } from '@hyperdx/common-utils/dist/types';
 import { trace } from '@opentelemetry/api';
 import SqlString from 'sqlstring';
@@ -13,8 +16,9 @@ import { ClickhouseClient } from '@/clickhouse';
 import { getConnectionById } from '@/controllers/connection';
 import { getSource } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
-import type { ToolRegistrar, ToolResult } from '@/mcp/tools/types';
+import type { McpContext, ToolRegistrar, ToolResult } from '@/mcp/tools/types';
 import { mcpServerError, mcpUserError } from '@/mcp/utils/errors';
+import { isHiddenSource } from '@/mcp/utils/promql';
 import {
   MCP_QUERY_MAX_EXECUTION_SEC,
   MCP_TIMEOUT_GRACE_MS,
@@ -25,6 +29,7 @@ import {
 import logger from '@/utils/logger';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 
+import { describePromqlSource } from './describePromqlSource';
 import {
   DISCOVERABLE_METRIC_KINDS,
   QUERYABLE_METRIC_KINDS,
@@ -87,13 +92,14 @@ type DescribeProgress = {
  * `signal` aborts, and the result is flagged partial.
  */
 async function describeSourceSchema(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   signal: AbortSignal,
   progress: DescribeProgress,
 ): Promise<ToolResult> {
+  const { teamId } = context;
   const source = await getSource(teamId, sourceId);
-  if (!source) {
+  if (!source || isHiddenSource(context, source)) {
     return mcpUserError(
       `Source "${sourceId}" not found. Call clickstack_list_sources to see available source IDs.`,
     );
@@ -112,6 +118,10 @@ async function describeSourceSchema(
 
   if (source.section) {
     meta.section = source.section;
+  }
+
+  if (source.kind === SourceKind.Promql) {
+    return describePromqlSource({ teamId, source, meta, signal, progress });
   }
 
   if (
@@ -217,10 +227,8 @@ async function describeSourceSchema(
 
   // Shared by stages 2–4 so map-key discovery can use rollup tables
   // instead of falling back to expensive main-table scans.
-  const metadataMVs =
-    'metadataMaterializedViews' in source
-      ? source.metadataMaterializedViews
-      : undefined;
+  const { metadataMVs, mapKeyIndexMaxParts, mapKeyIndexPartSelection } =
+    tcFromSource(source);
 
   const now = new Date();
   const dateRange: [Date, Date] = [
@@ -299,6 +307,8 @@ async function describeSourceSchema(
             maxKeys: 50,
             connectionId,
             metadataMVs,
+            mapKeyIndexMaxParts,
+            mapKeyIndexPartSelection,
             dateRange,
             timestampValueExpression,
             signal,
@@ -345,6 +355,8 @@ async function describeSourceSchema(
         maxValuesPerKey: MAX_LC_VALUES,
         connectionId,
         metadataMVs,
+        mapKeyIndexMaxParts,
+        mapKeyIndexPartSelection,
         dateRange,
         timestampValueExpression,
         signal,
@@ -392,6 +404,8 @@ async function describeSourceSchema(
         maxValuesPerKey: MAX_MAP_KEY_VALUES,
         connectionId,
         metadataMVs,
+        mapKeyIndexMaxParts,
+        mapKeyIndexPartSelection,
         dateRange,
         timestampValueExpression,
         signal,
@@ -507,7 +521,11 @@ function formatDescribeResult({
     ? `For more metric names than the sample above, call clickstack_list_metrics with sourceId "${sourceId}". For per-metric attribute keys + sampled values, call clickstack_describe_metric with sourceId and metricName.`
     : undefined;
 
-  const { data: output, isTrimmed } = trimToolResponse({
+  const {
+    data: output,
+    isTrimmed,
+    notes: trimNotes,
+  } = trimToolResponse({
     source,
     usage: {
       topLevelColumns:
@@ -535,6 +553,7 @@ function formatDescribeResult({
     ? {
         ...output,
         note: 'Result was trimmed for context size. Some columns or sampled values may be omitted.',
+        trimNotes,
       }
     : output;
 
@@ -617,8 +636,7 @@ export function registerDescribeSource({
       let outcome: TimeoutOutcome<ToolResult>;
       try {
         outcome = await runWithTimeout(
-          signal =>
-            describeSourceSchema(teamId.toString(), sourceId, signal, progress),
+          signal => describeSourceSchema(context, sourceId, signal, progress),
           { timeoutMs: DESCRIBE_TIMEOUT_MS, graceMs: DESCRIBE_BACKSTOP_MS },
         );
       } catch (e) {

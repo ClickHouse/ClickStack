@@ -63,6 +63,7 @@ type CollectorConfig = {
           cors: {
             allowed_origins: string[];
             allowed_headers: string[];
+            max_age: number;
           };
           include_metadata: boolean;
           auth?: {
@@ -181,8 +182,14 @@ export const buildOtelCollectorConfig = (
 ): CollectorConfig => {
   const apiKeys = teams.filter(team => team.apiKey).map(team => team.apiKey);
 
-  if (config.IS_ALL_IN_ONE_IMAGE || config.IS_LOCAL_APP_MODE || config.IS_DEV) {
-    // Only allow INGESTION_API_KEY for dev or all-in-one images for security reasons
+  if (
+    config.IS_ALL_IN_ONE_IMAGE ||
+    config.IS_LOCAL_APP_MODE ||
+    config.IS_DEV ||
+    config.ENABLE_INGESTION_API_KEY
+  ) {
+    // Only allow INGESTION_API_KEY for dev or all-in-one images for security
+    // reasons, unless the deployment opts in with ENABLE_INGESTION_API_KEY
     if (config.INGESTION_API_KEY) {
       apiKeys.push(config.INGESTION_API_KEY);
     }
@@ -206,6 +213,11 @@ export const buildOtelCollectorConfig = (
             cors: {
               allowed_origins: ['*'],
               allowed_headers: ['*'],
+              // Without Access-Control-Max-Age, Chrome caches a preflight for only 5 s, which is
+              // how often the browser SDK exports, so about half of its requests were preflights.
+              // Ten minutes already removes nearly all of them while keeping a policy change from
+              // lingering in browsers.
+              max_age: 600,
             },
             include_metadata: true,
           },
@@ -302,7 +314,7 @@ export const buildOtelCollectorConfig = (
       // The pipeline `processors:` lists are intentionally declared in the
       // bootstrap config (docker/otel-collector/config.yaml) instead of here,
       // so that users can swap them via CUSTOM_OTELCOL_CONFIG_FILE. See
-      // https://github.com/hyperdxio/hyperdx/pull/2351: when the OpAMP
+      // https://github.com/ClickHouse/ClickStack/pull/2351: when the OpAMP
       // remote config sets `processors:` on a pipeline, it overwrites the
       // bootstrap+custom merge, which prevents users from substituting
       // their own processor (e.g. a memory_limiter with limit_percentage

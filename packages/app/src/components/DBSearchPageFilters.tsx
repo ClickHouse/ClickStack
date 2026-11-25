@@ -39,13 +39,13 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowBarToLeft,
   IconChartBar,
   IconChartBarOff,
   IconChevronDown,
   IconChevronRight,
   IconChevronUp,
   IconFilterOff,
+  IconLayoutSidebarLeftCollapse,
   IconMinus,
   IconPlus,
   IconRefresh,
@@ -53,6 +53,7 @@ import {
   IconSitemap,
 } from '@tabler/icons-react';
 
+import api from '@/api';
 import { IS_CLICKHOUSE_BUILD } from '@/config';
 import {
   useColumns,
@@ -65,6 +66,7 @@ import { usePinnedFiltersApi } from '@/pinnedFilters';
 import {
   FilterStateHook,
   IS_ROOT_SPAN_COLUMN_NAME,
+  useCollapsedPinnedFields,
   usePinnedFilters,
 } from '@/searchFilters';
 import { useSource } from '@/source';
@@ -918,6 +920,31 @@ function FilterGroupActions({
 
 const voidFunc = () => {};
 
+/**
+ * Whether a filter group opens on load. A pinned field the user collapsed
+ * stays collapsed unless it has an active filter. That persisted collapse
+ * intentionally takes precedence over a section-level `forceExpanded`
+ * (the Shared Filters section).
+ */
+export function getFilterGroupDefaultExpanded({
+  hasSelection,
+  isPinned,
+  isCollapsed,
+  isPrimary,
+  forceExpanded,
+}: {
+  hasSelection: boolean;
+  isPinned: boolean;
+  isCollapsed: boolean;
+  isPrimary: boolean;
+  forceExpanded?: boolean;
+}): boolean {
+  if (isPinned && isCollapsed && !hasSelection) {
+    return false;
+  }
+  return forceExpanded ?? (isPrimary || isPinned || hasSelection);
+}
+
 export const FilterGroup = ({
   name,
   options,
@@ -1172,6 +1199,11 @@ const DBSearchPageFiltersComponent = ({
     hasPersonalPins,
     hasSharedPins,
   } = usePinnedFilters(sourceId ?? null);
+  const {
+    isPinnedFieldCollapsed,
+    setPinnedFieldCollapsed,
+    pruneCollapsedPinnedFields,
+  } = useCollapsedPinnedFields(sourceId ?? null);
   const { data: pinnedFiltersApiData } = usePinnedFiltersApi(sourceId ?? null);
   const [isSharedFiltersVisible, setSharedFiltersVisible] = useLocalStorage(
     'hdx-shared-filters-visible',
@@ -1189,10 +1221,14 @@ const DBSearchPageFiltersComponent = ({
     'hdx-shared-filters-expanded',
     true,
   );
-  const [showAllValues, setShowAllValues] = useLocalStorage(
+  const { data: me } = api.useMe();
+  // null = user hasn't chosen, so fall back to the team default
+  const [userShowAllValues, setShowAllValues] = useLocalStorage<boolean | null>(
     'hdx-show-all-filter-values',
-    true,
+    null,
   );
+  const teamShowAllValues = !me?.team?.filterValuesExactByDefault;
+  const showAllValues = userShowAllValues ?? teamShowAllValues;
   const { size, startResize } = useResizable(16, 'left');
 
   const { data: source } = useSource({ id: sourceId });
@@ -1227,6 +1263,10 @@ const DBSearchPageFiltersComponent = ({
   const knownColumns = useMemo(
     () => (columns ? new Set(columns.map(c => c.name)) : new Set<string>()),
     [columns],
+  );
+  const jsonColumnSet = useMemo(
+    () => new Set(jsonColumns ?? []),
+    [jsonColumns],
   );
 
   const [showMoreFields, setShowMoreFields] = useState(false);
@@ -1504,6 +1544,8 @@ const DBSearchPageFiltersComponent = ({
       const { keyPrefix = '', isDefaultExpanded: forceExpanded } =
         options ?? {};
       const { grouped, nonGrouped } = groupFacetsByBaseName(facets);
+      const isFieldPinnedAny = (key: string) =>
+        isFieldPinned(key) || isSharedFieldPinned(key);
 
       const makeValuePins = (key: string): ValuePinHandlers => ({
         onPinClick: (value: string | boolean) => toggleFilterPin(key, value),
@@ -1515,9 +1557,21 @@ const DBSearchPageFiltersComponent = ({
       });
 
       const makeFieldPins = (key: string): FieldPinHandlers => ({
-        onFieldPinClick: () => toggleFieldPin(key),
+        onFieldPinClick: () => {
+          // Unpinned for good: forget its collapsed state, so pinning it again
+          // opens it like any newly pinned field.
+          if (isFieldPinned(key) && !isSharedFieldPinned(key)) {
+            setPinnedFieldCollapsed(key, false);
+          }
+          toggleFieldPin(key);
+        },
         isFieldPinned: isFieldPinned(key),
-        onToggleSharedFieldPin: () => toggleSharedFieldPin(key),
+        onToggleSharedFieldPin: () => {
+          if (isSharedFieldPinned(key) && !isFieldPinned(key)) {
+            setPinnedFieldCollapsed(key, false);
+          }
+          toggleSharedFieldPin(key);
+        },
         isSharedFieldPinned: isSharedFieldPinned(key),
       });
 
@@ -1536,6 +1590,7 @@ const DBSearchPageFiltersComponent = ({
                 sqlKey: toQuotedClickHouseKeyExpression(
                   child.key,
                   knownColumns,
+                  jsonColumnSet,
                 ),
               }))}
               selectedValues={group.children.reduce((acc, child) => {
@@ -1602,6 +1657,7 @@ const DBSearchPageFiltersComponent = ({
             const facetSqlKey = toQuotedClickHouseKeyExpression(
               facet.key,
               knownColumns,
+              jsonColumnSet,
             );
             return (
               <FilterGroup
@@ -1641,17 +1697,23 @@ const DBSearchPageFiltersComponent = ({
                 hasLoadedMore={extraFacetKeys.has(facet.key)}
                 isDefaultExpanded={(() => {
                   const entry = getFilterStateEntry(filterState, facet.key);
-                  return (
-                    forceExpanded ??
-                    (isFieldPrimary(tableMetadata, facet.key) ||
-                      isFieldPinned(facet.key) ||
-                      isSharedFieldPinned(facet.key) ||
-                      (entry != null &&
-                        (entry.included.size > 0 ||
-                          entry.excluded.size > 0 ||
-                          entry.range != null)))
-                  );
+                  return getFilterGroupDefaultExpanded({
+                    hasSelection:
+                      entry != null &&
+                      (entry.included.size > 0 ||
+                        entry.excluded.size > 0 ||
+                        entry.range != null),
+                    isPinned: isFieldPinnedAny(facet.key),
+                    isCollapsed: isPinnedFieldCollapsed(facet.key),
+                    isPrimary: !!isFieldPrimary(tableMetadata, facet.key),
+                    forceExpanded,
+                  });
                 })()}
+                onExpandedChange={expanded => {
+                  if (isFieldPinnedAny(facet.key)) {
+                    setPinnedFieldCollapsed(facet.key, !expanded);
+                  }
+                }}
                 chartConfig={chartConfig}
                 isLive={isLive}
                 onRangeChange={range => setFilterRange(facet.key, range)}
@@ -1673,6 +1735,8 @@ const DBSearchPageFiltersComponent = ({
       isFieldPinned,
       toggleSharedFieldPin,
       isSharedFieldPinned,
+      isPinnedFieldCollapsed,
+      setPinnedFieldCollapsed,
       onColumnToggle,
       displayedColumns,
       loadMoreFacetsForKey,
@@ -1684,6 +1748,7 @@ const DBSearchPageFiltersComponent = ({
       setFilterRange,
       tableMetadata,
       knownColumns,
+      jsonColumnSet,
       extraFacetKeys,
     ],
   );
@@ -1738,11 +1803,20 @@ const DBSearchPageFiltersComponent = ({
                 showFilterCounts={showFilterCounts}
                 onShowFilterCountsChange={setShowFilterCounts}
                 hasPersonalPins={hasPersonalPins}
-                onResetPersonalPins={resetPersonalPins}
+                onResetPersonalPins={() => {
+                  pruneCollapsedPinnedFields(isSharedFieldPinned);
+                  resetPersonalPins();
+                }}
                 hasSharedPins={hasSharedPins}
-                onResetSharedFilters={resetSharedFilters}
+                onResetSharedFilters={() => {
+                  pruneCollapsedPinnedFields(isFieldPinned);
+                  resetSharedFilters();
+                }}
                 showAllValues={showAllValues}
                 onShowAllValuesChange={setShowAllValues}
+                teamShowAllValues={teamShowAllValues}
+                isShowAllValuesOverridden={userShowAllValues != null}
+                onResetShowAllValues={() => setShowAllValues(null)}
               />
               {onCollapse && (
                 <Tooltip label="Hide filters" position="bottom">
@@ -1752,7 +1826,7 @@ const DBSearchPageFiltersComponent = ({
                     onClick={onCollapse}
                     aria-label="Hide filters"
                   >
-                    <IconArrowBarToLeft size={14} />
+                    <IconLayoutSidebarLeftCollapse size={14} />
                   </ActionIcon>
                 </Tooltip>
               )}

@@ -22,7 +22,7 @@ services:
     depends_on:
       - ch-server
   ch-server:
-    image: clickhouse/clickhouse-server:26.8.36.3-alpine
+    image: clickhouse/clickhouse-server:26.10.3.7-alpine
     environment:
       # default settings
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
@@ -35,10 +35,13 @@ services:
     networks:
       - internal
   db:
-    image: mongo:5.0.32-focal
-    command: --port 29999
+    image: hyperdx/documentdb:local
+    build: ./docker/documentdb
+    environment:
+      DOCDB_USER: hyperdx
+      DOCDB_PASSWORD: hyperdx
     ports:
-      - '${HDX_CI_MONGO_PORT:-39999}:29999'
+      - '127.0.0.1:${HDX_CI_MONGO_PORT:-39999}:10260'
     networks:
       - internal
 networks:

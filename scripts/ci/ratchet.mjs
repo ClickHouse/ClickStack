@@ -17,7 +17,8 @@ export const PATTERNS = {
   // "...has any dashboards", inflating the baseline with phantom counts.
   'as-any': /\bas any\b/g,
   'ts-ignore': /@ts-ignore/g,
-  'eslint-disable': /eslint-disable/g,
+  // oxlint honours both spellings, so both count.
+  'eslint-disable': /(?:eslint|oxlint)-disable/g,
   // Duplication licensed by comment. `@source` marks code copied from another
   // package (mostly packages/cli/src/shared today, plus a handful under
   // src/components, src/utils and src/api).

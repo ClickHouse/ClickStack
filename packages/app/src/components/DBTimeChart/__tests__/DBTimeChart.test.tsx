@@ -2,6 +2,7 @@ import React from 'react';
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import api from '@/api';
 import { ChartKeyJoiner } from '@/ChartUtils';
@@ -18,6 +19,7 @@ import {
   useQueriedChartConfig,
 } from '@/hooks/useChartConfig';
 import { useMVOptimizationExplanation } from '@/hooks/useMVOptimizationExplanation';
+import { makeLogSource } from '@/llm/__fixtures__/sources';
 import { useSource } from '@/source';
 
 // Mock dependencies
@@ -170,11 +172,75 @@ describe('DBTimeChart', () => {
     expect(secondCallOptions.enabled).toBe(false);
   });
 
+  describe('empty state', () => {
+    const emptyResult = {
+      data: {
+        data: [],
+        meta: [
+          { name: 'timestamp', type: 'DateTime' },
+          { name: 'value', type: 'UInt64' },
+        ],
+        rows: 0,
+        isComplete: true,
+      },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      isPlaceholderData: false,
+    };
+    // Zero-filled buckets would otherwise render an empty line, not the empty state.
+    const emptyConfig = { ...baseTestConfig, fillNulls: false as const };
+    const isPreviousPeriod = (config: { dateRange: [Date, Date] }) =>
+      config.dateRange[0] < baseTestConfig.dateRange[0];
+
+    it('shows loading while the query is still fetching', () => {
+      mockUseQueriedChartConfig.mockReturnValue({
+        ...emptyResult,
+        data: { ...emptyResult.data, isComplete: false },
+        isFetching: true,
+      });
+
+      renderWithMantine(<DBTimeChart config={emptyConfig} />);
+
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+    });
+
+    it('shows no data when the previous-period query fails', () => {
+      mockUseQueriedChartConfig.mockImplementation(config =>
+        isPreviousPeriod(config)
+          ? {
+              data: undefined,
+              isLoading: false,
+              isFetching: false,
+              isError: true,
+              error: new Error('previous period failed'),
+              isSuccess: false,
+              isPlaceholderData: false,
+            }
+          : emptyResult,
+      );
+
+      renderWithMantine(
+        <DBTimeChart
+          config={{ ...emptyConfig, compareToPreviousPeriod: true }}
+        />,
+      );
+
+      expect(
+        screen.getByText('No data found within time range.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Loading Chart Data...')).toBeNull();
+    });
+  });
+
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial<ReturnType<typeof useSource>>({
+        data: makeLogSource({ id: 'test-source', name: 'Test Source' }),
+      }),
+    );
 
     renderWithMantine(<DBTimeChart config={baseTestConfig} />);
 
@@ -200,9 +266,11 @@ describe('DBTimeChart', () => {
   });
 
   it('disables the MV-optimization query when both MV and date-range indicators are hidden', () => {
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial<ReturnType<typeof useSource>>({
+        data: makeLogSource({ id: 'test-source', name: 'Test Source' }),
+      }),
+    );
 
     renderWithMantine(
       <DBTimeChart
@@ -218,9 +286,11 @@ describe('DBTimeChart', () => {
   });
 
   it('keeps the MV-optimization query enabled when only the date-range indicator is shown', () => {
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial<ReturnType<typeof useSource>>({
+        data: makeLogSource({ id: 'test-source', name: 'Test Source' }),
+      }),
+    );
 
     renderWithMantine(
       <DBTimeChart
@@ -462,25 +532,27 @@ describe('DBTimeChart', () => {
     };
 
     // Mock useMVOptimizationExplanation to return an optimized config with aligned date range
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: {
-          ...config,
-          dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
-        },
-        explanations: [
-          {
-            success: true,
-            mvConfig: {
-              minGranularity: '1 minute',
-              tableName: 'metrics_rollup_1m',
-            },
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial<ReturnType<typeof useMVOptimizationExplanation>>({
+        data: {
+          optimizedConfig: {
+            ...config,
+            dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
           },
-        ],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+          explanations: [
+            {
+              success: true,
+              mvConfig: {
+                minGranularity: '1 minute',
+                tableName: 'metrics_rollup_1m',
+              },
+            },
+          ],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBTimeChart config={config} />);
 
@@ -515,14 +587,16 @@ describe('DBTimeChart', () => {
     };
 
     // Mock useMVOptimizationExplanation to return no optimized config
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: undefined,
-        explanations: [],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial<ReturnType<typeof useMVOptimizationExplanation>>({
+        data: {
+          optimizedConfig: undefined,
+          explanations: [],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBTimeChart config={config} />);
 
@@ -586,7 +660,7 @@ describe('DBTimeChart', () => {
       sqlTemplate:
         'SELECT toStartOfInterval(ts, INTERVAL {intervalSeconds:Int64} SECOND) AS ts, count() AS count FROM logs GROUP BY ts ORDER BY ts ASC',
       connection: 'test-connection',
-      displayType: 'line' as any,
+      displayType: DisplayType.Line,
       dateRange: [new Date('2024-01-01'), new Date('2024-01-02')] as [
         Date,
         Date,
@@ -812,14 +886,16 @@ describe('DBTimeChart', () => {
 
   it('does not render DateRangeIndicator when MV optimization has no optimized date range and showDateRangeIndicator is false', () => {
     // Mock useMVOptimizationExplanation to return data without an optimized config
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: undefined,
-        explanations: [],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial<ReturnType<typeof useMVOptimizationExplanation>>({
+        data: {
+          optimizedConfig: undefined,
+          explanations: [],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(
       <DBTimeChart config={baseTestConfig} showDateRangeIndicator={false} />,
