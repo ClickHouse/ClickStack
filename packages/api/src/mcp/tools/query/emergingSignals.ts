@@ -372,9 +372,9 @@ export function registerEmergingSignals({
           else if (verdict === 'disappeared') disappeared.push(a);
           continue;
         }
-        // The new message is its own emerging entry; the rest of the cluster
-        // (the baseline message) is listed only if it disappeared, so one
-        // cluster never takes two emerging slots.
+        // The new message is its own emerging entry. The rest of the cluster
+        // (the baseline message) is classified on its own, so a surge or drop
+        // of the baseline message is still reported next to the variant.
         const b = baseline.get(key);
         const baselinePattern = (b?.tokens ?? []).join(' ');
         const variantCount = Math.round(v.rows * curRes.sampleMultiplier);
@@ -396,8 +396,9 @@ export function registerEmergingSignals({
           baseCount: a.baseCount,
           sample: b?.sample ?? baselinePattern,
         };
-        if (classifyShift(rest, ratio, newPatternShareFloor) === 'disappeared')
-          disappeared.push(rest);
+        const restVerdict = classifyShift(rest, ratio, newPatternShareFloor);
+        if (restVerdict === 'emerging') emerging.push(rest);
+        else if (restVerdict === 'disappeared') disappeared.push(rest);
       }
       // Rank by absolute share swing (a variant entry has baseShare 0, so its
       // swing is its own share, the same unit as a brand-new pattern).

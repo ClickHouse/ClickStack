@@ -242,9 +242,9 @@ describe('clickstack_emerging_signals with one Drain tree', () => {
     expect(out.disappeared).toEqual([]);
   });
 
-  it('gives one cluster at most one emerging entry', async () => {
-    // The baseline message also triples while a variant appears: only the
-    // variant is listed in emerging.
+  it('reports a baseline message that grew next to its new variant', async () => {
+    // The baseline message triples while a variant appears: two changes, so
+    // two emerging entries.
     const out = await run(
       [
         ...repeat('user login failed: invalid password', 10),
@@ -257,7 +257,35 @@ describe('clickstack_emerging_signals with one Drain tree', () => {
       ],
     );
     const login = out.emerging.filter(p => p.pattern.startsWith('user login'));
-    expect(login).toEqual([expect.objectContaining({ status: 'new_variant' })]);
+    expect(login).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'new_variant' }),
+        expect.objectContaining({
+          status: 'shifted',
+          pattern: 'user login failed: invalid password',
+        }),
+      ]),
+    );
+    expect(login).toHaveLength(2);
+  });
+
+  it('ranks a baseline surge above its small new variant', async () => {
+    const other = (n: number) =>
+      Array.from({ length: n }, (_, i) => `cache warmed in ${i} regions ok`);
+    const out = await run(
+      [...repeat('payment failed: card declined', 10), ...other(990)],
+      [
+        ...repeat('payment failed: card declined', 500),
+        ...repeat('payment failed: gateway timeout', 2),
+        ...other(498),
+      ],
+    );
+    expect(out.emerging[0]).toEqual(
+      expect.objectContaining({
+        status: 'shifted',
+        pattern: 'payment failed: card declined',
+      }),
+    );
   });
 
   it('treats klog and Spark dated lines on two days as one pattern', async () => {
