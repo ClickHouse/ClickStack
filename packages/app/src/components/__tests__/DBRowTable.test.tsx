@@ -1,7 +1,13 @@
 import { Provider } from 'jotai';
 import type { ReactElement } from 'react';
 import type { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
-import { renderHook, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { fromPartial } from '@total-typescript/shoehorn';
 
@@ -281,6 +287,26 @@ describe('RawLogTable', () => {
       expect(headers).toHaveLength(2);
       expect((headers[0] as HTMLElement).style.width).not.toBe('250px');
     });
+
+    it('saves the width a column is dragged to', () => {
+      const { container } = renderWithMantine(
+        <RawLogTable {...baseProps} tableId="t1" />,
+      );
+      const header = container.querySelector('th[data-column-id="col1"]');
+      if (!(header instanceof HTMLElement)) throw new Error('No col1 header');
+
+      // From the default 160px, 40px to the right
+      fireEvent.mouseDown(within(header).getByTestId('column-resize-handle'), {
+        clientX: 100,
+      });
+      fireEvent.mouseMove(document, { clientX: 140 });
+      fireEvent.mouseUp(document, { clientX: 140 });
+
+      expect(
+        JSON.parse(window.localStorage.getItem('t1-column-sizes') ?? '{}'),
+      ).toEqual({ col1: 200 });
+      expect(header.style.width).toBe('200px');
+    });
   });
 
   describe('Fit column to content', () => {
@@ -444,17 +470,22 @@ describe('RawLogTable', () => {
       expect(getHeaderCell(container, 'col2').style.width).toBe('800px');
     });
 
-    it('fits a column of a table that does not save its widths', async () => {
+    it('does not fit columns of a table that does not save its widths', async () => {
       const { container } = renderWithMantine(
         <RawLogTable
           {...baseProps}
           rows={[{ col1: 'abcdefghij', col2: 'y' }]}
         />,
       );
+      const handle = within(getHeaderCell(container, 'col1')).getByTestId(
+        'column-resize-handle',
+      );
+      expect(handle.getAttribute('title')).toBeNull();
 
       await fitColumn(container, 'col1');
 
-      expect(getHeaderCell(container, 'col1').style.width).toBe('80px');
+      expect(getHeaderCell(container, 'col1').style.width).toBe('160px');
+      expect(getHeaderCell(container, 'col2').style.width).toBe('840px');
     });
   });
 

@@ -1127,8 +1127,14 @@ export const RawLogTable = memo(
                             key={header.id}
                             header={header}
                             isLast={isLast}
-                            onFitToContent={() =>
-                              fitColumnToContent(header.column.id, isLast)
+                            // Only saved widths feed the last column's fill
+                            // width, so elsewhere a fit would leave the rows
+                            // out of line with the header.
+                            onFitToContent={
+                              tableId
+                                ? () =>
+                                    fitColumnToContent(header.column.id, isLast)
+                                : undefined
                             }
                             onRemoveColumn={
                               onRemoveColumn &&
