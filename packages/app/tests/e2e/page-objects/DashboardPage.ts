@@ -1651,6 +1651,18 @@ export class DashboardPage {
     return this.getFilterForm().getByTestId('filter-sql-preview-values');
   }
 
+  /** The SQL query filter form's generated SQL section. */
+  getSqlQueryFilterGeneratedSql(): Locator {
+    return this.getFilterForm().getByTestId('filter-sql-generated-sql');
+  }
+
+  /** Expand the generated SQL section, which starts collapsed. */
+  async openSqlQueryFilterGeneratedSql() {
+    await this.getSqlQueryFilterGeneratedSql()
+      .getByRole('button', { name: 'Generated SQL' })
+      .click();
+  }
+
   /** Run the SQL query filter form's query and show its values. */
   async previewSqlQueryFilter() {
     await this.getFilterForm().getByTestId('filter-sql-preview-button').click();

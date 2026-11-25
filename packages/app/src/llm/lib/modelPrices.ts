@@ -58,6 +58,8 @@ const AV = '(\\[[^\\]]+\\])?(-v\\d+(:\\d+)?)?(@\\d+)?$';
 // Anthropic bills prompt-cache writes at 1.25x the input rate (5m TTL).
 // prettier-ignore
 const ANTHROPIC: PriceTuple[] = [
+  // https://platform.claude.com/docs/en/about-claude/pricing
+  ['claude-sonnet-5-5', `${A}claude-sonnet-5-5${AV}`, 2e-6, 10e-6, 2e-7, 2.5e-6],
   ['claude-opus-5', `${A}claude-opus-5${AV}`, 5e-6, 25e-6, 5e-7, 6.25e-6],
   ['claude-sonnet-5', `${A}claude-sonnet-5${AV}`, 2e-6, 10e-6, 2e-7, 2.5e-6],
   ['claude-fable-5', `${A}claude-fable-5${AV}`, 10e-6, 50e-6, 1e-6, 12.5e-6],
