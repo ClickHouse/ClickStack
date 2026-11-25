@@ -35,6 +35,10 @@ export function createRegisterTool(
       name,
       {
         ...config,
+        // Zod drops unknown keys by default, so a tool would run as if an
+        // unsupported or misspelled option was never sent. Reject them, as the
+        // advertised schema (additionalProperties: false) already says.
+        inputSchema: config.inputSchema.strict(),
         annotations: { title: config.title, ...config.annotations },
       },
       traced,
