@@ -41,6 +41,13 @@ describe('MODEL_PRICES catalog', () => {
     );
   });
 
+  it('uses Anthropic rates for Claude Sonnet 5.5', () => {
+    expect(findModelPrice('claude-sonnet-5-5')).toMatchObject({
+      inputPricePerToken: 2e-6,
+      outputPricePerToken: 10e-6,
+    });
+  });
+
   it('matches the expanded provider families across id flavors', () => {
     // xAI (bare + OpenRouter-style ids)
     expect(findModelPrice('grok-4')?.name).toBe('grok-4');
