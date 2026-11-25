@@ -14,7 +14,7 @@
 ## Code Organization
 
 - **Single Responsibility**: One clear purpose per component/function
-- **File Size**: Max 300 lines - refactor when approaching limit
+- **File Size**: Max 300 lines - refactor when approaching limit. `yarn ratchet` fails when a file crosses it or an already-larger file grows
 - **DRY**: Grep for an existing implementation before adding a type, schema,
   helper, or component - see "Before you add a type, schema, or helper" below
   (REQUIRED)

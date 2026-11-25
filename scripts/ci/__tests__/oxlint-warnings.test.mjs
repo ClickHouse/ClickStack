@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   collectWarnings,
   formatStylish,
+  intersectLines,
   newWarnings,
   parseAddedLines,
   parseArgs,
@@ -187,4 +188,16 @@ test('formatStylish prints per-file problems and a total', () => {
   assert.doesNotMatch(out, /clean\.ts/);
   assert.match(out, /✖ 4 problems \(1 error, 3 warnings\)\n$/);
   assert.equal(formatStylish([], ROOT), '');
+});
+
+test('intersectLines keeps only lines new against both merge parents', () => {
+  const ours = new Map([
+    ['/repo/a.ts', new Set([1, 2, 3])],
+    ['/repo/from-main.ts', new Set([5])],
+  ]);
+  const theirs = new Map([['/repo/a.ts', new Set([2, 9])]]);
+  assert.deepEqual(
+    intersectLines(ours, theirs),
+    new Map([['/repo/a.ts', new Set([2])]]),
+  );
 });
