@@ -115,6 +115,20 @@ describe('utils', () => {
         }),
       ).toEqual('Jan 2');
     });
+
+    it('formats the month and year, in the given time zone', () => {
+      const date = new Date('2024-02-29T20:00:00Z');
+      expect(
+        formatDate(date, { timeZone: 'Asia/Tokyo', format: 'monthYear' }),
+      ).toEqual('Mar 2024');
+    });
+
+    it('formats an ISO date, in the given time zone', () => {
+      const date = new Date('2024-03-17T20:00:00Z');
+      expect(
+        formatDate(date, { timeZone: 'Asia/Tokyo', format: 'isoDate' }),
+      ).toEqual('2024-03-18');
+    });
   });
 
   describe('toWallClock / fromWallClock', () => {

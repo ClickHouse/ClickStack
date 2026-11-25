@@ -8,9 +8,12 @@ export {
   compactTickAnchor,
   formatAxisTick,
   getExpandableYAxisTicks,
+  getMonthStartTicks,
   getNiceYAxisTicks,
+  getTooltipDateFormat,
   getXAxisTickDateFormat,
   getYAxisTicks,
+  isYearScaleRange,
 } from './axisTicks';
 export {
   type ActiveClickPayload,

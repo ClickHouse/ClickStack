@@ -49,7 +49,11 @@ import { COLORS } from '@/utils';
 import {
   compactTickAnchor,
   formatAxisTick,
+  getMonthStartTicks,
+  getTooltipDateFormat,
   getXAxisTickDateFormat,
+  isYearScaleRange,
+  MONTH_TICK_MIN_GAP_PX,
 } from './axisTicks';
 import {
   type ActiveClickPayload,
@@ -461,6 +465,7 @@ export const MemoChart = memo(function MemoChart({
 
   const formatTime = useFormatTime();
   const displayTimeZone = useDisplayTimeZone();
+  const yearScale = isYearScaleRange(dateRange);
   const xTickFormatter = useCallback(
     (value: number, index: number) => {
       return formatTime(value * 1000, {
@@ -469,10 +474,22 @@ export const MemoChart = memo(function MemoChart({
           index,
           granularity,
           timeZone: displayTimeZone,
+          yearScale,
         }),
       });
     },
-    [formatTime, granularity, displayTimeZone],
+    [formatTime, granularity, displayTimeZone, yearScale],
+  );
+  const xAxisTicks = useMemo(
+    () =>
+      yearScale
+        ? getMonthStartTicks({
+            domain: xAxisDomain,
+            timeZone: displayTimeZone,
+            plotWidth: containerWidth - yAxisWidth,
+          })
+        : undefined,
+    [yearScale, xAxisDomain, displayTimeZone, containerWidth, yAxisWidth],
   );
 
   // Compact mode: anchor the first label to the start and the last to the end
@@ -579,6 +596,7 @@ export const MemoChart = memo(function MemoChart({
     return map;
   }, [lineData]);
 
+  const tooltipDateFormat = getTooltipDateFormat({ dateRange, granularity });
   // Memoize the tooltip `content` element: recharts re-evaluates it every hover
   // frame, so a fresh element each render defeats HDXLineChartTooltip's memo.
   // Refs are stable, so only the listed values are deps.
@@ -589,6 +607,7 @@ export const MemoChart = memo(function MemoChart({
         numberFormatByKey={tooltipNumberFormatsByKey}
         lineDataMap={lineDataMap}
         previousPeriodOffsetSeconds={previousPeriodOffsetSeconds}
+        dateFormat={tooltipDateFormat}
         activePointYByKeyRef={activePointYByKeyRef}
         containerRef={containerRef}
       />
@@ -598,6 +617,7 @@ export const MemoChart = memo(function MemoChart({
       tooltipNumberFormatsByKey,
       lineDataMap,
       previousPeriodOffsetSeconds,
+      tooltipDateFormat,
     ],
   );
 
@@ -901,8 +921,9 @@ export const MemoChart = memo(function MemoChart({
             interval="preserveStartEnd"
             scale="time"
             type="number"
+            ticks={xAxisTicks}
             tickFormatter={xTickFormatter}
-            minTickGap={100}
+            minTickGap={xAxisTicks ? MONTH_TICK_MIN_GAP_PX : 100}
             tick={
               compactXAxisLabels
                 ? renderCompactXTick

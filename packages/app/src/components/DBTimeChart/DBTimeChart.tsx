@@ -27,7 +27,11 @@ import {
   MAX_LOADABLE_TIME_CHART_SERIES,
   resolveRenderedSeriesCap,
 } from '@/defaults';
-import { type ActiveClickPayload, MemoChart } from '@/HDXMultiSeriesTimeChart';
+import {
+  type ActiveClickPayload,
+  getTooltipDateFormat,
+  MemoChart,
+} from '@/HDXMultiSeriesTimeChart';
 import {
   getMinGranularitySeconds,
   useQueriedChartConfig,
@@ -655,6 +659,7 @@ function DBTimeChartComponent({
             fallbackNumberFormat={queriedConfig.numberFormat}
             numberFormatByKey={formatByColumn}
             previousPeriodOffsetSeconds={previousPeriodOffsetSeconds}
+            dateFormat={getTooltipDateFormat({ dateRange, granularity })}
             // "+N more" in the pinned tooltip loads every series (same escape
             // hatch as the hidden-series warning). Only offered while capped.
             hiddenSeriesCount={hiddenSeriesCount}

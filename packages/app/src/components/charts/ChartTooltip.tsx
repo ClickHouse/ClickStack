@@ -8,7 +8,7 @@ import {
 } from '@tabler/icons-react';
 
 import type { NumberFormat } from '@/types';
-import { FormatTime } from '@/useFormatTime';
+import { type DateFormat, FormatTime } from '@/useFormatTime';
 import { formatNumber, truncateMiddle } from '@/utils';
 import { useZIndex } from '@/zIndex';
 
@@ -160,18 +160,23 @@ export const ChartTooltipItem = memo(
 const ChartTooltipTimestamp = ({
   labelSeconds,
   previousPeriodOffsetSeconds,
+  dateFormat,
 }: {
   labelSeconds: number | string;
   previousPeriodOffsetSeconds?: number;
+  dateFormat?: DateFormat;
 }) => {
   const sec = Number(labelSeconds);
   return (
     <>
-      <FormatTime value={sec * 1000} />
+      <FormatTime value={sec * 1000} format={dateFormat} />
       {previousPeriodOffsetSeconds != null && (
         <>
           {' (vs '}
-          <FormatTime value={(sec - previousPeriodOffsetSeconds) * 1000} />
+          <FormatTime
+            value={(sec - previousPeriodOffsetSeconds) * 1000}
+            format={dateFormat}
+          />
           {')'}
         </>
       )}
@@ -187,10 +192,13 @@ const ChartTooltipTimestamp = ({
 export const ChartTooltipHeader = ({
   labelSeconds,
   previousPeriodOffsetSeconds,
+  dateFormat,
   onClose,
 }: {
   labelSeconds: number | string;
   previousPeriodOffsetSeconds?: number;
+  /** Defaults to the full date and time without the year. */
+  dateFormat?: DateFormat;
   /** Pinned only; when omitted the X is rendered but hidden. */
   onClose?: () => void;
 }) => (
@@ -199,6 +207,7 @@ export const ChartTooltipHeader = ({
       <ChartTooltipTimestamp
         labelSeconds={labelSeconds}
         previousPeriodOffsetSeconds={previousPeriodOffsetSeconds}
+        dateFormat={dateFormat}
       />
     </span>
     <ActionIcon

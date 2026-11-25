@@ -849,7 +849,17 @@ const TIME_TOKENS = {
     '12h': 'MMM d',
     '24h': 'MMM d',
   },
+  monthYear: {
+    '12h': 'MMM yyyy',
+    '24h': 'MMM yyyy',
+  },
+  isoDate: {
+    '12h': 'yyyy-MM-dd',
+    '24h': 'yyyy-MM-dd',
+  },
 };
+
+export type DateFormat = keyof typeof TIME_TOKENS;
 
 export const UTC_TIME_ZONE = 'Etc/UTC';
 
@@ -862,7 +872,7 @@ export const formatDate = (
     clock = '12h',
   }: {
     timeZone?: string;
-    format?: 'normal' | 'short' | 'withMs' | 'time' | 'withYear' | 'date';
+    format?: DateFormat;
     clock?: '12h' | '24h';
   },
 ) => {

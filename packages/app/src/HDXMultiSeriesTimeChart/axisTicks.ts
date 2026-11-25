@@ -1,6 +1,7 @@
 import { getTickValuesFixedDomain } from 'recharts/lib/util/scale/getNiceTickValues';
 import {
   convertGranularityToSeconds,
+  fromWallClock,
   toWallClock,
 } from '@hyperdx/common-utils/dist/core/utils';
 
@@ -367,25 +368,139 @@ export function compactTickAnchor(
 }
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
+const SECONDS_PER_YEAR = 365 * SECONDS_PER_DAY;
 
 /**
- * Format for an x-axis tick label. Below daily granularity the first tick
- * carries the date and the rest only the time. At daily granularity or coarser
- * every tick carries the date, plus the time when the bucket does not start at
- * midnight in `timeZone` (buckets are UTC-aligned, so this happens in most
- * zones). An undefined `timeZone` means the browser's zone.
+ * Whether a chart's date range is long enough to label by month and year:
+ * at a year or more, day-level tick labels repeat across years and a time of
+ * day is noise.
+ */
+export function isYearScaleRange(
+  dateRange: readonly [Date, Date] | Readonly<[Date, Date]>,
+): boolean {
+  return (
+    (dateRange[1].getTime() - dateRange[0].getTime()) / 1000 >= SECONDS_PER_YEAR
+  );
+}
+
+// Month steps for year-scale ticks; each divides 12 or is a whole number of
+// years, so ticks land on the same months every year.
+const MONTH_TICK_STEPS = [1, 2, 3, 6, 12, 24, 60, 120];
+
+const MIN_MONTH_TICK_SPACING_PX = 100;
+
+/**
+ * XAxis minTickGap to use with getMonthStartTicks. Those ticks are already
+ * spaced for their labels; the default gap (label width + 100px) would make
+ * Recharts drop some of them and leave the rest unevenly spaced.
+ */
+export const MONTH_TICK_MIN_GAP_PX = 16;
+
+/**
+ * X-axis ticks for a year-scale chart: the first instant of a month in
+ * `timeZone`, every `step` months, choosing the smallest step that fits
+ * `plotWidth`. Recharts' own time ticks land at arbitrary instants on a
+ * seconds-valued axis, which would label "Mar 2024" partway through March.
+ * Returns undefined (let Recharts choose) before the chart is measured.
+ */
+export function getMonthStartTicks({
+  domain,
+  timeZone,
+  plotWidth,
+}: {
+  domain: readonly [number, number];
+  timeZone: string | undefined;
+  plotWidth: number;
+}): number[] | undefined {
+  const [startSeconds, endSeconds] = domain;
+  if (plotWidth <= 0 || !(endSeconds > startSeconds)) {
+    return undefined;
+  }
+  const zone = timeZone ?? getLocalTimeZone();
+  const toMonthIndex = (seconds: number) => {
+    const wallClock = toWallClock(new Date(seconds * 1000), zone);
+    return wallClock.getUTCFullYear() * 12 + wallClock.getUTCMonth();
+  };
+  const firstMonth = toMonthIndex(startSeconds);
+  const lastMonth = toMonthIndex(endSeconds);
+  const monthStartSeconds = (monthIndex: number) =>
+    fromWallClock(
+      new Date(Date.UTC(Math.floor(monthIndex / 12), monthIndex % 12, 1)),
+      zone,
+    ).getTime() / 1000;
+
+  const ticksForStep = (step: number) => {
+    const ticks: number[] = [];
+    for (
+      let month = Math.ceil(firstMonth / step) * step;
+      month <= lastMonth;
+      month += step
+    ) {
+      const tick = monthStartSeconds(month);
+      if (tick >= startSeconds && tick <= endSeconds) {
+        ticks.push(tick);
+      }
+    }
+    return ticks;
+  };
+
+  const maxTicks = Math.max(
+    2,
+    Math.floor(plotWidth / MIN_MONTH_TICK_SPACING_PX),
+  );
+  let ticks: number[] = [];
+  for (const step of MONTH_TICK_STEPS) {
+    ticks = ticksForStep(step);
+    if (ticks.length <= maxTicks) {
+      break;
+    }
+  }
+  return ticks.length > 0 ? ticks : undefined;
+}
+
+/**
+ * Format for the tooltip header timestamp. Year-scale ranges carry the year,
+ * and drop the time of day when buckets are a day or longer.
+ */
+export function getTooltipDateFormat({
+  dateRange,
+  granularity,
+}: {
+  dateRange: readonly [Date, Date] | Readonly<[Date, Date]>;
+  granularity: string;
+}): DateFormat {
+  if (!isYearScaleRange(dateRange)) {
+    return 'normal';
+  }
+  return convertGranularityToSeconds(granularity) >= SECONDS_PER_DAY
+    ? 'isoDate'
+    : 'withYear';
+}
+
+/**
+ * Format for an x-axis tick label. Year-scale ranges show the month and year
+ * on every tick. Otherwise, below daily granularity the first tick carries the
+ * date and the rest only the time. At daily granularity or coarser every tick
+ * carries the date, plus the time when the bucket does not start at midnight
+ * in `timeZone` (buckets are UTC-aligned, so this happens in most zones). An
+ * undefined `timeZone` means the browser's zone.
  */
 export function getXAxisTickDateFormat({
   tickSeconds,
   index,
   granularity,
   timeZone,
+  yearScale = false,
 }: {
   tickSeconds: number;
   index: number;
   granularity: string;
   timeZone: string | undefined;
+  yearScale?: boolean;
 }): DateFormat {
+  if (yearScale) {
+    return 'monthYear';
+  }
   if (convertGranularityToSeconds(granularity) < SECONDS_PER_DAY) {
     return index === 0 ? 'normal' : 'time';
   }
