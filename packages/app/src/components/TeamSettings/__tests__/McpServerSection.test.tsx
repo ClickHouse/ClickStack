@@ -52,11 +52,10 @@ describe('McpServerSection', () => {
     setMe('k_test');
   });
 
-  it('renders the section header and the install panel', () => {
+  it('renders the install panel', () => {
     renderSection();
 
     expect(screen.getByTestId('mcp-server-section')).toBeInTheDocument();
-    expect(screen.getByText(/^Connect your AI Agents$/)).toBeInTheDocument();
   });
 
   it('renders nothing while the me payload is still loading', () => {

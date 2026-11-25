@@ -36,8 +36,7 @@ export const PRODUCT_TASKS: Record<
   mcp: {
     title: 'Connect the MCP server',
     description: 'Query your data from an AI agent',
-    // /team alone lands on the Data tab (TeamPage falls back to tabs[0]).
-    href: '/team?tab=api-agents#team-api-agents-mcp-server',
+    href: '/team?tab=mcp',
   },
 };
 
