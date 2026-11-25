@@ -295,8 +295,8 @@ const TimePickerComponent = ({
       position="bottom-start"
       closeOnEscape
       opened={opened}
-      // A controlled popover reports outside clicks and Escape only through
-      // onChange; onClose fires after `opened` is already false.
+      // A controlled popover reports outside clicks and Escape (closeOnEscape)
+      // only through onChange; onClose fires after `opened` is already false.
       onChange={next => {
         if (!next) close();
       }}
