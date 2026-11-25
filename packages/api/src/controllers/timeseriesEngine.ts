@@ -108,7 +108,7 @@ const TIMESERIES_MAX_TIME_MS = 10413791999999; // 2299-12-31T23:59:59.999Z
  * Returns a predicate keeping only the series matched by at least one of
  * the given `match` selectors.
  */
-function getSeriesSelectorCondition({
+export function getSeriesSelectorCondition({
   databaseName,
   tableName,
   match,

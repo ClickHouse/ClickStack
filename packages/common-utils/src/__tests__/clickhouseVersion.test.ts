@@ -6,6 +6,7 @@ import {
   supportsMergeTreeIndex,
   supportsPrometheusHttpApi,
   supportsPrometheusLabelsApi,
+  timeSeriesSelectorTakesReturnColumns,
 } from '@/core/clickhouseVersion';
 
 type ClickHouseVersionTuple = readonly [number, number, number, number];
@@ -322,5 +323,27 @@ describe('supportsPrometheusLabelsApi', () => {
 
   it('returns false when the version is unknown', () => {
     expect(supportsPrometheusLabelsApi(undefined)).toBe(false);
+  });
+});
+
+describe('timeSeriesSelectorTakesReturnColumns', () => {
+  it.each<readonly [ClickHouseVersionTuple]>([
+    [[26, 11, 0, 0]],
+    [[26, 11, 1, 2942]],
+    [[27, 0, 0, 0]],
+  ])('accepts %j', version => {
+    expect(timeSeriesSelectorTakesReturnColumns(version)).toBe(true);
+  });
+
+  it.each<readonly [ClickHouseVersionTuple]>([
+    [[26, 10, 3, 7]],
+    [[26, 9, 0, 0]],
+    [[25, 12, 0, 0]],
+  ])('rejects %j', version => {
+    expect(timeSeriesSelectorTakesReturnColumns(version)).toBe(false);
+  });
+
+  it('returns false when the version is unknown', () => {
+    expect(timeSeriesSelectorTakesReturnColumns(undefined)).toBe(false);
   });
 });
