@@ -2764,6 +2764,20 @@ async function renderFiltersToSql(
     return undefined;
   }
 
+  // The same Map-KV rewrite as builder tiles get in renderWhere. Like the
+  // Lucene serializer's rewrite, it needs the items ALIAS column to be visible
+  // where the SQL places $__filters.
+  const { databaseName, tableName } = chartConfig.from;
+  const textIndexInfoLookup: TextIndexInfoLookup =
+    databaseName && tableName && chartConfig.filters.some(f => f.type === 'sql')
+      ? await buildTextIndexInfoLookup({
+          metadata,
+          databaseName,
+          tableName,
+          connectionId: chartConfig.connection,
+        })
+      : new Map();
+
   const conditions = (
     await Promise.all(
       chartConfig.filters.map(async filter => {
@@ -2784,7 +2798,13 @@ async function renderFiltersToSql(
           hasSourceTable
         ) {
           const condition = await renderWhereExpressionStr({
-            condition: filter.condition,
+            condition:
+              filter.type === 'sql'
+                ? rewriteSqlFilterWithKvItems(
+                    filter.condition,
+                    textIndexInfoLookup,
+                  )
+                : filter.condition,
             from: chartConfig.from!,
             language: filter.type,
             implicitColumnExpression: chartConfig.implicitColumnExpression,

@@ -2148,6 +2148,65 @@ describe('renderChartConfig', () => {
       expect(sql).not.toContain("toString(LogAttributes['env'])");
     });
 
+    const renderRawSqlFilters = async (
+      filters: Filter[],
+      tableName = 'otel_logs',
+    ) =>
+      (
+        await renderChartConfig(
+          {
+            configType: 'sql',
+            sqlTemplate: 'SELECT count() FROM otel_logs WHERE $__filters',
+            connection: 'test-connection',
+            dateRange: [new Date('2025-01-01'), new Date('2025-01-02')],
+            source: 'source-1',
+            from: { databaseName: 'default', tableName },
+            filters,
+          },
+          mockMetadata,
+          querySettings,
+        )
+      ).sql;
+
+    it('rewrites ad hoc filter conditions in raw SQL $__filters', async () => {
+      stubKvItemsMetadata();
+      expect(
+        await renderRawSqlFilters(
+          adhocConditionsToFilters([
+            { key: "LogAttributes['country']", operator: '=', value: 'US' },
+            { key: "LogAttributes['env']", operator: 'IN', value: 'prod' },
+            { key: "LogAttributes['env']", operator: 'IN', value: 'dev' },
+            { key: "LogAttributes['path']", operator: '!=', value: '/' },
+          ]),
+        ),
+      ).toBe(
+        "SELECT count() FROM otel_logs WHERE ((has(`LogAttributeItems`, concat('country', '=', 'US'))) AND (hasAny(`LogAttributeItems`, array(concat('env', '=', 'prod'), concat('env', '=', 'dev')))) AND (toString(LogAttributes['path']) != '/'))",
+      );
+    });
+
+    it('rewrites a SQL filter in raw SQL $__filters', async () => {
+      stubKvItemsMetadata();
+      expect(
+        await renderRawSqlFilters([
+          { type: 'sql', condition: "LogAttributes['k'] = 'v'" },
+        ]),
+      ).toBe(
+        "SELECT count() FROM otel_logs WHERE ((has(`LogAttributeItems`, concat('k', '=', 'v'))))",
+      );
+    });
+
+    it('leaves raw SQL $__filters unchanged for a source without a table', async () => {
+      stubKvItemsMetadata();
+      expect(
+        await renderRawSqlFilters(
+          [{ type: 'sql', condition: "LogAttributes['k'] = 'v'" }],
+          '',
+        ),
+      ).toBe(
+        "SELECT count() FROM otel_logs WHERE ((LogAttributes['k'] = 'v'))",
+      );
+    });
+
     const buildWhereConfig = (where: string): ChartConfigWithOptDateRange => ({
       connection: 'test-connection',
       from: { databaseName: 'default', tableName: 'otel_logs' },
