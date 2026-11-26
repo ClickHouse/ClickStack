@@ -1,0 +1,430 @@
+import { useMemo } from 'react';
+import { add, isSameSecond, sub } from 'date-fns';
+import { CurveType } from 'recharts/types/shape/Curve';
+import { AxisDomain } from 'recharts/types/util/types';
+import { convertGranularityToSeconds } from '@hyperdx/common-utils/dist/core/utils';
+import {
+  DisplayType,
+  getDefaultLineInterpolation,
+  LineInterpolation,
+} from '@hyperdx/common-utils/dist/types';
+
+import {
+  getSeriesColorForGroup,
+  type LineData,
+  toStartOfInterval,
+} from '@/ChartUtils';
+import {
+  ChartAnnotation,
+  getAnnotationElements,
+  layoutAnnotations,
+  resolveAnnotationSeries,
+} from '@/components/charts/chartAnnotations';
+import type { NumberFormat } from '@/types';
+
+import {
+  cleanNumber,
+  formatAxisTick,
+  getExpandableYAxisTicks,
+  getNiceYAxisTicks,
+  getYAxisTicks,
+} from './axisTicks';
+import { hasSeriesSelection } from './chartData';
+
+type UseChartScalesArgs = {
+  annotations: ChartAnnotation[] | undefined;
+  /** Measured container width; annotation layout needs the drawable width. */
+  containerWidth: number;
+  dateRange: readonly [Date, Date];
+  granularity: string;
+  dateRangeEndInclusive: boolean;
+  displayType: DisplayType;
+  fitYAxisToData: boolean | undefined;
+  graphResults: Record<string, unknown>[];
+  lineData: LineData[];
+  visibleLineData: LineData[];
+  selectedSeriesNames: Set<string> | undefined;
+  referenceLineValues: number[];
+  axisNumberFormat: NumberFormat | undefined;
+  yAxisMaxDomain: number | undefined;
+  /** Already scaled for the content font size preference (see MemoChart). */
+  yAxisWidth: number;
+};
+
+// Shared by every yAxisDomain branch below. Callers pass only the series
+// actually drawn (already selection- and HARD_LINES_LIMIT-filtered).
+export function scanYAxisValueRange(
+  graphResults: any[],
+  lineData: LineData[],
+): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  graphResults.forEach(dataPoint => {
+    lineData.forEach(ld => {
+      const value = dataPoint[ld.dataKey];
+      if (typeof value === 'number' && !isNaN(value)) {
+        min = Math.min(min, value);
+        max = Math.max(max, value);
+      }
+    });
+  });
+  return { min, max };
+}
+
+// Mirrors Recharts' stackOffset="none": each series sits on the running sum
+// of the ones before it, starting from a zero baseline, and the axis must
+// cover every one of those running sums.
+export function scanStackedYAxisValueRange(
+  graphResults: any[],
+  lineData: LineData[],
+): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  graphResults.forEach(dataPoint => {
+    let sum = 0;
+    lineData.forEach(ld => {
+      const value = dataPoint[ld.dataKey];
+      if (typeof value === 'number' && !isNaN(value)) {
+        sum += value;
+        min = Math.min(min, sum);
+        max = Math.max(max, sum);
+      }
+    });
+  });
+  if (max === -Infinity) {
+    return { min, max };
+  }
+  return { min: Math.min(min, 0), max: Math.max(max, 0) };
+}
+
+export interface YAxisBounds {
+  domain: AxisDomain;
+  ticks: number[] | undefined;
+  tickFormatter?: (value: number) => string;
+}
+
+const DEFAULT_Y_AXIS_BOUNDS: YAxisBounds = {
+  domain: [0, 'auto'],
+  ticks: undefined,
+};
+const FIT_Y_AXIS_BOUNDS: YAxisBounds = {
+  domain: ['auto', 'auto'],
+  ticks: undefined,
+};
+
+const CURVE_TYPE_BY_INTERPOLATION: Record<LineInterpolation, CurveType> = {
+  smooth: 'monotone',
+  linear: 'linear',
+  step: 'stepAfter',
+};
+
+export function getLineCurveType(
+  displayType: DisplayType,
+  lineInterpolation: LineInterpolation | undefined,
+): CurveType {
+  return CURVE_TYPE_BY_INTERPOLATION[
+    lineInterpolation ?? getDefaultLineInterpolation(displayType)
+  ];
+}
+
+export function computeYAxisBounds(
+  graphResults: any[],
+  visibleLineData: LineData[],
+  hasSelection: boolean,
+  fitYAxisToData: boolean,
+  displayType: DisplayType,
+  referenceLineValues: number[],
+  axisNumberFormat?: NumberFormat,
+  yAxisMaxDomain?: number,
+): YAxisBounds {
+  const isStacked =
+    displayType === DisplayType.StackedBar ||
+    displayType === DisplayType.StackedLine;
+  const shouldFitYAxis = fitYAxisToData;
+
+  if (yAxisMaxDomain != null && !isStacked) {
+    // A capped axis (e.g. a 0-100% rate tile): pin the lower bound at 0 and
+    // scale the upper bound to the data peak with headroom but never above the
+    // cap, so a flat or near-zero series can't auto-scale to a nonsense range.
+    // Applied on every path (selection and fit included) so selecting the sole
+    // series can't collapse the axis to [0, 0]; a numeric bound (not a function
+    // domain) lets the nice-tick logic dedupe labels instead of Recharts
+    // repeating "0%" at very small rates. Stacked charts skip the cap: their
+    // axis follows the stack height, sized below.
+    const { max } = scanYAxisValueRange(graphResults, visibleLineData);
+    const upperBound = cappedYAxisUpperBound(max, yAxisMaxDomain);
+    const expanded = getExpandableYAxisTicks(
+      0,
+      upperBound,
+      5,
+      axisNumberFormat,
+    );
+    if (expanded.ticks.length === 0) {
+      const baseFormat = (value: number) =>
+        formatAxisTick(value, axisNumberFormat);
+      return {
+        domain: [0, upperBound],
+        ticks: getYAxisTicks(0, upperBound, baseFormat),
+        tickFormatter: baseFormat,
+      };
+    }
+    return {
+      domain: [0, expanded.max],
+      ticks: expanded.ticks,
+      tickFormatter: expanded.tickFormatter,
+    };
+  }
+
+  // Stacked charts always stay zero-pinned: fit-to-data is line-only, and a
+  // selection already narrows visibleLineData, so it changes the stack sums.
+  if (isStacked || (!hasSelection && !shouldFitYAxis)) {
+    // A fully numeric domain skips Recharts' own nice rounding, and a
+    // reference line can extend it further - defer to Recharts entirely.
+    if (referenceLineValues.length > 0) {
+      return DEFAULT_Y_AXIS_BOUNDS;
+    }
+    const { min, max } = isStacked
+      ? scanStackedYAxisValueRange(graphResults, visibleLineData)
+      : scanYAxisValueRange(graphResults, visibleLineData);
+    if (max === -Infinity) {
+      return DEFAULT_Y_AXIS_BOUNDS;
+    }
+    // Recharts widens an explicit domain to fit out-of-range data, so
+    // negative data must be reflected here, not just pinned at zero.
+    const lowerBound = cleanNumber(Math.min(0, min));
+    // max * 1.05 would shrink the upper bound below max for negative data;
+    // padding away from zero keeps headroom regardless of max's sign.
+    const upperBound = cleanNumber(max + Math.abs(max) * 0.05);
+    if (upperBound <= lowerBound) {
+      return DEFAULT_Y_AXIS_BOUNDS;
+    }
+    const expanded = getExpandableYAxisTicks(
+      lowerBound,
+      upperBound,
+      5,
+      axisNumberFormat,
+    );
+    // No nice step fits - fall back to getYAxisTicks' reduce-tick-count
+    // dedup instead of Recharts' raw, collision-prone default.
+    if (expanded.ticks.length === 0) {
+      const baseFormat = (value: number) =>
+        formatAxisTick(value, axisNumberFormat);
+      return {
+        domain: [lowerBound, upperBound],
+        ticks: getYAxisTicks(lowerBound, upperBound, baseFormat),
+        tickFormatter: baseFormat,
+      };
+    }
+    return {
+      domain: [lowerBound, expanded.max],
+      ticks: expanded.ticks,
+      tickFormatter: expanded.tickFormatter,
+    };
+  }
+
+  // A selection with fit-to-data off still keeps the zero-pinned fallback,
+  // not the unpinned fit fallback - only fitting itself opts out of it.
+  const degenerateFallback = shouldFitYAxis
+    ? FIT_Y_AXIS_BOUNDS
+    : DEFAULT_Y_AXIS_BOUNDS;
+  const { min, max } = scanYAxisValueRange(graphResults, visibleLineData);
+  if (min === Infinity || max === -Infinity) {
+    return degenerateFallback;
+  }
+  const padding = (max - min) * 0.05;
+  // Recharts widens the domain to actual negative data regardless of fit
+  // mode, so the lower bound must follow it whenever min itself is negative.
+  const lowerBound = cleanNumber(
+    min < 0 ? min - padding : Math.max(0, min - padding),
+  );
+  const upperBound = cleanNumber(max + padding);
+  if (upperBound <= lowerBound) {
+    return degenerateFallback;
+  }
+  // A reference line can widen the domain (extendDomain) - extend it up
+  // front and nice-step the result, instead of ticking a stale domain.
+  if (referenceLineValues.length > 0) {
+    const extendedLower = cleanNumber(
+      Math.min(lowerBound, ...referenceLineValues),
+    );
+    const extendedUpper = cleanNumber(
+      Math.max(upperBound, ...referenceLineValues),
+    );
+    const expanded = getExpandableYAxisTicks(
+      extendedLower,
+      extendedUpper,
+      5,
+      axisNumberFormat,
+    );
+    if (expanded.ticks.length > 0) {
+      return {
+        domain: [extendedLower, expanded.max],
+        ticks: expanded.ticks,
+        tickFormatter: expanded.tickFormatter,
+      };
+    }
+    const baseFormat = (value: number) =>
+      formatAxisTick(value, axisNumberFormat);
+    return {
+      domain: [extendedLower, extendedUpper],
+      ticks: getYAxisTicks(extendedLower, extendedUpper, baseFormat),
+      tickFormatter: baseFormat,
+    };
+  }
+  const { ticks, tickFormatter } = getNiceYAxisTicks(
+    lowerBound,
+    upperBound,
+    5,
+    axisNumberFormat,
+  );
+  // Same fallback as the default branch above - reduce tick count via
+  // getYAxisTicks rather than leaving this to Recharts' raw default.
+  if (ticks.length === 0) {
+    const baseFormat = (value: number) =>
+      formatAxisTick(value, axisNumberFormat);
+    return {
+      domain: [lowerBound, upperBound],
+      ticks: getYAxisTicks(lowerBound, upperBound, baseFormat),
+      tickFormatter: baseFormat,
+    };
+  }
+  return {
+    domain: [lowerBound, upperBound],
+    ticks,
+    tickFormatter,
+  };
+}
+
+/**
+ * Upper bound for a y-axis that has an explicit cap (`yAxisMaxDomain`). Recharts
+ * calls this with the data's max value. Auto-scale up to the data max with 10%
+ * headroom, but never above the cap; a flat or zero/non-finite series uses the
+ * cap instead of a degenerate auto-domain (which recharts otherwise renders as
+ * e.g. 0-400% for a 0% error rate).
+ */
+export function cappedYAxisUpperBound(dataMax: number, cap: number): number {
+  return Number.isFinite(dataMax) && dataMax > 0
+    ? Math.min(dataMax * 1.1, cap)
+    : cap;
+}
+
+/**
+ * Derive the chart's axis domains and the annotation elements that hang off the
+ * x-domain.
+ *
+ * Extracted from MemoChart because it is pure derivation from props — no state,
+ * no event handlers, no recharts tree — and the y-domain rules (fit-to-data,
+ * legend selection, zero-anchored bars) are easier to follow on their own.
+ */
+export function useChartScales({
+  annotations,
+  containerWidth,
+  dateRange,
+  granularity,
+  dateRangeEndInclusive,
+  displayType,
+  fitYAxisToData,
+  graphResults,
+  lineData,
+  visibleLineData,
+  selectedSeriesNames,
+  referenceLineValues,
+  axisNumberFormat,
+  yAxisMaxDomain,
+  yAxisWidth,
+}: UseChartScalesArgs) {
+  const yAxisBounds = useMemo(
+    () =>
+      computeYAxisBounds(
+        graphResults,
+        visibleLineData,
+        hasSeriesSelection(selectedSeriesNames),
+        fitYAxisToData ?? false,
+        displayType,
+        referenceLineValues,
+        axisNumberFormat,
+        yAxisMaxDomain,
+      ),
+    [
+      graphResults,
+      visibleLineData,
+      selectedSeriesNames,
+      fitYAxisToData,
+      displayType,
+      referenceLineValues,
+      axisNumberFormat,
+      yAxisMaxDomain,
+    ],
+  );
+
+  // Typed as the tuple it actually returns rather than the wider AxisDomain, so
+  // the annotation elements below can read [min, max] without asserting. Still
+  // assignable to XAxis's `domain`.
+  const xAxisDomain: [number, number] = useMemo(() => {
+    let startTime = toStartOfInterval(dateRange[0], granularity);
+    let endTime = toStartOfInterval(dateRange[1], granularity);
+    const endTimeIsBoundaryAligned = isSameSecond(dateRange[1], endTime);
+    if (endTimeIsBoundaryAligned && !dateRangeEndInclusive) {
+      endTime = sub(endTime, {
+        seconds: convertGranularityToSeconds(granularity),
+      });
+    }
+
+    // For bar charts, extend the domain in both directions by half a granularity unit
+    // so that the full bar width is within the bounds of the chart
+    if (displayType === DisplayType.StackedBar) {
+      const halfGranularitySeconds =
+        convertGranularityToSeconds(granularity) / 2;
+      startTime = sub(startTime, { seconds: halfGranularitySeconds });
+      endTime = add(endTime, { seconds: halfGranularitySeconds });
+    }
+
+    return [startTime.getTime() / 1000, endTime.getTime() / 1000];
+  }, [dateRange, granularity, dateRangeEndInclusive, displayType]);
+
+  // Tint each marker to match the series it describes and drop the ones that
+  // can't be tied to anything on this chart — see `resolveAnnotationSeries`.
+  const coloredAnnotations = useMemo(() => {
+    if (!annotations?.length) {
+      return annotations;
+    }
+    return resolveAnnotationSeries(annotations, group =>
+      getSeriesColorForGroup(lineData, group),
+    );
+  }, [annotations, lineData]);
+
+  // Same geometry the hit layer positions against, so the hover bands can't
+  // drift from the lines they belong to.
+  const laidOutAnnotations = useMemo(() => {
+    if (!coloredAnnotations?.length) {
+      return null;
+    }
+    return layoutAnnotations(coloredAnnotations, {
+      domain: xAxisDomain,
+      plotWidth: Math.max(0, containerWidth - yAxisWidth),
+    });
+  }, [coloredAnnotations, xAxisDomain, containerWidth, yAxisWidth]);
+
+  // Alert/event markers as dashed lines, clamped to the chart's x-axis domain so
+  // an edge marker (e.g. an alert already firing at window open) stays visible
+  // instead of being dropped. Labels float in the reserved top headroom.
+  const annotationElements = useMemo(() => {
+    if (!coloredAnnotations?.length) {
+      return null;
+    }
+    return getAnnotationElements(coloredAnnotations, {
+      domain: xAxisDomain,
+      // Drawable width, so markers too close together share one label. Zero on
+      // the first paint (before ResponsiveContainer measures), which the
+      // renderer treats as "label everything".
+      plotWidth: Math.max(0, containerWidth - yAxisWidth),
+    });
+  }, [coloredAnnotations, xAxisDomain, containerWidth, yAxisWidth]);
+
+  return {
+    yAxisBounds,
+    xAxisDomain,
+    annotationElements,
+    laidOutAnnotations,
+  };
+}

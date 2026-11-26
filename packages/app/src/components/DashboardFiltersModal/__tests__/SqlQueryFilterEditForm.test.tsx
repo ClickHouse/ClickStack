@@ -14,6 +14,7 @@ import { ReferenceVariablesProvider } from '@/components/sourceSelectUtils';
 import { SqlVariablesProvider } from '@/components/SQLEditor/variableCompletions';
 
 const mockUseSqlQueryFilterValues = jest.fn();
+const mockUseSqlQueryFilterGeneratedSql = jest.fn();
 const mockCompletionLabels: string[] = [];
 const mockTables: string[] = [];
 let mockSources: TSource[] = [];
@@ -54,6 +55,14 @@ jest.mock('@/hooks/useSqlQueryFilterValues', () => ({
   SQL_QUERY_FILTER_VALUES_QUERY_KEY: 'sql-values',
   useSqlQueryFilterValues: (...args: unknown[]) =>
     mockUseSqlQueryFilterValues(...args),
+}));
+jest.mock('@/hooks/useSqlQueryFilterGeneratedSql', () => ({
+  useSqlQueryFilterGeneratedSql: (...args: unknown[]) =>
+    mockUseSqlQueryFilterGeneratedSql(...args),
+}));
+// CodeMirror doesn't render meaningfully in jsdom.
+jest.mock('@/components/ChartSQLPreview', () => ({
+  SQLPreview: ({ data }: { data?: string }) => <pre>{data}</pre>,
 }));
 // The real selector fetches connections, and the real editor is CodeMirror;
 // plain inputs bound to the same fields are enough to drive the preview.
@@ -174,6 +183,8 @@ describe('SqlQueryFilterEditForm', () => {
     mockUseSqlQueryFilterValues.mockReturnValue(
       valuesResult({ values: ['prod', 'dev'] }),
     );
+    mockUseSqlQueryFilterGeneratedSql.mockReset();
+    mockUseSqlQueryFilterGeneratedSql.mockReturnValue({ data: undefined });
   });
 
   it('suggests time macros but not source or interval macros', () => {
@@ -539,5 +550,47 @@ describe('SqlQueryFilterEditForm', () => {
     expect(screen.getByTestId('filter-sql-preview')).toHaveTextContent(
       'Unknown table default.envs',
     );
+  });
+
+  describe('generated SQL', () => {
+    const sql = 'SELECT env FROM envs WHERE $__filter(cloud, $cloud)';
+    const generated = 'SELECT env FROM envs WHERE (1=1)';
+
+    it('shows the previewed SQL with its variables filled in', async () => {
+      mockUseSqlQueryFilterGeneratedSql.mockReturnValue({ data: generated });
+      const user = await renderForm(sql);
+
+      expect(
+        screen.queryByTestId('filter-sql-generated-sql'),
+      ).not.toBeInTheDocument();
+      await user.click(screen.getByTestId('filter-sql-preview-button'));
+
+      expect(screen.getByTestId('filter-sql-generated-sql')).toHaveTextContent(
+        generated,
+      );
+      expect(mockUseSqlQueryFilterGeneratedSql).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          filter: expect.objectContaining({
+            connection: 'conn1',
+            sqlTemplate: sql,
+          }),
+          variables: [cloudVariable],
+        }),
+      );
+    });
+
+    it('shows it when the values query fails', async () => {
+      mockUseSqlQueryFilterValues.mockReturnValue(
+        valuesResult({ error: 'Unknown table default.envs' }),
+      );
+      mockUseSqlQueryFilterGeneratedSql.mockReturnValue({ data: generated });
+      const user = await renderForm(sql);
+
+      await user.click(screen.getByTestId('filter-sql-preview-button'));
+
+      expect(screen.getByTestId('filter-sql-generated-sql')).toHaveTextContent(
+        generated,
+      );
+    });
   });
 });

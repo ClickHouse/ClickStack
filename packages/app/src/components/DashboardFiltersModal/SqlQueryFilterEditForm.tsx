@@ -15,7 +15,6 @@ import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVari
 import {
   BroadcastFilter,
   DashboardFilter,
-  SqlQueryDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { Alert, Button, Group, Loader, Stack, Text } from '@mantine/core';
 import { IconAlertTriangle, IconPlayerPlay } from '@tabler/icons-react';
@@ -32,6 +31,7 @@ import {
   useChartVariables,
 } from '@/components/SQLEditor/variableCompletions';
 import { NOW } from '@/config';
+import { SqlQueryFilterPreviewOptions } from '@/hooks/useSqlQueryFilterGeneratedSql';
 import {
   SQL_QUERY_FILTER_VALUES_QUERY_KEY,
   useSqlQueryFilterValues,
@@ -47,6 +47,7 @@ import { resolveConnectionSourceSync } from '@/utils/connectionSourceSync';
 import { TOOLTIP_PORTAL_TARGET } from './constants';
 import { CustomInputWrapper } from './CustomInputWrapper';
 import { FilterFormControl, FilterFormValues } from './filterFormState';
+import { SqlQueryFilterGeneratedSql } from './SqlQueryFilterGeneratedSql';
 import { VariableNameInput } from './VariableNameInput';
 
 /** Values the preview lists before summarizing the rest as a count. */
@@ -166,6 +167,27 @@ export const SqlQueryFilterEditForm = ({
     source?: string;
     sqlTemplate: string;
   }>();
+  const lastHour = useMemo(
+    (): [Date, Date] => [new Date(NOW - 60 * 60 * 1000), new Date(NOW)],
+    [],
+  );
+  const preview = useMemo(
+    (): SqlQueryFilterPreviewOptions | undefined =>
+      previewed && {
+        filter: {
+          id: 'preview',
+          type: 'SQL_QUERY',
+          name: 'Preview',
+          ...previewed,
+          isBroadcastEnabled: false,
+          isVariableEnabled: true,
+        },
+        dateRange: dateRange ?? lastHour,
+        variables,
+        getDashboardFilters,
+      },
+    [previewed, dateRange, lastHour, variables, getDashboardFilters],
+  );
   const unresolvedVariables = [
     !resolvedConnection && parseVariableReference(connection) != null
       ? connection
@@ -303,13 +325,11 @@ export const SqlQueryFilterEditForm = ({
               Preview values
             </Button>
           </Group>
-          {previewed && (
-            <SqlQueryFilterPreview
-              {...previewed}
-              dateRange={dateRange}
-              variables={variables}
-              getDashboardFilters={getDashboardFilters}
-            />
+          {preview && (
+            <>
+              <SqlQueryFilterPreview {...preview} />
+              <SqlQueryFilterGeneratedSql {...preview} />
+            </>
           )}
         </Stack>
       </CustomInputWrapper>
@@ -320,47 +340,20 @@ export const SqlQueryFilterEditForm = ({
 };
 
 const SqlQueryFilterPreview = ({
-  connection,
-  source,
-  sqlTemplate,
+  filter,
   dateRange,
   variables,
   getDashboardFilters,
-}: {
-  connection: string;
-  source?: string;
-  sqlTemplate: string;
-  dateRange?: [Date, Date];
-  variables: ReturnType<typeof useChartVariables>;
-  getDashboardFilters?: (sourceId: string) => BroadcastFilter[];
-}) => {
-  const lastHour = useMemo(
-    (): [Date, Date] => [new Date(NOW - 60 * 60 * 1000), new Date(NOW)],
-    [],
-  );
-  const filters = useMemo(
-    (): SqlQueryDashboardFilter[] => [
-      {
-        id: 'preview',
-        type: 'SQL_QUERY',
-        name: 'Preview',
-        connection,
-        source,
-        sqlTemplate,
-        isBroadcastEnabled: false,
-        isVariableEnabled: true,
-      },
-    ],
-    [connection, source, sqlTemplate],
-  );
+}: SqlQueryFilterPreviewOptions) => {
+  const filters = useMemo(() => [filter], [filter]);
   const { data, filterErrorMessages, isLoading, isFetching, isError } =
     useSqlQueryFilterValues({
       filters,
-      dateRange: dateRange ?? lastHour,
+      dateRange,
       variables,
       getDashboardFilters,
     });
-  const values = data.get('preview')?.values ?? [];
+  const values = data.get(filter.id)?.values ?? [];
 
   // While a re-run loads, the previous query's values stand in as placeholder
   // data, so isLoading alone would show them as this query's results.
@@ -380,7 +373,7 @@ const SqlQueryFilterPreview = ({
         icon={<IconAlertTriangle size={16} />}
         data-testid="filter-sql-preview"
       >
-        {filterErrorMessages.get('preview') ?? 'The query failed.'}
+        {filterErrorMessages.get(filter.id) ?? 'The query failed.'}
       </Alert>
     );
   }

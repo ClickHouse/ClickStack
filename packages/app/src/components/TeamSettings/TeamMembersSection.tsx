@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { HTTPError } from 'ky';
 import CopyToClipboard from 'react-copy-to-clipboard';
-import { Badge, Separator } from '@clickhouse/click-ui';
+import { Badge } from '@clickhouse/click-ui';
 import {
   Box,
   Button,
@@ -216,8 +216,6 @@ export default function TeamMembersSection() {
 
   return (
     <Box id="team_members" data-testid="team-members-section">
-      <Text size="md">Team Members</Text>
-      <Separator size="lg" />
       <Card>
         <Card.Section withBorder py="sm" px="lg">
           <Group align="center" justify="space-between">
