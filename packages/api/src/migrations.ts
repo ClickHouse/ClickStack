@@ -145,10 +145,12 @@ export async function backfillSessionLastModified() {
         },
       },
     );
-  logger.info(
-    { updatedCount: result.modifiedCount },
-    'Backfilled session lastModified',
-  );
+  if (result.modifiedCount > 0) {
+    logger.info(
+      { updatedCount: result.modifiedCount },
+      'Backfilled session lastModified',
+    );
+  }
 }
 
 export async function runStartupMigrations() {
