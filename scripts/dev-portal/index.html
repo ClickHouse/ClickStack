@@ -489,6 +489,18 @@
         return `${slots.length > 1 ? 'Slots' : 'Slot'} ${slots.join(', ')}`;
       }
 
+      function clickhouseVersionLabel(stacks) {
+        const versions = [
+          ...new Set(
+            stacks
+              .flatMap(s => s.services)
+              .filter(svc => svc.name === 'clickhouse' && svc.version)
+              .map(svc => svc.version),
+          ),
+        ];
+        return versions.length ? `ClickHouse ${versions.join(', ')}` : null;
+      }
+
       // Group by full path so checkouts that share a folder name (a/hyperdx,
       // b/hyperdx) get separate cards. Items with no known path fall back to
       // their folder name.
@@ -522,6 +534,7 @@
       function renderWorktreeCard(key, stacks, dupNames) {
         const header = cardHeader(stacks);
         const collapsed = collapsedStacks.has(key);
+        const chVersion = clickhouseVersionLabel(stacks);
         const worktreePath =
           (stacks.find(s => s.worktreePath) || {}).worktreePath || '';
         const devStack = stacks.find(s => s.envType === 'dev');
@@ -568,7 +581,8 @@
               <span class="stack-title">
                 <span class="stack-title-row">
                   <span class="branch">${escapeHtml(header.branch)}</span>
-                  <span class="slot-badge">${slotLabel(stacks)}</span>
+                  <span class="meta-badge">${slotLabel(stacks)}</span>
+                  ${chVersion ? `<span class="meta-badge">${escapeHtml(chVersion)}</span>` : ''}
                 </span>
                 <span class="worktree" title="${escapeHtml(worktreePath)}">${escapeHtml(worktreeLabel(header.worktree, worktreePath, dupNames))}</span>
               </span>

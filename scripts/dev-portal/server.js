@@ -91,6 +91,17 @@ function parseContainerLabels(container) {
   return labels;
 }
 
+// "clickhouse/clickhouse-server:26.10.3.7-alpine" -> "26.10.3.7". Tags that
+// aren't a version (latest, head) are returned as-is. docker ps shows an image
+// ID instead of a name when the tag was removed or re-pointed.
+function imageVersion(image) {
+  const name = (image || '').split('@')[0].split('/').pop();
+  if (name.startsWith('sha256:')) return null;
+  const tag = name.includes(':') ? name.slice(name.indexOf(':') + 1) : '';
+  const match = tag.match(/^\d+(\.\d+)*/);
+  return match ? match[0] : tag || null;
+}
+
 function parsePortMappings(portsStr) {
   // Ports look like: "0.0.0.0:30589->8123/tcp, 0.0.0.0:30689->9000/tcp"
   const mappings = [];
@@ -319,6 +330,7 @@ async function buildDashboardData() {
       port: mainPort,
       url: labels['hdx.dev.url'] || null,
       ports,
+      version: imageVersion(container.Image),
       containerId: container.ID,
       uptime: container.RunningFor || '',
     });
