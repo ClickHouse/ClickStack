@@ -21,9 +21,11 @@ function Controls() {
 
 function renderLayout({
   defaultOpened = false,
+  defaultIsDraft = false,
   withContent = true,
 }: {
   defaultOpened?: boolean;
+  defaultIsDraft?: boolean;
   withContent?: boolean;
 }) {
   const onOpen = jest.fn();
@@ -31,6 +33,7 @@ function renderLayout({
   renderWithMantine(
     <AlertPanelLayout
       defaultOpened={defaultOpened}
+      defaultIsDraft={defaultIsDraft}
       onOpen={onOpen}
       onCancel={onCancel}
       actions={<span data-testid="alert-action" />}
@@ -113,6 +116,18 @@ describe('AlertPanel', () => {
 
     click('Open draft');
     expect(screen.getByTestId('alert-settings')).toBeInTheDocument();
+    click('Close');
+
+    expect(onCancel).toHaveBeenCalledWith(true);
+    expect(screen.queryByTestId('alert-panel')).not.toBeInTheDocument();
+  });
+
+  it('discards a draft it opens on, closed without confirming', () => {
+    const { onCancel } = renderLayout({
+      defaultOpened: true,
+      defaultIsDraft: true,
+    });
+
     click('Close');
 
     expect(onCancel).toHaveBeenCalledWith(true);

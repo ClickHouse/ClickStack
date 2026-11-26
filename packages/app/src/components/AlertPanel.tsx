@@ -133,6 +133,7 @@ const AlertPanelContext = createContext<
 /** Lays out its children beside the alert panel. */
 export function AlertPanelLayout({
   defaultOpened = false,
+  defaultIsDraft = false,
   actions,
   onOpen,
   onCancel,
@@ -140,6 +141,8 @@ export function AlertPanelLayout({
   ...props
 }: BoxProps & {
   defaultOpened?: boolean;
+  /** Whether the panel opens on a new alert, which closing it discards. */
+  defaultIsDraft?: boolean;
   /**
    * The alert's primary action. The alert form places it under its inputs
    * with `AlertPanelActions`, so it reads as part of the alert rather than
@@ -153,7 +156,7 @@ export function AlertPanelLayout({
   children: ReactNode;
 }) {
   const [opened, setOpened] = useState(defaultOpened);
-  const [isDraft, setIsDraft] = useState(false);
+  const [isDraft, setIsDraft] = useState(defaultIsDraft);
   const [target, setTarget] = useState<HTMLElement | null>(null);
   const [hasContent, setHasContent] = useState(false);
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
