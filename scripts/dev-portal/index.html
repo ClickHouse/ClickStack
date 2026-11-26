@@ -449,12 +449,44 @@
         }
 
         // All envs for the same worktree appear in a single card.
-        const groups = [...groupByWorktree(stacks).values()];
+        const groups = groupByWorktree(stacks);
         const dupNames = duplicateNames(
-          groups.map(group => cardHeader(group).worktree),
+          [...groups.values()].map(group => cardHeader(group).worktree),
         );
 
-        return `<div class="stacks">${groups.map(group => renderWorktreeCard(group, dupNames)).join('')}</div>`;
+        return `<div class="stacks">${[...groups.entries()].map(([key, group]) => renderWorktreeCard(key, group, dupNames)).join('')}</div>`;
+      }
+
+      // Collapsed live cards, keyed like groupByWorktree. Persisted so the
+      // choice survives reloads; cards are expanded by default.
+      const COLLAPSED_STORAGE_KEY = 'hdx-dev-portal-collapsed';
+      const collapsedStacks = new Set(
+        JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) || '[]'),
+      );
+
+      function onStackHeaderClick(event, header) {
+        if (event.target.closest('a')) return;
+        const card = header.closest('.stack-card');
+        const key = card.dataset.key;
+        const collapsed = !collapsedStacks.has(key);
+        if (collapsed) collapsedStacks.add(key);
+        else collapsedStacks.delete(key);
+        localStorage.setItem(
+          COLLAPSED_STORAGE_KEY,
+          JSON.stringify([...collapsedStacks]),
+        );
+        card.classList.toggle('collapsed', collapsed);
+        card.querySelector('.services-table').hidden = collapsed;
+        card
+          .querySelector('.stack-toggle')
+          .setAttribute('aria-expanded', String(!collapsed));
+      }
+
+      function slotLabel(stacks) {
+        const slots = [...new Set(stacks.map(s => s.slot))].sort(
+          (a, b) => a - b,
+        );
+        return `${slots.length > 1 ? 'Slots' : 'Slot'} ${slots.join(', ')}`;
       }
 
       // Group by full path so checkouts that share a folder name (a/hyperdx,
@@ -487,8 +519,9 @@
         return stacks.find(s => s.envType === 'dev') || stacks[0];
       }
 
-      function renderWorktreeCard(stacks, dupNames) {
+      function renderWorktreeCard(key, stacks, dupNames) {
         const header = cardHeader(stacks);
+        const collapsed = collapsedStacks.has(key);
         const worktreePath =
           (stacks.find(s => s.worktreePath) || {}).worktreePath || '';
         const devStack = stacks.find(s => s.envType === 'dev');
@@ -528,20 +561,24 @@
         }
 
         return `
-        <div class="stack-card">
-          <div class="stack-header">
-            <div>
-              <div style="display:flex;align-items:center">
-                <span class="branch">${escapeHtml(header.branch)}</span>
-              </div>
-              <div class="worktree" title="${escapeHtml(worktreePath)}">${escapeHtml(worktreeLabel(header.worktree, worktreePath, dupNames))}</div>
-            </div>
+        <div class="stack-card${collapsed ? ' collapsed' : ''}" data-key="${escapeHtml(key)}">
+          <div class="stack-header stack-header-toggle" onclick="onStackHeaderClick(event, this)">
+            <button type="button" class="stack-toggle" aria-expanded="${!collapsed}">
+              <svg class="chevron" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              <span class="stack-title">
+                <span class="stack-title-row">
+                  <span class="branch">${escapeHtml(header.branch)}</span>
+                  <span class="slot-badge">${slotLabel(stacks)}</span>
+                </span>
+                <span class="worktree" title="${escapeHtml(worktreePath)}">${escapeHtml(worktreeLabel(header.worktree, worktreePath, dupNames))}</span>
+              </span>
+            </button>
             <div class="stack-actions">
               ${chUrl ? `<a href="${chUrl}" target="_blank" class="open-btn open-btn-secondary">Open ClickHouse</a>` : ''}
               ${appUrl ? `<a href="${appUrl}" target="_blank" class="open-btn">Open App</a>` : ''}
             </div>
           </div>
-          <table class="services-table">
+          <table class="services-table"${collapsed ? ' hidden' : ''}>
             <thead>
               <tr>
                 <th>Service</th>
@@ -917,7 +954,17 @@
           const res = await fetch('/api/stacks');
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const stacks = await res.json();
+          // Re-rendering replaces the toggle buttons, so restore keyboard focus.
+          const focusedKey = document.activeElement?.matches('.stack-toggle')
+            ? document.activeElement.closest('.stack-card').dataset.key
+            : null;
           contentEl.innerHTML = renderStacks(stacks);
+          if (focusedKey !== null) {
+            [...contentEl.querySelectorAll('.stack-card')]
+              .find(card => card.dataset.key === focusedKey)
+              ?.querySelector('.stack-toggle')
+              .focus();
+          }
           errorEl.style.display = 'none';
         } catch (err) {
           errorEl.textContent = `Failed to fetch stacks: ${err.message}`;

@@ -982,9 +982,15 @@ export function renderSqlQueryFilterValuesQuery({
 }: SqlQueryFilterTemplateContext & {
   sqlTemplate: string;
   dateRange: [Date, Date];
-}): { sql: string; params: Record<string, number> } {
-  const sql = expandSqlQueryFilterTemplate(sqlTemplate, context)
+}): {
+  sql: string;
+  params: Record<string, number>;
+  /** The filter's own SQL after expansion, without the values wrapper. */
+  expandedSql: string;
+} {
+  const expandedSql = expandSqlQueryFilterTemplate(sqlTemplate, context)
     .trim()
+    // A trailing `;` would be a syntax error inside the values subquery.
     .replace(/;+$/, '');
   // The SQL goes on its own lines so a trailing `--` comment can't swallow the
   // closing parenthesis.
@@ -994,12 +1000,15 @@ export function renderSqlQueryFilterValuesQuery({
   };
   return {
     // DISTINCT before the LIMIT, so repeated rows can't crowd out values.
-    sql: `SELECT DISTINCT toString(tupleElement(tuple(*), 1)) AS value FROM (\n${sql}\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
+    sql: `SELECT DISTINCT toString(tupleElement(tuple(*), 1)) AS value FROM (\n${expandedSql}\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
     // Only the params the SQL reads, so a query that ignores the time range
     // keeps its cache key, and isn't re-run, when the range changes.
     params: Object.fromEntries(
-      Object.entries(timeParams).filter(([name]) => sql.includes(`{${name}:`)),
+      Object.entries(timeParams).filter(([name]) =>
+        expandedSql.includes(`{${name}:`),
+      ),
     ),
+    expandedSql,
   };
 }
 
