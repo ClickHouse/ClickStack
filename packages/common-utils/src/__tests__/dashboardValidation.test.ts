@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   validateChartConfigFormulas,
@@ -284,6 +284,10 @@ describe('validateDashboardFilterModes', () => {
 type GatingFilter = ModeFilter & {
   variableName?: string;
   appliesToSourceIds?: string[];
+  type?: string;
+  sourceType?: string;
+  where?: string;
+  whereLanguage?: string;
 };
 
 const collectGatingIssues = (
@@ -302,6 +306,26 @@ const collectGatingIssues = (
 describe('validateDashboardFilterFieldGating', () => {
   it('accepts an empty filter list', () => {
     expect(collectGatingIssues([])).toEqual([]);
+  });
+
+  it('rejects where and whereLanguage on a PromQL ad hoc filter only', () => {
+    const adhoc = (sourceType: string) => ({
+      name: sourceType,
+      type: 'ADHOC',
+      sourceType,
+      isBroadcastEnabled: true,
+      where: 'Namespace:api',
+      whereLanguage: 'lucene',
+    });
+    const issues = collectGatingIssues([adhoc('sql'), adhoc('promql')]);
+
+    expect(issues.map(issue => issue.path)).toEqual([
+      ['filters', 1, 'where'],
+      ['filters', 1, 'whereLanguage'],
+    ]);
+    expect(issues[0].message).toBe(
+      'Filter "promql" sets where, which only ad hoc filters with sourceType "sql" use; drop where',
+    );
   });
 
   it('accepts a filter that carries neither field', () => {

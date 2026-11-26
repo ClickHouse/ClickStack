@@ -1,11 +1,12 @@
 import mongoose from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import { getDashboards } from '@/controllers/dashboard';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError, validateObjectId } from '@/mcp/utils/errors';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
 import Dashboard from '@/models/dashboard';
 import { convertToExternalDashboard } from '@/routers/external-api/v2/utils/dashboards';
 
@@ -61,7 +62,7 @@ export function registerGetDashboard({
         return mcpUserError('Dashboard not found');
       }
       const externalDashboard = convertToExternalDashboard(dashboard, {
-        hidePromqlTiles: true,
+        hidePromql: !isPromqlEnabled(context),
       });
       return {
         content: [

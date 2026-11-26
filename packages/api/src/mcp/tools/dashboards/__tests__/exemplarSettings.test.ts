@@ -1,6 +1,8 @@
 import { Types } from 'mongoose';
 
-import { mcpTilesParam } from '@/mcp/tools/dashboards/schemas';
+import { buildMcpTilesParam } from '@/mcp/tools/dashboards/schemas';
+
+const mcpTilesParam = buildMcpTilesParam(false);
 
 /**
  * `enableExemplars` and `exemplarTraceSourceId` are the two exemplar settings an

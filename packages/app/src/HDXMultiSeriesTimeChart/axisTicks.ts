@@ -1,6 +1,12 @@
 import { getTickValuesFixedDomain } from 'recharts/lib/util/scale/getNiceTickValues';
+import {
+  convertGranularityToSeconds,
+  toWallClock,
+} from '@hyperdx/common-utils/dist/core/utils';
 
+import { getLocalTimeZone } from '@/timeZone';
 import type { NumberFormat } from '@/types';
+import type { DateFormat } from '@/useFormatTime';
 import {
   formatDurationMsCompact,
   formatNumber,
@@ -340,4 +346,56 @@ export function getExpandableYAxisTicks(
     return { max, ticks: tightTicks, tickFormatter: tightFormatter };
   }
   return { max, ticks: [] };
+}
+
+/**
+ * Text anchor for a compact x-axis tick. The first and last ticks are anchored
+ * to their inner edge so the edge time labels stay inside the plot instead of
+ * clipping; interior ticks stay centered.
+ */
+export function compactTickAnchor(
+  index: number,
+  visibleTicksCount: number,
+): 'start' | 'middle' | 'end' {
+  if (index <= 0) {
+    return 'start';
+  }
+  if (index >= visibleTicksCount - 1) {
+    return 'end';
+  }
+  return 'middle';
+}
+
+const SECONDS_PER_DAY = 24 * 60 * 60;
+
+/**
+ * Format for an x-axis tick label. Below daily granularity the first tick
+ * carries the date and the rest only the time. At daily granularity or coarser
+ * every tick carries the date, plus the time when the bucket does not start at
+ * midnight in `timeZone` (buckets are UTC-aligned, so this happens in most
+ * zones). An undefined `timeZone` means the browser's zone.
+ */
+export function getXAxisTickDateFormat({
+  tickSeconds,
+  index,
+  granularity,
+  timeZone,
+}: {
+  tickSeconds: number;
+  index: number;
+  granularity: string;
+  timeZone: string | undefined;
+}): DateFormat {
+  if (convertGranularityToSeconds(granularity) < SECONDS_PER_DAY) {
+    return index === 0 ? 'normal' : 'time';
+  }
+  const wallClock = toWallClock(
+    new Date(tickSeconds * 1000),
+    timeZone ?? getLocalTimeZone(),
+  );
+  const isMidnight =
+    wallClock.getUTCHours() === 0 &&
+    wallClock.getUTCMinutes() === 0 &&
+    wallClock.getUTCSeconds() === 0;
+  return isMidnight ? 'date' : 'short';
 }

@@ -1,5 +1,8 @@
-import { SourceKind } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import {
+  PromqlSourceBackendSchema,
+  SourceKind,
+} from '@hyperdx/common-utils/dist/types';
+import { z } from 'zod/v3';
 
 import { sanitizeMetricTables } from './metricKinds';
 
@@ -19,29 +22,40 @@ const _assertSourceKindsMatchEnum: readonly (typeof SOURCE_KINDS)[number][] = [
 ];
 void _assertSourceKindsMatchEnum;
 
+const NON_PROMQL_SOURCE_KINDS = ['log', 'trace', 'session', 'metric'] as const;
+
+const KIND_DESCRIPTION =
+  'Type of telemetry the table holds. Determines which other fields are ' +
+  'required; see the tool description.';
+
 // Advanced nested config, modeled loosely (SourceSchemaNoId does the strict
 // validation) so it round-trips through describe_source -> save_source.
 // Granularity fields use the internal "<n> <unit>" form (e.g. "5 minute").
-const highlightedAttributeExpressionsSchema = z.array(
-  z.object({
-    sqlExpression: z
-      .string()
-      .describe(
-        "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
-      ),
-    luceneExpression: z
-      .string()
-      .optional()
-      .describe(
-        'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
-          'When set, it is used when searching for this attribute value.',
-      ),
-    alias: z
-      .string()
-      .optional()
-      .describe('Display name for the attribute (rendered as AS <alias>).'),
-  }),
-);
+//
+// A factory, not a shared constant: zod-to-json-schema emits a reused schema
+// instance as a bare `$ref` to its first use, and MCP directory validators
+// flag that property as untyped.
+const highlightedAttributeExpressionsSchema = () =>
+  z.array(
+    z.object({
+      sqlExpression: z
+        .string()
+        .describe(
+          "ClickHouse SQL expression for the attribute, e.g. ResourceAttributes['http.host'].",
+        ),
+      luceneExpression: z
+        .string()
+        .optional()
+        .describe(
+          'Lucene version of sqlExpression, e.g. ResourceAttributes.http.host. ' +
+            'When set, it is used when searching for this attribute value.',
+        ),
+      alias: z
+        .string()
+        .optional()
+        .describe('Display name for the attribute (rendered as AS <alias>).'),
+    }),
+  );
 
 const aggregatedColumnSchema = z.object({
   sourceColumn: z
@@ -150,7 +164,7 @@ const metricTablesSchema = z
       'metric sources.',
   );
 
-export const mcpSaveSourceSchema = z.object({
+const mcpSaveSourceSchema = z.object({
   // ── Update selector ──
   id: z
     .string()
@@ -160,12 +174,7 @@ export const mcpSaveSourceSchema = z.object({
     ),
 
   // ── Always required (base) ──
-  kind: z
-    .enum(SOURCE_KINDS)
-    .describe(
-      'Type of telemetry the table holds. Determines which other fields are ' +
-        'required; see the tool description.',
-    ),
+  kind: z.enum(SOURCE_KINDS).describe(KIND_DESCRIPTION),
   name: z.string().min(1).describe('Display name shown in source selectors.'),
   connection: z
     .string()
@@ -244,6 +253,15 @@ export const mcpSaveSourceSchema = z.object({
         'different column sets: comma-separated column names present in all ' +
         'targets, used instead of SELECT * when fetching full rows. Column ' +
         'names only, no expressions or aliases. Omit to select all columns.',
+    ),
+  rowKeyExpression: z
+    .string()
+    .optional()
+    .describe(
+      'Log and trace sources. Comma-separated expressions that together ' +
+        'identify one row, e.g. the partition key, primary key, _block_number ' +
+        'and _block_offset. When set, the row side panel looks rows up by ' +
+        'these only. Omit to detect keys from table metadata.',
     ),
   orderByExpression: z
     .string()
@@ -376,13 +394,13 @@ export const mcpSaveSourceSchema = z.object({
     ),
 
   // ── Highlighted attribute expressions (advanced) ──
-  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedTraceAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Trace-level attributes displayed in the trace ' +
         'view for the selected trace.',
     ),
-  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema
+  highlightedRowAttributeExpressions: highlightedAttributeExpressionsSchema()
     .optional()
     .describe(
       'Log and trace sources. Row-level attributes displayed in the row side ' +
@@ -434,6 +452,16 @@ export const mcpSaveSourceSchema = z.object({
         'for no minimum.',
     ),
 
+  // ── PromQL ──
+  promqlBackend: PromqlSourceBackendSchema.optional().describe(
+    'Promql sources on a ClickHouse connection. How PromQL is evaluated: ' +
+      '"clickhouse-http" uses ClickHouse\'s Prometheus HTTP API (ClickHouse ' +
+      '26.6+ with the prometheus_api_v1 handler configured), "table-function" ' +
+      'uses the prometheusQuery table functions, and "auto" (the default when ' +
+      'omitted) probes the server and prefers the HTTP API. Ignored when the ' +
+      'connection is a Prometheus endpoint.',
+  ),
+
   // ── Materialized views (advanced; granularities use "<n> <unit>" form) ──
   materializedViews: materializedViewsSchema
     .optional()
@@ -447,9 +475,38 @@ export const mcpSaveSourceSchema = z.object({
       'Log and trace sources. Rollup tables used for fast field discovery and ' +
         'value autocomplete in filters and search suggestions.',
     ),
+  mapKeyIndexMaxParts: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      'Log and trace sources. How many data parts are read from text indexes ' +
+        'to discover attribute keys and filter values, chosen by ' +
+        'mapKeyIndexPartSelection. Raise it if keys or values are missing from ' +
+        'filters; lower it if they load slowly. Omit for the default of 20.',
+    ),
+  mapKeyIndexPartSelection: z
+    .enum(['median', 'smallest', 'largest'])
+    .optional()
+    .describe(
+      'Log and trace sources. Which data parts, by row count, are read from ' +
+        'text indexes for attribute keys and filter values: "median" (used when unset) ' +
+        'balances coverage and cost, "smallest" reads the newest unmerged ' +
+        'parts, "largest" reads the most merged data.',
+    ),
 });
 
 export type McpSaveSourceInput = z.infer<typeof mcpSaveSourceSchema>;
+
+/** The save_source input schema, without the promql kind when PromQL is off. */
+export function buildMcpSaveSourceSchema(promqlEnabled: boolean) {
+  return promqlEnabled
+    ? mcpSaveSourceSchema
+    : mcpSaveSourceSchema.extend({
+        kind: z.enum(NON_PROMQL_SOURCE_KINDS).describe(KIND_DESCRIPTION),
+      });
+}
 
 /**
  * Assemble the flat MCP input into the SourceSchemaNoId shape: nest from.*,

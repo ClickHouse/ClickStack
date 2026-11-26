@@ -3,7 +3,7 @@ import {
   SavedSearchSchema,
 } from '@hyperdx/common-utils/dist/types';
 import { groupBy } from 'lodash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { deleteSavedSearchAlerts } from '@/controllers/alerts';
 import Alert from '@/models/alert';
@@ -60,10 +60,14 @@ export function updateSavedSearch(
   savedSearch: SavedSearchWithoutId,
   userId?: string,
 ) {
+  // Callers may pass a merged stored document, which carries `createdBy`.
+  // Drop it so a spread can never rewrite ownership attribution.
+  const { createdBy: _createdBy, ...safeSavedSearch } =
+    savedSearch as SavedSearchWithoutId & { createdBy?: unknown };
   return SavedSearch.findOneAndUpdate(
     { _id: savedSearchId, team: teamId },
     {
-      ...savedSearch,
+      ...safeSavedSearch,
       team: teamId,
       updatedBy: userId,
     },

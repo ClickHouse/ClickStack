@@ -1,14 +1,18 @@
 // Port from ChartUtils + source.ts
+import type { ClickHouseSettings } from '@clickhouse/client-common';
 import { add as fnsAdd, format as fnsFormat } from 'date-fns';
 import { formatInTimeZone, zonedTimeToUtc } from 'date-fns-tz';
 import { omit } from 'lodash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export { default as objectHash } from 'object-hash';
 
 import {
   isAdhocFilter,
+  isConnectionFilter,
+  isDataSourceFilter,
   isQueryExpressionFilter,
+  isSqlQueryFilter,
   isStaticListFilter,
 } from '@/filters';
 import {
@@ -26,6 +30,11 @@ import {
   replaceMacros,
 } from '@/macros';
 import { QUERY_PARAMS, RawSqlQueryParam } from '@/rawSqlParams';
+import {
+  configUsesReferenceVariable,
+  getObjectName,
+  getReferenceVariableFilters,
+} from '@/referenceVariables';
 import {
   BuilderChartConfig,
   BuilderChartConfigWithDateRange,
@@ -52,8 +61,29 @@ import { validateVariableReferencesInTemplate } from '@/variables';
 
 import { SkipIndexMetadata, TableMetadata } from './metadata';
 
+/** Source `querySettings` in the shape the ClickHouse client expects. */
+export function querySettingsToClickHouseSettings(
+  querySettings: QuerySettings | undefined,
+): ClickHouseSettings {
+  return Object.fromEntries(
+    (querySettings ?? []).map(({ setting, value }) => [setting, value]),
+  );
+}
+
 /** The default maximum number of buckets setting when determining a bucket duration for 'auto' granularity */
 export const DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS = 60;
+
+/** The bucket count a time chart sizes an 'auto' granularity for. */
+export const TIME_CHART_AUTO_GRANULARITY_BUCKETS = 80;
+
+/** The bucket count a heatmap sizes an 'auto' granularity for. */
+export const HEATMAP_AUTO_GRANULARITY_BUCKETS = 245;
+
+/**
+ * The most rows a table tile shows. Arbitrary limit to prevent OOM crashes for
+ * very large result sets. Most result sets should be paginated anyway.
+ */
+export const MAX_TABLE_ROWS = 10_000;
 
 /** Code-point limit for row-lookup string hashes (matches ClickHouse leftUTF8). */
 export const LEFT_UTF8_HASH_CODE_POINTS = 1000;
@@ -615,6 +645,22 @@ export function hashCode(str: string) {
   return hash;
 }
 
+/** A chart's granularity, with 'auto' (or none) resolved for its date range. */
+export function getTimeChartGranularity<T extends string>(
+  granularity: T | 'auto' | undefined,
+  dateRange: [Date, Date],
+  minGranularitySeconds?: number,
+  maxBuckets = TIME_CHART_AUTO_GRANULARITY_BUCKETS,
+) {
+  return granularity === 'auto' || granularity == null
+    ? convertDateRangeToGranularityString(
+        dateRange,
+        maxBuckets,
+        minGranularitySeconds,
+      )
+    : granularity;
+}
+
 export function convertDateRangeToGranularityString(
   dateRange: [Date, Date],
   maxNumBuckets: number = DEFAULT_AUTO_GRANULARITY_MAX_BUCKETS,
@@ -799,6 +845,10 @@ const TIME_TOKENS = {
     '12h': 'h:mm:ss a',
     '24h': 'HH:mm:ss',
   },
+  date: {
+    '12h': 'MMM d',
+    '24h': 'MMM d',
+  },
 };
 
 export const UTC_TIME_ZONE = 'Etc/UTC';
@@ -812,7 +862,7 @@ export const formatDate = (
     clock = '12h',
   }: {
     timeZone?: string;
-    format?: 'normal' | 'short' | 'withMs' | 'time' | 'withYear';
+    format?: 'normal' | 'short' | 'withMs' | 'time' | 'withYear' | 'date';
     clock?: '12h' | '24h';
   },
 ) => {
@@ -886,44 +936,49 @@ export function convertToDashboardTemplate(
     };
   };
 
+  // A variable reference is portable as written; '' marks a missing object
+  const getSourceName = (id: string) => getObjectName(id, sources) ?? '';
+  const getConnectionName = (id: string) =>
+    getObjectName(id, connections) ?? '';
+
   const convertToTileTemplate = (
     input: Dashboard['tiles'][0],
-    sources: TSource[],
-    connections: Connection[],
   ): TileTemplate => {
     const tile = TileTemplateSchema.strip().parse(structuredClone(input));
     // Extract name from source/connection or default to '' if not found
     const tileConfig = tile.config;
     if (isBuilderSavedChartConfig(tileConfig)) {
-      tileConfig.source = (
-        sources.find(source => source.id === tileConfig.source) ?? { name: '' }
-      ).name;
+      tileConfig.source = getSourceName(tileConfig.source);
     } else if (isRawSqlSavedChartConfig(tileConfig)) {
-      tileConfig.connection = (
-        connections.find(conn => conn.id === tileConfig.connection) ?? {
-          name: '',
-        }
-      ).name;
+      tileConfig.connection = getConnectionName(tileConfig.connection);
       if (tileConfig.source) {
-        tileConfig.source =
-          sources.find(source => source.id === tileConfig.source)?.name ?? '';
+        tileConfig.source = getSourceName(tileConfig.source);
       }
     }
     convertOnClickTargetIdToName(tileConfig);
     return tile;
   };
 
-  const convertToFilterTemplate = (
-    input: DashboardFilter,
-    sources: TSource[],
-  ): DashboardFilter => {
+  const convertToFilterTemplate = (input: DashboardFilter): DashboardFilter => {
     const filter = DashboardFilterSchema.parse(structuredClone(input));
 
-    // A static filter references nothing in the workspace
-    if (isStaticListFilter(filter)) return filter;
-
-    const getSourceName = (id: string) =>
-      sources.find(source => source.id === id)?.name ?? '';
+    // These reference nothing in the workspace
+    if (isStaticListFilter(filter) || isConnectionFilter(filter)) return filter;
+    if (isSqlQueryFilter(filter)) {
+      filter.connection = getConnectionName(filter.connection);
+      // The source is optional, so drop it rather than export an empty name
+      // the template schema would reject.
+      if (filter.source) {
+        filter.source = getSourceName(filter.source) || undefined;
+      }
+      return filter;
+    }
+    if (isDataSourceFilter(filter)) {
+      if (filter.connection) {
+        filter.connection = getConnectionName(filter.connection) || undefined;
+      }
+      return filter;
+    }
 
     if (isAdhocFilter(filter)) {
       filter.sources = filter.sources.map(getSourceName);
@@ -941,13 +996,13 @@ export function convertToDashboardTemplate(
   };
 
   for (const tile of input.tiles) {
-    output.tiles.push(convertToTileTemplate(tile, sources, connections));
+    output.tiles.push(convertToTileTemplate(tile));
   }
 
   if (input.filters) {
     output.filters = [];
     for (const filter of input.filters ?? []) {
-      output.filters.push(convertToFilterTemplate(filter, sources));
+      output.filters.push(convertToFilterTemplate(filter));
     }
   }
 
@@ -960,8 +1015,16 @@ export function convertToDashboardTemplate(
     output.savedQueryLanguage = input.savedQueryLanguage ?? null;
   }
 
-  if (input.savedFilterValues && input.savedFilterValues.length > 0) {
-    output.savedFilterValues = structuredClone(input.savedFilterValues);
+  // A reference variable's saved value is an ID from this workspace
+  const referenceVariableNames = new Set(
+    getReferenceVariableFilters(input.filters).map(({ name }) => name),
+  );
+  const savedFilterValues = (input.savedFilterValues ?? []).filter(
+    value =>
+      !(value.type === 'variable' && referenceVariableNames.has(value.name)),
+  );
+  if (savedFilterValues.length > 0) {
+    output.savedFilterValues = structuredClone(savedFilterValues);
   }
 
   return output;
@@ -1415,6 +1478,41 @@ export type TextIndexTokenizer =
     }
   | { type: 'array' };
 
+/** Reads a setting from `system.tables.engine_full`, which ends with the SETTINGS clause. */
+export function getEngineSetting(engineFull: string, name: string) {
+  const settingsClause = engineFull.match(/ SETTINGS (.*)$/)?.[1] ?? '';
+  return splitAndTrimWithBracket(settingsClause)
+    .map(setting => setting.split(' = '))
+    .find(([key]) => key === name)?.[1];
+}
+
+const DEFAULT_TEXT_INDEX_DICTIONARY_BLOCK_SIZE = 512;
+
+/**
+ * A text index's dictionary block size: the index argument, else the table's
+ * `text_index_dictionary_block_size`, else the server's, else ClickHouse's 512.
+ */
+export function getTextIndexDictionaryBlockSize({
+  typeFull,
+  engineFull,
+  serverMergeTreeSettings,
+}: {
+  typeFull?: string;
+  engineFull?: string;
+  serverMergeTreeSettings?: Map<string, string>;
+}): number {
+  const value =
+    typeFull?.match(/\bdictionary_block_size\s*=\s*(\d+)/)?.[1] ??
+    (engineFull
+      ? getEngineSetting(engineFull, 'text_index_dictionary_block_size')
+      : undefined) ??
+    serverMergeTreeSettings?.get('text_index_dictionary_block_size');
+  const size = Number(value);
+  return Number.isInteger(size) && size > 0
+    ? size
+    : DEFAULT_TEXT_INDEX_DICTIONARY_BLOCK_SIZE;
+}
+
 /**
  * Parses the tokenizer and any associated tokenizer parameters from a text index type definition.
  *
@@ -1612,6 +1710,38 @@ export function aliasMapToWithClauses(
   return withClauses.length > 0 ? withClauses : undefined;
 }
 
+/**
+ * Keeps only the WITH clauses that `texts` reference, directly or through
+ * another kept clause. Lets a query that doesn't select a config's columns
+ * (e.g. a count histogram) skip the aliases it never uses, so adding or
+ * removing a column doesn't change its query key.
+ */
+export function getReferencedWithClauses(
+  withClauses: BuilderChartConfig['with'],
+  texts: string[],
+): BuilderChartConfig['with'] {
+  if (!withClauses) return undefined;
+
+  const kept = new Set<string>();
+  let haystack = texts.join('\n');
+  let added = true;
+  while (added) {
+    added = false;
+    for (const clause of withClauses) {
+      // Substring match over-includes (e.g. `svc` in `svc_name`), which only
+      // costs a refetch; under-including would break the query.
+      if (!kept.has(clause.name) && haystack.includes(clause.name)) {
+        kept.add(clause.name);
+        haystack += `\n${clause.sql?.sql ?? ''}`;
+        added = true;
+      }
+    }
+  }
+
+  const referenced = withClauses.filter(clause => kept.has(clause.name));
+  return referenced.length > 0 ? referenced : undefined;
+}
+
 const stripQuotes = (s: string) => s.replace(/^["'`]|["'`]$/g, '');
 
 /** Parses and returns the cluster, database, and table from the given distributed table metadata */
@@ -1700,6 +1830,8 @@ export function displayTypeSupportsPromQLAlerts(
 export function savedChartConfigSupportsAlerts(
   config: SavedChartConfig,
 ): boolean {
+  // An alert must query one fixed source, not the viewer's current selection.
+  if (configUsesReferenceVariable(config)) return false;
   if (isPromqlSavedChartConfig(config)) {
     return displayTypeSupportsPromQLAlerts(config.displayType);
   }

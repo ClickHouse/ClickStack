@@ -1,8 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { getConnectionsByTeam } from '@/controllers/connection';
-import { getSources } from '@/controllers/sources';
 import type { PromptDefinition } from '@/mcp/tools/types';
+import { getMcpConnections } from '@/mcp/utils/connections';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
+import { getMcpSources, getVisibleMcpSources } from '@/mcp/utils/sources';
 import logger from '@/utils/logger';
 
 import {
@@ -18,6 +19,7 @@ import {
 
 const dashboardPrompts: PromptDefinition = (server, context) => {
   const { teamId } = context;
+  const promptOptions = { promql: isPromqlEnabled(context) };
 
   // ── create_dashboard ──────────────────────────────────────────────────────
 
@@ -45,8 +47,8 @@ const dashboardPrompts: PromptDefinition = (server, context) => {
 
       try {
         const [sources, connections] = await Promise.all([
-          getSources(teamId),
-          getConnectionsByTeam(teamId),
+          getVisibleMcpSources(context),
+          getMcpConnections(context),
         ]);
 
         sourceSummary = buildSourceSummary(
@@ -88,6 +90,7 @@ const dashboardPrompts: PromptDefinition = (server, context) => {
                 traceSourceId,
                 logSourceId,
                 description,
+                promptOptions,
               ),
             },
           },
@@ -123,8 +126,8 @@ const dashboardPrompts: PromptDefinition = (server, context) => {
 
       try {
         const [sources, connections] = await Promise.all([
-          getSources(teamId),
-          getConnectionsByTeam(teamId),
+          getMcpSources(context),
+          getMcpConnections(context),
         ]);
 
         traceSourceId = getFirstSourceId(
@@ -176,7 +179,7 @@ const dashboardPrompts: PromptDefinition = (server, context) => {
       description:
         'Look up HyperDX query syntax: aggregation functions, ' +
         'Lucene/SQL filters, raw SQL macros, column naming, ' +
-        'per-tile constraints, and common mistakes.',
+        `per-tile constraints, ${promptOptions.promql ? 'PromQL, ' : ''}and common mistakes.`,
     },
     async () => {
       return {
@@ -185,7 +188,7 @@ const dashboardPrompts: PromptDefinition = (server, context) => {
             role: 'user' as const,
             content: {
               type: 'text' as const,
-              text: buildQueryGuidePrompt(),
+              text: buildQueryGuidePrompt(promptOptions),
             },
           },
         ],

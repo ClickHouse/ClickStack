@@ -1,6 +1,11 @@
 import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
+import {
+  isPromqlChartConfig,
+  isRawSqlChartConfig,
+} from '@hyperdx/common-utils/dist/guards';
 import { SourceKind, TLogSource } from '@hyperdx/common-utils/dist/types';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   getJSONColumnNames,
@@ -13,7 +18,41 @@ jest.mock('@/hooks/useChartConfig', () => ({
   useQueriedChartConfig: jest.fn(),
 }));
 
-const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
+type ColumnsResult = {
+  data?: { name: string; default_type: string }[];
+  isLoading: boolean;
+};
+let mockColumns: ColumnsResult;
+const mockUseColumns = jest.fn(
+  (_table: unknown, _options: { enabled?: boolean }) => mockColumns,
+);
+jest.mock('@/hooks/useMetadata', () => ({
+  useColumns: (table: unknown, options: { enabled?: boolean }) =>
+    mockUseColumns(table, options),
+}));
+
+const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
+type QueryResult = ReturnType<typeof useQueriedChartConfig>;
+
+// useRowData always builds builder configs; narrowing gives access to `select`.
+// Excluding the other variants (rather than isBuilderChartConfig) keeps the
+// optional dateRange/timestampValueExpression of the queried config type.
+function queriedConfig(call = 0) {
+  const [config] = mockUseQueriedChartConfig.mock.calls[call];
+  if (isRawSqlChartConfig(config) || isPromqlChartConfig(config)) {
+    throw new Error('expected a builder chart config');
+  }
+  return config;
+}
+
+function queriedOptions(call = 0) {
+  const [, options] = mockUseQueriedChartConfig.mock.calls[call];
+  if (options == null) {
+    throw new Error('expected query options');
+  }
+  return options;
+}
+
 const showMaterializedAliasColumns = () =>
   localStorage.setItem('hdx-row-show-materialized-alias-columns', 'true');
 
@@ -32,17 +71,20 @@ describe('DBRowDataPanel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: {
-        data: [],
-        meta: [],
-        rows: 0,
-        isComplete: true,
-      },
-      isLoading: false,
-      isError: false,
-      isSuccess: true,
-    });
+    mockColumns = { data: undefined, isLoading: false };
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: {
+          data: [],
+          meta: [],
+          rows: 0,
+          isComplete: true,
+        },
+        isLoading: false,
+        isError: false,
+        isSuccess: true,
+      }),
+    );
   });
 
   describe('getJSONColumnNames', () => {
@@ -76,29 +118,31 @@ describe('DBRowDataPanel', () => {
   it('selects `*` when the source has no Known Columns List', () => {
     renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
 
-    const [config] = mockUseQueriedChartConfig.mock.calls[0];
+    const config = queriedConfig();
     expect(config.select[0]).toEqual({ valueExpression: '*' });
   });
 
   // JSON-typed Events.Attributes come back nested.
   it('flattens span-event exception attributes', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: {
-        data: [
-          {
-            __hdx_events_exception_attributes: {
-              exception: { type: 'TypeError' },
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: {
+          data: [
+            {
+              __hdx_events_exception_attributes: {
+                exception: { type: 'TypeError' },
+              },
             },
-          },
-        ],
-        meta: [],
-        rows: 1,
-        isComplete: true,
-      },
-      isLoading: false,
-      isError: false,
-      isSuccess: true,
-    });
+          ],
+          meta: [],
+          rows: 1,
+          isComplete: true,
+        },
+        isLoading: false,
+        isError: false,
+        isSuccess: true,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useRowData({ source, rowId: "id='abc123'" }),
@@ -119,18 +163,168 @@ describe('DBRowDataPanel', () => {
       useRowData({ source: sourceWithKnownColumns, rowId: "id='abc123'" }),
     );
 
-    const [config] = mockUseQueriedChartConfig.mock.calls[0];
+    const config = queriedConfig();
     expect(config.select[0]).toEqual({
       valueExpression: 'Timestamp, Body, ServiceName',
     });
     expect(config.select).not.toContainEqual({ valueExpression: '*' });
   });
 
+  describe('event name', () => {
+    const eventNameAlias = expect.objectContaining({
+      alias: '__hdx_event_name',
+    });
+    const eventNameColumn = (default_type: string) => [
+      { name: 'Body', default_type: '' },
+      { name: 'EventName', default_type },
+    ];
+    const lookUp = (
+      overrides: Partial<TLogSource>,
+      row: Record<string, unknown> = {},
+    ) => {
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [row], meta: [], rows: 1, isComplete: true },
+          isLoading: false,
+          isError: false,
+          isSuccess: true,
+        }),
+      );
+      const { result } = renderHook(() =>
+        useRowData({ source: { ...source, ...overrides }, rowId: "id='a'" }),
+      );
+      const { select } = queriedConfig();
+      const { queryKey } = queriedOptions();
+      return {
+        select,
+        queryKey,
+        row: result.current.data?.data[0],
+        checksColumns: mockUseColumns.mock.calls[0][1].enabled,
+      };
+    };
+
+    it('reads a plain column from the row instead of selecting it', () => {
+      mockColumns = { data: eventNameColumn(''), isLoading: false };
+      const { select, row, checksColumns } = lookUp(
+        { eventNameExpression: 'EventName' },
+        { EventName: 'browser.navigation' },
+      );
+      expect(checksColumns).toBe(true);
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBe('browser.navigation');
+    });
+
+    it.each(['ALIAS', 'MATERIALIZED'])(
+      'selects a %s column, which `*` leaves out',
+      kind => {
+        mockColumns = { data: eventNameColumn(kind), isLoading: false };
+        const { select, row } = lookUp(
+          { eventNameExpression: 'EventName' },
+          { __hdx_event_name: 'browser.resource_timing' },
+        );
+        expect(select).toContainEqual({
+          valueExpression: 'EventName',
+          alias: '__hdx_event_name',
+        });
+        expect(row?.__hdx_event_name).toBe('browser.resource_timing');
+      },
+    );
+
+    it('keys the lookup by whether it selects the column', () => {
+      mockColumns = { data: eventNameColumn(''), isLoading: false };
+      const plain = lookUp({ eventNameExpression: 'EventName' }).queryKey;
+      mockUseQueriedChartConfig.mockClear();
+      mockColumns = { data: eventNameColumn('ALIAS'), isLoading: false };
+      const alias = lookUp({ eventNameExpression: 'EventName' }).queryKey;
+      expect(alias).not.toEqual(plain);
+    });
+
+    it('leaves the event name unset when the table has no such column', () => {
+      mockColumns = {
+        data: [{ name: 'Body', default_type: '' }],
+        isLoading: false,
+      };
+      const { select, row } = lookUp({ eventNameExpression: 'EventName' });
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBeUndefined();
+    });
+
+    it('reads the row when the table columns fail to load', () => {
+      const { select, row } = lookUp(
+        { eventNameExpression: 'EventName' },
+        { EventName: 'browser.navigation' },
+      );
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBe('browser.navigation');
+    });
+
+    it.each<{ lookup: string; dateRange?: [Date, Date] }>([
+      { lookup: 'unbounded' },
+      { lookup: 'bounded', dateRange: [new Date(0), new Date(1000)] },
+    ])(
+      'waits for the table columns before the $lookup lookup',
+      ({ dateRange }) => {
+        mockColumns = { data: undefined, isLoading: true };
+        const { result } = renderHook(() =>
+          useRowData({
+            source: { ...source, eventNameExpression: 'EventName' },
+            rowId: "id='a'",
+            dateRange,
+          }),
+        );
+        for (const [, options] of mockUseQueriedChartConfig.mock.calls) {
+          expect(options?.enabled).toBe(false);
+        }
+        expect(result.current.isLoading).toBe(true);
+      },
+    );
+
+    // Columns another page cached must not add a select that the Known
+    // Columns List leaves out.
+    it('selects nothing that a Known Columns List leaves out', () => {
+      mockColumns = { data: eventNameColumn('ALIAS'), isLoading: false };
+      const { select, row, checksColumns } = lookUp({
+        eventNameExpression: 'EventName',
+        knownColumnsListExpression: 'Timestamp, Body',
+      });
+      expect(checksColumns).toBe(false);
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBeUndefined();
+    });
+
+    it('reads a column that a Known Columns List names from the row', () => {
+      const { row } = lookUp(
+        {
+          eventNameExpression: 'EventName',
+          knownColumnsListExpression: 'Timestamp, Body, EventName',
+        },
+        { EventName: 'browser.navigation' },
+      );
+      expect(row?.__hdx_event_name).toBe('browser.navigation');
+    });
+
+    it('selects any other expression under the alias', () => {
+      const { select, checksColumns } = lookUp({
+        eventNameExpression: "LogAttributes['event.name']",
+      });
+      expect(checksColumns).toBe(false);
+      expect(select).toContainEqual({
+        valueExpression: "LogAttributes['event.name']",
+        alias: '__hdx_event_name',
+      });
+    });
+
+    it('reads no event name when the expression is unset', () => {
+      const { select, row } = lookUp({}, { EventName: 'browser.navigation' });
+      expect(select).not.toContainEqual(eventNameAlias);
+      expect(row?.__hdx_event_name).toBeUndefined();
+    });
+  });
+
   it('adds no query settings while the viewer option is off', () => {
     renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
 
-    const [bounded, fallback] = mockUseQueriedChartConfig.mock.calls;
-    for (const [, options] of [bounded, fallback]) {
+    for (const options of [queriedOptions(0), queriedOptions(1)]) {
       expect(options.additionalQuerySettings).toBeUndefined();
       expect(options.retry).toBeUndefined();
     }
@@ -140,8 +334,7 @@ describe('DBRowDataPanel', () => {
     showMaterializedAliasColumns();
     renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
 
-    const [bounded, fallback] = mockUseQueriedChartConfig.mock.calls;
-    for (const [, options] of [bounded, fallback]) {
+    for (const options of [queriedOptions(0), queriedOptions(1)]) {
       expect(options.additionalQuerySettings).toEqual([
         { setting: 'asterisk_include_materialized_columns', value: '1' },
         { setting: 'asterisk_include_alias_columns', value: '1' },
@@ -162,7 +355,7 @@ describe('DBRowDataPanel', () => {
       useRowData({ source: sourceWithSetting, rowId: "id='abc123'" }),
     );
 
-    const [[, options]] = mockUseQueriedChartConfig.mock.calls;
+    const options = queriedOptions();
     expect(options.additionalQuerySettings).toEqual([
       { setting: 'asterisk_include_materialized_columns', value: '1' },
     ]);
@@ -182,7 +375,7 @@ describe('DBRowDataPanel', () => {
       useRowData({ source: sourceWithSettings, rowId: "id='abc123'" }),
     );
 
-    const [[, options]] = mockUseQueriedChartConfig.mock.calls;
+    const options = queriedOptions();
     expect(options.additionalQuerySettings).toBeUndefined();
   });
 
@@ -197,8 +390,7 @@ describe('DBRowDataPanel', () => {
       useRowData({ source: sourceWithKnownColumns, rowId: "id='abc123'" }),
     );
 
-    const [bounded, fallback] = mockUseQueriedChartConfig.mock.calls;
-    for (const [, options] of [bounded, fallback]) {
+    for (const options of [queriedOptions(0), queriedOptions(1)]) {
       expect(options.additionalQuerySettings).toBeUndefined();
     }
   });
@@ -213,14 +405,16 @@ describe('DBRowDataPanel', () => {
       code: '164',
       type: 'READONLY',
     });
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: undefined,
-      error: readonlyError,
-      isLoading: false,
-      isPending: false,
-      isError: true,
-      isSuccess: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        error: readonlyError,
+        isLoading: false,
+        isPending: false,
+        isError: true,
+        isSuccess: false,
+      }),
+    );
 
     const { result } = renderHook(() =>
       useRowData({ source, rowId: "id='abc123'" }),
@@ -230,7 +424,7 @@ describe('DBRowDataPanel', () => {
     expect(result.current.error).toBe(readonlyError);
     expect(result.current.isLoading).toBe(false);
     for (const [, options] of mockUseQueriedChartConfig.mock.calls) {
-      expect(options.additionalQuerySettings).toBeDefined();
+      expect(options?.additionalQuerySettings).toBeDefined();
     }
   });
 
@@ -241,7 +435,7 @@ describe('DBRowDataPanel', () => {
     it('omits the time filter when no dateRange is given', () => {
       renderHook(() => useRowData({ source, rowId: "id='abc123'" }));
 
-      const [config] = mockUseQueriedChartConfig.mock.calls[0];
+      const config = queriedConfig();
       expect(config.dateRange).toBeUndefined();
       expect(config.timestampValueExpression).toBeUndefined();
     });
@@ -254,7 +448,8 @@ describe('DBRowDataPanel', () => {
 
       renderHook(() => useRowData({ source, rowId: "id='abc123'", dateRange }));
 
-      const [config, options] = mockUseQueriedChartConfig.mock.calls[0];
+      const config = queriedConfig();
+      const options = queriedOptions();
       expect(config.dateRange).toBe(dateRange);
       expect(config.timestampValueExpression).toBe('Timestamp');
       // Filtered and unfiltered lookups for the same row must not share a
@@ -282,7 +477,7 @@ describe('DBRowDataPanel', () => {
         }),
       );
 
-      const [config] = mockUseQueriedChartConfig.mock.calls[0];
+      const config = queriedConfig();
       expect(config.timestampValueExpression).toBe('EventDate, EventTime');
     });
 
@@ -305,7 +500,7 @@ describe('DBRowDataPanel', () => {
         }),
       );
 
-      const [config] = mockUseQueriedChartConfig.mock.calls[0];
+      const config = queriedConfig();
       expect(config.dateRange).toBeUndefined();
       expect(config.timestampValueExpression).toBeUndefined();
     });
@@ -322,8 +517,8 @@ describe('DBRowDataPanel', () => {
         }),
       );
 
-      const [, boundedOptions] = mockUseQueriedChartConfig.mock.calls[0];
-      const [, fallbackOptions] = mockUseQueriedChartConfig.mock.calls[1];
+      const boundedOptions = queriedOptions(0);
+      const fallbackOptions = queriedOptions(1);
       expect(boundedOptions.queryKey).not.toEqual(fallbackOptions.queryKey);
     });
   });
@@ -340,15 +535,19 @@ describe('DBRowDataPanel', () => {
     ];
     const ROW = { __hdx_timestamp: '2024-01-01T01:00:00Z' };
 
-    function lookupResult(overrides: Record<string, unknown> = {}) {
-      return {
-        data: { data: [], meta: [], rows: 0, isComplete: true },
+    function lookupResult(
+      data: {
+        data: Record<string, unknown>[];
+        isComplete: boolean;
+      } = { data: [], isComplete: true },
+    ): QueryResult {
+      return fromPartial({
+        data: { meta: [], rows: data.data.length, ...data },
         isLoading: false,
         isPending: false,
         isError: false,
         isSuccess: true,
-        ...overrides,
-      };
+      });
     }
 
     // Dispatch on the query key rather than a call counter, so the mock is
@@ -358,14 +557,16 @@ describe('DBRowDataPanel', () => {
       bounded,
       fallback,
     }: {
-      bounded: ReturnType<typeof lookupResult>;
-      fallback: ReturnType<typeof lookupResult>;
+      bounded: QueryResult;
+      fallback: QueryResult;
     }) {
-      mockUseQueriedChartConfig.mockImplementation((_config, options) =>
-        options.queryKey[options.queryKey.length - 1] === undefined
-          ? fallback
-          : bounded,
-      );
+      mockUseQueriedChartConfig.mockImplementation((_config, options) => {
+        const queryKey = options?.queryKey;
+        if (queryKey == null) {
+          throw new Error('expected a query key');
+        }
+        return queryKey[queryKey.length - 1] === undefined ? fallback : bounded;
+      });
     }
 
     function renderLookup(dateRange?: [Date, Date]) {
@@ -375,8 +576,8 @@ describe('DBRowDataPanel', () => {
     }
 
     function enabledFlags() {
-      const [, boundedOptions] = mockUseQueriedChartConfig.mock.calls[0];
-      const [, fallbackOptions] = mockUseQueriedChartConfig.mock.calls[1];
+      const boundedOptions = queriedOptions(0);
+      const fallbackOptions = queriedOptions(1);
       return {
         bounded: boundedOptions.enabled,
         fallback: fallbackOptions.enabled,
@@ -385,9 +586,7 @@ describe('DBRowDataPanel', () => {
 
     it('does not run when the bounded lookup finds the row', () => {
       mockLookups({
-        bounded: lookupResult({
-          data: { data: [ROW], meta: [], rows: 1, isComplete: true },
-        }),
+        bounded: lookupResult({ data: [ROW], isComplete: true }),
         fallback: lookupResult(),
       });
 
@@ -408,9 +607,7 @@ describe('DBRowDataPanel', () => {
     it('serves the row the bounded lookup missed', () => {
       mockLookups({
         bounded: lookupResult(),
-        fallback: lookupResult({
-          data: { data: [ROW], meta: [], rows: 1, isComplete: true },
-        }),
+        fallback: lookupResult({ data: [ROW], isComplete: true }),
       });
 
       const { result } = renderLookup(DATE_RANGE);
@@ -423,8 +620,10 @@ describe('DBRowDataPanel', () => {
     it('does not run when the bounded lookup errors', () => {
       const error = new Error('boom');
       mockLookups({
-        bounded: lookupResult({
+        bounded: fromPartial({
           data: undefined,
+          isLoading: false,
+          isPending: false,
           isSuccess: false,
           isError: true,
           error,
@@ -452,8 +651,9 @@ describe('DBRowDataPanel', () => {
     it('reports loading while in flight', () => {
       mockLookups({
         bounded: lookupResult(),
-        fallback: lookupResult({
+        fallback: fromPartial({
           data: undefined,
+          isError: false,
           isSuccess: false,
           isLoading: false,
           isPending: true,
@@ -469,9 +669,7 @@ describe('DBRowDataPanel', () => {
     // first chunk must not read as "no such row".
     it('does not run on an incomplete bounded result', () => {
       mockLookups({
-        bounded: lookupResult({
-          data: { data: [], meta: [], rows: 0, isComplete: false },
-        }),
+        bounded: lookupResult({ data: [], isComplete: false }),
         fallback: lookupResult(),
       });
 
@@ -482,9 +680,10 @@ describe('DBRowDataPanel', () => {
   });
 
   describe('__hdx_timestamp_value_<i>', () => {
-    function timestampValueSelects(config: {
-      select: { alias?: string }[];
-    }): { alias?: string }[] {
+    function timestampValueSelects(config: ReturnType<typeof queriedConfig>) {
+      if (typeof config.select === 'string') {
+        throw new Error('expected a select list');
+      }
       return config.select.filter(s =>
         s.alias?.startsWith('__hdx_timestamp_value_'),
       );
@@ -503,7 +702,7 @@ describe('DBRowDataPanel', () => {
         }),
       );
 
-      const [config] = mockUseQueriedChartConfig.mock.calls[0];
+      const config = queriedConfig();
       expect(config.select).toContainEqual({
         valueExpression: 'ObservedTimestamp',
         alias: '__hdx_timestamp',
@@ -526,7 +725,7 @@ describe('DBRowDataPanel', () => {
         useRowData({ source: multiColumnSource, rowId: "id='abc123'" }),
       );
 
-      const [config] = mockUseQueriedChartConfig.mock.calls[0];
+      const config = queriedConfig();
       expect(timestampValueSelects(config)).toEqual([
         { valueExpression: 'EventDate', alias: '__hdx_timestamp_value_0' },
         { valueExpression: 'EventTime', alias: '__hdx_timestamp_value_1' },
@@ -543,7 +742,7 @@ describe('DBRowDataPanel', () => {
         useRowData({ source: sourceWithoutTimestamp, rowId: "id='abc123'" }),
       );
 
-      const [config] = mockUseQueriedChartConfig.mock.calls[0];
+      const config = queriedConfig();
       expect(timestampValueSelects(config)).toEqual([]);
     });
   });

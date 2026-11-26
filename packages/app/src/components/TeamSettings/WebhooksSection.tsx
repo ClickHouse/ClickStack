@@ -1,16 +1,17 @@
 import { Fragment, useMemo, useState } from 'react';
 import { HTTPError } from 'ky';
+import { Separator } from '@clickhouse/click-ui';
 import {
   WebhookApiData,
   WebhookService,
 } from '@hyperdx/common-utils/dist/types';
-import { Button, Divider, Group, Stack, Text, Title } from '@mantine/core';
+import { Button, Group, Stack, Text, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconPencil, IconX } from '@tabler/icons-react';
 
 import api from '@/api';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
+import { useBrandDisplayName } from '@/brand';
 import { useConfirm } from '@/useConfirm';
 import {
   getWebhookServiceConfig,
@@ -100,8 +101,6 @@ export default function WebhooksSection() {
 
   return (
     <>
-      <Text mb="xs">Webhooks</Text>
-
       <Stack>
         {groupedWebhooks.length === 0 ? (
           <Text
@@ -185,7 +184,7 @@ export default function WebhooksSection() {
                           }}
                         />
                       )}
-                      <Divider />
+                      <Separator size="xs" />
                     </Fragment>
                   ))}
                 </Stack>

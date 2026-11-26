@@ -5,9 +5,11 @@
  * file layout stays free to change.
  */
 export {
+  compactTickAnchor,
   formatAxisTick,
   getExpandableYAxisTicks,
   getNiceYAxisTicks,
+  getXAxisTickDateFormat,
   getYAxisTicks,
 } from './axisTicks';
 export {
@@ -24,7 +26,9 @@ export { MAX_TOOLTIP_ROWS, TOOLTIP_POINT_OFFSET_PX } from './constants';
 export { collectMemoChartGradientHexes, MemoChart } from './MemoChart';
 export { TooltipItem } from './TooltipItem';
 export {
+  cappedYAxisUpperBound,
   computeYAxisBounds,
   getLineCurveType,
+  scanStackedYAxisValueRange,
   scanYAxisValueRange,
 } from './useChartScales';

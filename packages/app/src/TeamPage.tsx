@@ -2,27 +2,17 @@ import { ReactNode, useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { SubmitHandler, useForm } from 'react-hook-form';
+import { Badge } from '@clickhouse/click-ui';
 import {
-  Box,
+  Anchor,
   Button,
   Center,
-  Container,
   Group,
   Loader,
-  Stack,
-  Tabs,
   TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import {
-  IconAdjustmentsHorizontal,
-  IconApi,
-  IconDatabase,
-  IconPencil,
-  IconPlug,
-  IconShieldLock,
-  IconUsers,
-} from '@tabler/icons-react';
+import { IconExternalLink, IconPencil } from '@tabler/icons-react';
 
 import { PageHeader } from './components/PageHeader';
 import ApiKeysSection from './components/TeamSettings/ApiKeysSection';
@@ -30,46 +20,56 @@ import ConnectionsSection from './components/TeamSettings/ConnectionsSection';
 import IacMigrationSection from './components/TeamSettings/IacMigrationSection';
 import IntegrationsSection from './components/TeamSettings/IntegrationsSection';
 import McpServerSection from './components/TeamSettings/McpServerSection';
+import OrgApiKeysSection from './components/TeamSettings/OrgApiKeysSection';
 import SecurityPoliciesSection from './components/TeamSettings/SecurityPoliciesSection';
+import {
+  resolveSettingsPage,
+  SETTINGS_PAGES,
+  SettingsPageId,
+} from './components/TeamSettings/settingsPages';
 import SourcesSection from './components/TeamSettings/SourcesSection';
 import TeamMembersSection from './components/TeamSettings/TeamMembersSection';
 import TeamQueryConfigSection from './components/TeamSettings/TeamQueryConfigSection';
-import { usePageTitle } from './theme/ThemeProvider';
+import TeamSettingsNav from './components/TeamSettings/TeamSettingsNav';
+import { useScrollToSetting } from './components/TeamSettings/useScrollToSetting';
 import api from './api';
-import { IS_IAC_EXPORT_ENABLED } from './config';
+import { usePageTitle } from './brand';
+import { IS_LOCAL_MODE } from './config';
 import { APP_CONTENT_SCROLL_CONTAINER_ID, withAppNav } from './layout';
 
-type TeamTab = {
-  value: string;
-  label: string;
-  icon: ReactNode;
-  sections: {
-    id: string;
-    // Always a function of whether this tab is the visible one. Mantine `Tabs`
-    // keeps every panel mounted, so a section that fetches on mount would
-    // otherwise do so on every Team Settings visit. Uniform rather than a
-    // `ReactNode | fn` union: the union let a bare `<Section />` be passed where
-    // the closure form was needed, silently reinstating the eager fetch.
-    content: (active: boolean) => ReactNode;
-  }[];
-};
+import styles from './components/TeamSettings/TeamSettings.module.scss';
 
-function TeamTabContent({
-  sections,
-  active,
-}: {
-  sections: TeamTab['sections'];
-  active: boolean;
-}) {
-  return (
-    <Stack gap="lg" pt="lg">
-      {sections.map(section => (
-        <Box key={section.id} id={section.id}>
-          {section.content(active)}
-        </Box>
-      ))}
-    </Stack>
-  );
+function renderSettingsPage(
+  id: SettingsPageId,
+  allowedAuthMethods: string[],
+): ReactNode {
+  switch (id) {
+    case 'sources':
+      return <SourcesSection />;
+    case 'connections':
+      return <ConnectionsSection />;
+    case 'query-settings':
+      return <TeamQueryConfigSection />;
+    case 'members':
+      return <TeamMembersSection />;
+    case 'security-policies':
+      return (
+        <SecurityPoliciesSection allowedAuthMethods={allowedAuthMethods} />
+      );
+    case 'webhooks':
+      return <IntegrationsSection />;
+    case 'api-keys':
+      return (
+        <ApiKeysSection>
+          {/* Org keys are stored by the API, which local mode doesn't run. */}
+          {!IS_LOCAL_MODE && <OrgApiKeysSection />}
+        </ApiKeysSection>
+      );
+    case 'mcp':
+      return <McpServerSection />;
+    case 'terraform':
+      return <IacMigrationSection />;
+  }
 }
 
 export default function TeamPage() {
@@ -111,160 +111,66 @@ export default function TeamPage() {
     [refetchTeam, setTeamName],
   );
 
-  const tabs: TeamTab[] = [
-    {
-      value: 'data',
-      label: 'Data',
-      icon: <IconDatabase size={16} />,
-      sections: [
-        {
-          id: 'team-data-sources',
-          content: () => <SourcesSection />,
-        },
-        {
-          id: 'team-data-connections',
-          content: () => <ConnectionsSection />,
-        },
-      ],
-    },
-    {
-      value: 'team',
-      label: 'Members',
-      icon: <IconUsers size={16} />,
-      sections: [
-        {
-          id: 'team-members',
-          content: () => <TeamMembersSection />,
-        },
-      ],
-    },
-    ...(hasAllowedAuthMethods
-      ? [
-          {
-            value: 'access',
-            label: 'Access',
-            icon: <IconShieldLock size={16} />,
-            sections: [
-              {
-                id: 'team-access-security-policies',
-                content: () => (
-                  <SecurityPoliciesSection
-                    allowedAuthMethods={allowedAuthMethods}
-                  />
-                ),
-              },
-            ],
-          },
-        ]
-      : []),
-    {
-      value: 'api-agents',
-      label: 'API & Agents',
-      icon: <IconApi size={16} />,
-      sections: [
-        {
-          id: 'team-api-agents-api-keys',
-          content: () => <ApiKeysSection />,
-        },
-        {
-          id: 'team-api-agents-mcp-server',
-          content: () => <McpServerSection />,
-        },
-        ...(IS_IAC_EXPORT_ENABLED
-          ? [
-              {
-                id: 'team-api-agents-iac',
-                content: (active: boolean) => (
-                  <IacMigrationSection active={active} />
-                ),
-              },
-            ]
-          : []),
-      ],
-    },
-    {
-      value: 'integrations',
-      label: 'Integrations',
-      icon: <IconPlug size={16} />,
-      sections: [
-        {
-          id: 'team-integrations-webhooks',
-          content: () => <IntegrationsSection />,
-        },
-      ],
-    },
-    {
-      value: 'advanced',
-      label: 'Query Settings',
-      icon: <IconAdjustmentsHorizontal size={16} />,
-      sections: [
-        {
-          id: 'team-advanced-query-settings',
-          content: () => <TeamQueryConfigSection />,
-        },
-      ],
-    },
-  ];
-
+  const pages = SETTINGS_PAGES.filter(
+    page => !page.requiresAuthPolicy || hasAllowedAuthMethods,
+  );
   const queryTab =
     typeof router.query.tab === 'string' ? router.query.tab : null;
-  const activeTab = tabs.some(tab => tab.value === queryTab)
-    ? queryTab
-    : tabs[0]?.value;
+  // asPath carries the hash on the client; the server render never sees it.
+  const hash = router.asPath.split('#')[1] ?? '';
+  const { id: activeId, legacyAnchor } = resolveSettingsPage(
+    pages,
+    queryTab,
+    hash,
+  );
+  const activePage = pages.find(page => page.id === activeId);
+  const [jumpNonce, setJumpNonce] = useState(0);
+  // Start waiting for the field only once the team has loaded and the page renders.
+  useScrollToSetting(
+    team != null && activePage?.items?.some(item => item.anchor === hash)
+      ? hash
+      : null,
+    jumpNonce,
+  );
 
+  // Rewrite old and missing `?tab=` values to the page being shown. Waits for
+  // the team so a security policies link isn't redirected before it loads.
   useEffect(() => {
-    if (!router.isReady || !activeTab || queryTab === activeTab) {
-      return;
-    }
-
-    // Preserve any hash (e.g. `#source-<id>` deep links consumed by
-    // SourcesList) — this replace only normalizes the `tab` param and
-    // must not strip other parts of the URL.
-    const hash = window.location.hash.slice(1);
+    if (!router.isReady || team == null) return;
+    if (queryTab === activeId && !legacyAnchor) return;
     void router.replace(
       {
         pathname: router.pathname,
-        query: {
-          ...router.query,
-          tab: activeTab,
-        },
-        hash: hash || undefined,
+        query: { ...router.query, tab: activeId },
+        // Keep anchors pages consume themselves, like SourcesList's `#source-<id>`.
+        hash: legacyAnchor ? undefined : hash || undefined,
       },
       undefined,
-      {
-        shallow: true,
-        scroll: false,
-      },
+      { shallow: true, scroll: false },
     );
-  }, [activeTab, queryTab, router]);
+  }, [activeId, hash, legacyAnchor, queryTab, router, team]);
 
-  const handleTabChange = useCallback(
-    (value: string | null) => {
-      if (!value || value === activeTab) {
-        return;
-      }
-
-      document.getElementById(APP_CONTENT_SCROLL_CONTAINER_ID)?.scrollTo({
-        top: 0,
-      });
-
-      void router.replace(
-        {
-          pathname: router.pathname,
-          query: {
-            ...router.query,
-            tab: value,
-          },
-        },
-        undefined,
-        {
-          shallow: true,
-          scroll: false,
-        },
-      );
-    },
-    [activeTab, router],
-  );
+  const selectPage = (id: SettingsPageId, anchor?: string) => {
+    if (anchor) {
+      // A new hash re-runs the jump on its own; only a repeat pick needs the nonce.
+      if (anchor === hash && id === activeId) setJumpNonce(n => n + 1);
+    } else if (id === activeId) {
+      return;
+    } else {
+      document
+        .getElementById(APP_CONTENT_SCROLL_CONTAINER_ID)
+        ?.scrollTo({ top: 0 });
+    }
+    void router.push(
+      {
+        pathname: router.pathname,
+        query: { ...router.query, tab: id },
+        hash: anchor,
+      },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  };
 
   return (
     <div className="TeamPage" data-testid="team-page">
@@ -337,38 +243,54 @@ export default function TeamPage() {
           )}
         </div>
       </PageHeader>
-      <div>
-        <Container size="lg" py="md">
-          {isLoading && (
-            <Center mt="xl">
-              <Loader color="dimmed" />
-            </Center>
-          )}
-          {!isLoading && team != null && (
-            <Tabs value={activeTab} onChange={handleTabChange}>
-              <Tabs.List>
-                {tabs.map(tab => (
-                  <Tabs.Tab
-                    key={tab.value}
-                    value={tab.value}
-                    leftSection={tab.icon}
-                  >
-                    {tab.label}
-                  </Tabs.Tab>
-                ))}
-              </Tabs.List>
-              {tabs.map(tab => (
-                <Tabs.Panel key={tab.value} value={tab.value}>
-                  <TeamTabContent
-                    sections={tab.sections}
-                    active={tab.value === activeTab}
-                  />
-                </Tabs.Panel>
-              ))}
-            </Tabs>
-          )}
-        </Container>
-      </div>
+      {isLoading && (
+        <Center mt="xl">
+          <Loader color="dimmed" />
+        </Center>
+      )}
+      {!isLoading && team != null && activePage != null && (
+        <div className={styles.layout}>
+          <TeamSettingsNav
+            pages={pages}
+            activeId={activeId}
+            onSelect={selectPage}
+          />
+          <main
+            className={styles.content}
+            aria-labelledby="team-settings-page-title"
+            data-testid={`team-settings-page-${activeId}`}
+          >
+            <header className={styles.pageHeading}>
+              <h2 id="team-settings-page-title" className={styles.pageTitle}>
+                {activePage.label}
+                {activePage.badge && (
+                  <Badge size="sm" text={activePage.badge} state="info" />
+                )}
+              </h2>
+              <p className={styles.pageDescription}>{activePage.description}</p>
+              {activePage.links && (
+                <Group gap="md" mt={4}>
+                  {activePage.links.map(link => (
+                    <Anchor
+                      key={link.href}
+                      href={link.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      size="sm"
+                    >
+                      <Group gap={4} wrap="nowrap">
+                        {link.label}
+                        <IconExternalLink size={14} aria-hidden />
+                      </Group>
+                    </Anchor>
+                  ))}
+                </Group>
+              )}
+            </header>
+            {renderSettingsPage(activeId, allowedAuthMethods)}
+          </main>
+        </div>
+      )}
     </div>
   );
 }

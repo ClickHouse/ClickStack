@@ -9,10 +9,11 @@ import {
   isPromqlSavedChartConfig,
   isRawSqlSavedChartConfig,
 } from '@hyperdx/common-utils/dist/guards';
+import { configUsesReferenceVariable } from '@hyperdx/common-utils/dist/referenceVariables';
 import { isRangeThresholdType } from '@hyperdx/common-utils/dist/types';
 import { groupBy } from 'lodash';
-import { Types } from 'mongoose';
-import { z } from 'zod';
+import { type FilterQuery, Types } from 'mongoose';
+import { z } from 'zod/v3';
 
 import { recordOnboardingTaskCompletion } from '@/controllers/user';
 import type { ObjectId } from '@/models';
@@ -97,6 +98,11 @@ export const validateAlertInput = async (
 
     // The alert checker cannot evaluate these tiles, so the alert would never run.
     if (tile.config != null && !savedChartConfigSupportsAlerts(tile.config)) {
+      if (configUsesReferenceVariable(tile.config)) {
+        throw new Api400Error(
+          'Alerts are not supported on tiles that use a data source or connection variable',
+        );
+      }
       if (isPromqlSavedChartConfig(tile.config)) {
         throw new Api400Error('Alerts are not supported on PromQL tiles');
       }
@@ -389,8 +395,11 @@ export const updateAlert = async (
   return alert;
 };
 
-export const countAlerts = async (teamId: ObjectId) => {
-  return Alert.countDocuments({ team: teamId });
+export const countAlerts = async (
+  teamId: ObjectId,
+  filter: FilterQuery<IAlert> = {},
+) => {
+  return Alert.countDocuments({ ...filter, team: teamId });
 };
 
 export const getAlertById = async (
@@ -401,6 +410,34 @@ export const getAlertById = async (
     _id: alertId,
     team: teamId,
   });
+};
+
+export const silenceAlert = async (
+  alertId: ObjectId | string,
+  teamId: ObjectId | string,
+  userId: ObjectId,
+  until: Date,
+) => {
+  const alert = await getAlertById(alertId, teamId);
+  if (!alert) {
+    return null;
+  }
+  alert.silenced = { by: userId, at: new Date(), until };
+  await alert.save();
+  return alert;
+};
+
+export const unsilenceAlert = async (
+  alertId: ObjectId | string,
+  teamId: ObjectId | string,
+) => {
+  const alert = await getAlertById(alertId, teamId);
+  if (!alert) {
+    return null;
+  }
+  alert.silenced = undefined;
+  await alert.save();
+  return alert;
 };
 
 export const getTeamDashboardAlertsByDashboardAndTile = async (
@@ -502,12 +539,18 @@ const DISPLAY_REF_POPULATE = [
   { path: 'dashboard', select: 'name tags tiles.id tiles.config.name' },
 ];
 
+/** Populate (and project) the search or dashboard reference of an alert document in place */
+export const populateAlertDisplayRefs = (
+  alert: NonNullable<Awaited<ReturnType<typeof getAlertById>>>,
+) => alert.populate<AlertWithDisplayRefs>(DISPLAY_REF_POPULATE);
+
 /** Get alerts, with a populated (and projected) search or dashboard reference */
 export const getAlertsWithDisplayRefs = async (
   teamId: ObjectId,
   { limit, offset }: { limit: number; offset: number },
+  filter: FilterQuery<IAlert> = {},
 ) => {
-  return Alert.find({ team: teamId })
+  return Alert.find({ ...filter, team: teamId })
     .sort({ _id: 1 })
     .skip(offset)
     .limit(limit)

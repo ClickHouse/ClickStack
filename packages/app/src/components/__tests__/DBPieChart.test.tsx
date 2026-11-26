@@ -1,5 +1,7 @@
+import { isPromqlChartConfig } from '@hyperdx/common-utils/dist/guards';
 import { DisplayType, PromqlReducer } from '@hyperdx/common-utils/dist/types';
 import { screen, within } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import DateRangeIndicator from '@/components/charts/DateRangeIndicator';
 import { DBPieChart } from '@/components/DBPieChart';
@@ -36,7 +38,7 @@ jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
 jest.mock('../charts/DateRangeIndicator', () => jest.fn(() => null));
 
 describe('DBPieChart', () => {
-  const mockUseQueriedChartConfig = useQueriedChartConfig as jest.Mock;
+  const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
 
   const baseTestConfig = {
     dateRange: [new Date(), new Date()] as [Date, Date],
@@ -50,25 +52,29 @@ describe('DBPieChart', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: {
-        data: [{ test1: 1234, test2: 5678 }],
-        meta: [
-          { name: 'test1', type: 'UInt64' },
-          { name: 'test2', type: 'UInt64' },
-        ],
-      },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: {
+          data: [{ test1: 1234, test2: 5678 }],
+          meta: [
+            { name: 'test1', type: 'UInt64' },
+            { name: 'test2', type: 'UInt64' },
+          ],
+        },
+        isLoading: false,
+        isError: false,
+      }),
+    );
   });
 
   it('handles loading state correctly', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      }),
+    );
 
     renderWithMantine(<DBPieChart config={baseTestConfig} />);
     expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
@@ -87,12 +93,14 @@ describe('DBPieChart', () => {
     };
 
     it('pulses while a refetch is showing the previous result', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: groupedData,
-        isLoading: false,
-        isPlaceholderData: true,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: groupedData,
+          isLoading: false,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBPieChart config={baseTestConfig} />);
       expect(screen.getByTestId('pie-chart-container')).toHaveClass(
@@ -105,12 +113,14 @@ describe('DBPieChart', () => {
     });
 
     it('does not pulse once fresh data has loaded', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: groupedData,
-        isLoading: false,
-        isPlaceholderData: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: groupedData,
+          isLoading: false,
+          isPlaceholderData: false,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBPieChart config={baseTestConfig} />);
       expect(screen.getByTestId('pie-chart-container')).not.toHaveClass(
@@ -118,28 +128,31 @@ describe('DBPieChart', () => {
       );
     });
 
-    it('pulses the empty state while a refetch is running', () => {
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: { data: [], meta: groupedData.meta },
-        isLoading: false,
-        isPlaceholderData: true,
-        isError: false,
-      });
+    it('shows loading instead of the stale empty result during a refetch', () => {
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: { data: [], meta: groupedData.meta },
+          isLoading: false,
+          isPlaceholderData: true,
+          isError: false,
+        }),
+      );
 
       renderWithMantine(<DBPieChart config={baseTestConfig} />);
-      expect(screen.getByText('No data found within time range.')).toHaveClass(
-        'effect-pulse',
-      );
+      expect(screen.getByText('Loading Chart Data...')).toBeInTheDocument();
+      expect(screen.queryByText('No data found within time range.')).toBeNull();
     });
   });
 
   it('handles error state correctly', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: true,
-      error: new Error('Test error'),
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: false,
+        isError: true,
+        error: new Error('Test error'),
+      }),
+    );
 
     renderWithMantine(<DBPieChart config={baseTestConfig} />);
     expect(screen.getByText(/Error loading chart/)).toBeInTheDocument();
@@ -153,21 +166,23 @@ describe('DBPieChart', () => {
   });
 
   it('should render pie chart legend with labels', () => {
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: {
-        data: [
-          { status: 'success', count: 100 },
-          { status: 'error', count: 50 },
-          { status: 'timeout', count: 25 },
-        ],
-        meta: [
-          { name: 'status', type: 'String' },
-          { name: 'count', type: 'UInt64' },
-        ],
-      },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: {
+          data: [
+            { status: 'success', count: 100 },
+            { status: 'error', count: 50 },
+            { status: 'timeout', count: 25 },
+          ],
+          meta: [
+            { name: 'status', type: 'String' },
+            { name: 'count', type: 'UInt64' },
+          ],
+        },
+        isLoading: false,
+        isError: false,
+      }),
+    );
 
     renderWithMantine(<DBPieChart config={baseTestConfig} />);
     const legend = screen.getByTestId('pie-chart-legend');
@@ -183,17 +198,19 @@ describe('DBPieChart', () => {
       count: 100 - i,
     }));
 
-    mockUseQueriedChartConfig.mockReturnValue({
-      data: {
-        data: manyGroups,
-        meta: [
-          { name: 'status', type: 'String' },
-          { name: 'count', type: 'UInt64' },
-        ],
-      },
-      isLoading: false,
-      isError: false,
-    });
+    mockUseQueriedChartConfig.mockReturnValue(
+      fromPartial({
+        data: {
+          data: manyGroups,
+          meta: [
+            { name: 'status', type: 'String' },
+            { name: 'count', type: 'UInt64' },
+          ],
+        },
+        isLoading: false,
+        isError: false,
+      }),
+    );
 
     renderWithMantine(<DBPieChart config={baseTestConfig} />);
     const legend = screen.getByTestId('pie-chart-legend');
@@ -205,9 +222,11 @@ describe('DBPieChart', () => {
 
   it('passes the same config to useMVOptimizationExplanation, useQueriedChartConfig, and MVOptimizationIndicator', () => {
     // Mock useSource to return a source so MVOptimizationIndicator is rendered
-    jest.mocked(useSource).mockReturnValue({
-      data: { id: 'test-source', name: 'Test Source' },
-    } as any);
+    jest.mocked(useSource).mockReturnValue(
+      fromPartial({
+        data: { id: 'test-source', name: 'Test Source' },
+      }),
+    );
 
     renderWithMantine(<DBPieChart config={baseTestConfig} />);
 
@@ -244,25 +263,27 @@ describe('DBPieChart', () => {
     };
 
     // Mock useMVOptimizationExplanation to return an optimized config with aligned date range
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: {
-          ...config,
-          dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
-        },
-        explanations: [
-          {
-            success: true,
-            mvConfig: {
-              minGranularity: '1 minute',
-              tableName: 'metrics_rollup_1m',
-            },
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: {
+            ...config,
+            dateRange: [alignedStartDate, alignedEndDate] as [Date, Date],
           },
-        ],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+          explanations: [
+            {
+              success: true,
+              mvConfig: {
+                minGranularity: '1 minute',
+                tableName: 'metrics_rollup_1m',
+              },
+            },
+          ],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBPieChart config={config} />);
 
@@ -285,14 +306,16 @@ describe('DBPieChart', () => {
 
   it('does not render DateRangeIndicator when MV optimization has no optimized date range', () => {
     // Mock useMVOptimizationExplanation to return data without an optimized config
-    jest.mocked(useMVOptimizationExplanation).mockReturnValue({
-      data: {
-        optimizedConfig: undefined,
-        explanations: [],
-      },
-      isLoading: false,
-      isPlaceholderData: false,
-    } as any);
+    jest.mocked(useMVOptimizationExplanation).mockReturnValue(
+      fromPartial({
+        data: {
+          optimizedConfig: undefined,
+          explanations: [],
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      }),
+    );
 
     renderWithMantine(<DBPieChart config={baseTestConfig} />);
 
@@ -317,9 +340,9 @@ describe('DBPieChart', () => {
       renderWithMantine(<DBPieChart config={promqlConfig} />);
 
       const queriedConfig = mockUseQueriedChartConfig.mock.calls[0][0];
-      expect(queriedConfig.promqlExpression).toEqual([
-        { expression: 'up', reducer: PromqlReducer.LastNotNull },
-      ]);
+      expect(
+        isPromqlChartConfig(queriedConfig) && queriedConfig.promqlExpression,
+      ).toEqual([{ expression: 'up', reducer: PromqlReducer.LastNotNull }]);
       expect(queriedConfig.granularity).toBe('1 minute');
     });
 
@@ -347,27 +370,30 @@ describe('DBPieChart', () => {
       );
 
       const [first, second] = mockUseQueriedChartConfig.mock.calls.map(
-        ([, options]) => options.queryKey,
+        ([, options]) => options?.queryKey,
       );
+      expect(first).toBeDefined();
       expect(second).toEqual(first);
     });
 
     const mockThreeSeries = () =>
-      mockUseQueriedChartConfig.mockReturnValue({
-        data: {
-          data: [
-            { series_name: 'cart', value: 2 },
-            { series_name: 'checkout', value: 7 },
-            { series_name: 'ad', value: 4 },
-          ],
-          meta: [
-            { name: 'series_name', type: 'String' },
-            { name: 'value', type: 'Float64' },
-          ],
-        },
-        isLoading: false,
-        isError: false,
-      });
+      mockUseQueriedChartConfig.mockReturnValue(
+        fromPartial({
+          data: {
+            data: [
+              { series_name: 'cart', value: 2 },
+              { series_name: 'checkout', value: 7 },
+              { series_name: 'ad', value: 4 },
+            ],
+            meta: [
+              { name: 'series_name', type: 'String' },
+              { name: 'value', type: 'Float64' },
+            ],
+          },
+          isLoading: false,
+          isError: false,
+        }),
+      );
 
     const legendLabels = () =>
       within(screen.getByTestId('pie-chart-legend'))

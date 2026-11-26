@@ -181,3 +181,34 @@ export function supportsPrometheusHttpApi(
 ): boolean {
   return isClickHouseVersionAtLeast(version, PROMETHEUS_HTTP_API_MIN);
 }
+
+/**
+ * First release whose Prometheus HTTP API serves `/api/v1/labels` and
+ * `/api/v1/label/<name>/values`. Older handlers answer both with a 400
+ * ("not implemented").
+ */
+const PROMETHEUS_LABELS_API_MIN: ClickHouseVersion = [26, 9, 0, 0];
+
+export function supportsPrometheusLabelsApi(
+  version: ClickHouseVersion | undefined,
+): boolean {
+  return isClickHouseVersionAtLeast(version, PROMETHEUS_LABELS_API_MIN);
+}
+
+/**
+ * First release whose `timeSeriesSelector()` takes a `return_columns`
+ * argument. From 26.11 it is required, and the 5-argument
+ * `('db', 'table', selector, min, max)` call reads 'db' as the table.
+ */
+const TIME_SERIES_SELECTOR_RETURN_COLUMNS_MIN: ClickHouseVersion = [
+  26, 11, 0, 0,
+];
+
+export function timeSeriesSelectorTakesReturnColumns(
+  version: ClickHouseVersion | undefined,
+): boolean {
+  return isClickHouseVersionAtLeast(
+    version,
+    TIME_SERIES_SELECTOR_RETURN_COLUMNS_MIN,
+  );
+}

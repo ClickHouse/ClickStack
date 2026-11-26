@@ -1,7 +1,60 @@
+import { ClickHouseError } from '@clickhouse/client-common';
+import { ClickHouseQueryError } from '@hyperdx/common-utils/dist/clickhouse';
+import { fromAny } from '@total-typescript/shoehorn';
+
 import {
   formatMatrixResponse,
   formatVectorResponse,
+  getSeriesSelectorCondition,
+  isNoTimeRangesTableError,
 } from '@/controllers/timeseriesEngine';
+
+describe('getSeriesSelectorCondition', () => {
+  const selectorSql = (takesReturnColumns: boolean) =>
+    getSeriesSelectorCondition({
+      databaseName: 'db',
+      tableName: 'ts',
+      match: ['up'],
+      takesReturnColumns,
+    }).sql;
+
+  it("passes return_columns 'samples' from ClickHouse 26.11", () => {
+    expect(selectorSql(true)).toContain("), 'samples'\n");
+  });
+
+  it('keeps the 5-argument call before 26.11', () => {
+    expect(selectorSql(false)).not.toContain('samples');
+  });
+});
+
+describe('isNoTimeRangesTableError', () => {
+  // The shape ClickhouseClient throws: the server's error wrapped as `cause`.
+  const queryError = (type: string) =>
+    Object.assign(new ClickHouseQueryError('query failed', 'DESCRIBE ...'), {
+      cause: new ClickHouseError({ message: 'failed', code: '0', type }),
+    });
+
+  it.each([
+    ['UNKNOWN_FUNCTION', 'servers before 26.10'],
+    ['UNKNOWN_TABLE', '26.10 and later'],
+  ])('accepts %s (%s)', type => {
+    expect(isNoTimeRangesTableError(queryError(type))).toBe(true);
+  });
+
+  it('rejects any other ClickHouse error', () => {
+    expect(isNoTimeRangesTableError(queryError('TIMEOUT_EXCEEDED'))).toBe(
+      false,
+    );
+  });
+
+  it('rejects an error without a ClickHouse type, whatever its message', () => {
+    expect(
+      isNoTimeRangesTableError(
+        new Error('Unknown table function timeSeriesTimeRanges'),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe('formatMatrixResponse', () => {
   it('converts prometheusQueryRange rows into Prometheus matrix shape', () => {
@@ -17,7 +70,7 @@ describe('formatMatrixResponse', () => {
         ] as [string | number, number][],
       },
     ];
-    expect(formatMatrixResponse(rows as any)).toEqual([
+    expect(formatMatrixResponse(fromAny(rows))).toEqual([
       {
         metric: { __name__: 'http_requests_total', method: 'GET' },
         values: [
@@ -39,7 +92,7 @@ describe('formatVectorResponse', () => {
       { tags: [['service', 'api']], timestamp: 1700000000, value: 42 },
       { tags: [], timestamp: '2023-11-14T22:13:20.000Z', value: 3 },
     ];
-    expect(formatVectorResponse(rows as any)).toEqual([
+    expect(formatVectorResponse(fromAny(rows))).toEqual([
       { metric: { service: 'api' }, value: [1700000000, '42'] },
       { metric: {}, value: [1700000000, '3'] },
     ]);

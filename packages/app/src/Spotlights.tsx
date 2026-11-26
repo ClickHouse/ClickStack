@@ -11,13 +11,13 @@ import {
   IconLayout,
   IconLogs,
   IconSearch,
-  IconSettings,
 } from '@tabler/icons-react';
 
-import { useBrandDisplayName, useLogomark } from './theme/ThemeProvider';
+import { useBrandDisplayName, useLogomark } from './brand';
 import { IS_K8S_DASHBOARD_ENABLED } from './config';
 import { useDashboards } from './dashboard';
 import { useSavedSearches } from './savedSearch';
+import { useSettingsSpotlightActions } from './spotlightSettingsActions';
 
 import '@mantine/spotlight/styles.css';
 
@@ -28,6 +28,7 @@ export const useSpotlightActions = () => {
 
   const { data: logViewsData } = useSavedSearches();
   const { data: dashboardsData } = useDashboards();
+  const settingsActions = useSettingsSpotlightActions();
 
   const actions = React.useMemo<SpotlightActionData[]>(() => {
     const logViews = logViewsData ?? [];
@@ -172,16 +173,6 @@ export const useSpotlightActions = () => {
         },
       },
       {
-        id: 'team-settings',
-        group: 'Menu',
-        leftSection: <IconSettings size={16} />,
-        label: 'Team Settings',
-
-        onClick: () => {
-          router.push('/team');
-        },
-      },
-      {
         id: 'documentation',
         group: 'Menu',
         leftSection: <IconHelpCircle size={16} />,
@@ -206,10 +197,18 @@ export const useSpotlightActions = () => {
           );
         },
       },
+      ...settingsActions,
     );
 
     return logViewActions;
-  }, [brandName, logomark, logViewsData, dashboardsData, router]);
+  }, [
+    brandName,
+    logomark,
+    logViewsData,
+    dashboardsData,
+    router,
+    settingsActions,
+  ]);
 
   return { actions };
 };

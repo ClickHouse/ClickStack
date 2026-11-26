@@ -14,6 +14,7 @@ import { Button, Divider, Flex, Loader, Modal, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconArrowLeft } from '@tabler/icons-react';
 
+import { useBrandDisplayName } from '@/brand';
 import { ConnectionForm } from '@/components/ConnectionForm';
 import {
   IS_CLICKHOUSE_BUILD,
@@ -21,6 +22,7 @@ import {
   IS_PROMQL_ENABLED,
 } from '@/config';
 import {
+  fetchPrometheusHttpApiSupport,
   useConnections,
   useCreateConnection,
   useUpdateConnection,
@@ -35,7 +37,6 @@ import {
   useSources,
   useUpdateSource,
 } from '@/source';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 
 import { TableSourceForm } from './Sources/SourceForm';
 import { SourcesList } from './Sources/SourcesList';
@@ -536,13 +537,20 @@ function OnboardingModalComponent({
         // Create PromQL Source if a TimeSeries table is available
         if (timeSeriesTable) {
           try {
+            // Pin the source to the HTTP API only when the server answers it
+            // now. Otherwise leave it on Auto, which keeps checking.
+            const servesHttpApi =
+              await fetchPrometheusHttpApiSupport(connectionId);
             const promqlSource = await createSourceMutation.mutateAsync({
               source: {
                 kind: SourceKind.Promql,
-                name: 'PromQL',
+                name: 'Time Series',
                 connection: connectionId,
                 from: timeSeriesTable,
                 timestampValueExpression: PROMQL_TIMESTAMP_EXPRESSION,
+                ...(servesHttpApi
+                  ? { promqlBackend: 'clickhouse-http' as const }
+                  : {}),
               },
             });
             createdSources.push(promqlSource);

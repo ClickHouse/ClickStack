@@ -1,14 +1,23 @@
-import type {
-  OnClickDashboard,
-  OnClickExternal,
-  OnClickSearch,
+import {
+  type OnClickDashboard,
+  type OnClickExternal,
+  type OnClickSearch,
+  SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { notifications } from '@mantine/notifications';
 import { renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { useDashboards } from '@/dashboard';
 import { useOnClickLinkBuilder } from '@/hooks/useOnClickLinkBuilder';
 import { useSources } from '@/source';
+import { TimeZoneOverrideProvider } from '@/timeZoneOverride';
+
+let mockTz: string | null = null;
+jest.mock('nuqs', () => ({
+  parseAsString: {},
+  useQueryState: () => [mockTz, jest.fn()],
+}));
 
 jest.mock('@/source', () => ({
   useSources: jest.fn(),
@@ -30,21 +39,25 @@ const dateRange: [Date, Date] = [
 describe('useOnClickLinkBuilder', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.mocked(useSources).mockReturnValue({
-      data: [
-        {
-          id: 'src_1',
-          name: 'HyperDX Logs',
-          kind: 'log',
-          connection: 'c',
-          from: { databaseName: 'd', tableName: 't' },
-          timestampValueExpression: 'Timestamp',
-        },
-      ],
-    } as any);
-    jest.mocked(useDashboards).mockReturnValue({
-      data: [{ id: 'dash_1', name: 'API Latency Drilldown', tiles: [] }],
-    } as any);
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: [
+          {
+            id: 'src_1',
+            name: 'HyperDX Logs',
+            kind: SourceKind.Log,
+            connection: 'c',
+            from: { databaseName: 'd', tableName: 't' },
+            timestampValueExpression: 'Timestamp',
+          },
+        ],
+      }),
+    );
+    jest.mocked(useDashboards).mockReturnValue(
+      fromPartial({
+        data: [{ id: 'dash_1', name: 'API Latency Drilldown', tiles: [] }],
+      }),
+    );
   });
 
   it('returns null when no onClick is configured', () => {
@@ -84,6 +97,37 @@ describe('useOnClickLinkBuilder', () => {
     const action = result.current!({});
     expect(action.description).toBe('Open dashboard "API Latency Drilldown"');
     expect(action.url!.startsWith('/dashboards/dash_1?')).toBe(true);
+  });
+
+  it("adds the page's time zone override to search and dashboard links", () => {
+    mockTz = 'Asia/Tokyo';
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <TimeZoneOverrideProvider>{children}</TimeZoneOverrideProvider>
+    );
+    const tzOf = (onClick: OnClickSearch | OnClickDashboard) => {
+      const { result } = renderHook(
+        () => useOnClickLinkBuilder({ onClick, dateRange }),
+        { wrapper },
+      );
+      const url = result.current!({}).url!;
+      return new URLSearchParams(url.split('?')[1]).get('tz');
+    };
+
+    expect(
+      tzOf({
+        type: 'search',
+        target: { mode: 'id', id: 'src_1' },
+        whereLanguage: 'sql',
+      }),
+    ).toBe('Asia/Tokyo');
+    expect(
+      tzOf({
+        type: 'dashboard',
+        target: { mode: 'id', id: 'dash_1' },
+        whereLanguage: 'sql',
+      }),
+    ).toBe('Asia/Tokyo');
+    mockTz = null;
   });
 
   it('resolves an external link to an absolute URL marked external', () => {
@@ -156,7 +200,7 @@ describe('useOnClickLinkBuilder', () => {
 
     // Clicking the failing row fires the toast.
     const preventDefault = jest.fn();
-    action.onClickError!({ preventDefault } as any);
+    action.onClickError!(fromPartial({ preventDefault }));
     expect(preventDefault).toHaveBeenCalledTimes(1);
     expect(jest.mocked(notifications.show)).toHaveBeenCalledWith(
       expect.objectContaining({

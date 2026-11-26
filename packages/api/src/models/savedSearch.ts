@@ -1,6 +1,6 @@
 import { SavedSearchSchema } from '@hyperdx/common-utils/dist/types';
 import mongoose, { Schema } from 'mongoose';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 type ObjectId = mongoose.Types.ObjectId;
 
@@ -19,8 +19,10 @@ type ExternalSavedSearch = {
   updatedAt?: string;
 };
 
-export interface ISavedSearch
-  extends Omit<z.infer<typeof SavedSearchSchema>, 'source'> {
+export interface ISavedSearch extends Omit<
+  z.infer<typeof SavedSearchSchema>,
+  'source'
+> {
   _id: ObjectId;
   team: ObjectId;
   source: ObjectId;
@@ -41,10 +43,12 @@ const savedSearchSchema = new Schema<
   ISavedSearchMethods
 >(
   {
+    // Immutable: `team` pins a saved search to its owning tenant.
     team: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
       ref: 'Team',
+      immutable: true,
     },
 
     name: String,
@@ -59,10 +63,12 @@ const savedSearchSchema = new Schema<
     },
     tags: [String],
     filters: [{ type: mongoose.Schema.Types.Mixed }],
+    // Immutable: ownership attribution is set once at creation.
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: false,
+      immutable: true,
     },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,

@@ -1,16 +1,16 @@
 {
   "name": "@hyperdx/cli",
-  "version": "0.8.0",
+  "version": "0.9.2",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hyperdxio/hyperdx.git",
+    "url": "git+https://github.com/ClickHouse/ClickStack.git",
     "directory": "packages/cli"
   },
-  "homepage": "https://github.com/hyperdxio/hyperdx/tree/main/packages/cli#readme",
+  "homepage": "https://github.com/ClickHouse/ClickStack/tree/main/packages/cli#readme",
   "bugs": {
-    "url": "https://github.com/hyperdxio/hyperdx/issues"
+    "url": "https://github.com/ClickHouse/ClickStack/issues"
   },
   "publishConfig": {
     "access": "public"
@@ -33,7 +33,7 @@
     "compile:linux": "bun build src/cli.tsx --compile --target=bun-linux-x64 --outfile dist/hdx-linux-x64",
     "compile:macos": "bun build src/cli.tsx --compile --target=bun-darwin-arm64 --outfile dist/hdx-darwin-arm64",
     "compile:macos-x64": "bun build src/cli.tsx --compile --target=bun-darwin-x64 --outfile dist/hdx-darwin-x64",
-    "lint": "npx eslint . --ext .ts,.tsx --max-warnings 0",
+    "lint": "node ../../scripts/ci/oxlint-warnings.mjs --max-warnings 0 && yarn run -T oxfmt --check 'src/**/*.{ts,tsx}'",
     "ci:build": "tsup",
     "ci:lint": "yarn lint && yarn tsc --noEmit",
     "ci:unit": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand --ci --passWithNoTests",
@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@clickhouse/client": "1.23.0-head.fae5998.1",
-    "@hyperdx/common-utils": "^0.33.0",
+    "@hyperdx/common-utils": "^0.36.1",
     "@jest/globals": "^30.2.0",
     "@types/crypto-js": "^4.2.2",
     "@types/jest": "^29.5.14",

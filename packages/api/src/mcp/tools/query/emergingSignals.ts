@@ -1,9 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
-import { trimToolResponse } from '@/utils/trimToolResponse';
+import { type Reduction, trimToolResponse } from '@/utils/trimToolResponse';
 
 import { parseTimeRange } from './helpers';
 import { mineWindowPatterns, normalizeTemplate } from './runEventPatterns';
@@ -75,6 +75,17 @@ const emergingSignalsSchema = z.object({
         'if omitted (Body for logs, SpanName for traces). ' +
         'Example: "Body", "SpanName", "SpanAttributes[\'http.url\']".',
     ),
+  maxBodyChars: z
+    .number()
+    .int()
+    .min(1)
+    .max(1_000_000)
+    .optional()
+    .describe(
+      'Mine only the first maxBodyChars characters of each value, e.g. 1000 for long ' +
+        'stack traces or request dumps. Long values are cut in the query, so less data ' +
+        'is read, and each sample is the cut value.',
+    ),
   currentStartTime: z
     .string()
     .describe(
@@ -130,12 +141,15 @@ const emergingSignalsSchema = z.object({
 
 // ─── Tool registration ───────────────────────────────────────────────────────
 
+export const EMERGING_SIGNALS_REDUCTIONS: Reduction[] = [
+  { path: 'emerging[].pattern', maxChars: 2000 },
+  { path: 'disappeared[].pattern', maxChars: 2000 },
+];
+
 export function registerEmergingSignals({
   context,
   registerTool,
 }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_emerging_signals',
     {
@@ -199,20 +213,21 @@ export function registerEmergingSignals({
         where: input.where,
         whereLanguage: input.whereLanguage,
         bodyExpression: input.bodyExpression,
+        maxBodyChars: input.maxBodyChars,
         sampleSize: input.sampleSize,
         trendBuckets: 0,
       };
 
       const [curRes, baseRes] = await Promise.all([
         mineWindowPatterns(
-          teamId.toString(),
+          context,
           input.sourceId,
           cur.startDate,
           cur.endDate,
           opts,
         ),
         mineWindowPatterns(
-          teamId.toString(),
+          context,
           input.sourceId,
           base.startDate,
           base.endDate,
@@ -342,7 +357,13 @@ export function registerEmergingSignals({
           'the threshold — a valid finding.',
       };
 
-      const { data, isTrimmed } = trimToolResponse(output);
+      const {
+        data,
+        isTrimmed,
+        notes: trimNotes,
+      } = trimToolResponse(output, undefined, {
+        reductions: EMERGING_SIGNALS_REDUCTIONS,
+      });
       return {
         content: [
           {
@@ -352,6 +373,7 @@ export function registerEmergingSignals({
                 ? {
                     ...data,
                     note: 'Trimmed for context size — lower topN or narrow windows.',
+                    trimNotes,
                   }
                 : data,
               null,

@@ -1,9 +1,14 @@
-import { Box, Button, Card, Divider, Group, Text } from '@mantine/core';
+import { ReactNode } from 'react';
+import { Box, Button, Stack } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 
 import api from '@/api';
 import { RevealSnippet } from '@/components/RevealSnippet/RevealSnippet';
 import { useConfirm } from '@/useConfirm';
+
+import { SettingsRow } from './SettingsBlock';
+
+import styles from './TeamSettings.module.scss';
 
 // The reveal Input fills its container, so cap its width here at the parent.
 const KEY_FIELD_MAX_WIDTH = 420;
@@ -30,7 +35,8 @@ function APIKeyCopyButton({
   );
 }
 
-export default function ApiKeysSection() {
+/** `children` renders below the team's single keys. */
+export default function ApiKeysSection({ children }: { children?: ReactNode }) {
   const { data: team, refetch: refetchTeam } = api.useTeam();
   const { data: me, isLoading: isLoadingMe } = api.useMe();
   const rotateTeamApiKey = api.useRotateTeamApiKey();
@@ -107,12 +113,13 @@ export default function ApiKeysSection() {
   };
 
   return (
-    <Box id="api_keys" data-testid="api-keys-section">
-      <Text size="md">API keys</Text>
-      <Divider my="md" />
-      <Card mb="md">
-        <Text mb="md">Ingestion API key</Text>
-        <Group gap="xs" align="flex-start" wrap="nowrap">
+    <Stack id="api_keys" data-testid="api-keys-section" gap={40}>
+      <div className={styles.rowList}>
+        <SettingsRow
+          id="setting-ingestion-api-key"
+          title="Ingestion API key"
+          description="Used by collectors and SDKs to send telemetry."
+        >
           {team?.apiKey && (
             <Box flex={1} miw={0} maw={KEY_FIELD_MAX_WIDTH}>
               <APIKeyCopyButton
@@ -125,37 +132,39 @@ export default function ApiKeysSection() {
           {hasAdminAccess && (
             <Button
               data-testid="rotate-api-key-button"
+              aria-label="Rotate ingestion API key"
               variant="danger"
               onClick={onRotateTeamApiKey}
             >
-              Rotate API key
+              Rotate key
             </Button>
           )}
-        </Group>
-      </Card>
-      {!isLoadingMe && me != null && (
-        <Card>
-          <Card.Section p="md">
-            <Text mb="md">Personal API access key</Text>
-            <Group gap="xs" align="flex-start" wrap="nowrap">
-              <Box flex={1} miw={0} maw={KEY_FIELD_MAX_WIDTH}>
-                <APIKeyCopyButton
-                  value={me.accessKey}
-                  dataTestId="personal-access-key"
-                  ariaLabel="Personal API access key"
-                />
-              </Box>
-              <Button
-                data-testid="rotate-access-key-button"
-                variant="danger"
-                onClick={onRotateAccessKey}
-              >
-                Rotate access key
-              </Button>
-            </Group>
-          </Card.Section>
-        </Card>
-      )}
-    </Box>
+        </SettingsRow>
+        {!isLoadingMe && me != null && (
+          <SettingsRow
+            id="setting-personal-access-key"
+            title="Personal access key"
+            description="Acts as you for MCP, the API, and Terraform."
+          >
+            <Box flex={1} miw={0} maw={KEY_FIELD_MAX_WIDTH}>
+              <APIKeyCopyButton
+                value={me.accessKey}
+                dataTestId="personal-access-key"
+                ariaLabel="Personal API access key"
+              />
+            </Box>
+            <Button
+              data-testid="rotate-access-key-button"
+              aria-label="Rotate personal access key"
+              variant="danger"
+              onClick={onRotateAccessKey}
+            >
+              Rotate key
+            </Button>
+          </SettingsRow>
+        )}
+      </div>
+      {children}
+    </Stack>
   );
 }

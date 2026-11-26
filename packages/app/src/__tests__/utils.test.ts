@@ -2,12 +2,14 @@ import {
   ChartPaletteTokenSchema,
   ColorCondition,
   NumericUnit,
+  SourceKind,
+  TLogSource,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
-import { SortingState } from '@tanstack/react-table';
 import { act, renderHook } from '@testing-library/react';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
-import { MetricsDataType, NumberFormat } from '@/types';
+import { NumberFormat } from '@/types';
 import * as utils from '@/utils';
 import {
   COLORS,
@@ -22,14 +24,13 @@ import {
   getColorFromCSSToken,
   getLogSeverityLevel,
   getMetricTableName,
+  getTableConnectionsForConnection,
   isColumnInSelect,
   mapKeyBy,
   mergePath,
   orderByAfterRemovingSelectItem,
-  orderByStringToSortingState,
   parseTimestampToMs,
   resolveConditionalColor,
-  sortingStateToOrderByString,
   stripTrailingSlash,
   useQueryHistory,
   withMapKeyAlias,
@@ -128,104 +129,94 @@ describe('getMetricTableName', () => {
     name: 'test-source',
     timestampValueExpression: 'timestamp',
     connection: 'test-connection',
-    kind: 'metric' as const,
+    kind: SourceKind.Metric,
   });
 
   // Source with metric tables
-  const createSourceWithMetrics = () => ({
-    ...createBaseSource(),
-    metricTables: {
-      gauge: 'gauge_table',
-      counter: 'counter_table',
-    },
-  });
+  // `counter` is not a MetricsDataType, so this source is deliberately invalid.
+  const createSourceWithMetrics = (): TSource =>
+    fromAny({
+      ...createBaseSource(),
+      metricTables: {
+        gauge: 'gauge_table',
+        counter: 'counter_table',
+      },
+    });
 
   it('returns the default table name when metricType is null', () => {
-    const source = createSourceWithMetrics() as unknown as TSource;
+    const source = createSourceWithMetrics();
 
     expect(getMetricTableName(source)).toBe('');
     expect(getMetricTableName(source, undefined)).toBe('');
   });
 
   it('returns the specific metric table when metricType is provided', () => {
-    const source = createSourceWithMetrics() as unknown as TSource;
+    const source = createSourceWithMetrics();
 
-    expect(getMetricTableName(source, 'gauge' as MetricsDataType)).toBe(
-      'gauge_table',
-    );
-    expect(getMetricTableName(source, 'counter' as MetricsDataType)).toBe(
-      'counter_table',
-    );
+    expect(getMetricTableName(source, 'gauge')).toBe('gauge_table');
+    expect(getMetricTableName(source, 'counter')).toBe('counter_table');
   });
 
   it('handles case insensitivity for metric types', () => {
-    const source = createSourceWithMetrics() as unknown as TSource;
+    const source = createSourceWithMetrics();
 
-    expect(getMetricTableName(source, 'GAUGE' as MetricsDataType)).toBe(
-      'gauge_table',
-    );
-    expect(getMetricTableName(source, 'Counter' as MetricsDataType)).toBe(
-      'counter_table',
-    );
+    expect(getMetricTableName(source, 'GAUGE')).toBe('gauge_table');
+    expect(getMetricTableName(source, 'Counter')).toBe('counter_table');
   });
 
   it('returns undefined when the requested metric type does not exist', () => {
-    const source = {
+    const source = fromPartial<TSource>({
       ...createBaseSource(),
       metricTables: {
         gauge: 'gauge_table',
       },
-    } as unknown as TSource;
+    });
 
-    expect(
-      getMetricTableName(source, 'histogram' as MetricsDataType),
-    ).toBeUndefined();
+    expect(getMetricTableName(source, 'histogram')).toBeUndefined();
   });
 
   it('handles sources without metricTables property', () => {
-    const source = createBaseSource() as unknown as TSource;
+    const source = fromPartial<TSource>(createBaseSource());
 
     expect(getMetricTableName(source)).toBe('');
-    expect(
-      getMetricTableName(source, 'gauge' as MetricsDataType),
-    ).toBeUndefined();
+    expect(getMetricTableName(source, 'gauge')).toBeUndefined();
   });
 });
 
 describe('getAllMetricTables', () => {
   const createMetricSource = (metricTables: Record<string, string>): TSource =>
-    ({
-      kind: 'metric' as const,
+    fromAny({
+      kind: SourceKind.Metric,
       from: { databaseName: 'test_db', tableName: '' },
       connection: 'test-conn',
       id: 'test-id',
       name: 'test',
       timestampValueExpression: 'timestamp',
       metricTables,
-    }) as unknown as TSource;
+    });
 
   it('returns empty array for non-metric source', () => {
-    const source = {
-      kind: 'log' as const,
+    const source = fromPartial<TSource>({
+      kind: SourceKind.Log,
       from: { databaseName: 'test_db', tableName: 'logs' },
       connection: 'test-conn',
       id: 'test-id',
       name: 'test',
       timestampValueExpression: 'timestamp',
-    } as unknown as TSource;
+    });
 
     expect(getAllMetricTables(source)).toEqual([]);
   });
 
   it('returns empty array when metricTables is undefined', () => {
-    const source = {
-      kind: 'metric' as const,
+    const source = fromPartial<TSource>({
+      kind: SourceKind.Metric,
       from: { databaseName: 'test_db', tableName: '' },
       connection: 'test-conn',
       id: 'test-id',
       name: 'test',
       timestampValueExpression: 'timestamp',
-    } as unknown as TSource;
+    });
 
     expect(getAllMetricTables(source)).toEqual([]);
   });
@@ -303,10 +294,64 @@ describe('getAllMetricTables', () => {
   });
 });
 
+describe('getTableConnectionsForConnection', () => {
+  const logSource: TLogSource = {
+    kind: SourceKind.Log,
+    id: 'logs',
+    name: 'Logs',
+    connection: 'conn1',
+    from: { databaseName: 'otel', tableName: 'logs' },
+    timestampValueExpression: 'Timestamp',
+    defaultTableSelectExpression: 'Body',
+    materializedViews: [
+      {
+        databaseName: 'otel',
+        tableName: 'logs_mv',
+        dimensionColumns: 'ServiceName',
+        minGranularity: '1 minute',
+        timestampColumn: 'Timestamp',
+        aggregatedColumns: [],
+      },
+    ],
+  };
+  const otherConnectionSource: TLogSource = {
+    ...logSource,
+    id: 'other',
+    connection: 'conn2',
+    from: { databaseName: 'other', tableName: 'logs' },
+    materializedViews: undefined,
+  };
+  const disabledSource: TLogSource = {
+    ...logSource,
+    id: 'disabled',
+    disabled: true,
+    from: { databaseName: 'otel', tableName: 'disabled' },
+  };
+
+  const tables = (connectionId: string | undefined) =>
+    getTableConnectionsForConnection(
+      [logSource, otherConnectionSource, disabledSource],
+      connectionId,
+    ).map(tc => `${tc.connectionId}:${tc.databaseName}.${tc.tableName}`);
+
+  it('lists source tables and materialized views on the connection', () => {
+    expect(tables('conn1')).toEqual(['conn1:otel.logs', 'conn1:otel.logs_mv']);
+  });
+
+  it('skips disabled sources and other connections', () => {
+    expect(tables('conn2')).toEqual(['conn2:other.logs']);
+  });
+
+  it('returns nothing without sources or a connection', () => {
+    expect(getTableConnectionsForConnection(undefined, 'conn1')).toEqual([]);
+    expect(tables(undefined)).toEqual([]);
+  });
+});
+
 describe('formatNumber', () => {
   it('handles undefined/null values', () => {
     expect(formatNumber(undefined)).toBe('N/A');
-    expect(formatNumber(null as any)).toBe('N/A');
+    expect(formatNumber(fromAny(null))).toBe('N/A');
   });
 
   it('returns string representation when no format options provided', () => {
@@ -1057,10 +1102,10 @@ describe('stripTrailingSlash', () => {
   });
 
   it('should throw an error for non-string values', () => {
-    expect(() => stripTrailingSlash(123 as any)).toThrow(
+    expect(() => stripTrailingSlash(fromAny(123))).toThrow(
       'URL must be a non-empty string',
     );
-    expect(() => stripTrailingSlash({} as any)).toThrow(
+    expect(() => stripTrailingSlash(fromAny({}))).toThrow(
       'URL must be a non-empty string',
     );
   });
@@ -1149,99 +1194,6 @@ describe('useQueryHistory', () => {
       setQueryHistory('   '); // empty after trim
     });
     expect(mockSetItem).not.toHaveBeenCalled();
-  });
-});
-
-describe('sortingStateToOrderByString', () => {
-  it('returns undefined for null input', () => {
-    expect(sortingStateToOrderByString(null)).toBeUndefined();
-  });
-
-  it('returns undefined for empty array', () => {
-    const sortingState: SortingState = [];
-    expect(sortingStateToOrderByString(sortingState)).toBeUndefined();
-  });
-
-  it('converts sorting state with desc: false to ASC order', () => {
-    const sortingState: SortingState = [{ id: 'timestamp', desc: false }];
-    expect(sortingStateToOrderByString(sortingState)).toBe('timestamp ASC');
-  });
-
-  it('converts sorting state with desc: true to DESC order', () => {
-    const sortingState: SortingState = [{ id: 'timestamp', desc: true }];
-    expect(sortingStateToOrderByString(sortingState)).toBe('timestamp DESC');
-  });
-
-  it('handles column names with special characters', () => {
-    const sortingState: SortingState = [{ id: 'user_count', desc: false }];
-    expect(sortingStateToOrderByString(sortingState)).toBe('user_count ASC');
-  });
-});
-
-describe('orderByStringToSortingState', () => {
-  it('returns undefined for undefined input', () => {
-    expect(orderByStringToSortingState(undefined)).toBeUndefined();
-  });
-
-  it('returns undefined for empty string', () => {
-    expect(orderByStringToSortingState('')).toBeUndefined();
-  });
-
-  it('converts "column ASC" to sorting state with desc: false', () => {
-    const result = orderByStringToSortingState('timestamp ASC');
-    expect(result).toEqual([{ id: 'timestamp', desc: false }]);
-  });
-
-  it('converts "column DESC" to sorting state with desc: true', () => {
-    const result = orderByStringToSortingState('timestamp DESC');
-    expect(result).toEqual([{ id: 'timestamp', desc: true }]);
-  });
-
-  it('handles case insensitive direction keywords', () => {
-    expect(orderByStringToSortingState('col asc')).toEqual([
-      { id: 'col', desc: false },
-    ]);
-    expect(orderByStringToSortingState('col Asc')).toEqual([
-      { id: 'col', desc: false },
-    ]);
-    expect(orderByStringToSortingState('col desc')).toEqual([
-      { id: 'col', desc: true },
-    ]);
-    expect(orderByStringToSortingState('col Desc')).toEqual([
-      { id: 'col', desc: true },
-    ]);
-    expect(orderByStringToSortingState('col DESC')).toEqual([
-      { id: 'col', desc: true },
-    ]);
-  });
-
-  it('returns undefined for invalid format without direction', () => {
-    expect(orderByStringToSortingState('timestamp')).toBeUndefined();
-  });
-
-  it('returns undefined for invalid format with wrong number of parts', () => {
-    expect(orderByStringToSortingState('col name ASC')).toBeUndefined();
-  });
-
-  it('returns undefined for invalid direction keyword', () => {
-    expect(orderByStringToSortingState('col INVALID')).toBeUndefined();
-  });
-
-  it('handles column names with underscores', () => {
-    const result = orderByStringToSortingState('user_count DESC');
-    expect(result).toEqual([{ id: 'user_count', desc: true }]);
-  });
-
-  it('handles column names with numbers', () => {
-    const result = orderByStringToSortingState('col123 ASC');
-    expect(result).toEqual([{ id: 'col123', desc: false }]);
-  });
-
-  it('round-trips correctly with sortingStateToOrderByString', () => {
-    const originalSort: SortingState = [{ id: 'service_name', desc: true }];
-    const orderByString = sortingStateToOrderByString(originalSort);
-    const roundTripSort = orderByStringToSortingState(orderByString);
-    expect(roundTripSort).toEqual(originalSort);
   });
 });
 
@@ -1371,6 +1323,40 @@ describe('mergePath', () => {
     it('emits dotted backtick-quoted accessor', () => {
       expect(mergePath(['BodyJson', 'service', 'name'], ['BodyJson'])).toBe(
         'BodyJson.`service`.`name`',
+      );
+    });
+
+    // Without array positions a numeric segment is a JSON object key, as
+    // before: facet keys come from the JSON schema, where `1` is a real key.
+    it('keeps a numeric segment as a quoted key when no array positions are given', () => {
+      expect(mergePath(['Body', 'events', '0', 'id'], ['Body'])).toBe(
+        'Body.`events`.`0`.`id`',
+      );
+    });
+
+    // The row viewer knows which segments index into an array. A JSON array
+    // element is addressed with a 1-based subscript; the quoted key
+    // (`.`0``) matches nothing, so the filter silently returns no rows.
+    it('emits a 1-based subscript for segments marked as array positions', () => {
+      expect(
+        mergePath(
+          ['message', 'events', '0', 'detail', 'parameters', '1', 'value'],
+          ['message'],
+          [],
+          new Set([2, 5]),
+        ),
+      ).toBe('message.`events`[1].`detail`.`parameters`[2].`value`');
+    });
+
+    it('chains subscripts for nested arrays', () => {
+      expect(
+        mergePath(['m', 'grid', '0', '1', 'x'], ['m'], [], new Set([2, 3])),
+      ).toBe('m.`grid`[1][2].`x`');
+    });
+
+    it('keeps a numeric object key quoted when it is not marked as an array position', () => {
+      expect(mergePath(['m', 'counts', '200', 'n'], ['m'], [], new Set())).toBe(
+        'm.`counts`.`200`.`n`',
       );
     });
   });
@@ -1623,19 +1609,23 @@ describe('getColorFromCSSToken', () => {
     // value (and shouldn't be relied upon by JS callers).
     const getComputedStyleSpy = jest
       .spyOn(global, 'getComputedStyle')
-      .mockReturnValue({
-        getPropertyValue: () => '#should-be-ignored',
-      } as unknown as CSSStyleDeclaration);
+      .mockReturnValue(
+        fromPartial<CSSStyleDeclaration>({
+          getPropertyValue: () => '#should-be-ignored',
+        }),
+      );
 
     expect(getColorFromCSSToken('chart-blue')).toBe(COLORS[0]);
     expect(getComputedStyleSpy).not.toHaveBeenCalled();
   });
 
   it('returns the CSS variable value for semantic tokens when provided', () => {
-    jest.spyOn(global, 'getComputedStyle').mockReturnValue({
-      getPropertyValue: (name: string) =>
-        name === '--color-chart-success' ? '#theme-green' : '',
-    } as unknown as CSSStyleDeclaration);
+    jest.spyOn(global, 'getComputedStyle').mockReturnValue(
+      fromPartial<CSSStyleDeclaration>({
+        getPropertyValue: (name: string) =>
+          name === '--color-chart-success' ? '#theme-green' : '',
+      }),
+    );
 
     expect(getColorFromCSSToken('chart-success')).toBe('#theme-green');
   });
@@ -1645,8 +1635,7 @@ describe('getColorFromCSSToken', () => {
       throw new Error('getComputedStyle unavailable');
     });
 
-    // Defaults to HyperDX in jsdom because the document has no
-    // theme-clickstack class.
+    // Falls back to the semantic palette when the CSS var cannot be read.
     expect(getColorFromCSSToken('chart-success')).toBe('#3ca951');
     expect(getColorFromCSSToken('chart-warning')).toBe('#efb118');
     expect(getColorFromCSSToken('chart-error')).toBe('#ff725c');

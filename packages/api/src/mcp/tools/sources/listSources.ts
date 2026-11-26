@@ -10,15 +10,13 @@ import {
   quoteIdentifierIfNeeded,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import {
-  getConnectionById,
-  getConnectionsByTeam,
-} from '@/controllers/connection';
-import { getSources } from '@/controllers/sources';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
-import type { ToolRegistrar } from '@/mcp/tools/types';
+import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
+import { getMcpConnection, getMcpConnections } from '@/mcp/utils/connections';
+import { PROMQL_SOURCE_USAGE } from '@/mcp/utils/promql';
+import { getVisibleMcpSources } from '@/mcp/utils/sources';
 import { runWithTimeout } from '@/mcp/utils/timeout';
 import logger from '@/utils/logger';
 
@@ -74,10 +72,10 @@ class PreviewClickhouseClient extends ClickhouseClient {
  * carries metricTables + the discovery nextSteps).
  */
 async function attachMetricNamePreviews({
-  teamId,
+  context,
   entries,
 }: {
-  teamId: string;
+  context: McpContext;
   entries: Array<{
     summary: Record<string, unknown>;
     databaseName: string;
@@ -99,7 +97,9 @@ async function attachMetricNamePreviews({
   >();
   await Promise.all(
     connectionIds.map(async connectionId => {
-      const connection = await getConnectionById(teamId, connectionId, true);
+      const connection = await getMcpConnection(context, connectionId, {
+        selectPassword: true,
+      });
       if (!connection) return;
       const clickhouseClient = new PreviewClickhouseClient({
         host: connection.host,
@@ -224,9 +224,9 @@ export function registerListSources({
       inputSchema: z.object({}),
     },
     async () => {
-      const [sources, connections] = await Promise.all([
-        getSources(teamId.toString()),
-        getConnectionsByTeam(teamId.toString()),
+      const [visibleSources, connections] = await Promise.all([
+        getVisibleMcpSources(context),
+        getMcpConnections(context),
       ]);
 
       const metricPreviewEntries: Array<{
@@ -237,7 +237,13 @@ export function registerListSources({
         metricTables: Record<string, string>;
       }> = [];
 
-      const sourceSummaries = sources.map(s => {
+      const prometheusEndpointIds = new Set(
+        connections
+          .filter(c => c.isPrometheusEndpoint)
+          .map(c => c._id.toString()),
+      );
+
+      const sourceSummaries = visibleSources.map(s => {
         const meta: Record<string, unknown> = {
           id: s._id.toString(),
           name: s.name,
@@ -250,10 +256,20 @@ export function registerListSources({
         // be. An unqualified name only resolves in the connection's default
         // database. Metric sources query the tables in metricTables, even
         // when from.tableName is set, so they get the database instead.
-        if (s.kind !== SourceKind.Metric && s.from.tableName) {
-          meta.table = `${quoteIdentifierIfNeeded(s.from.databaseName)}.${quoteIdentifierIfNeeded(s.from.tableName)}`;
-        } else {
-          meta.database = quoteIdentifierIfNeeded(s.from.databaseName);
+        // A PromQL source on a Prometheus endpoint has no ClickHouse table:
+        // its database and table are placeholders, so it gets neither.
+        const onPrometheusEndpoint =
+          s.kind === SourceKind.Promql &&
+          prometheusEndpointIds.has(s.connection.toString());
+        if (s.kind === SourceKind.Promql) {
+          meta.backend = onPrometheusEndpoint ? 'prometheus' : 'clickhouse';
+        }
+        if (!onPrometheusEndpoint) {
+          if (s.kind !== SourceKind.Metric && s.from.tableName) {
+            meta.table = `${quoteIdentifierIfNeeded(s.from.databaseName)}.${quoteIdentifierIfNeeded(s.from.tableName)}`;
+          } else {
+            meta.database = quoteIdentifierIfNeeded(s.from.databaseName);
+          }
         }
 
         if (s.section) {
@@ -314,7 +330,7 @@ export function registerListSources({
       // Best-effort: never let preview sampling fail or stall the catalog.
       try {
         await attachMetricNamePreviews({
-          teamId: teamId.toString(),
+          context,
           entries: metricPreviewEntries,
         });
       } catch (e) {
@@ -341,6 +357,9 @@ export function registerListSources({
                 'quantify impact (request/error counters), and rule resource saturation in or out ' +
                 '(cpu/memory gauges).',
             }
+          : {}),
+        ...(visibleSources.some(s => s.kind === SourceKind.Promql)
+          ? { promqlUsage: PROMQL_SOURCE_USAGE }
           : {}),
         nextStep:
           'Call clickstack_describe_source with a sourceId above to get the full column schema, ' +

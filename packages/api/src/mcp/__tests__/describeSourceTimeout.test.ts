@@ -12,6 +12,11 @@ jest.mock('@/controllers/connection', () => ({
 jest.mock('@/clickhouse', () => ({ ClickhouseClient: jest.fn() }));
 jest.mock('@hyperdx/common-utils/dist/core/metadata', () => ({
   getMetadata: () => mockMetadata,
+  tcFromSource: jest.requireActual('@hyperdx/common-utils/dist/core/metadata')
+    .tcFromSource,
+}));
+jest.mock('@/controllers/promql', () => ({
+  getPromqlLabelCatalog: jest.fn(),
 }));
 jest.mock('@/mcp/tools/sources/metricNames', () => ({
   sampleMetricNamesWithLookback: jest.fn(),
@@ -21,8 +26,10 @@ jest.mock('@/utils/trimToolResponse', () => ({
 }));
 
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 
 import { getConnectionById } from '@/controllers/connection';
+import { getPromqlLabelCatalog } from '@/controllers/promql';
 import { getSource } from '@/controllers/sources';
 import {
   DESCRIBE_BACKSTOP_MS,
@@ -30,7 +37,7 @@ import {
   registerDescribeSource,
 } from '@/mcp/tools/sources/describeSource';
 import { sampleMetricNamesWithLookback } from '@/mcp/tools/sources/metricNames';
-import type { ToolRegistrar, ToolResult } from '@/mcp/tools/types';
+import type { ToolResult } from '@/mcp/tools/types';
 
 const COLUMNS = [
   { name: 'Timestamp', type: 'DateTime64(9)' },
@@ -58,6 +65,13 @@ const metricSource = {
   metricTables: { gauge: 'otel_metrics_gauge', sum: 'otel_metrics_sum' },
 };
 
+const promqlSource = {
+  ...traceSource,
+  kind: SourceKind.Promql,
+  timestampValueExpression: 'timestamp',
+  from: { databaseName: 'default', tableName: 'metrics_ts' },
+};
+
 const never = () => new Promise<never>(() => {});
 
 const rejectOnAbort = (signal: AbortSignal) =>
@@ -68,13 +82,15 @@ const rejectOnAbort = (signal: AbortSignal) =>
 function getHandler() {
   let handler: ((args: { sourceId: string }) => Promise<ToolResult>) | null =
     null;
-  registerDescribeSource({
-    server: {},
-    context: { teamId: 'team-1', userId: 'user-1' },
-    registerTool: (_name: string, _config: unknown, h: typeof handler) => {
-      handler = h;
-    },
-  } as unknown as ToolRegistrar);
+  registerDescribeSource(
+    fromAny({
+      server: {},
+      context: { teamId: 'team-1', userId: 'user-1', promqlEnabled: true },
+      registerTool: (_name: string, _config: unknown, h: typeof handler) => {
+        handler = h;
+      },
+    }),
+  );
   return handler!;
 }
 
@@ -89,16 +105,14 @@ const parse = (result: ToolResult) => JSON.parse(result.content[0].text);
 describe('clickstack_describe_source deadline', () => {
   beforeEach(() => {
     jest.useFakeTimers();
-    jest
-      .mocked(getSource)
-      .mockResolvedValue(
-        traceSource as unknown as Awaited<ReturnType<typeof getSource>>,
-      );
-    jest.mocked(getConnectionById).mockResolvedValue({
-      host: 'http://localhost:8123',
-      username: 'default',
-      password: '',
-    } as unknown as Awaited<ReturnType<typeof getConnectionById>>);
+    jest.mocked(getSource).mockResolvedValue(fromAny(traceSource));
+    jest.mocked(getConnectionById).mockResolvedValue(
+      fromPartial({
+        host: 'http://localhost:8123',
+        username: 'default',
+        password: '',
+      }),
+    );
     mockMetadata.getColumns.mockResolvedValue(COLUMNS);
     mockMetadata.getMapKeys.mockResolvedValue(['http.method']);
     mockMetadata.getAllKeyValues.mockResolvedValue([
@@ -284,11 +298,7 @@ describe('clickstack_describe_source deadline', () => {
 
   describe('metric sources', () => {
     beforeEach(() => {
-      jest
-        .mocked(getSource)
-        .mockResolvedValue(
-          metricSource as unknown as Awaited<ReturnType<typeof getSource>>,
-        );
+      jest.mocked(getSource).mockResolvedValue(fromAny(metricSource));
       mockMetadata.getColumns.mockResolvedValue([
         { name: 'TimeUnix', type: 'DateTime64(9)' },
         { name: 'MetricName', type: 'LowCardinality(String)' },
@@ -351,6 +361,57 @@ describe('clickstack_describe_source deadline', () => {
 
       expect(source.partial).toBe(true);
       expect(source.skippedStages).toEqual(['metricNames']);
+    });
+  });
+
+  describe('PromQL sources', () => {
+    beforeEach(() => {
+      jest
+        .mocked(getSource)
+        // @ts-expect-error mock source only has the fields describe_source reads
+        .mockResolvedValue(promqlSource);
+    });
+
+    it('looks the connection up through the MCP connection helper', async () => {
+      jest.mocked(getPromqlLabelCatalog).mockResolvedValue({
+        backend: 'clickhouse',
+        labelNames: [],
+        metricNames: [],
+      });
+
+      await runWithClock(0);
+
+      const { getConnection } = jest.mocked(getPromqlLabelCatalog).mock
+        .calls[0][0];
+      await getConnection!('conn-1', { selectPassword: true });
+      expect(getConnectionById).toHaveBeenCalledWith('team-1', 'conn-1', true);
+    });
+
+    it('aborts the label lookup at the deadline', async () => {
+      jest
+        .mocked(getPromqlLabelCatalog)
+        .mockImplementation(({ signal }) => rejectOnAbort(signal!));
+
+      const result = await runWithClock(DESCRIBE_TIMEOUT_MS);
+
+      expect(result.isError).toBeFalsy();
+      const output = parse(result);
+      expect(output.partial).toBe(true);
+      expect(output.source.config).toMatchObject({ kind: SourceKind.Promql });
+    });
+
+    it('returns the source config at the backstop when the lookup hangs', async () => {
+      jest.mocked(getPromqlLabelCatalog).mockImplementation(never);
+
+      const result = await runWithClock(
+        DESCRIBE_TIMEOUT_MS + DESCRIBE_BACKSTOP_MS,
+      );
+
+      expect(result.isError).toBeFalsy();
+      const output = parse(result);
+      expect(output.partial).toBe(true);
+      expect(output.error).toContain('timed out');
+      expect(output.source.config).toMatchObject({ kind: SourceKind.Promql });
     });
   });
 });

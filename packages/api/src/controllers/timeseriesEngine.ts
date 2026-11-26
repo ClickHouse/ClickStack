@@ -3,17 +3,23 @@ import {
   chSql,
   concatChSql,
 } from '@hyperdx/common-utils/dist/clickhouse';
-import { supportsPrometheusHttpApi } from '@hyperdx/common-utils/dist/core/clickhouseVersion';
+import {
+  supportsPrometheusHttpApi,
+  supportsPrometheusLabelsApi,
+  timeSeriesSelectorTakesReturnColumns,
+} from '@hyperdx/common-utils/dist/core/clickhouseVersion';
 import {
   Metadata,
   MetadataCache,
 } from '@hyperdx/common-utils/dist/core/metadata';
+import { promqlSelectorMetricName } from '@hyperdx/common-utils/dist/core/promqlSelector';
 import {
   PrometheusMatrixResult,
   PrometheusVectorResult,
 } from '@hyperdx/common-utils/dist/types';
 
 import { ClickhouseClient } from '@/clickhouse';
+import { getClickHouseErrorType } from '@/utils/clickhouseErrors';
 import logger from '@/utils/logger';
 
 export const PROMETHEUS_MAX_EXECUTION_SEC = 30;
@@ -28,13 +34,34 @@ export type TimeSeriesTagsQueryArgs = {
   endMs?: number;
   limit?: number;
   match?: string[];
+  /** Cancels the DISTINCT query; the tags-table column lookup is not cancellable. */
+  signal?: AbortSignal;
 };
 
 /**
- * Indicates whether the tags inner table associated with the given TimeSeries table
- * includes the optional `min_time` and `max_time` columns.
+ * What a table without a time ranges table answers (version 7 or earlier, or
+ * store_time_ranges off): servers before 26.10 have no timeSeriesTimeRanges()
+ * (UNKNOWN_FUNCTION), newer ones reject the table (UNKNOWN_TABLE). Any other
+ * error is unexpected.
+ *
+ * 26.10 also answers UNKNOWN_TABLE when the TimeSeries table itself is
+ * missing. That case already failed, and warned, on the Tags probe that
+ * timeSeriesTimeBounds runs first, so treating it as expected here hides
+ * nothing.
  */
-async function timeSeriesTagsTableHasTimeBounds({
+export const isNoTimeRangesTableError = (e: unknown): boolean => {
+  const type = getClickHouseErrorType(e);
+  return type === 'UNKNOWN_FUNCTION' || type === 'UNKNOWN_TABLE';
+};
+
+/**
+ * Where the given TimeSeries table keeps each series' time range, if anywhere:
+ * - `tags`: the `min_time`/`max_time` columns of the tags inner table (schema
+ *   version 7 or earlier, with `store_min_time_and_max_time` on);
+ * - `timeRanges`: the time ranges inner table (version 8 and later, with
+ *   `store_time_ranges` on, the default from ClickHouse 26.10).
+ */
+async function timeSeriesTimeBounds({
   metadata,
   connectionId,
   database,
@@ -44,24 +71,32 @@ async function timeSeriesTagsTableHasTimeBounds({
   connectionId: string;
   database: string;
   table: string;
-}): Promise<boolean> {
-  try {
-    const columns = await metadata.getTimeSeriesTableColumns({
-      connectionId,
-      databaseName: database,
-      tableName: table,
-      innerTableType: 'Tags',
-    });
-
-    const columnNames = new Set(columns.map(column => column.name));
-    return columnNames.has('min_time') && columnNames.has('max_time');
-  } catch (e) {
-    logger.warn(
-      { err: e, database, table },
-      'Failed to check if TimeSeries tags table has time bounds columns',
-    );
-    return false;
+}): Promise<'tags' | 'timeRanges' | undefined> {
+  // Tags first: a version 7 table returns there without a second query.
+  for (const [innerTableType, bounds] of [
+    ['Tags', 'tags'],
+    ['TimeRanges', 'timeRanges'],
+  ] as const) {
+    try {
+      const columns = await metadata.getTimeSeriesTableColumns({
+        connectionId,
+        databaseName: database,
+        tableName: table,
+        innerTableType,
+      });
+      const columnNames = new Set(columns.map(column => column.name));
+      if (columnNames.has('min_time') && columnNames.has('max_time'))
+        return bounds;
+    } catch (e) {
+      if (innerTableType === 'TimeRanges' && isNoTimeRangesTableError(e))
+        continue;
+      logger.warn(
+        { err: e, database, table, innerTableType },
+        'Failed to check if TimeSeries table has time bounds',
+      );
+    }
   }
+  return undefined;
 }
 
 // `timeSeriesSelector()` requires both bounds, so we define the minimum and maximum possible times
@@ -73,21 +108,27 @@ const TIMESERIES_MAX_TIME_MS = 10413791999999; // 2299-12-31T23:59:59.999Z
  * Returns a predicate keeping only the series matched by at least one of
  * the given `match` selectors.
  */
-function getSeriesSelectorCondition({
+export function getSeriesSelectorCondition({
   databaseName,
   tableName,
   match,
   startMs,
   endMs,
+  takesReturnColumns,
 }: {
   databaseName: string;
   tableName: string;
   match: string[];
   startMs?: number;
   endMs?: number;
+  /** ClickHouse 26.11+ requires the `return_columns` argument. */
+  takesReturnColumns: boolean;
 }): ChSql {
   const minTime = { Int64: startMs ?? TIMESERIES_MIN_TIME_MS };
   const maxTime = { Int64: endMs ?? TIMESERIES_MAX_TIME_MS };
+  // Only `id` is read. 'samples' matches the bucketed layout that 26.11 tables
+  // use; 'timestamp_and_value' would unfold every bucket with arrayJoin.
+  const returnColumns = takesReturnColumns ? chSql`, 'samples'` : chSql``;
   const idsPerSelector = match.map(
     selector => chSql`
       SELECT id
@@ -96,11 +137,20 @@ function getSeriesSelectorCondition({
         ${{ String: tableName }},
         ${{ String: selector }},
         fromUnixTimestamp64Milli(${minTime}),
-        fromUnixTimestamp64Milli(${maxTime})
+        fromUnixTimestamp64Milli(${maxTime})${returnColumns}
       )`,
   );
 
-  return chSql`id IN (${concatChSql(' UNION DISTINCT ', idsPerSelector)})`;
+  const ids = chSql`id IN (${concatChSql(' UNION DISTINCT ', idsPerSelector)})`;
+  // The tags table is sorted by metric name, so `id IN (...)` alone reads every
+  // tags row. When each selector names its metric, say so: same rows, but only
+  // those metrics' part of the table is read.
+  const names = match
+    .map(promqlSelectorMetricName)
+    .filter((n): n is string => n != null);
+  if (names.length < match.length) return ids;
+  const list = [...new Set(names)].map(n => chSql`${{ String: n }}`);
+  return chSql`metric_name IN (${concatChSql(', ', list)}) AND ${ids}`;
 }
 
 /**
@@ -120,10 +170,11 @@ async function getSeriesFilterConditions({
   const selectors = match?.length ? match : undefined;
   if (startMs == null && endMs == null && selectors == null) return [];
 
-  // Both filters lean on min_time/max_time, which the tags inner table carries
-  // only when the table was created with store_min_time_and_max_time on.
+  // Both filters lean on each series' time range: min_time/max_time in the
+  // tags inner table up to schema version 7, a separate time ranges inner
+  // table from version 8.
   const metadata = new Metadata(client, new MetadataCache());
-  const tableHasTimeBounds = await timeSeriesTagsTableHasTimeBounds({
+  const timeBounds = await timeSeriesTimeBounds({
     metadata,
     connectionId,
     database: databaseName,
@@ -133,14 +184,15 @@ async function getSeriesFilterConditions({
   const conditions: ChSql[] = [];
 
   if (selectors != null) {
-    // timeSeriesSelector() prunes on min_time/max_time unconditionally, so
-    // without those columns it cannot run. Unlike the bounds it also cannot
-    // degrade to "no filter" — that would answer a different question.
-    if (!tableHasTimeBounds) {
+    // timeSeriesSelector() prunes on the series' time range, so without one it
+    // cannot run. Unlike the bounds it also cannot degrade to "no filter" —
+    // that would answer a different question.
+    if (timeBounds == null) {
       throw new Error(
-        'match[] requires a TimeSeries table created with store_min_time_and_max_time = 1',
+        'match[] requires a TimeSeries table that stores time ranges (store_time_ranges = 1, or store_min_time_and_max_time = 1 before version 8), or the prometheus_api_v1 HTTP handler on ClickHouse 26.9+',
       );
     }
+    const version = await metadata.getServerVersion({ connectionId });
     conditions.push(
       getSeriesSelectorCondition({
         databaseName,
@@ -148,11 +200,12 @@ async function getSeriesFilterConditions({
         match: selectors,
         startMs,
         endMs,
+        takesReturnColumns: timeSeriesSelectorTakesReturnColumns(version),
       }),
     );
   }
 
-  if (tableHasTimeBounds) {
+  if (timeBounds === 'tags') {
     if (endMs != null)
       conditions.push(
         chSql`(min_time IS NULL OR min_time <= fromUnixTimestamp64Milli(${{ Int64: endMs }}))`,
@@ -161,6 +214,27 @@ async function getSeriesFilterConditions({
       conditions.push(
         chSql`(max_time IS NULL OR max_time >= fromUnixTimestamp64Milli(${{ Int64: startMs }}))`,
       );
+  } else if (timeBounds === 'timeRanges' && selectors == null) {
+    // The selector above already keeps only series with samples in the
+    // window. Without one, the time ranges table answers the window; its rows
+    // are partial aggregates until merged, hence the GROUP BY.
+    const having: ChSql[] = [];
+    if (endMs != null)
+      having.push(
+        chSql`min(min_time) <= fromUnixTimestamp64Milli(${{ Int64: endMs }})`,
+      );
+    if (startMs != null)
+      having.push(
+        chSql`max(max_time) >= fromUnixTimestamp64Milli(${{ Int64: startMs }})`,
+      );
+    conditions.push(
+      chSql`id IN (
+        SELECT id
+        FROM timeSeriesTimeRanges(${{ Identifier: databaseName }}, ${{ Identifier: tableName }})
+        GROUP BY id
+        HAVING ${concatChSql(' AND ', ...having)}
+      )`,
+    );
   }
 
   return conditions;
@@ -177,6 +251,7 @@ async function queryDistinctTagsValues({
   value,
   conditions,
   limit,
+  signal,
 }: {
   client: ClickhouseClient;
   databaseName: string;
@@ -184,6 +259,7 @@ async function queryDistinctTagsValues({
   value: ChSql;
   conditions: ChSql[];
   limit?: number;
+  signal?: AbortSignal;
 }): Promise<string[]> {
   const where = conditions.length
     ? chSql`WHERE ${concatChSql(' AND ', ...conditions)}`
@@ -203,6 +279,7 @@ async function queryDistinctTagsValues({
     query: query.sql,
     query_params: query.params,
     format: 'JSON',
+    abort_signal: signal,
     clickhouse_settings: {
       allow_experimental_time_series_table: 1,
       max_execution_time: PROMETHEUS_MAX_EXECUTION_SEC,
@@ -244,12 +321,20 @@ export async function queryLabelValues({
  */
 export async function queryLabelNames({
   limit,
+  metricName,
   ...args
-}: TimeSeriesTagsQueryArgs): Promise<string[]> {
+}: TimeSeriesTagsQueryArgs & {
+  /** Only this metric's series; the tags table is sorted by metric name. */
+  metricName?: string;
+}): Promise<string[]> {
   // The engine keeps `__name__` in `metric_name`, not `tags`, so it is folded
   // back in explicitly.
   const value = chSql`arrayJoin(arrayConcat([${{ String: '__name__' }}], mapKeys(${{ Identifier: 'tags' }})))`;
   const conditions = await getSeriesFilterConditions(args);
+  if (metricName != null)
+    conditions.push(
+      chSql`${{ Identifier: 'metric_name' }} = ${{ String: metricName }}`,
+    );
 
   return queryDistinctTagsValues({ ...args, value, conditions, limit });
 }
@@ -332,6 +417,7 @@ export async function queryRangeViaTableFunction({
   startMs,
   endMs,
   stepSec,
+  signal,
 }: {
   client: ClickhouseClient;
   connectionId: string;
@@ -341,6 +427,7 @@ export async function queryRangeViaTableFunction({
   startMs: number;
   endMs: number;
   stepSec: number;
+  signal?: AbortSignal;
 }): Promise<PrometheusMatrixResult[]> {
   const samplesColumn = await timeSeriesSamplesColumn({
     client,
@@ -359,6 +446,7 @@ export async function queryRangeViaTableFunction({
       stepSec,
     },
     format: 'JSON',
+    abort_signal: signal,
     clickhouse_settings: PROMQL_TABLE_FUNCTION_SETTINGS,
   });
   const json = await resp.json<any>();
@@ -371,17 +459,20 @@ export async function queryInstantViaTableFunction({
   tableName,
   expr,
   evalMs,
+  signal,
 }: {
   client: ClickhouseClient;
   databaseName: string;
   tableName: string;
   expr: string;
   evalMs: number;
+  signal?: AbortSignal;
 }): Promise<PrometheusVectorResult[]> {
   const resp = await client.query({
     query: `SELECT tags, timestamp, value FROM prometheusQuery({db:String}, {table:String}, {expr:String}, fromUnixTimestamp64Milli({evalMs:Int64})) SETTINGS allow_experimental_time_series_table = 1`,
     query_params: { db: databaseName, table: tableName, expr, evalMs },
     format: 'JSON',
+    abort_signal: signal,
     clickhouse_settings: PROMQL_TABLE_FUNCTION_SETTINGS,
   });
   const json = await resp.json<any>();
@@ -389,20 +480,29 @@ export async function queryInstantViaTableFunction({
 }
 
 /**
- * Whether the connection's ClickHouse is new enough for the Prometheus HTTP
- * API. `SELECT version()` runs each call (throwaway cache) so an upgraded
- * server is picked up without a restart; an unknown version is treated as
- * old, matching the other version-gated features.
+ * The parts of ClickHouse's Prometheus HTTP API a server can serve: queries
+ * (26.6+) and label lookups (26.9+).
  */
-export async function connectionSupportsPrometheusHttpApi({
+export type PrometheusHttpApiSupport = { query: boolean; labels: boolean };
+
+/**
+ * Which parts of the Prometheus HTTP API the connection's ClickHouse is new
+ * enough for, or `undefined` when its version could not be read.
+ * `SELECT version()` runs each call (throwaway cache); callers that keep the
+ * answer decide how long to.
+ */
+export async function connectionPrometheusHttpApiSupport({
   client,
   connectionId,
 }: {
   client: ClickhouseClient;
   connectionId: string;
-}): Promise<boolean> {
+}): Promise<PrometheusHttpApiSupport | undefined> {
   const metadata = new Metadata(client, new MetadataCache());
-  return supportsPrometheusHttpApi(
-    await metadata.getServerVersion({ connectionId }),
-  );
+  const version = await metadata.getServerVersion({ connectionId });
+  if (version == null) return undefined;
+  return {
+    query: supportsPrometheusHttpApi(version),
+    labels: supportsPrometheusLabelsApi(version),
+  };
 }

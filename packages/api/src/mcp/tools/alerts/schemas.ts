@@ -2,13 +2,15 @@ import {
   ALERT_INTERVAL_TO_MINUTES,
   alertDisplayNameSchema,
   type AlertInterval,
+  alertNoteSchema,
+  alertNumConsecutiveWindowsSchema,
   checkAlertChannelSelection,
   isRangeThresholdType,
   MAX_ALERT_CHANNELS,
   SearchConditionTrimmedLanguageSchema,
   tagsSchema,
 } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   mcpBarTileSchema,
@@ -17,6 +19,7 @@ import {
   mcpSqlTileSchema,
   mcpStackedLineTileSchema,
 } from '@/mcp/tools/dashboards/schemas';
+import { mcpUnion } from '@/mcp/utils/errors';
 
 // ---------------------------------------------------------------------------
 // MCP-compatible flat Zod schema for clickstack_save_alert.
@@ -73,47 +76,45 @@ const rejectedRawSqlAlertWhereField = z
     'Not supported on Raw SQL alert configs. Filter inside the sqlTemplate.',
   );
 
-const mcpAlertChartConfigSchema = z
-  .union([
-    mcpLineTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpBarTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpStackedLineTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpNumberTileSchema.shape.config.extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: mcpAlertChartLevelWhereSchema,
-      whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
-    }),
-    mcpSqlTileSchema.shape.config.omit({ onClick: true }).extend({
-      name: mcpAlertChartConfigNameSchema,
-      where: rejectedRawSqlAlertWhereField,
-      whereLanguage: rejectedRawSqlAlertWhereField,
-      displayType: z
-        .enum(['line', 'stacked_bar', 'stacked_line', 'number'])
-        .describe(
-          'How to render the SQL results. Alerts evaluate line, stacked_bar, stacked_line, or number charts only.',
-        ),
-    }),
-  ])
-  .describe(
-    'Chart configuration for inline alerts (required when source is "inline"). ' +
-      'Same shape as a dashboard tile config, limited to displayType line, ' +
-      'stacked_bar, stacked_line, or number. Omit configType for the builder variant ' +
-      '(sourceId + select); set configType to "sql" for the Raw SQL variant ' +
-      '(connectionId + sqlTemplate; the template must use the $__timeFilter ' +
-      'and $__timeInterval macros so each evaluation window can be queried).',
-  );
+const mcpAlertChartConfigSchema = mcpUnion([
+  mcpLineTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpBarTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpStackedLineTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpNumberTileSchema.shape.config.extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: mcpAlertChartLevelWhereSchema,
+    whereLanguage: mcpAlertChartLevelWhereLanguageSchema,
+  }),
+  mcpSqlTileSchema.shape.config.omit({ onClick: true }).extend({
+    name: mcpAlertChartConfigNameSchema,
+    where: rejectedRawSqlAlertWhereField,
+    whereLanguage: rejectedRawSqlAlertWhereField,
+    displayType: z
+      .enum(['line', 'stacked_bar', 'stacked_line', 'number'])
+      .describe(
+        'How to render the SQL results. Alerts evaluate line, stacked_bar, stacked_line, or number charts only.',
+      ),
+  }),
+]).describe(
+  'Chart configuration for inline alerts (required when source is "inline"). ' +
+    'Same shape as a dashboard tile config, limited to displayType line, ' +
+    'stacked_bar, stacked_line, or number. Omit configType for the builder variant ' +
+    '(sourceId + select); set configType to "sql" for the Raw SQL variant ' +
+    '(connectionId + sqlTemplate; the template must use the $__timeFilter ' +
+    'and $__timeInterval macros so each evaluation window can be queried).',
+);
 
 const mcpAlertChannelSchema = z
   .object({
@@ -244,6 +245,12 @@ export const mcpSaveAlertSchema = z.object({
         'stored value or send null to clear it.',
     ),
 
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema.describe(
+    'Fire only after the threshold condition is met in this many ' +
+      'consecutive evaluation windows; 1 fires on the first. On update, ' +
+      'omit to keep the stored value or send null to clear it.',
+  ),
+
   // Channel
   channel: mcpAlertChannelSchema.optional(),
   channels: z
@@ -273,6 +280,11 @@ export const mcpSaveAlertSchema = z.object({
     .max(4096)
     .optional()
     .describe('Handlebars template for the notification body.'),
+  note: alertNoteSchema.describe(
+    'Markdown note shown with the alert, e.g. why it exists and links to ' +
+      'runbooks. On update, omit to keep the stored value or send null to ' +
+      'clear it.',
+  ),
   displayName: alertDisplayNameSchema.describe(
     'Display name shown for the alert in the UI. Defaults to the saved search name, dashboard tile name, or inline chartConfig name when omitted. Overridden by the "name" field in alert notifications when provided.',
   ),

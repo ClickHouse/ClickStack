@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { ColumnMeta, JSDataType } from '@hyperdx/common-utils/dist/clickhouse';
+import { ResolvedFilterValuesQuery } from '@hyperdx/common-utils/dist/filters';
 import {
   AdhocDashboardFilter,
   SourceKind,
@@ -7,6 +8,7 @@ import {
 } from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
   getSourcesWithKey,
@@ -180,6 +182,7 @@ describe('useAdhocFilterOptions', () => {
   ): AdhocDashboardFilter => ({
     id: 'f',
     type: 'ADHOC',
+    isBroadcastEnabled: true,
     name: 'Conditions',
     sourceType,
     sources,
@@ -191,24 +194,28 @@ describe('useAdhocFilterOptions', () => {
     columnsBySource: ColumnMeta[][],
     { isLoading = false } = {},
   ) =>
-    jest.mocked(useMultipleAllFields).mockReturnValue({
-      fieldsByTableConnection: new Map(),
-      columnsByTableConnection: new Map(columnsBySource.entries()),
-      isFieldMetadataDisabled: true,
-      isLoading,
-      isError: false,
-    } as unknown as ReturnType<typeof useMultipleAllFields>);
+    jest.mocked(useMultipleAllFields).mockReturnValue(
+      fromPartial({
+        fieldsByTableConnection: new Map(),
+        columnsByTableConnection: new Map(columnsBySource.entries()),
+        isFieldMetadataDisabled: true,
+        isLoading,
+        isError: false,
+      }),
+    );
 
   const renderOptions = (
     adhocFilter: AdhocDashboardFilter,
     key = 'SeverityText',
+    suggestionsWhere?: ResolvedFilterValuesQuery,
   ) => {
     const queryClient = new QueryClient();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
     return renderHook(
-      () => useAdhocFilterOptions(adhocFilter, key, DATE_RANGE),
+      () =>
+        useAdhocFilterOptions(adhocFilter, key, DATE_RANGE, suggestionsWhere),
       { wrapper },
     );
   };
@@ -245,6 +252,45 @@ describe('useAdhocFilterOptions', () => {
     const [{ chartConfigs, keys }] = lastSqlLookup();
     expect(keys).toEqual(['SeverityText']);
     expect(chartConfigs).toEqual([expect.objectContaining({ source: 'logs' })]);
+  });
+
+  it('reads keys and values only from rows matching its condition', () => {
+    mockSources = [
+      { ...source('logs', SourceKind.Log), implicitColumnExpression: 'Body' },
+    ];
+    mockAllFields([[column('SeverityText', 'LowCardinality(String)')]]);
+    const suggestionsWhere = {
+      where: 'Namespace:$namespace',
+      whereLanguage: 'lucene' as const,
+    };
+    renderOptions(filter('sql', ['logs']), 'SeverityText', suggestionsWhere);
+
+    expect(jest.mocked(useMultipleAllFields).mock.calls.at(-1)![1]).toEqual(
+      expect.objectContaining({
+        conditions: [
+          expect.objectContaining({
+            ...suggestionsWhere,
+            implicitColumnExpression: 'Body',
+          }),
+        ],
+      }),
+    );
+    expect(lastSqlLookup()[0].chartConfigs).toEqual([
+      expect.objectContaining(suggestionsWhere),
+    ]);
+  });
+
+  it('reads every row when its condition is blank', () => {
+    mockSources = [source('logs', SourceKind.Log)];
+    mockAllFields([[column('SeverityText', 'LowCardinality(String)')]]);
+    renderOptions(filter('sql', ['logs']), 'SeverityText', {
+      where: '  ',
+      whereLanguage: 'sql',
+    });
+
+    expect(
+      jest.mocked(useMultipleAllFields).mock.calls.at(-1)![1]?.conditions,
+    ).toBeUndefined();
   });
 
   it('quotes a map column name that is not a bare identifier', () => {

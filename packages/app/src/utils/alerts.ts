@@ -4,8 +4,7 @@ import {
   differenceInMinutes,
   sub,
 } from 'date-fns';
-import _ from 'lodash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { formatTileAlertDisplayName } from '@hyperdx/common-utils/dist/alerts';
 import { Granularity } from '@hyperdx/common-utils/dist/core/utils';
 import { isPromqlSavedChartConfig } from '@hyperdx/common-utils/dist/guards';
@@ -22,7 +21,6 @@ import {
   SavedChartConfig,
 } from '@hyperdx/common-utils/dist/types';
 
-import { IS_DEV } from '@/config';
 import type { AlertsPageItem } from '@/types';
 
 export function intervalToGranularity(interval: AlertInterval) {
@@ -42,7 +40,6 @@ export function intervalToMinutes(interval: AlertInterval): number {
 }
 
 export function intervalToDateRange(interval: AlertInterval): [Date, Date] {
-  // eslint-disable-next-line no-restricted-syntax
   const now = new Date();
   if (interval === '1m') return [sub(now, { minutes: 15 }), now];
   if (interval === '5m') return [sub(now, { hours: 1 }), now];
@@ -121,16 +118,7 @@ export const ALERT_INTERVAL_OPTIONS: Record<AlertInterval, string> = {
   '1d': '1 day',
 };
 
-export const TILE_ALERT_INTERVAL_OPTIONS = _.pick(ALERT_INTERVAL_OPTIONS, [
-  ...(IS_DEV ? (['1m'] as const) : []),
-  '5m',
-  '15m',
-  '30m',
-  '1h',
-  '6h',
-  '12h',
-  '1d',
-]);
+export const TILE_ALERT_INTERVAL_OPTIONS = ALERT_INTERVAL_OPTIONS;
 
 export const ALERT_CHANNEL_OPTIONS: Record<AlertChannelType, string> = {
   webhook: 'Webhook',
@@ -196,7 +184,6 @@ export const DEFAULT_TILE_ALERT: z.infer<typeof ChartAlertBaseSchema> = {
 export function isAlertSilenceExpired(silenced?: {
   until: string | Date;
 }): boolean {
-  // eslint-disable-next-line no-restricted-syntax
   return silenced ? new Date() > new Date(silenced.until) : false;
 }
 

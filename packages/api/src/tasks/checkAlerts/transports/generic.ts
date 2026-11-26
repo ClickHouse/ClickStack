@@ -8,6 +8,7 @@ import Handlebars from 'handlebars';
 import _ from 'lodash';
 import { performance } from 'perf_hooks';
 import { serializeError } from 'serialize-error';
+import { Agent, fetch } from 'undici';
 
 import { IWebhook } from '@/models/webhook';
 import {
@@ -18,14 +19,17 @@ import type {
   Message,
   WebhookChannel,
 } from '@/tasks/checkAlerts/transports/types';
-import { escapeJsonString } from '@/tasks/util';
+import { escapeJsonString, WEBHOOK_USER_AGENT } from '@/tasks/util';
 import { getCounter, getHistogram } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import { withRetry } from '@/utils/retry';
 import {
   validateWebhookUrl,
+  webhookLookup,
   WebhookUrlValidationError,
 } from '@/utils/validators';
+
+const webhookDispatcher = new Agent({ connect: { lookup: webhookLookup } });
 
 // Webhook delivery is the last (and most failure-prone) hop of an alert. It
 // happens in the background task, so failures only show up in logs today.
@@ -204,9 +208,16 @@ const sendGenericWebhook = async (
   // TODO: handle real webhook security and signage after v0
   // X-HyperDX-Signature FROM PRIVATE SHA-256 HMAC, time based nonces, caching functionality etc
 
+  const userHeaders = toStringHeaderRecord(webhook.headers?.toJSON());
+  // Without this undici sends `User-Agent: undici`, which some receiver WAFs
+  // block. Checked case-insensitively so a user's `user-agent` isn't sent twice.
+  const hasUserAgent = Object.keys(userHeaders).some(
+    k => k.toLowerCase() === 'user-agent',
+  );
   const headers: Record<string, string> = {
     'Content-Type': 'application/json', // default, will be overwritten if user has set otherwise
-    ...toStringHeaderRecord(webhook.headers?.toJSON()),
+    ...(hasUserAgent ? {} : { 'User-Agent': WEBHOOK_USER_AGENT }),
+    ...userHeaders,
     // Stable per-alert key for receivers that honour Idempotency-Key; delivery is at-least-once.
     'Idempotency-Key': objectHash({
       eventId: message.eventId,
@@ -261,6 +272,13 @@ const sendGenericWebhook = async (
         headers,
         body,
         signal: attemptSignal,
+        dispatcher: webhookDispatcher,
+      }).catch(e => {
+        // Surface a connect-time block as the validation error (a 400), not "fetch failed".
+        for (let c = e; c; c = c.cause) {
+          if (c instanceof WebhookUrlValidationError) throw c;
+        }
+        throw e;
       });
 
       // Disallow redirects to avoid redirect-based SSRF.

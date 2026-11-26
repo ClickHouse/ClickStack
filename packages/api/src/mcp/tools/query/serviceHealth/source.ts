@@ -1,8 +1,9 @@
 import { SourceKind } from '@hyperdx/common-utils/dist/types';
 
-import { getSource, getSources } from '@/controllers/sources';
+import type { McpContext } from '@/mcp/tools/types';
 import type { McpErrorResult } from '@/mcp/utils/errors';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource, getMcpSources } from '@/mcp/utils/sources';
 
 import type { HealthSource } from './queries';
 
@@ -13,11 +14,11 @@ const MAX_LISTED_SOURCES = 10;
  * the exact ID when the input names one trace source, else list the options.
  */
 async function sourceNotFound(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   toolName: string,
 ): Promise<McpErrorResult> {
-  const traces = (await getSources(teamId)).filter(
+  const traces = (await getMcpSources(context)).filter(
     s => s.kind === SourceKind.Trace,
   );
   const needle = sourceId.trim().toLowerCase();
@@ -50,12 +51,12 @@ async function sourceNotFound(
 
 /** Load a trace source and check it has the fields the tool needs. */
 export async function loadHealthSource(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   toolName: string,
 ): Promise<HealthSource | McpErrorResult> {
-  const doc = await getSource(teamId, sourceId);
-  if (!doc) return sourceNotFound(teamId, sourceId, toolName);
+  const doc = await getMcpSource(context, sourceId);
+  if (!doc) return sourceNotFound(context, sourceId, toolName);
   if (doc.kind !== SourceKind.Trace) {
     return mcpUserError(
       `Source ${sourceId} is kind="${doc.kind}". ${toolName} requires a source of kind="trace".`,

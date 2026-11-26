@@ -6,10 +6,12 @@ import {
   Filter,
   PromqlConditionFilter,
   PromqlExpressionList,
+  RawSqlConfigWithDateRange,
   SavedChartConfig,
   SourceKind,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { ChartEditorFormState } from '@/components/ChartEditor/types';
 import {
@@ -19,10 +21,13 @@ import {
   buildSampleEventsConfig,
   computeDbTimeChartConfig,
   displayTypeToActiveTab,
+  getPreviewBlockingFilters,
   isQueryReady,
+  orderByToTableSortState,
   resolvePreviewVariables,
   resolveTilePreviewFilters,
   seriesToFilters,
+  tableSortStateToOrderBy,
   tabQueriesData,
   TABS_WITH_GENERATED_SQL,
   withBroadcastFilters,
@@ -54,12 +59,12 @@ const builderConfig: ChartConfigWithDateRange = {
   granularity: 'auto',
 } as ChartConfigWithDateRange;
 
-const rawSqlConfig = {
-  configType: 'sql' as const,
+const rawSqlConfig: RawSqlConfigWithDateRange = {
+  configType: 'sql',
   sqlTemplate: 'SELECT count() FROM logs',
   connection: 'clickhouse',
   dateRange,
-} as ChartConfigWithDateRange;
+};
 
 const logSource = {
   kind: SourceKind.Log,
@@ -143,11 +148,13 @@ describe('isQueryReady', () => {
 
   it('returns truthy for metric sources with metricTables but empty tableName', () => {
     expect(
-      isQueryReady({
-        ...builderConfig,
-        from: { databaseName: 'default', tableName: '' },
-        metricTables: { gauge: 'metrics.gauge' },
-      } as ChartConfigWithDateRange),
+      isQueryReady(
+        fromPartial({
+          ...builderConfig,
+          from: { databaseName: 'default', tableName: '' },
+          metricTables: { gauge: 'metrics.gauge' },
+        }),
+      ),
     ).toBeTruthy();
   });
 
@@ -160,7 +167,7 @@ describe('isQueryReady', () => {
       isQueryReady({
         ...rawSqlConfig,
         sqlTemplate: '',
-      } as ChartConfigWithDateRange),
+      }),
     ).toBe(false);
   });
 
@@ -696,6 +703,7 @@ describe('resolveTilePreviewFilters', () => {
       filters: dashboardFilters,
       variables: [],
       missingRequiredFilterNames: [],
+      canPreviewWithoutFilters: false,
     });
   });
 
@@ -708,6 +716,7 @@ describe('resolveTilePreviewFilters', () => {
       filters: undefined,
       variables: [{ name: 'service', values: [] }],
       missingRequiredFilterNames: [],
+      canPreviewWithoutFilters: false,
     });
   });
 
@@ -795,6 +804,107 @@ describe('resolveTilePreviewFilters', () => {
         applySelections: false,
       }).missingRequiredFilterNames,
     ).toEqual([]);
+  });
+
+  it('still blocks on a referenced source variable while the filters are turned off', () => {
+    const sourceVariable: DashboardFilter = {
+      id: 'f3',
+      type: 'DATA_SOURCE',
+      name: 'Logs source',
+      allowedSourceKinds: [SourceKind.Log],
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'logs',
+      minSelections: 1,
+      maxSelections: 1,
+    };
+    const unsatisfiedRequiredFilters = [requiredFilter, sourceVariable];
+
+    expect(
+      resolve({
+        config: rawSqlWithFiltersMacro,
+        unsatisfiedRequiredFilters,
+        applySelections: false,
+        referenceVariableNames: ['logs'],
+      }).missingRequiredFilterNames,
+    ).toEqual(['Logs source']);
+    expect(
+      resolve({ unsatisfiedRequiredFilters, applySelections: false })
+        .missingRequiredFilterNames,
+    ).toEqual([]);
+  });
+});
+
+describe('getPreviewBlockingFilters', () => {
+  const sourceVariable: DashboardFilter = {
+    id: 'logs',
+    type: 'DATA_SOURCE',
+    name: 'Logs source',
+    allowedSourceKinds: [SourceKind.Log],
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'logs',
+    minSelections: 1,
+    maxSelections: 1,
+  };
+  const requiredVariable: DashboardFilter = {
+    id: 'env',
+    type: 'STATIC_LIST',
+    name: 'Environment',
+    options: ['prod'],
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'env',
+    minSelections: 1,
+  };
+  const rawSqlWithVariable: ChartConfigWithDateRange = {
+    configType: 'sql',
+    sqlTemplate: "SELECT count() FROM logs WHERE env = '$env'",
+    connection: 'clickhouse',
+    dateRange,
+  };
+
+  const getBlocking = (
+    overrides: Partial<Parameters<typeof getPreviewBlockingFilters>[0]> = {},
+  ) =>
+    getPreviewBlockingFilters({
+      config: rawSqlWithVariable,
+      sourceId: undefined,
+      variables: [{ name: 'env', values: [] }],
+      unsatisfiedRequiredFilters: [sourceVariable, requiredVariable],
+      applySelections: true,
+      referenceVariableNames: ['logs'],
+      ...overrides,
+    });
+
+  it('offers turning off the filters when that clears part of the block', () => {
+    expect(getBlocking()).toEqual({
+      missingRequiredFilterNames: ['Logs source', 'Environment'],
+      canPreviewWithoutFilters: true,
+    });
+  });
+
+  it('does not offer turning off the filters when only a reference variable blocks', () => {
+    expect(
+      getBlocking({ unsatisfiedRequiredFilters: [sourceVariable] }),
+    ).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
+  });
+
+  it('does not offer turning off the filters when they are already off', () => {
+    expect(getBlocking({ applySelections: false })).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
+  });
+
+  it('blocks only on reference variables when no query could be built', () => {
+    expect(getBlocking({ config: undefined })).toEqual({
+      missingRequiredFilterNames: ['Logs source'],
+      canPreviewWithoutFilters: false,
+    });
   });
 });
 
@@ -1247,5 +1357,51 @@ describe('buildGroupByConnectionProps', () => {
     });
 
     expect(result).toEqual({ tableConnection });
+  });
+});
+
+describe('table sort state <-> Order By', () => {
+  it.each([
+    ['"duration min" ASC', { id: '"duration min"', desc: false }],
+    [
+      'round(Duration / 1e6, 2) DESC',
+      { id: 'round(Duration / 1e6, 2)', desc: true },
+    ],
+    ['Duration desc', { id: 'Duration', desc: true }],
+    [
+      '(TimestampTime, Timestamp) DESC',
+      { id: '(TimestampTime, Timestamp)', desc: true },
+    ],
+    ['"a, b" ASC', { id: '"a, b"', desc: false }],
+    [
+      "arrayElement(Attributes, 'k') DESC",
+      { id: "arrayElement(Attributes, 'k')", desc: true },
+    ],
+  ])('parses %s and serializes it back', (orderBy, expected) => {
+    const sort = orderByToTableSortState(orderBy);
+    expect(sort).toEqual([expected]);
+    expect(tableSortStateToOrderBy(sort)).toBe(
+      orderBy.replace(/desc$/, 'DESC'),
+    );
+  });
+
+  it.each([
+    '',
+    '   ',
+    'Duration',
+    '(TimestampTime, Timestamp)',
+    'Duration DESC NULLS LAST',
+    'Timestamp DESC, ServiceName ASC',
+    'TimestampTime ASC, Timestamp DESC',
+  ])(
+    'returns an empty sort for an Order By that is not a single key with a trailing direction (%p)',
+    orderBy => {
+      expect(orderByToTableSortState(orderBy)).toEqual([]);
+    },
+  );
+
+  it('serializes an empty or null sort as an empty Order By', () => {
+    expect(tableSortStateToOrderBy([])).toBe('');
+    expect(tableSortStateToOrderBy(null)).toBe('');
   });
 });

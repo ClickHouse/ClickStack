@@ -3,6 +3,9 @@
 // separator (e.g. "Source ID – call clickstack_list_sources") for LLM
 // readability. Reformatting all separators is out of scope here.
 import {
+  ADHOC_FILTER_MAX_CONDITIONS,
+  AdhocFilterConditionSchema,
+  AdhocFilterSourceTypeSchema,
   AggregateFunctionSchema,
   BackgroundChartSchema,
   ChartPaletteTokenSchema,
@@ -12,20 +15,45 @@ import {
   DASHBOARD_VARIABLE_NAME_PATTERN_ANCHORED,
   DashboardContainerSchema,
   DashboardFilterType,
+  HeatmapScaleTypeSchema,
   LineInterpolationSchema,
+  MAX_LEGEND_TEMPLATE_LENGTH,
+  MAX_PROMQL_EXPRESSIONS,
   MetricsDataType,
   NumberTileColorConditionSchema,
+  PromqlHeatmapModeSchema,
+  PromqlLabelDashboardFilterSchema,
+  PromqlQueryTypeSchema,
+  PromqlReducerSchema,
   SearchConditionTrimmedLanguageSchema,
+  SourceKind,
+  SQLIntervalSchema,
+  SqlQueryDashboardFilterSchema,
   StaticListDashboardFilterSchema,
 } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import {
   getMetricSelectIssues,
   mcpQuantileLevelSchema,
 } from '@/mcp/tools/query/schemas';
 import { QUERYABLE_METRIC_KINDS } from '@/mcp/tools/sources/metricKinds';
-import { objectIdSchema, tagsSchema } from '@/utils/zod';
+import { mcpUnion } from '@/mcp/utils/errors';
+import {
+  externalAdhocSavedFilterValueSchema,
+  externalSqlSavedFilterValueSchema,
+  externalVariableSavedFilterValueSchema,
+  objectIdOrVariableReferenceSchema,
+  objectIdSchema,
+  tagsSchema,
+} from '@/utils/zod';
+
+const SOURCE_VARIABLE_REFERENCE_NOTE =
+  'May instead be `$name`, a reference to a DATA_SOURCE filter (variable) on this ' +
+  'dashboard, so viewers can switch the source; the variable must offer at least ' +
+  'one kind this field accepts.';
+
+const SOURCE_ID_DESCRIPTION = `Source ID - call clickstack_list_sources. ${SOURCE_VARIABLE_REFERENCE_NOTE}`;
 
 /**
  * Metric type values exposed on dashboard tile select items. Restricted to
@@ -633,7 +661,7 @@ const mcpTimeChartDisplayFields = {
 };
 
 const mcpRowListSourceFields = {
-  sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+  sourceId: z.string().describe(SOURCE_ID_DESCRIPTION),
   where: z
     .string()
     .optional()
@@ -721,7 +749,7 @@ export const mcpLineTileSchema = mcpTileLayoutSchema.extend({
     .object({
       ...rejectedTileWhereFields,
       displayType: z.literal('line').describe('Line chart over time'),
-      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      sourceId: z.string().describe(SOURCE_ID_DESCRIPTION),
       select: z
         .array(mcpTileSelectItemSchema)
         .min(1)
@@ -777,7 +805,7 @@ export const mcpLineTileSchema = mcpTileLayoutSchema.extend({
 });
 
 const mcpStackedTimeChartConfigFields = {
-  sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+  sourceId: z.string().describe(SOURCE_ID_DESCRIPTION),
   select: z
     .array(mcpTileSelectItemSchema)
     .min(1)
@@ -848,7 +876,7 @@ const mcpTableTileSchema = mcpTileLayoutSchema.extend({
     .object({
       ...rejectedTileWhereFields,
       displayType: z.literal('table').describe('Tabular aggregated data'),
-      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      sourceId: z.string().describe(SOURCE_ID_DESCRIPTION),
       select: z
         .array(mcpTileSelectItemSchema)
         .min(1)
@@ -904,7 +932,7 @@ export const mcpNumberTileSchema = mcpTileLayoutSchema.extend({
       displayType: z
         .literal('number')
         .describe('Single aggregate scalar value'),
-      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      sourceId: z.string().describe(SOURCE_ID_DESCRIPTION),
       select: z
         .array(mcpTileSelectItemSchema)
         .min(1)
@@ -945,7 +973,7 @@ const mcpPieTileSchema = mcpTileLayoutSchema.extend({
     .object({
       ...rejectedTileWhereFields,
       displayType: z.literal('pie').describe('Pie chart'),
-      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      sourceId: z.string().describe(SOURCE_ID_DESCRIPTION),
       select: z
         .array(mcpTileSelectItemSchema)
         .length(1)
@@ -993,7 +1021,7 @@ const mcpCategoricalBarTileSchema = mcpTileLayoutSchema.extend({
       displayType: z
         .literal('bar')
         .describe('Bar chart — one bar per group value (not a time series)'),
-      sourceId: z.string().describe('Source ID – call clickstack_list_sources'),
+      sourceId: z.string().describe(SOURCE_ID_DESCRIPTION),
       select: z
         .array(mcpTileSelectItemSchema)
         .length(1)
@@ -1081,7 +1109,8 @@ const mcpHeatmapTileSchema = mcpTileLayoutSchema.extend({
         .string()
         .describe(
           'Source ID. Must be a Trace source today; use clickstack_list_sources and ' +
-            'pick one whose kind is "trace".',
+            'pick one whose kind is "trace". ' +
+            SOURCE_VARIABLE_REFERENCE_NOTE,
         ),
       select: z
         .array(mcpHeatmapSelectItemSchema)
@@ -1126,7 +1155,8 @@ const mcpHeatmapSeriesTileSchema = mcpTileLayoutSchema.extend({
       sourceId: z
         .string()
         .describe(
-          'Source ID of a Trace, Log, or Metric source - call clickstack_list_sources',
+          'Source ID of a Trace, Log, or Metric source - call clickstack_list_sources. ' +
+            SOURCE_VARIABLE_REFERENCE_NOTE,
         ),
       select: z
         .array(mcpTileSelectItemSchema)
@@ -1223,7 +1253,9 @@ export const mcpSqlTileSchema = mcpTileLayoutSchema.extend({
       connectionId: z
         .string()
         .describe(
-          'Connection ID (not sourceId) – call clickstack_list_sources to find available connections',
+          'Connection ID (not sourceId) – call clickstack_list_sources to find available connections. ' +
+            'May instead be `$name`, a reference to a CONNECTION filter (variable) on this ' +
+            'dashboard, so viewers can switch the connection the query runs on.',
         ),
       sourceId: z
         .string()
@@ -1233,7 +1265,8 @@ export const mcpSqlTileSchema = mcpTileLayoutSchema.extend({
             'ALWAYS set this for raw SQL tiles UNLESS the query reads from multiple tables ' +
             '(e.g. JOINs or sub-queries spanning several sources), in which case omit it. ' +
             'sourceId is REQUIRED by two macros: $__filters and $__sourceTable. ' +
-            'The sourceId must belong to the same connection as connectionId.',
+            'The sourceId must belong to the same connection as connectionId. ' +
+            SOURCE_VARIABLE_REFERENCE_NOTE,
         ),
       sqlTemplate: z.string().describe(`
 Raw ClickHouse SQL query. SQL guidelines:
@@ -1310,7 +1343,151 @@ GROUP BY ServiceName, ts
     .describe('Raw SQL tile query and display settings.'),
 });
 
-const mcpTileSchema = z.union([
+const PROMQL_TIME_CHARTS = '"line", "stacked_bar" or "stacked_line"';
+
+const promqlOnlyFor = (displayTypes: string) =>
+  `Valid only when displayType is ${displayTypes}, ignored otherwise.`;
+
+const mcpPromqlExpressionSchema = z.object({
+  expression: z
+    .string()
+    .max(10000)
+    .describe(
+      'PromQL expression. Supports dashboard variables in label matchers ' +
+        '(e.g. {job=~"$job"}) and the $__interval, $__rate_interval and ' +
+        '$__range macros. Example: ' +
+        'sum by (job) (rate(http_requests_total[$__rate_interval]))',
+    ),
+  alias: z
+    .string()
+    .max(10000)
+    .optional()
+    .describe('Legend label for this series.'),
+  queryType: PromqlQueryTypeSchema.optional().describe(
+    '"instant" evaluates the expression once at the end of the time range; ' +
+      `"range" (the default) evaluates it over the range. ${promqlOnlyFor('"table", "number", "pie" or "bar"')}`,
+  ),
+  reducer: PromqlReducerSchema.optional().describe(
+    'How a range query reduces each series to a single value. ' +
+      promqlOnlyFor('"number", "pie" or "bar"'),
+  ),
+});
+
+// One flat config for every display type, like the save_source schema: the
+// external API tile schema applies the per-display-type rules on save.
+const mcpPromqlTileSchema = mcpTileLayoutSchema.extend({
+  config: z
+    .object({
+      configType: z
+        .literal('promql')
+        .describe('Marks this as a PromQL tile. Requires a promql source.'),
+      displayType: z.enum([
+        'line',
+        'stacked_bar',
+        'stacked_line',
+        'table',
+        'number',
+        'pie',
+        'bar',
+        'heatmap',
+      ]),
+      sourceId: z
+        .string()
+        .describe(
+          'ID of a source whose kind is "promql" – call clickstack_list_sources. ' +
+            SOURCE_VARIABLE_REFERENCE_NOTE,
+        ),
+      expressions: z
+        .array(mcpPromqlExpressionSchema)
+        .min(1)
+        .max(MAX_PROMQL_EXPRESSIONS)
+        .describe(
+          'PromQL queries. Line and stacked charts plot every expression; ' +
+            'other display types query only the first.',
+        ),
+      granularity: mcpUnion([SQLIntervalSchema, z.literal('auto')])
+        .optional()
+        .describe(
+          'Step of range queries and the value of $__interval, as "<n> <unit>" ' +
+            'with unit second, minute, hour or day (e.g. "1 minute"), or "auto". ' +
+            'Omit for auto.',
+        ),
+      numberFormat: mcpNumberFormatSchema
+        .optional()
+        .describe(tileLevelNumberFormatDescription),
+      legendTemplate: z
+        .string()
+        .max(MAX_LEGEND_TEMPLATE_LENGTH)
+        .optional()
+        .describe(
+          'Series name built from label values, e.g. "{{job}} {{instance}}". ' +
+            'Ignored when displayType is "table" or "number".',
+        ),
+      fillNulls: z
+        .boolean()
+        .optional()
+        .describe(
+          `${timeChartFillNullsDescription} ${promqlOnlyFor(PROMQL_TIME_CHARTS)}`,
+        ),
+      alignDateRangeToGranularity: z
+        .boolean()
+        .optional()
+        .describe(
+          `${timeChartAlignDateRangeDescription} ${promqlOnlyFor(PROMQL_TIME_CHARTS)}`,
+        ),
+      seriesLimit: seriesLimitSchema.describe(
+        'Maximum number of series to show. Omit for the default cap; 0 means ' +
+          `unlimited. ${promqlOnlyFor(PROMQL_TIME_CHARTS)}`,
+      ),
+      compareToPreviousPeriod: z
+        .boolean()
+        .optional()
+        .describe(
+          'Overlay the previous period as a dashed comparison series. ' +
+            promqlOnlyFor('"line"'),
+        ),
+      lineInterpolation: LineInterpolationSchema.optional().describe(
+        'How points are connected: "smooth", "linear", or "step". ' +
+          promqlOnlyFor('"line" or "stacked_line"'),
+      ),
+      color: ChartPaletteTokenSchema.optional().describe(
+        `${numberTileColorDescription} ${promqlOnlyFor('"number"')}`,
+      ),
+      colorRules: z
+        .array(NumberTileColorConditionSchema)
+        .max(10)
+        .optional()
+        .describe(
+          `${numberTileColorRulesDescription} ${promqlOnlyFor('"number"')}`,
+        ),
+      backgroundChart: BackgroundChartSchema.optional().describe(
+        'Background trend sparkline drawn behind the number. ' +
+          promqlOnlyFor('"number"'),
+      ),
+      limit: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          'Maximum number of slices or bars, one per series. Omit for the ' +
+            `default cap; 0 means unlimited. ${promqlOnlyFor('"pie" or "bar"')}`,
+        ),
+      heatmapMode: PromqlHeatmapModeSchema.optional().describe(
+        '"distribution" (the default) buckets sample values, "series" shows ' +
+          'one row per series, "histogram" plots Prometheus histogram ' +
+          `buckets (_bucket series by le). ${promqlOnlyFor('"heatmap"')}`,
+      ),
+      heatmapScaleType: HeatmapScaleTypeSchema.optional().describe(
+        `Scale of the y axis. ${promqlOnlyFor('"heatmap"')}`,
+      ),
+    })
+    .describe(
+      'PromQL tile query and display settings. PromQL tiles cannot have alerts.',
+    ),
+});
+
+const mcpTileSchema = mcpUnion([
   mcpLineTileSchema,
   mcpBarTileSchema,
   mcpStackedLineTileSchema,
@@ -1386,7 +1563,7 @@ const mcpPatchTileLayoutSchema = z.object({
 // Build the patch tile union by extending the default-free layout with
 // each tile type's config shape. We only need the `config` field from
 // each tile schema; the layout wrapper is replaced.
-const mcpPatchTileSchema = z.union([
+const mcpPatchTileSchema = mcpUnion([
   mcpPatchTileLayoutSchema.extend({ config: mcpLineTileSchema.shape.config }),
   mcpPatchTileLayoutSchema.extend({ config: mcpBarTileSchema.shape.config }),
   mcpPatchTileLayoutSchema.extend({
@@ -1418,7 +1595,11 @@ const mcpPatchTileSchema = z.union([
   mcpPatchTileLayoutSchema.extend({ config: mcpSqlTileSchema.shape.config }),
 ]);
 
-export const mcpTilesParam = z
+const mcpPromqlPatchTileSchema = mcpPatchTileLayoutSchema.extend({
+  config: mcpPromqlTileSchema.shape.config,
+});
+
+const mcpTilesParam = z
   .array(mcpTileSchema)
   .describe(
     'Array of dashboard tiles. Each tile needs a name, optional layout (x/y/w/h), and a config block. ' +
@@ -1439,6 +1620,20 @@ export const mcpTilesParam = z
       '"select": [{ "valueExpression": "Duration" }], ' +
       '"numberFormat": { "output": "duration", "factor": 0.000000001 } } }',
   );
+
+const PROMQL_TILE_EXAMPLE =
+  '\n6. PromQL line chart (promql sources only): { "name": "Request Rate", "config": { "configType": "promql", ' +
+  '"displayType": "line", "sourceId": "<promql source id>", ' +
+  '"expressions": [{ "expression": "sum by (job) (rate(http_requests_total{job=~\\"$job\\"}[$__rate_interval]))" }], ' +
+  '"legendTemplate": "{{job}}" } }';
+
+/** PromQL tiles are offered only while PromQL is enabled. */
+export function buildMcpTilesParam(promqlEnabled: boolean) {
+  if (!promqlEnabled) return mcpTilesParam;
+  return z
+    .array(mcpUnion([...mcpTileSchema.options, mcpPromqlTileSchema]))
+    .describe(`${mcpTilesParam.description}${PROMQL_TILE_EXAMPLE}`);
+}
 
 const VARIABLE_NAME_DESCRIPTION =
   "Token that tiles reference this filter's selected value by, eg. $variableName. " +
@@ -1528,9 +1723,10 @@ const mcpQueryExpressionFilterSchema = z
           "not declared in any of this dashboard's filters is silently dropped at click time. " +
           'Declare an expression here for every column you plan to drive via row-click.',
       ),
-    sourceId: objectIdSchema.describe(
+    sourceId: objectIdOrVariableReferenceSchema.describe(
       'Source the filter values are pulled from (for the dropdown). ' +
-        'Get IDs from clickstack_list_sources.',
+        'Get IDs from clickstack_list_sources. ' +
+        SOURCE_VARIABLE_REFERENCE_NOTE,
     ),
     sourceMetricType: z
       .nativeEnum(MetricsDataType)
@@ -1559,7 +1755,7 @@ const mcpQueryExpressionFilterSchema = z
       'Query language of `where`. Set it explicitly.',
     ),
     appliesToSourceIds: z
-      .array(objectIdSchema)
+      .array(objectIdOrVariableReferenceSchema)
       .optional()
       .describe(
         'Source IDs (from clickstack_list_sources) that this filter is applied to. ' +
@@ -1628,20 +1824,243 @@ const mcpStaticListFilterSchema = z
       'with the column passed explicitly, since the filter has no expression of its own.',
   );
 
+const mcpSqlQueryFilterSchema = z
+  .object({
+    ...mcpDashboardFilterBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.SQL_QUERY)
+      .describe(
+        'Filter type discriminator for a filter whose dropdown values come from a ClickHouse SQL query.',
+      ),
+    connectionId: objectIdOrVariableReferenceSchema.describe(
+      'ClickHouse connection the query runs on: a connection ID from ' +
+        'clickstack_list_sources, or `$name` of a CONNECTION filter on this dashboard.',
+    ),
+    sourceId: objectIdOrVariableReferenceSchema
+      .optional()
+      .describe(
+        'Optional log, trace, session, or metric source on the same connection. ' +
+          'Lets sqlTemplate use $__sourceTable and $__filters. Get IDs from ' +
+          'clickstack_list_sources. ' +
+          SOURCE_VARIABLE_REFERENCE_NOTE,
+      ),
+    sqlTemplate: SqlQueryDashboardFilterSchema.shape.sqlTemplate.describe(
+      'ClickHouse SELECT whose FIRST column becomes the dropdown values (cast to ' +
+        'string; nulls and duplicates dropped; row order kept, so add ORDER BY). ' +
+        'May use the time macros ($__timeFilter(<column>), $__fromTime, $__toTime) ' +
+        "and other filters' variables, ideally as $__filter(<expression>, $<variableName>). " +
+        '$__sourceTable and $__filters need a sourceId; $__filters expands to the ' +
+        "dashboard's broadcast filter selections for that source. Without a sourceId, " +
+        'name tables explicitly. Example: "SELECT DISTINCT env FROM default.envs ORDER BY env".',
+    ),
+  })
+  .describe(
+    'A variable-only filter whose dropdown lists the first column of a ClickHouse ' +
+      'query. Use it for values in lookup tables, dictionaries, or joins that no ' +
+      'single source column covers. Tiles reference the selection as ' +
+      '$__filter(<expression>, $<variableName>) with the column passed explicitly.',
+  );
+
+const mcpPromqlLabelFilterSchema = z
+  .object({
+    ...mcpDashboardFilterBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.PROMETHEUS_LABEL)
+      .describe(
+        "Filter type discriminator for a filter whose dropdown lists a Prometheus label's values.",
+      ),
+    sourceId: objectIdOrVariableReferenceSchema.describe(
+      'ID of a source whose kind is "promql". Get IDs from clickstack_list_sources. ' +
+        SOURCE_VARIABLE_REFERENCE_NOTE,
+    ),
+    label: PromqlLabelDashboardFilterSchema.shape.label.describe(
+      'Label whose values fill the dropdown, e.g. "job". ' +
+        'clickstack_describe_source with metricName lists the label names of a metric in a promql source.',
+    ),
+    match: PromqlLabelDashboardFilterSchema.shape.match.describe(
+      'Optional series selector narrowing which series the values come from, ' +
+        'e.g. up{env="prod"}.',
+    ),
+  })
+  .describe(
+    "A variable-only filter whose dropdown lists a Prometheus label's values. " +
+      'PromQL tiles reference it in a label matcher: {job=~"$job"} for the ' +
+      'default multi-select, or {job="$job"} with maxSelections: 1.',
+  );
+
+// Selection limits and requirements have no meaning for a list of conditions,
+// so the ad hoc shape doesn't carry them.
+const mcpAdhocFilterSchema = z
+  .object({
+    id: mcpDashboardFilterBaseShape.id,
+    name: mcpDashboardFilterBaseShape.name,
+    variableName: variableNameSchema.describe(
+      "Unique name the filter's conditions are saved under in savedFilterValues. " +
+        'Tiles CANNOT reference it as a variable. A default is derived from the ' +
+        "display name when omitted. Must be unique across the dashboard's " +
+        'variable-enabled filters.',
+    ),
+    type: z
+      .literal(DashboardFilterType.enum.ADHOC)
+      .describe(
+        'Filter type discriminator for a filter holding free-form key / operator / value conditions.',
+      ),
+    sourceType: z
+      .literal('sql')
+      .describe(
+        '"sql": keys are the columns and map keys of Log, Trace, or Session sources.',
+      ),
+    sources: z
+      .array(objectIdOrVariableReferenceSchema)
+      .min(1)
+      .describe(
+        'IDs of the Log, Trace, or Session sources (from clickstack_list_sources) ' +
+          'whose keys and values the filter suggests, or `$name` of DATA_SOURCE filters.',
+      ),
+    where: z
+      .string()
+      .optional()
+      .describe(
+        'Optional condition narrowing the rows keys and values are suggested from. ' +
+          "Never applied to tiles. May reference other filters' variables.",
+      ),
+    whereLanguage: SearchConditionTrimmedLanguageSchema.describe(
+      'Query language of `where`.',
+    ),
+    appliesToSourceIds: z
+      .array(objectIdOrVariableReferenceSchema)
+      .optional()
+      .describe(
+        'IDs of the sources whose tiles the conditions apply to, of the same kind ' +
+          "as `sources`. Omit to apply to the tiles of the filter's `sources`.",
+      ),
+  })
+  .describe(
+    'An ad hoc filter: the user picks any number of key / operator / value ' +
+      'conditions in the filter bar, or clicks values in tiles, and every ' +
+      'condition is ANDed onto the tiles the filter applies to. Always ' +
+      'broadcasts and is never a variable. Seed its conditions with an ' +
+      '"adhoc" entry in savedFilterValues.',
+  );
+
+const mcpPromqlAdhocFilterSchema = mcpAdhocFilterSchema.extend({
+  sourceType: AdhocFilterSourceTypeSchema.describe(
+    '"sql": keys are the columns and map keys of Log, Trace, or Session sources. ' +
+      '"promql": keys are the labels of promql sources, and conditions are added ' +
+      'as label matchers to every selector in PromQL tiles.',
+  ),
+  sources: z
+    .array(objectIdOrVariableReferenceSchema)
+    .min(1)
+    .describe(
+      'IDs of the sources (from clickstack_list_sources) whose keys and values ' +
+        'the filter suggests, or `$name` of DATA_SOURCE filters: Log, Trace, or ' +
+        'Session sources for sourceType "sql", promql sources for "promql".',
+    ),
+  where: mcpAdhocFilterSchema.shape.where.describe(
+    `${mcpAdhocFilterSchema.shape.where.description} sourceType "sql" only; rejected when sourceType is "promql".`,
+  ),
+});
+
+// Reference variables are always single-select and required, so they take
+// none of the selection-limit fields.
+const mcpReferenceVariableBaseShape = {
+  id: mcpDashboardFilterBaseShape.id,
+  name: mcpDashboardFilterBaseShape.name,
+  variableName: mcpDashboardFilterBaseShape.variableName,
+  // Always required, so the base description's minSelections condition doesn't apply
+  isGlobalRequirement: mcpDashboardFilterBaseShape.isGlobalRequirement.describe(
+    'Block EVERY tile on the dashboard until a value is selected, not just ' +
+      'the ones that reference this variable.',
+  ),
+};
+
+const mcpDataSourceFilterSchema = z
+  .object({
+    ...mcpReferenceVariableBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.DATA_SOURCE)
+      .describe(
+        'Filter type discriminator for a variable whose value is a source.',
+      ),
+    allowedSourceKinds: z
+      .array(z.nativeEnum(SourceKind))
+      .min(1)
+      .describe(
+        'Kinds of sources offered in the dropdown. A tile or filter can reference the ' +
+          'variable if it accepts at least one listed kind. A tile whose selected source ' +
+          'is a kind it cannot use (e.g. a log source on a PromQL tile) errors instead of ' +
+          'running, so prefer kinds that charts treat alike (log + trace, or a single kind).',
+      ),
+    connectionId: objectIdOrVariableReferenceSchema
+      .optional()
+      .describe(
+        'Optional connection the offered sources are limited to: a connection ID, or ' +
+          '`$name` of a CONNECTION filter on this dashboard.',
+      ),
+  })
+  .describe(
+    'A variable whose single, required value is a source. Tiles and other filters ' +
+      'reference it as `$variableName` in sourceId (or appliesToSourceIds) instead of a ' +
+      'source ID; tiles stay blocked until a source is selected.',
+  );
+
+const mcpConnectionFilterSchema = z
+  .object({
+    ...mcpReferenceVariableBaseShape,
+    type: z
+      .literal(DashboardFilterType.enum.CONNECTION)
+      .describe(
+        'Filter type discriminator for a variable whose value is a connection.',
+      ),
+  })
+  .describe(
+    'A variable whose single, required value is a connection. Raw SQL tiles reference ' +
+      'it as `$variableName` in connectionId, and DATA_SOURCE and SQL_QUERY filters in ' +
+      'connectionId.',
+  );
+
 const mcpDashboardFilterSchema = z
   .discriminatedUnion('type', [
     mcpQueryExpressionFilterSchema,
     mcpStaticListFilterSchema,
+    mcpSqlQueryFilterSchema,
+    mcpAdhocFilterSchema,
+    mcpDataSourceFilterSchema,
+    mcpConnectionFilterSchema,
   ])
   .describe(
     'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
-      'Two types: QUERY_EXPRESSION queries its dropdown values from a source column; ' +
-      'STATIC_LIST declares them inline and is always variable-only.',
+      'QUERY_EXPRESSION queries its dropdown values from a source column; ' +
+      'STATIC_LIST declares them inline; SQL_QUERY reads them from a SQL query. ' +
+      'STATIC_LIST and SQL_QUERY are always variable-only. ADHOC holds free-form ' +
+      'conditions and always broadcasts. DATA_SOURCE and CONNECTION select the ' +
+      'source or connection that tiles referencing them as `$variableName` use.',
   );
 
-export type McpDashboardFilter = z.infer<typeof mcpDashboardFilterSchema>;
+const mcpPromqlDashboardFilterSchema = z
+  .discriminatedUnion('type', [
+    mcpQueryExpressionFilterSchema,
+    mcpStaticListFilterSchema,
+    mcpSqlQueryFilterSchema,
+    mcpPromqlLabelFilterSchema,
+    mcpPromqlAdhocFilterSchema,
+    mcpDataSourceFilterSchema,
+    mcpConnectionFilterSchema,
+  ])
+  .describe(
+    'A dashboard-level filter the user can adjust in the dashboard filter bar. ' +
+      'QUERY_EXPRESSION queries its dropdown values from a source column; ' +
+      'STATIC_LIST declares them inline; SQL_QUERY reads them from a SQL query; ' +
+      'PROMETHEUS_LABEL lists the values of a label on a promql source. Those three ' +
+      'are always variable-only. ADHOC holds free-form conditions on SQL or promql ' +
+      'sources and always broadcasts. DATA_SOURCE and CONNECTION select the source ' +
+      'or connection that tiles referencing them as `$variableName` use.',
+  );
 
-export const mcpFiltersParam = z
+export type McpDashboardFilter = z.infer<typeof mcpPromqlDashboardFilterSchema>;
+
+const mcpFiltersParam = z
   .array(mcpDashboardFilterSchema)
   .describe(
     'Optional dashboard-level filters. These define the dropdowns in the dashboard filter ' +
@@ -1649,9 +2068,12 @@ export const mcpFiltersParam = z
       'If another tile\'s onClick targets THIS dashboard with `filters: [{ expression: "X", ... }]`, ' +
       'this array MUST declare a filter whose `expression` is "X". Otherwise the value is ' +
       'dropped on arrival and the destination opens unfiltered.\n\n' +
-      'Two filter types: QUERY_EXPRESSION queries its dropdown values from a source column, ' +
-      'while STATIC_LIST declares them inline via `options` and is always variable-only ' +
-      '(it has no expression to broadcast).\n\n' +
+      'Filter types: QUERY_EXPRESSION queries its dropdown values from a source column. ' +
+      'STATIC_LIST declares them inline via `options`, and SQL_QUERY reads them from the ' +
+      'first column of a ClickHouse query; both are always variable-only (they have no ' +
+      'expression to broadcast). ADHOC lets the user build any number of ' +
+      'key / operator / value conditions, with keys and values suggested from its ' +
+      '`sources`, and always broadcasts them; it is never a variable.\n\n' +
       'A QUERY_EXPRESSION filter runs in one of two modes (or both). BROADCAST (the default) applies the ' +
       'selected value as a condition on matching tiles with no per-tile wiring. VARIABLE ' +
       '(isVariableEnabled) exposes the value to tile queries as $variableName, which the tile ' +
@@ -1690,6 +2112,13 @@ export const mcpFiltersParam = z
       'Always pass the column explicitly: the one-argument $__filter($env) form reuses the ' +
       "filter's own expression, which a static filter does not have. Prefer STATIC_LIST when " +
       'the values are a fixed business list or a curated subset rather than derivable from the data.\n\n' +
+      'Example (SQL query: values from a lookup table no source covers, narrowed by another filter):\n' +
+      '[\n' +
+      '  { "type": "SQL_QUERY", "name": "Environment", "connectionId": "<connection-id>",\n' +
+      '    "sqlTemplate": "SELECT DISTINCT env FROM default.envs WHERE $__filter(cloud, $cloud) ORDER BY env",\n' +
+      '    "variableName": "env" }\n' +
+      ']\n' +
+      'Prefer QUERY_EXPRESSION when the values are a column of a registered source.\n\n' +
       "Example (dependent filter: the Endpoint dropdown only lists the selected service's " +
       'endpoints):\n' +
       '[\n' +
@@ -1702,10 +2131,127 @@ export const mcpFiltersParam = z
       ']\n' +
       "A filter's `where` scopes only the values ITS dropdown offers; it is not applied to " +
       'any tile. That is why Service keeps broadcasting here: its variable is read by the ' +
-      'Endpoint dropdown, not by a tile, so the value is never applied twice.',
+      'Endpoint dropdown, not by a tile, so the value is never applied twice.\n\n' +
+      'Example (ad hoc: free-form conditions on the log and trace tiles, seeded via ' +
+      'savedFilterValues):\n' +
+      '[\n' +
+      '  { "type": "ADHOC", "name": "Conditions", "sourceType": "sql",\n' +
+      '    "sources": ["<log-source-id>", "<trace-source-id>"], "variableName": "conditions" }\n' +
+      ']\n' +
+      'with savedFilterValues: [{ "type": "adhoc", "name": "conditions", "conditions": ' +
+      '[{ "key": "ServiceName", "operator": "IN", "value": "api" }, ' +
+      '{ "key": "ServiceName", "operator": "IN", "value": "web" }] }].\n\n' +
+      'Example (data source variable: viewers pick which logs source every tile reads):\n' +
+      '[\n' +
+      '  { "type": "DATA_SOURCE", "name": "Logs source", "variableName": "logs",\n' +
+      '    "allowedSourceKinds": ["log"] }\n' +
+      ']\n' +
+      'Tiles then set "sourceId": "$logs". A CONNECTION filter works the same way for ' +
+      'raw SQL tiles ("connectionId": "$conn"); a DATA_SOURCE filter may set ' +
+      '"connectionId" to limit its sources to one connection. Alerts are not supported ' +
+      'on tiles that use either.',
   );
 
-export const mcpPatchDashboardSchema = z.object({
+const PROMQL_FILTERS_EXAMPLE =
+  '\n\nAnother type, PROMETHEUS_LABEL, lists the values of a label on a promql source ' +
+  'and is always variable-only.\n\n' +
+  'Example (PROMETHEUS_LABEL):\n' +
+  '[\n' +
+  '  { "type": "PROMETHEUS_LABEL", "name": "Job", "sourceId": "<promql-source-id>",\n' +
+  '    "label": "job", "variableName": "job" }\n' +
+  ']\n' +
+  'A PromQL tile references it as rate(http_requests_total{job=~"$job"}[$__rate_interval]).\n\n' +
+  'An ADHOC filter with sourceType "promql" reads label keys and values from promql ' +
+  '`sources` and adds its conditions as label matchers to every selector in the PromQL ' +
+  'tiles it applies to; no tile wiring is needed.';
+
+/** PROMETHEUS_LABEL filters are offered only while PromQL is enabled. */
+export function buildMcpFiltersParam(promqlEnabled: boolean) {
+  if (!promqlEnabled) return mcpFiltersParam;
+  return z
+    .array(mcpPromqlDashboardFilterSchema)
+    .describe(`${mcpFiltersParam.description}${PROMQL_FILTERS_EXAMPLE}`);
+}
+
+// Validation rules come from the external schemas so MCP and REST stay in
+// lockstep; only the descriptions live here.
+const sqlValueShape = externalSqlSavedFilterValueSchema.shape;
+const mcpSqlSavedFilterValueSchema = externalSqlSavedFilterValueSchema.extend({
+  type: sqlValueShape.type.describe(
+    'Entry kind. Defaults to "sql"; a predicate broadcast to tiles.',
+  ),
+  condition: sqlValueShape.condition.describe(
+    'Raw SQL predicate applied to every tile (SQL, not Lucene). Example: ' +
+      '"ServiceName IN (\'api\')".',
+  ),
+});
+
+const variableValueShape = externalVariableSavedFilterValueSchema.shape;
+const mcpVariableSavedFilterValueSchema =
+  externalVariableSavedFilterValueSchema.extend({
+    type: variableValueShape.type.describe(
+      'Entry kind: a selection for a variable-enabled filter.',
+    ),
+    name: variableValueShape.name.describe(
+      'The variableName of the variable-enabled filter this selection belongs ' +
+        "to. Must match a filter's variableName declared in `filters` (see " +
+        'clickstack_get_dashboard for the resolved names); an unknown name is ' +
+        'ignored when the dashboard loads.',
+    ),
+    values: variableValueShape.values.describe(
+      'Selected values for the variable, e.g. ["api", "web"].',
+    ),
+  });
+
+const adhocValueShape = externalAdhocSavedFilterValueSchema.shape;
+const mcpAdhocSavedFilterValueSchema =
+  externalAdhocSavedFilterValueSchema.extend({
+    type: adhocValueShape.type.describe(
+      'Entry kind: the conditions of an ADHOC filter.',
+    ),
+    name: adhocValueShape.name.describe(
+      'The variableName of the ADHOC filter these conditions belong to.',
+    ),
+    conditions: z
+      .array(
+        AdhocFilterConditionSchema.extend({
+          key: AdhocFilterConditionSchema.shape.key.describe(
+            'A SQL expression (column or map access, e.g. "ServiceName" or ' +
+              '"SpanAttributes[\'http.method\']") for a sql filter, or a label ' +
+              'name for a promql filter.',
+          ),
+          operator: AdhocFilterConditionSchema.shape.operator.describe(
+            '=, !=, =~ (regex), !~ (not regex), and IN. sql filters also take ' +
+              'LIKE and NOT LIKE. Conditions are ANDed, except that IN conditions ' +
+              'on the same key are ORed into one IN (...) for a sql filter or ' +
+              '=~"a|b" matcher for a promql filter, so each carries one value.',
+          ),
+          value: AdhocFilterConditionSchema.shape.value.describe(
+            'The value, LIKE pattern, or regular expression to compare against.',
+          ),
+        }),
+      )
+      .max(ADHOC_FILTER_MAX_CONDITIONS)
+      .describe("The filter's conditions."),
+  });
+
+export const mcpSavedFilterValuesParam = z
+  .array(
+    mcpUnion([
+      mcpSqlSavedFilterValueSchema,
+      mcpVariableSavedFilterValueSchema,
+      mcpAdhocSavedFilterValueSchema,
+    ]),
+  )
+  .describe(
+    'Default filter selections restored every time the dashboard is opened. ' +
+      'Replaces the whole saved set on write; pass [] to clear the defaults. ' +
+      'Omit to leave the saved defaults untouched.',
+  );
+
+export type McpSavedFilterValues = z.infer<typeof mcpSavedFilterValuesParam>;
+
+const mcpPatchDashboardSchema = z.object({
   dashboardId: objectIdSchema.describe(
     'ID of the dashboard to patch, from clickstack_get_dashboard (no id lists ' +
       'dashboards) or clickstack_search_dashboards.',
@@ -1718,6 +2264,7 @@ export const mcpPatchDashboardSchema = z.object({
   tags: tagsSchema.describe(
     'New tag list; replaces all existing tags. Omit to keep the current tags.',
   ),
+  savedFilterValues: mcpSavedFilterValuesParam.optional(),
   tileId: z
     .string()
     .optional()
@@ -1734,6 +2281,16 @@ export const mcpPatchDashboardSchema = z.object({
         'complete config, since omitted config fields are not carried over.',
     ),
 });
+
+/** PromQL tiles are offered only while PromQL is enabled. */
+export function buildMcpPatchDashboardSchema(promqlEnabled: boolean) {
+  if (!promqlEnabled) return mcpPatchDashboardSchema;
+  return mcpPatchDashboardSchema.extend({
+    tile: mcpUnion([...mcpPatchTileSchema.options, mcpPromqlPatchTileSchema])
+      .optional()
+      .describe(mcpPatchDashboardSchema.shape.tile.description ?? ''),
+  });
+}
 
 export const mcpSearchDashboardsSchema = z.object({
   query: z

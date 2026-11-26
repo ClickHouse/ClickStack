@@ -1,7 +1,9 @@
 import router from 'next/router';
 import { SourceKind, TTraceSource } from '@hyperdx/common-utils/dist/types';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import {
+  buildServiceMapErrorWhere,
   deriveDisplayMetrics,
   ERROR_RATE_HIGH,
   formatApproximateNumber,
@@ -11,6 +13,8 @@ import {
   getNodeSize,
   getRequestsPerSecond,
   getServiceMetricValue,
+  isServiceMapTooLarge,
+  MAX_SERVICE_MAP_NODES,
   navigateToTraceSearch,
   rawDurationToMs,
   SERVICE_MAP_METRIC_HUE,
@@ -24,6 +28,21 @@ jest.mock('next/router', () => ({
     push: jest.fn(),
   },
 }));
+
+describe('buildServiceMapErrorWhere', () => {
+  it('includes legacy STATUS_CODE_ERROR spans in the error drill-down', () => {
+    expect(
+      buildServiceMapErrorWhere({
+        serviceNameExpression: 'ServiceName',
+        serviceName: 'api',
+        spanKindExpression: 'SpanKind',
+        statusCodeExpression: 'StatusCode',
+      }),
+    ).toBe(
+      "ServiceName = 'api' AND SpanKind IN ('Server', 'Consumer') AND lower(StatusCode) IN ('error', 'status_code_error')",
+    );
+  });
+});
 
 describe('navigateToTraceSearch', () => {
   const mockSource: TTraceSource = {
@@ -50,6 +69,15 @@ describe('navigateToTraceSearch', () => {
     jest.clearAllMocks();
   });
 
+  // router.push accepts a UrlObject too; navigateToTraceSearch always passes a string.
+  function getPushedUrl(): string {
+    const callArg = jest.mocked(router.push).mock.calls[0]?.[0];
+    if (typeof callArg !== 'string') {
+      throw new Error('Expected router.push to be called with a string URL');
+    }
+    return callArg;
+  }
+
   it('should navigate to search page with correct query parameters', () => {
     const dateRange: [Date, Date] = [
       new Date('2024-01-15T10:00:00.000Z'),
@@ -64,7 +92,7 @@ describe('navigateToTraceSearch', () => {
 
     expect(router.push).toHaveBeenCalledTimes(1);
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     expect(callArg).toContain('/search?');
 
     // Parse query params
@@ -91,7 +119,7 @@ describe('navigateToTraceSearch', () => {
       where: 'status_code = 500',
     });
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     const url = new URL(callArg, 'http://localhost');
     const params = url.searchParams;
 
@@ -114,7 +142,7 @@ describe('navigateToTraceSearch', () => {
       where: complexWhere,
     });
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     const url = new URL(callArg, 'http://localhost');
     const params = url.searchParams;
 
@@ -135,7 +163,7 @@ describe('navigateToTraceSearch', () => {
       where: whereWithSpecialChars,
     });
 
-    const callArg = (router.push as jest.Mock).mock.calls[0][0];
+    const callArg = getPushedUrl();
     const url = new URL(callArg, 'http://localhost');
     const params = url.searchParams;
 
@@ -479,7 +507,9 @@ describe('getServiceMetricValue', () => {
     overrides: Partial<ServiceAggregation['incomingRequests']> = {},
     outgoingRequests = 0,
   ): ServiceAggregation => ({
+    key: 'svc',
     serviceName: 'svc',
+    dimensions: [],
     incomingRequests: {
       totalRequests: 100,
       errorCount: 5,
@@ -629,7 +659,7 @@ describe('getNodeSize', () => {
 });
 
 describe('deriveDisplayMetrics', () => {
-  const source = { durationPrecision: 9 } as unknown as TTraceSource;
+  const source = fromPartial<TTraceSource>({ durationPrecision: 9 });
   const oneHour: [Date, Date] = [
     new Date('2024-01-01T00:00:00.000Z'),
     new Date('2024-01-01T01:00:00.000Z'),
@@ -675,5 +705,16 @@ describe('deriveDisplayMetrics', () => {
     );
     expect(m.requestsPerSecond).toBeUndefined();
     expect(m.latencyMs).toBeDefined();
+  });
+});
+
+describe('isServiceMapTooLarge', () => {
+  it('gates only maps above the node limit', () => {
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES, false)).toBe(false);
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES + 1, false)).toBe(true);
+  });
+
+  it('is lifted by "Show anyway"', () => {
+    expect(isServiceMapTooLarge(MAX_SERVICE_MAP_NODES + 1, true)).toBe(false);
   });
 });

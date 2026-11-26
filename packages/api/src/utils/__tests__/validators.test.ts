@@ -1,4 +1,6 @@
 import { WebhookService } from '@hyperdx/common-utils/dist/types';
+import { fromAny } from '@total-typescript/shoehorn';
+import dns from 'dns';
 
 import { createHandlebarsWithHelpers } from '@/tasks/checkAlerts/transports';
 import * as validators from '@/utils/validators';
@@ -98,6 +100,10 @@ describe('validators', () => {
       ['mapped public address', '::ffff:8.8.8.8', false],
       ['mapped private address in hexadecimal form', '::ffff:ac10:1', true],
       ['mapped public address in hexadecimal form', '::ffff:808:808', false],
+      ['NAT64 loopback address', '64:ff9b::7f00:1', true],
+      ['NAT64 private address in dotted form', '64:ff9b::10.0.0.1', true],
+      ['NAT64 public address', '64:ff9b::808:808', false],
+      ['local-use NAT64 address', '64:ff9b:1::808:808', true],
       ['private IPv4 address with a CIDR suffix', '127.0.0.1/8', true],
       ['scoped IPv6 link-local address', 'fe80::1%lo0', true],
     ])('%s (%s)', (_description, ip, expected) => {
@@ -128,28 +134,28 @@ describe('validators', () => {
     });
   });
 
+  const loadValidatorsWithConfig = (config: {
+    clickhouseHost?: string;
+    hostnameAllowlist?: string;
+  }): typeof validators => {
+    let isolatedValidators: typeof validators | undefined;
+
+    jest.isolateModules(() => {
+      jest.doMock('@/config', () => ({
+        CLICKHOUSE_HOST: config.clickhouseHost,
+        MONGO_URI: undefined,
+        WEBHOOK_HOSTNAME_ALLOWLIST: config.hostnameAllowlist ?? '',
+      }));
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, n/no-missing-require
+      isolatedValidators = require('@/utils/validators');
+    });
+    jest.dontMock('@/config');
+
+    return isolatedValidators!;
+  };
+
   describe('validateWebhookUrl', () => {
-    const loadValidatorsWithConfig = (config: {
-      clickhouseHost?: string;
-      hostnameAllowlist?: string;
-    }): typeof validators => {
-      let isolatedValidators: typeof validators | undefined;
-
-      jest.isolateModules(() => {
-        jest.doMock('@/config', () => ({
-          CLICKHOUSE_HOST: config.clickhouseHost,
-          MONGO_URI: undefined,
-          WEBHOOK_HOSTNAME_ALLOWLIST: config.hostnameAllowlist ?? '',
-        }));
-
-        // eslint-disable-next-line @typescript-eslint/no-require-imports, n/no-missing-require
-        isolatedValidators = require('@/utils/validators');
-      });
-      jest.dontMock('@/config');
-
-      return isolatedValidators!;
-    };
-
     it.each([
       [
         'generic webhook',
@@ -322,6 +328,81 @@ describe('validators', () => {
     });
   });
 
+  describe('webhookLookup', () => {
+    const lookup = (
+      v: typeof validators,
+      hostname: string,
+      all = false,
+    ): Promise<unknown> =>
+      new Promise((resolve, reject) =>
+        v.webhookLookup(hostname, { all }, (err, address) =>
+          err ? reject(err) : resolve(address),
+        ),
+      );
+
+    const mockLookup = (err: Error | null, addresses: dns.LookupAddress[]) =>
+      jest
+        .spyOn(dns, 'lookup')
+        .mockImplementation((...args: any[]) => args[2](err, addresses));
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('blocks a hostname that resolves to a private address', async () => {
+      await expect(lookup(validators, 'localhost')).rejects.toThrow(
+        validators.WebhookUrlValidationError,
+      );
+    });
+
+    it('returns public addresses in the shape the caller asked for', async () => {
+      mockLookup(null, [{ address: '93.184.216.34', family: 4 }]);
+
+      await expect(lookup(validators, 'example.com')).resolves.toBe(
+        '93.184.216.34',
+      );
+      await expect(lookup(validators, 'example.com', true)).resolves.toEqual([
+        { address: '93.184.216.34', family: 4 },
+      ]);
+    });
+
+    it.each([
+      [
+        'one private record among public ones',
+        [
+          { address: '93.184.216.34', family: 4 },
+          { address: '10.0.0.1', family: 4 },
+        ],
+      ],
+      ['an IPv6 loopback record', [{ address: '::1', family: 6 }]],
+      [
+        'an IPv4-mapped private record',
+        [{ address: '::ffff:192.168.1.1', family: 6 }],
+      ],
+      ['a NAT64 loopback record', [{ address: '64:ff9b::7f00:1', family: 6 }]],
+    ])('blocks %s', async (_name, addresses) => {
+      mockLookup(null, addresses);
+      await expect(lookup(validators, 'example.com', true)).rejects.toThrow(
+        validators.WebhookUrlValidationError,
+      );
+    });
+
+    it('passes through a DNS error unchanged', async () => {
+      const dnsError = Object.assign(new Error('getaddrinfo ENOTFOUND'), {
+        code: 'ENOTFOUND',
+      });
+      mockLookup(dnsError, []);
+      await expect(lookup(validators, 'nope.example')).rejects.toBe(dnsError);
+    });
+
+    it('allows an allowlisted hostname that resolves privately', async () => {
+      const isolatedValidators = loadValidatorsWithConfig({
+        hostnameAllowlist: 'localhost',
+      });
+      await expect(lookup(isolatedValidators, 'localhost')).resolves.toEqual(
+        expect.any(String),
+      );
+    });
+  });
+
   describe('getWebhookConfigErrors', () => {
     const BROKEN_BODY = '{"text": "{{#if title}}"}';
 
@@ -480,8 +561,8 @@ describe('validators', () => {
     });
 
     it('should return false if password is invalid', () => {
-      expect(validators.validatePassword(null as any)).toBe(false);
-      expect(validators.validatePassword(undefined as any)).toBe(false);
+      expect(validators.validatePassword(fromAny(null))).toBe(false);
+      expect(validators.validatePassword(fromAny(undefined))).toBe(false);
       expect(validators.validatePassword('')).toBe(false);
       expect(validators.validatePassword('1234567')).toBe(false);
       expect(validators.validatePassword('abcdefghijk')).toBe(false); // 11 chars

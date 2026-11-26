@@ -47,6 +47,7 @@ export default mongoose.model<ITeam>(
       parallelizeWhenPossible: Boolean,
       filterKeysFetchLimit: Number,
       maxExemplars: Number,
+      filterValuesExactByDefault: Boolean,
     },
     {
       timestamps: true,

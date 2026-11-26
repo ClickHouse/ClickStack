@@ -11,11 +11,12 @@ import {
   timeFilterExpr,
 } from '@/core/renderChartConfig';
 import { convertToCategoricalChartConfig } from '@/core/utils';
-import { adhocConditionsToFilters } from '@/filters';
+import { adhocConditionsToFilters, filtersToQuery } from '@/filters';
 import {
   BuilderChartConfig,
   ChartConfigWithOptDateRange,
   DisplayType,
+  Filter,
   MetricsDataType,
   QuerySettings,
 } from '@/types';
@@ -257,6 +258,138 @@ describe('renderChartConfig', () => {
       );
     },
   );
+
+  describe('group-by over the raw time column (Unknown identifier TimeUnix)', () => {
+    const metricTables = gaugeConfiguration.metricTables;
+    const tableConfig = (
+      metricType: MetricsDataType,
+      aggFn: 'max' | 'count' | 'sum' | 'increase',
+      groupBy: string,
+      extra: Partial<BuilderChartConfig> = {},
+    ): ChartConfigWithOptDateRange => ({
+      displayType: DisplayType.Table,
+      connection: 'test-connection',
+      metricTables,
+      from: { databaseName: 'default', tableName: '' },
+      select: [
+        {
+          aggFn,
+          aggCondition: '',
+          valueExpression: 'Value',
+          alias: 'v',
+          metricName: 'm',
+          metricType,
+        },
+      ],
+      where: '',
+      whereLanguage: 'sql',
+      timestampValueExpression: 'TimeUnix',
+      dateRange: [new Date('2025-02-12'), new Date('2025-02-19')],
+      groupBy,
+      ...extra,
+    });
+    const render = async (config: ChartConfigWithOptDateRange) =>
+      parameterizedQueryToSql(
+        await renderChartConfig(config, mockMetadata, querySettings),
+      ).replace(/\s+/g, ' ');
+
+    const gaugeBucketStart =
+      'Bucketed AS (SELECT *, __hdx_time_bucket2 AS `TimeUnix` FROM ( SELECT';
+    const gaugePerBucket =
+      'FROM Source GROUP BY AttributesHash, __hdx_time_bucket2 ORDER BY';
+    const sumBucketStart =
+      'IsMonotonic, `__hdx_time_bucket2` AS `TimeUnix` FROM ( SELECT';
+    const sumPerBucket =
+      'FROM Source GROUP BY AttributesHash, `__hdx_time_bucket2` ORDER BY';
+
+    it.each([
+      'toStartOfInterval(TimeUnix, INTERVAL 1 MINUTE)',
+      "ResourceAttributes['k8s.pod.name'], toStartOfInterval(TimeUnix, toIntervalSecond(10))",
+      "toStartOfInterval(TimeUnix, toIntervalMinute(1)) AS m, Attributes['queue']",
+      'toDate(TimeUnix)',
+    ])(
+      'exposes the gauge bucket start as TimeUnix for group-by %p',
+      async groupBy => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Gauge, 'max', groupBy),
+        );
+        expect(sql).toContain(gaugeBucketStart);
+        expect(sql).toContain(gaugePerBucket);
+      },
+    );
+
+    it('exposes the gauge bucket start in a pie chart split by time', async () => {
+      const sql = await render(
+        convertToCategoricalChartConfig(
+          tableConfig(MetricsDataType.Gauge, 'max', 'toStartOfHour(TimeUnix)', {
+            displayType: DisplayType.Pie,
+          }) as Parameters<typeof convertToCategoricalChartConfig>[0],
+        ),
+      );
+      expect(sql).toContain(gaugeBucketStart);
+      expect(sql).toContain(gaugePerBucket);
+    });
+
+    it('keeps the per-bucket delta of an isDelta gauge grouped by time', async () => {
+      const sql = await render(
+        tableConfig(MetricsDataType.Gauge, 'max', 'toStartOfHour(TimeUnix)', {
+          select: [
+            {
+              aggFn: 'max',
+              aggCondition: '',
+              valueExpression: 'Value',
+              metricName: 'm',
+              metricType: MetricsDataType.Gauge,
+              isDelta: true,
+            },
+          ],
+        }),
+      );
+      expect(sql).toContain(gaugeBucketStart);
+      expect(sql).toContain(gaugePerBucket);
+      expect(sql).toContain('argMax(Value, TimeUnix)');
+    });
+
+    it.each([
+      ['sum', 'toStartOfFiveMinutes(TimeUnix)'],
+      [
+        'increase',
+        "concat(Attributes['outcome'], ' ', toString(toStartOfInterval(TimeUnix, toIntervalHour(6))))",
+      ],
+    ] as const)(
+      'exposes the sum bucket start as TimeUnix for %s grouped by %p',
+      async (aggFn, groupBy) => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Sum, aggFn, groupBy, {
+            having: 'v > 0',
+            havingLanguage: 'sql',
+          }),
+        );
+        expect(sql).toContain(sumBucketStart);
+        expect(sql).toContain(sumPerBucket);
+      },
+    );
+
+    it.each(['toDate(TimeUnix)', 'ServiceName, toStartOfHour(TimeUnix)'])(
+      'keeps every time bucket of an increase grouped by %p',
+      async groupBy => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Sum, 'increase', groupBy),
+        );
+        expect(sql).not.toContain('TopGroups');
+      },
+    );
+
+    it.each(['StartTimeUnix', "Attributes['TimeUnix']", 'ServiceName'])(
+      'leaves Bucketed per bucket for group-by %p',
+      async groupBy => {
+        const sql = await render(
+          tableConfig(MetricsDataType.Gauge, 'max', groupBy),
+        );
+        expect(sql).not.toContain('AS `TimeUnix`');
+      },
+    );
+  });
 
   it('should generate sql for a single gauge metric with a delta() function applied', async () => {
     const generatedSql = await renderChartConfig(
@@ -929,6 +1062,118 @@ describe('renderChartConfig', () => {
       renderChartConfig(config, mockMetadata, querySettings),
     ).rejects.toThrow(
       "aggFn 'increase' is only supported for Sum (counter) metrics",
+    );
+  });
+
+  describe('metric points with no recorded value', () => {
+    const NO_RECORDED_VALUE_FILTER = 'bitAnd(Flags, 1) = 0';
+
+    const renderMetricSql = async (
+      metricType: MetricsDataType,
+      select: { aggFn: 'avg' | 'count' | 'quantile'; level?: number },
+    ) => {
+      const rendered = await renderChartConfig(
+        {
+          ...gaugeConfiguration,
+          select: [
+            {
+              ...select,
+              aggCondition: '',
+              aggConditionLanguage: 'sql',
+              valueExpression: 'Value',
+              metricName: 'test.metric',
+              metricType,
+            },
+          ],
+        } as ChartConfigWithOptDateRange,
+        mockMetadata,
+        querySettings,
+      );
+      return parameterizedQueryToSql(rendered).replace(/\s+/g, ' ');
+    };
+
+    const cases = [
+      [MetricsDataType.Gauge, { aggFn: 'avg' }],
+      [MetricsDataType.Sum, { aggFn: 'avg' }],
+      [MetricsDataType.Histogram, { aggFn: 'quantile', level: 0.5 }],
+      [MetricsDataType.Histogram, { aggFn: 'count' }],
+      [MetricsDataType.ExponentialHistogram, { aggFn: 'quantile', level: 0.5 }],
+      [MetricsDataType.ExponentialHistogram, { aggFn: 'count' }],
+    ] as const;
+
+    it.each(cases)(
+      'leaves flagged points out of the %s source scan (%o)',
+      async (metricType, select) => {
+        mockMetadata.getColumn = jest
+          .fn()
+          .mockImplementation(async ({ column }) =>
+            column === 'Flags' ? { name: 'Flags', type: 'UInt32' } : undefined,
+          );
+        const sql = await renderMetricSql(metricType, select);
+        expect(sql).toMatch(
+          /WHERE .*\(MetricName = 'test\.metric'\)\) AND bitAnd\(Flags, 1\) = 0/,
+        );
+        expect(sql.split(NO_RECORDED_VALUE_FILTER)).toHaveLength(2);
+      },
+    );
+
+    // Gauge and sum queries already read Flags, so only histogram tables can
+    // lack it.
+    it.each(
+      cases.filter(
+        ([metricType]) =>
+          metricType === MetricsDataType.Histogram ||
+          metricType === MetricsDataType.ExponentialHistogram,
+      ),
+    )(
+      'reads a table without a Flags column as before (%s, %o)',
+      async (metricType, select) => {
+        const sql = await renderMetricSql(metricType, select);
+        expect(sql).not.toContain(NO_RECORDED_VALUE_FILTER);
+      },
+    );
+
+    it('reads the table as before when the Flags lookup fails', async () => {
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockImplementation(async ({ column }) => {
+          if (column === 'Flags') throw new Error('DESCRIBE failed');
+          return undefined;
+        });
+      const sql = await renderMetricSql(MetricsDataType.Gauge, {
+        aggFn: 'avg',
+      });
+      expect(sql).not.toContain(NO_RECORDED_VALUE_FILTER);
+    });
+
+    it.each(['UInt8', 'Int64', 'LowCardinality(UInt32)'])(
+      'leaves flagged points out when Flags is %s',
+      async flagsType => {
+        mockMetadata.getColumn = jest
+          .fn()
+          .mockImplementation(async ({ column }) =>
+            column === 'Flags' ? { name: 'Flags', type: flagsType } : undefined,
+          );
+        const sql = await renderMetricSql(MetricsDataType.Gauge, {
+          aggFn: 'avg',
+        });
+        expect(sql).toContain(NO_RECORDED_VALUE_FILTER);
+      },
+    );
+
+    it.each(['String', 'Nullable(UInt32)', 'LowCardinality(Nullable(UInt32))'])(
+      'reads the table as before when Flags is %s',
+      async flagsType => {
+        mockMetadata.getColumn = jest
+          .fn()
+          .mockImplementation(async ({ column }) =>
+            column === 'Flags' ? { name: 'Flags', type: flagsType } : undefined,
+          );
+        const sql = await renderMetricSql(MetricsDataType.Gauge, {
+          aggFn: 'avg',
+        });
+        expect(sql).not.toContain(NO_RECORDED_VALUE_FILTER);
+      },
     );
   });
 
@@ -1725,17 +1970,22 @@ describe('renderChartConfig', () => {
         .mockResolvedValue(new Map());
     };
 
-    const buildConfig = (condition: string): ChartConfigWithOptDateRange => ({
+    const buildFiltersConfig = (
+      filters: Filter[],
+    ): ChartConfigWithOptDateRange => ({
       connection: 'test-connection',
       from: { databaseName: 'default', tableName: 'otel_logs' },
       select: [{ aggFn: 'count', valueExpression: '' }],
       where: '',
       whereLanguage: 'sql',
-      filters: [{ type: 'sql', condition }],
+      filters,
       timestampValueExpression: 'Timestamp',
       dateRange: [new Date('2025-01-01'), new Date('2025-01-02')],
       granularity: '1 minute',
     });
+
+    const buildConfig = (condition: string) =>
+      buildFiltersConfig([{ type: 'sql', condition }]);
 
     it('rewrites `Map[key] = value` to has() when a KV items column exists', async () => {
       stubKvItemsMetadata();
@@ -1855,6 +2105,52 @@ describe('renderChartConfig', () => {
         "has(`LogAttributeItems`, concat('service.name', '=', 'api'))",
       );
       expect(sql).toContain("SeverityText = 'error'");
+    });
+
+    it('rewrites ad hoc filter conditions on a Map key', async () => {
+      stubKvItemsMetadata();
+      const sql = parameterizedQueryToSql(
+        await renderChartConfig(
+          buildFiltersConfig(
+            adhocConditionsToFilters([
+              { key: "LogAttributes['country']", operator: '=', value: 'US' },
+              { key: "LogAttributes['env']", operator: 'IN', value: 'prod' },
+              { key: "LogAttributes['env']", operator: 'IN', value: 'dev' },
+            ]),
+          ),
+          mockMetadata,
+          querySettings,
+        ),
+      );
+      expect(sql).toContain(
+        "(has(`LogAttributeItems`, concat('country', '=', 'US'))) AND (hasAny(`LogAttributeItems`, array(concat('env', '=', 'prod'), concat('env', '=', 'dev'))))",
+      );
+      expect(sql).not.toContain("toString(LogAttributes['");
+    });
+
+    it('rewrites dashboard filter selections on a Map key', async () => {
+      stubKvItemsMetadata();
+      const sql = parameterizedQueryToSql(
+        await renderChartConfig(
+          buildFiltersConfig(
+            filtersToQuery(
+              {
+                "LogAttributes['env']": {
+                  included: new Set(['prod', 'dev']),
+                  excluded: new Set(),
+                },
+              },
+              { stringifyKeys: true },
+            ),
+          ),
+          mockMetadata,
+          querySettings,
+        ),
+      );
+      expect(sql).toContain(
+        "hasAny(`LogAttributeItems`, array(concat('env', '=', 'prod'), concat('env', '=', 'dev')))",
+      );
+      expect(sql).not.toContain("toString(LogAttributes['env'])");
     });
 
     const buildWhereConfig = (where: string): ChartConfigWithOptDateRange => ({
@@ -3730,6 +4026,297 @@ describe('renderChartConfig', () => {
     // via hasToken(lower(<col>), lower(<term>)) instead of LIKE.
     expect(sql).toContain("hasToken(lower(Body), lower('errored'))");
     expect(sql).toContain("hasToken(lower(Body), lower('denied'))");
+  });
+
+  describe('min/max on date and time columns', () => {
+    const baseTraceConfig: ChartConfigWithOptDateRange = {
+      displayType: DisplayType.Table,
+      connection: 'test-connection',
+      from: {
+        databaseName: 'default',
+        tableName: 'otel_traces',
+      },
+      select: [],
+      where: '',
+      whereLanguage: 'sql',
+      timestampValueExpression: 'Timestamp',
+      dateRange: [new Date('2025-02-12'), new Date('2025-02-14')],
+    };
+
+    beforeEach(() => {
+      const columns = [
+        { name: 'Timestamp', type: "DateTime64(9, 'UTC')" },
+        { name: 'TimestampTime', type: 'DateTime' },
+        { name: 'EventDate', type: 'Nullable(Date)' },
+        { name: 'Duration', type: 'UInt64' },
+        { name: 'ServiceName', type: 'LowCardinality(String)' },
+        { name: 'SpanAttributes', type: 'Map(LowCardinality(String), String)' },
+      ];
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockImplementation(async ({ column }) =>
+          columns.find(col => col.name === column),
+        );
+    });
+
+    const render = async (config: ChartConfigWithOptDateRange) =>
+      parameterizedQueryToSql(
+        await renderChartConfig(config, mockMetadata, querySettings),
+      ).replace(/\s+/g, ' ');
+
+    it('keeps the column type for min and max on a DateTime64 column', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'min', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('SELECT min( Timestamp ),max( Timestamp ) FROM');
+      expect(actual).not.toContain('toFloat64OrDefault(toString(Timestamp))');
+    });
+
+    it('keeps the column type for DateTime, Date, and quoted identifiers', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'min', valueExpression: 'TimestampTime', aggCondition: '' },
+          { aggFn: 'max', valueExpression: 'EventDate', aggCondition: '' },
+          { aggFn: 'max', valueExpression: '`Timestamp`', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('min( TimestampTime )');
+      expect(actual).toContain('max( EventDate )');
+      expect(actual).toContain('max( `Timestamp` )');
+      expect(actual).not.toContain('toFloat64OrDefault');
+    });
+
+    it('keeps the column type with an aggCondition', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          {
+            aggFn: 'max',
+            valueExpression: 'Timestamp',
+            aggCondition: "ServiceName = 'api'",
+            aggConditionLanguage: 'sql',
+          },
+        ],
+      });
+      expect(actual).toContain(
+        "maxIf( Timestamp, ServiceName = 'api' AND Timestamp IS NOT NULL )",
+      );
+    });
+
+    it('keeps the column type with sampleWeightExpression', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        sampleWeightExpression: 'SampleRate',
+        select: [
+          { aggFn: 'min', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('min( Timestamp )');
+      expect(actual).not.toContain('toFloat64OrDefault');
+    });
+
+    it('still casts numeric and string-typed values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'min', valueExpression: 'Duration', aggCondition: '' },
+          {
+            aggFn: 'max',
+            valueExpression: "SpanAttributes['http.status_code']",
+            aggCondition: '',
+          },
+          { aggFn: 'max', valueExpression: 'NotAColumn', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('min( toFloat64OrDefault(toString(Duration)) )');
+      expect(actual).toContain(
+        "max( toFloat64OrDefault(toString(SpanAttributes['http.status_code'])) )",
+      );
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(NotAColumn)) )',
+      );
+    });
+
+    it('still casts other aggregations on a DateTime column', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'avg', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'avg( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it.each([DisplayType.Pie, DisplayType.Bar])(
+      'still casts in %s charts, which need a numeric value',
+      async displayType => {
+        const actual = await render({
+          ...baseTraceConfig,
+          displayType,
+          select: [
+            { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          ],
+        });
+        expect(actual).toContain(
+          'max( toFloat64OrDefault(toString(Timestamp)) )',
+        );
+      },
+    );
+
+    it('keeps the column type for LowCardinality-wrapped date columns', async () => {
+      mockMetadata.getColumn = jest
+        .fn()
+        .mockResolvedValue({ name: 'Day', type: 'LowCardinality(Date)' });
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [{ aggFn: 'max', valueExpression: 'Day', aggCondition: '' }],
+      });
+      expect(actual).toContain('max( Day )');
+    });
+
+    it('keeps the raw column in the null check with sampleWeightExpression and an aggCondition', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        sampleWeightExpression: 'SampleRate',
+        select: [
+          {
+            aggFn: 'min',
+            valueExpression: 'Timestamp',
+            aggCondition: "ServiceName = 'api'",
+            aggConditionLanguage: 'sql',
+          },
+        ],
+      });
+      expect(actual).toContain(
+        "minIf( Timestamp, ServiceName = 'api' AND Timestamp IS NOT NULL )",
+      );
+    });
+
+    it('still casts when the column lookup fails', async () => {
+      const getColumn = mockMetadata.getColumn;
+      mockMetadata.getColumn = jest.fn().mockImplementation(async args => {
+        // Only this select's lookup fails; the time filter's still resolves.
+        if (args.column === 'TimestampTime') {
+          throw new Error('DESCRIBE failed');
+        }
+        return getColumn(args);
+      });
+      const actual = await render({
+        ...baseTraceConfig,
+        select: [
+          { aggFn: 'max', valueExpression: 'TimestampTime', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(TimestampTime)) )',
+      );
+    });
+
+    it('still casts in a ratio, which divides the values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        seriesReturnType: 'ratio',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'count', valueExpression: '', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'divide(max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts when formulas do arithmetic on the values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        formulas: [{ expression: 'B - A', alias: 'span' }],
+        select: [
+          { aggFn: 'min', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'min( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+      expect(actual).not.toContain('min( Timestamp )');
+    });
+
+    it('still casts in a number tile with several series', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        displayType: DisplayType.Number,
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+          { aggFn: 'count', valueExpression: '', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts in a time-bucketed table', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        granularity: '1 minute',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('still casts when reading from a subquery CTE', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        with: [
+          {
+            name: 'Recent',
+            sql: chSql`SELECT Timestamp FROM default.otel_traces`,
+          },
+        ],
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
+
+    it('keeps the column type in number tiles', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        displayType: DisplayType.Number,
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain('max( Timestamp )');
+    });
+
+    it('still casts in time-bucketed charts, which plot numeric values', async () => {
+      const actual = await render({
+        ...baseTraceConfig,
+        displayType: DisplayType.Line,
+        granularity: '1 minute',
+        select: [
+          { aggFn: 'max', valueExpression: 'Timestamp', aggCondition: '' },
+        ],
+      });
+      expect(actual).toContain(
+        'max( toFloat64OrDefault(toString(Timestamp)) )',
+      );
+    });
   });
 
   describe('percentile shorthand aggFn', () => {
@@ -5971,7 +6558,9 @@ describe('renderMetricExemplarsChartConfig', () => {
     // Surfaces the exemplar columns
     expect(sql).toContain('ARRAY JOIN');
     expect(sql).toContain('`Exemplars.TraceId` AS ex_TraceId');
-    expect(sql).toContain('toUnixTimestamp64Milli(ex_TimeUnix)');
+    expect(sql).toContain(
+      'toUnixTimestamp64Milli(toDateTime64(ex_TimeUnix, 9))',
+    );
     // Points at the histogram table and filters by metric name + time
     expect(sql).toContain('otel_metrics_histogram');
     expect(sql).toContain("MetricName = 'http.server.duration'");

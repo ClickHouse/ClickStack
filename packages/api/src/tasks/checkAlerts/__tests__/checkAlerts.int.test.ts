@@ -8,8 +8,10 @@ import {
   Tile,
   WebhookService,
 } from '@hyperdx/common-utils/dist/types';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 import ms from 'ms';
+import { z } from 'zod/v3';
 
 import * as config from '@/config';
 import { createAlert } from '@/controllers/alerts';
@@ -39,10 +41,13 @@ import * as checkAlert from '@/tasks/checkAlerts';
 import {
   alertHasGroupBy,
   doesExceedThreshold,
+  getAlertHistoryLookbackMs,
   getConsecutiveWindowHistories,
+  getLatestAlertHistories,
   getPreviousAlertHistories,
   getScheduledWindowStart,
   parseAlertData,
+  partitionPreviousMapsByAlert,
   processAlert,
 } from '@/tasks/checkAlerts';
 import {
@@ -1109,8 +1114,8 @@ describe('checkAlerts', () => {
       }> = {},
     ): AlertDetails => {
       const base = {
-        alert: { groupBy: overrides.alertGroupBy } as any,
-        source: {} as any,
+        alert: fromPartial<IAlert>({ groupBy: overrides.alertGroupBy }),
+        source: fromPartial<ISource>({}),
         previousMap: new Map(),
       };
 
@@ -1118,10 +1123,10 @@ describe('checkAlerts', () => {
         return {
           ...base,
           taskType: AlertTaskType.TILE,
-          tile: {
+          tile: fromPartial({
             config: { groupBy: overrides.tileGroupBy ?? '' },
-          } as any,
-          dashboard: {} as any,
+          }),
+          dashboard: fromPartial({}),
         };
       }
 
@@ -1139,7 +1144,7 @@ describe('checkAlerts', () => {
       return {
         ...base,
         taskType: AlertTaskType.SAVED_SEARCH,
-        savedSearch: {} as any,
+        savedSearch: fromPartial({}),
       };
     };
 
@@ -1273,15 +1278,15 @@ describe('checkAlerts', () => {
         defaultTableSelectExpression: 'Timestamp, Body',
       },
       savedSearch: {
-        _id: 'fake-saved-search-id' as any,
-        team: 'team-123' as any,
+        _id: fromAny('fake-saved-search-id'),
+        team: fromAny('team-123'),
         id: 'fake-saved-search-id',
         name: 'My Search',
         select: 'Body',
         where: 'Body: "error"',
         whereLanguage: 'lucene',
         orderBy: 'timestamp',
-        source: 'fake-source-id' as any,
+        source: fromAny('fake-source-id'),
         tags: ['test'],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1313,7 +1318,7 @@ describe('checkAlerts', () => {
         id: 'id-123',
         name: 'My Dashboard',
         tiles: [testTile],
-        team: 'team-123' as any,
+        team: fromAny('team-123'),
         tags: ['test'],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1358,7 +1363,7 @@ describe('checkAlerts', () => {
     beforeEach(async () => {
       jest
         .spyOn(slack, 'postMessageToWebhook')
-        .mockResolvedValueOnce(null as any);
+        .mockResolvedValueOnce(fromAny(null));
     });
 
     afterEach(async () => {
@@ -2019,7 +2024,7 @@ describe('checkAlerts', () => {
 
       jest
         .spyOn(slack, 'postMessageToWebhook')
-        .mockResolvedValueOnce(null as any);
+        .mockResolvedValueOnce(fromAny(null));
 
       jest.spyOn(checkAlert, 'handleSendGenericWebhook');
     });
@@ -2036,7 +2041,7 @@ describe('checkAlerts', () => {
     const setupSavedSearchAlertTest = async ({
       webhookSettings,
     }: Partial<{
-      webhookSettings: IWebhook;
+      webhookSettings: Partial<IWebhook>;
     }> = {}) => {
       const team = await createTeam({ name: 'My Team' });
 
@@ -2151,7 +2156,7 @@ describe('checkAlerts', () => {
       teamWebhooksById: Map<string, IWebhook>,
     ) => {
       const [previousMap, recentHistoryMap] = await Promise.all([
-        getPreviousAlertHistories([details.alert.id], now),
+        getPreviousAlertHistories([details.alert], now),
         getConsecutiveWindowHistories([details.alert], now),
       ]);
       await processAlert(
@@ -3068,7 +3073,9 @@ describe('checkAlerts', () => {
     it('INLINE alert (group by) - notifies per group', async () => {
       // Two groups fire, so two notifications go out (the shared beforeEach
       // only mocks a single call).
-      jest.spyOn(slack, 'postMessageToWebhook').mockResolvedValue(null as any);
+      jest
+        .spyOn(slack, 'postMessageToWebhook')
+        .mockResolvedValue(fromAny(null));
 
       const {
         team,
@@ -3242,7 +3249,7 @@ describe('checkAlerts', () => {
         webhookSettings: Partial<IWebhook>;
       }> = {}) => {
         const fixture = await setupSavedSearchAlertTest({
-          webhookSettings: webhookSettings as IWebhook,
+          webhookSettings,
         });
         const dashboard = await new Dashboard({
           name: 'Errors Dashboard',
@@ -4179,7 +4186,7 @@ describe('checkAlerts', () => {
               headers: status === 302 ? { Location: redirectTarget } : {},
             });
           });
-          global.fetch = fetchMock as any;
+          global.fetch = fetchMock;
 
           const {
             team,
@@ -4392,7 +4399,7 @@ describe('checkAlerts', () => {
             status: 500,
             text: jest.fn().mockResolvedValue('resolve send failed'),
           });
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock;
 
         const {
           team,
@@ -4567,7 +4574,7 @@ describe('checkAlerts', () => {
           status: 500,
           text: jest.fn().mockResolvedValue('group webhook failed'),
         });
-        global.fetch = fetchMock as any;
+        global.fetch = fetchMock;
 
         const {
           team,
@@ -4584,7 +4591,7 @@ describe('checkAlerts', () => {
             name: 'Generic Webhook',
             description: 'generic webhook',
             body: JSON.stringify({ text: '{{title}}' }),
-          } as IWebhook,
+          },
         });
 
         const now = new Date('2023-11-16T22:12:00.000Z');
@@ -4875,6 +4882,7 @@ describe('checkAlerts', () => {
           description: 'generic webhook description',
           body: JSON.stringify({
             text: '{{link}} | {{title}}',
+            note: '{{note}}',
           }),
           headers: {
             // @ts-expect-error type mismatch due to mongoose typing
@@ -4958,6 +4966,7 @@ describe('checkAlerts', () => {
           threshold: 1,
           dashboardId: dashboard.id,
           tileId: '17quud',
+          note: 'Check the api pods',
         },
         {
           taskType: AlertTaskType.TILE,
@@ -5027,6 +5036,7 @@ describe('checkAlerts', () => {
         redirect: 'manual',
         body: JSON.stringify({
           text: `http://app:8080/dashboards/${dashboard.id}?from=1700170200000&granularity=5+minute&to=1700174700000&highlightedTileId=17quud | 🚨 Alert for "My Dashboard - Logs Count" - 3 meets or exceeds 1`,
+          note: 'Check the api pods',
         }),
         // Idempotency-Key is always injected last (cannot be overridden by user headers)
         // and is a stable objectHash of {eventId, startTime, endTime, state}.
@@ -5037,6 +5047,7 @@ describe('checkAlerts', () => {
           'Idempotency-Key': expect.any(String),
         }),
         signal: expect.any(AbortSignal),
+        dispatcher: expect.anything(),
       });
     });
 
@@ -5065,7 +5076,7 @@ describe('checkAlerts', () => {
           url: 'https://webhook.site/no-body',
           name: 'Bodyless Generic Webhook',
           // Intentionally no `body`.
-        } as IWebhook,
+        },
       });
 
       const now = new Date('2023-11-16T22:12:00.000Z');
@@ -5805,6 +5816,208 @@ describe('checkAlerts', () => {
       const renderedBody = payload.blocks[0].text.text;
       expect(renderedBody).toContain('Affected service: web');
       expect(renderedBody).toContain('Group: "ServiceName:web"');
+    });
+
+    // Fires a grouped raw SQL alert for one service, then evaluates again once
+    // the only event has left the window so the group has no rows.
+    const fireThenVanish = async ({
+      alias,
+      serviceName = 'web',
+      setup,
+      name,
+      message,
+    }: {
+      alias: string;
+      serviceName?: string;
+      setup?: Parameters<typeof setupSavedSearchAlertTest>[0];
+      name?: string;
+      message?: string;
+    }) => {
+      const { team, webhook, connection, teamWebhooksById, clickhouseClient } =
+        await setupSavedSearchAlertTest(setup);
+
+      const firedAt = new Date('2023-11-16T22:12:00.000Z');
+      const eventMs = firedAt.getTime() - ms('5m');
+
+      await bulkInsertLogs(
+        [1, 2].map(i => ({
+          ServiceName: serviceName,
+          Timestamp: new Date(eventMs),
+          SeverityText: 'error',
+          Body: `error ${i}`,
+        })),
+      );
+
+      const dashboard = await new Dashboard({
+        name: 'Raw SQL Vanished Group Dashboard',
+        team: team._id,
+        tiles: [
+          {
+            id: 'rawsql-vanished',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 4,
+            config: {
+              configType: 'sql',
+              displayType: 'line',
+              sqlTemplate: `
+        SELECT
+          toStartOfInterval(Timestamp, INTERVAL {intervalSeconds:Int64} second) AS ts,
+          ServiceName AS "${alias}",
+          count() AS cnt
+        FROM default.otel_logs
+        WHERE Timestamp >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64})
+          AND Timestamp < fromUnixTimestamp64Milli({endDateMilliseconds:Int64})
+        GROUP BY ts, "${alias}"
+        ORDER BY ts`,
+              connection: connection.id,
+            },
+          },
+        ],
+      }).save();
+
+      const tile = dashboard.tiles?.find(t => t.id === 'rawsql-vanished');
+      if (!tile) throw new Error('tile not found');
+
+      const details = await createAlertDetails(
+        team,
+        undefined,
+        {
+          source: AlertSource.TILE,
+          channel: {
+            type: 'webhook',
+            webhookId: webhook._id.toString(),
+          },
+          interval: '5m',
+          thresholdType: AlertThresholdType.ABOVE,
+          threshold: 2,
+          dashboardId: dashboard.id,
+          tileId: 'rawsql-vanished',
+          name,
+          message,
+        },
+        {
+          taskType: AlertTaskType.TILE,
+          tile,
+          dashboard,
+        },
+      );
+
+      const evaluateAt = (at: Date) =>
+        processAlertAtTime(
+          at,
+          details,
+          clickhouseClient,
+          connection,
+          alertProvider,
+          teamWebhooksById,
+        );
+
+      await evaluateAt(firedAt);
+      expect((await Alert.findById(details.alert.id))!.state).toBe('ALERT');
+
+      const firedRow = await AlertHistory.findOne({
+        alert: details.alert.id,
+        group: `${alias}:${serviceName}`,
+      }).lean();
+
+      return {
+        details,
+        firedRow,
+        resolve: async () => {
+          await evaluateAt(new Date(firedAt.getTime() + ms('10m')));
+          expect((await Alert.findById(details.alert.id))!.state).toBe('OK');
+        },
+      };
+    };
+
+    // Alert titles and messages read the nested `attributes` view, so a dotted
+    // alias is addressed by its path; `var` exists only in webhook bodies.
+    it.each([
+      ['ServiceName', 'attributes.ServiceName'],
+      ['service.name', 'attributes.service.name'],
+    ])(
+      'TILE alert (raw SQL) - a vanished group keyed by %s persists and resolves with its values',
+      async (alias, ref) => {
+        const { firedRow, resolve } = await fireThenVanish({
+          alias,
+          name: `Errors for {{${ref}}}`,
+          message: `Affected service: {{${ref}}}`,
+        });
+        expect(firedRow?.groupValues).toEqual([{ key: alias, value: 'web' }]);
+
+        await resolve();
+
+        expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(2);
+        const [, resolvePayload] = jest.mocked(slack.postMessageToWebhook).mock
+          .calls[1];
+        expect(resolvePayload.text).toContain('Errors for web');
+        expect(JSON.stringify(resolvePayload.blocks)).toContain(
+          'Affected service: web',
+        );
+      },
+    );
+
+    it('TILE alert (raw SQL) - a vanished group resolves with its values in a generic webhook body', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        text: jest.fn().mockResolvedValue(''),
+      });
+      global.fetch = fetchMock;
+
+      const { resolve } = await fireThenVanish({
+        alias: 'service.name',
+        setup: {
+          webhookSettings: {
+            service: WebhookService.Generic,
+            url: 'https://webhook.site/123',
+            name: 'Generic Webhook',
+            body: JSON.stringify({
+              state: '{{state}}',
+              service: '{{var.[service.name]}}',
+            }),
+          },
+        },
+      });
+      await resolve();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const resolveBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+      expect(resolveBody).toEqual({ state: 'OK', service: 'web' });
+    });
+
+    it('TILE alert (raw SQL) - a vanished group with an empty value persists and resolves', async () => {
+      const { firedRow, resolve } = await fireThenVanish({
+        alias: 'ServiceName',
+        serviceName: '',
+      });
+      expect(firedRow?.groupValues).toEqual([
+        { key: 'ServiceName', value: '' },
+      ]);
+
+      await resolve();
+
+      expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(2);
+    });
+
+    it('TILE alert (raw SQL) - a previous ALERT row without groupValues still resolves with empty attributes', async () => {
+      const { details, resolve } = await fireThenVanish({
+        alias: 'ServiceName',
+        name: 'Errors for {{attributes.ServiceName}}',
+      });
+      await AlertHistory.updateMany(
+        { alert: details.alert.id },
+        { $unset: { groupValues: 1 } },
+      );
+
+      await resolve();
+
+      expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(2);
+      const [, resolvePayload] = jest.mocked(slack.postMessageToWebhook).mock
+        .calls[1];
+      expect(resolvePayload.text).toContain('Errors for');
+      expect(resolvePayload.text).not.toContain('web');
     });
 
     it('TILE alert (raw SQL) - alert is evaluated using the last numeric column', async () => {
@@ -6720,11 +6933,137 @@ describe('checkAlerts', () => {
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(4);
 
       // Verify the resolution notification was sent for service-b
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       const resolutionCall = calls.find(call =>
-        call[1].text.includes('My Search'),
+        call[1].text?.includes('My Search'),
       );
       expect(resolutionCall).toBeDefined();
+    });
+
+    describe('with a previous-history map shared by every alert in the tick', () => {
+      const now = new Date('2023-11-16T22:12:00.000Z');
+
+      const setupGroupedAlertBesideFiringAlert = async () => {
+        const setup = await setupSavedSearchAlertTest();
+        const { team, webhook, source, savedSearch } = setup;
+        const alertConfig = {
+          source: AlertSource.SAVED_SEARCH,
+          channel: { type: 'webhook', webhookId: webhook._id.toString() },
+          interval: '5m',
+          thresholdType: AlertThresholdType.ABOVE,
+          threshold: 1,
+          savedSearchId: savedSearch.id,
+        } as const;
+        const savedSearchDetails = {
+          taskType: AlertTaskType.SAVED_SEARCH,
+          savedSearch,
+        } as const;
+
+        const grouped = await createAlertDetails(
+          team,
+          source,
+          { ...alertConfig, groupBy: 'ServiceName' },
+          savedSearchDetails,
+        );
+        const firing = await createAlertDetails(
+          team,
+          source,
+          alertConfig,
+          savedSearchDetails,
+        );
+        await AlertHistory.create({
+          alert: firing.alert.id,
+          createdAt: new Date('2023-11-16T22:05:00.000Z'),
+          state: AlertState.ALERT,
+          fired: true,
+          counts: 1,
+          lastValues: [],
+        });
+
+        return { ...setup, grouped, firing };
+      };
+
+      // Mirrors CheckAlertTask.execute(): load one shared map, then split it.
+      const evaluateGroupedAlert = async ({
+        grouped,
+        firing,
+        connection,
+        clickhouseClient,
+        teamWebhooksById,
+      }: Awaited<ReturnType<typeof setupGroupedAlertBesideFiringAlert>>) => {
+        const shared = await getPreviousAlertHistories(
+          [grouped.alert, firing.alert],
+          now,
+        );
+        expect(shared.get(firing.alert.id)?.state).toBe(AlertState.ALERT);
+
+        const [task] = partitionPreviousMapsByAlert([
+          {
+            alerts: [
+              { ...grouped, previousMap: shared },
+              { ...firing, previousMap: shared },
+            ],
+            conn: connection,
+            now,
+          },
+        ]);
+        await processAlert(
+          now,
+          task.alerts[0],
+          clickhouseClient,
+          connection.id,
+          alertProvider,
+          teamWebhooksById,
+        );
+
+        return AlertHistory.find({ alert: grouped.alert.id }).sort({
+          createdAt: 1,
+        });
+      };
+
+      it("does not write an empty-group history from another alert's ALERT state", async () => {
+        const setup = await setupGroupedAlertBesideFiringAlert();
+        await bulkInsertLogs(
+          [1, 2].map(() => ({
+            ServiceName: 'service-a',
+            Timestamp: new Date('2023-11-16T22:05:00.000Z'),
+            SeverityText: 'error',
+            Body: 'Error from service-a',
+          })),
+        );
+
+        const histories = await evaluateGroupedAlert(setup);
+
+        expect(histories.map(h => [h.group, h.state])).toEqual([
+          ['ServiceName:service-a', AlertState.ALERT],
+        ]);
+      });
+
+      it('records every empty bucket when only another alert is firing', async () => {
+        const setup = await setupGroupedAlertBesideFiringAlert();
+        await AlertHistory.create({
+          alert: setup.grouped.alert.id,
+          createdAt: new Date('2023-11-16T21:55:00.000Z'),
+          state: AlertState.OK,
+          group: 'ServiceName:service-a',
+          counts: 0,
+          lastValues: [],
+        });
+
+        const histories = await evaluateGroupedAlert(setup);
+
+        const latest = histories[histories.length - 1];
+        expect(histories).toHaveLength(2);
+        expect(latest.group).toBeUndefined();
+        expect(latest.state).toBe(AlertState.OK);
+        expect(
+          latest.lastValues.map(v => [v.startTime.toISOString(), v.count]),
+        ).toEqual([
+          ['2023-11-16T21:55:00.000Z', 0],
+          ['2023-11-16T22:00:00.000Z', 0],
+          ['2023-11-16T22:05:00.000Z', 0],
+        ]);
+      });
     });
 
     // The sample rows quoted in the message body carry no group predicate, so
@@ -7279,9 +7618,9 @@ describe('checkAlerts', () => {
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(4);
 
       // Verify the resolution notification was sent for service-b
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       const resolutionCall = calls.find(call =>
-        call[1].text.includes('My Search'),
+        call[1].text?.includes('My Search'),
       );
       expect(resolutionCall).toBeDefined();
     });
@@ -7673,7 +8012,7 @@ describe('checkAlerts', () => {
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(2);
 
       // Validate webhook messages contain correct group names
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       const messages = calls.map((call: any) => ({
         url: call[0],
         text: call[1].text,
@@ -8751,7 +9090,7 @@ describe('checkAlerts', () => {
       // Should NOT rescan 22:00-22:05 where service-b had data but was already checked
       const nextRun = new Date('2023-11-16T22:23:00.000Z');
       const previousMapNextRun = await getPreviousAlertHistories(
-        [details.alert.id],
+        [details.alert],
         nextRun,
       );
 
@@ -11162,7 +11501,7 @@ describe('checkAlerts', () => {
       expect((await Alert.findById(details.alert.id))!.state).toBe('OK');
       expect(slack.postMessageToWebhook).toHaveBeenCalledTimes(2);
 
-      const calls = (slack.postMessageToWebhook as jest.Mock).mock.calls;
+      const calls = jest.mocked(slack.postMessageToWebhook).mock.calls;
       expect(JSON.stringify(calls[0][1])).toContain('Alert for');
       expect(JSON.stringify(calls[1][1])).toContain(
         'The alert has been resolved',
@@ -11234,7 +11573,7 @@ describe('checkAlerts', () => {
 
         jest
           .spyOn(slack, 'postMessageToWebhook')
-          .mockResolvedValue(null as any);
+          .mockResolvedValue(fromAny(null));
 
         const details = await createAlertDetails(
           team,
@@ -11335,7 +11674,7 @@ describe('checkAlerts', () => {
 
         jest
           .spyOn(slack, 'postMessageToWebhook')
-          .mockResolvedValue(null as any);
+          .mockResolvedValue(fromAny(null));
 
         const details = await createAlertDetails(
           team,
@@ -11422,7 +11761,7 @@ describe('checkAlerts', () => {
 
         jest
           .spyOn(slack, 'postMessageToWebhook')
-          .mockResolvedValue(null as any);
+          .mockResolvedValue(fromAny(null));
 
         const details = await createAlertDetails(
           team,
@@ -11725,10 +12064,7 @@ describe('checkAlerts', () => {
       ]);
 
       // Act - Run alerts twice to cover two periods
-      let previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
-        now,
-      );
+      let previousMap = await getPreviousAlertHistories([details.alert], now);
       await processAlert(
         now,
         {
@@ -11743,7 +12079,7 @@ describe('checkAlerts', () => {
 
       const nextWindow = new Date('2023-11-16T22:15:00.000Z');
       previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
+        [details.alert],
         nextWindow,
       );
       await processAlert(
@@ -11869,10 +12205,7 @@ describe('checkAlerts', () => {
       ]);
 
       // Act - Run alerts twice to cover two periods
-      let previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
-        now,
-      );
+      let previousMap = await getPreviousAlertHistories([details.alert], now);
       await processAlert(
         now,
         {
@@ -11887,7 +12220,7 @@ describe('checkAlerts', () => {
 
       const nextWindow = new Date('2023-11-16T22:15:00.000Z');
       previousMap = await getPreviousAlertHistories(
-        [details.alert.id],
+        [details.alert],
         nextWindow,
       );
       await processAlert(
@@ -11941,13 +12274,24 @@ describe('checkAlerts', () => {
       await server.stop();
     });
 
-    const saveAlert = (id: mongoose.Types.ObjectId, createdAt: Date) => {
+    const saveAlert = (
+      id: mongoose.Types.ObjectId,
+      createdAt: Date,
+      group?: string,
+    ) => {
       return new AlertHistory({
         alert: id,
         createdAt,
         state: AlertState.OK,
+        group,
       }).save();
     };
+
+    // getPreviousAlertHistories only reads id + interval off the alert.
+    const asAlert = (
+      id: mongoose.Types.ObjectId,
+      interval: IAlert['interval'] = '5m',
+    ) => ({ id: id.toString(), interval });
 
     it('should return the latest alert history for each alert', async () => {
       const alert1Id = new mongoose.Types.ObjectId();
@@ -11959,7 +12303,7 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z'));
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString(), alert2Id.toString()],
+        [asAlert(alert1Id), asAlert(alert2Id)],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -11969,6 +12313,31 @@ describe('checkAlerts', () => {
       );
       expect(result.get(alert2Id.toString())!.createdAt).toEqual(
         new Date('2025-01-01T00:15:00Z'),
+      );
+    });
+
+    it('should return the latest history per group for grouped alerts', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveAlert(alertId, new Date('2025-01-01T00:00:00Z'), 'group-a');
+      await saveAlert(alertId, new Date('2025-01-01T00:05:00Z'), 'group-a');
+      await saveAlert(alertId, new Date('2025-01-01T00:00:00Z'), 'group-b');
+      // A row without a group should key off the bare alert ID
+      await saveAlert(alertId, new Date('2025-01-01T00:05:00Z'));
+
+      const result = await getPreviousAlertHistories(
+        [asAlert(alertId)],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.size).toBe(3);
+      expect(result.get(`${alertId.toString()}||group-a`)!.createdAt).toEqual(
+        new Date('2025-01-01T00:05:00Z'),
+      );
+      expect(result.get(`${alertId.toString()}||group-b`)!.createdAt).toEqual(
+        new Date('2025-01-01T00:00:00Z'),
+      );
+      expect(result.get(alertId.toString())!.createdAt).toEqual(
+        new Date('2025-01-01T00:05:00Z'),
       );
     });
 
@@ -11982,7 +12351,7 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z')); // This one is in the future
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString(), alert2Id.toString()],
+        [asAlert(alert1Id), asAlert(alert2Id)],
         new Date('2025-01-01T00:14:00Z'),
       );
 
@@ -11995,6 +12364,29 @@ describe('checkAlerts', () => {
       );
     });
 
+    it('should not return alert histories older than the interval-derived lookback', async () => {
+      const now = new Date('2025-01-10T00:00:00Z');
+      const alertId = new mongoose.Types.ObjectId();
+      // 1m interval → lookback floor of 1 day. A row from 2 days ago is out of
+      // range even though a fixed 7d window would have included it.
+      await saveAlert(alertId, new Date('2025-01-08T00:00:00Z'));
+      const result = await getPreviousAlertHistories(
+        [asAlert(alertId, '1m')],
+        now,
+      );
+      expect(result.size).toBe(0);
+
+      // 1h interval → lookback of 52 windows (52h) picks the same row up.
+      const resultHourly = await getPreviousAlertHistories(
+        [asAlert(alertId, '1h')],
+        now,
+      );
+      expect(resultHourly.size).toBe(1);
+      expect(resultHourly.get(alertId.toString())!.createdAt).toEqual(
+        new Date('2025-01-08T00:00:00Z'),
+      );
+    });
+
     it('should not return a history if there are no histories for the given alert', async () => {
       const alert1Id = new mongoose.Types.ObjectId();
       await saveAlert(alert1Id, new Date('2025-01-01T00:00:00Z'));
@@ -12003,7 +12395,7 @@ describe('checkAlerts', () => {
       const alert2Id = new mongoose.Types.ObjectId();
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString(), alert2Id.toString()],
+        [asAlert(alert1Id), asAlert(alert2Id)],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12024,7 +12416,7 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z'));
 
       const result = await getPreviousAlertHistories(
-        [alert1Id.toString()],
+        [asAlert(alert1Id)],
         new Date('2025-01-01T00:20:00Z'),
       );
 
@@ -12034,7 +12426,7 @@ describe('checkAlerts', () => {
       );
     });
 
-    it('should issue one aggregation per alert ID (per-alert queries)', async () => {
+    it('should issue one range find per alert (no aggregation, no chunking)', async () => {
       const alert1Id = new mongoose.Types.ObjectId();
       await saveAlert(alert1Id, new Date('2025-01-01T00:00:00Z'));
       await saveAlert(alert1Id, new Date('2025-01-01T00:05:00Z'));
@@ -12043,24 +12435,28 @@ describe('checkAlerts', () => {
       await saveAlert(alert2Id, new Date('2025-01-01T00:10:00Z'));
       await saveAlert(alert2Id, new Date('2025-01-01T00:15:00Z'));
 
+      const findSpy = jest.spyOn(AlertHistory, 'find');
       const aggregateSpy = jest.spyOn(AlertHistory, 'aggregate');
+      const cursorSpy = jest.spyOn(mongoose.Query.prototype, 'cursor');
 
-      const fakeAlertIds = Array(150)
+      const fakeAlerts = Array(150)
         .fill(null)
-        .map(() => new mongoose.Types.ObjectId().toString());
-      const allIds = [
-        alert1Id.toString(),
-        ...fakeAlertIds,
-        alert2Id.toString(),
-      ];
+        .map(() => asAlert(new mongoose.Types.ObjectId()));
+      const allAlerts = [asAlert(alert1Id), ...fakeAlerts, asAlert(alert2Id)];
 
       const result = await getPreviousAlertHistories(
-        allIds,
+        allAlerts,
         new Date('2025-01-01T00:20:00Z'),
       );
 
-      // One aggregation per alert ID (no chunking)
-      expect(aggregateSpy).toHaveBeenCalledTimes(allIds.length);
+      // One tight-bounds find per alert; no aggregation pipeline is used
+      // (DocumentDB cannot serve the old $sort+$group shape from an index).
+      expect(findSpy).toHaveBeenCalledTimes(allAlerts.length);
+      expect(aggregateSpy).not.toHaveBeenCalled();
+      // Each find is consumed through a streaming cursor rather than
+      // materialized as an array — the reduce only keeps the latest row per
+      // group, so buffering O(groups × windows) rows would waste heap.
+      expect(cursorSpy).toHaveBeenCalledTimes(allAlerts.length);
       expect(result.size).toBe(2);
       expect(result.get(alert1Id.toString())!.createdAt).toEqual(
         new Date('2025-01-01T00:05:00Z'),
@@ -12068,6 +12464,94 @@ describe('checkAlerts', () => {
       expect(result.get(alert2Id.toString())!.createdAt).toEqual(
         new Date('2025-01-01T00:15:00Z'),
       );
+    });
+  });
+
+  describe('getAlertHistoryLookbackMs', () => {
+    it('applies the 1d floor for short intervals', () => {
+      expect(getAlertHistoryLookbackMs('1m')).toBe(ms('1d'));
+      expect(getAlertHistoryLookbackMs('5m')).toBe(ms('1d'));
+      expect(getAlertHistoryLookbackMs('15m')).toBe(ms('1d'));
+    });
+
+    it('derives 52 windows for mid-size intervals', () => {
+      expect(getAlertHistoryLookbackMs('30m')).toBe(52 * ms('30m'));
+      expect(getAlertHistoryLookbackMs('1h')).toBe(52 * ms('1h'));
+    });
+
+    it('caps at 7d for long intervals', () => {
+      // 52 windows of 6h/12h/1d all exceed 7 days
+      expect(getAlertHistoryLookbackMs('6h')).toBe(ms('7d'));
+      expect(getAlertHistoryLookbackMs('12h')).toBe(ms('7d'));
+      expect(getAlertHistoryLookbackMs('1d')).toBe(ms('7d'));
+    });
+  });
+
+  describe('getLatestAlertHistories', () => {
+    const server = getServer();
+
+    beforeAll(async () => {
+      await server.start();
+    });
+
+    afterEach(async () => {
+      await server.clearDBs();
+      jest.clearAllMocks();
+    });
+
+    afterAll(async () => {
+      await server.stop();
+    });
+
+    const saveAlert = (
+      id: mongoose.Types.ObjectId,
+      createdAt: Date,
+      state: AlertState = AlertState.OK,
+    ) => {
+      return new AlertHistory({
+        alert: id,
+        createdAt,
+        state,
+      }).save();
+    };
+
+    it('returns the latest createdAt/state per alert and null when no history exists', async () => {
+      const alert1Id = new mongoose.Types.ObjectId();
+      await saveAlert(alert1Id, new Date('2025-01-01T00:00:00Z'));
+      await saveAlert(
+        alert1Id,
+        new Date('2025-01-01T00:05:00Z'),
+        AlertState.ALERT,
+      );
+
+      const alert2Id = new mongoose.Types.ObjectId();
+
+      const result = await getLatestAlertHistories(
+        [alert1Id.toString(), alert2Id.toString()],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.get(alert1Id.toString())).toEqual({
+        createdAt: new Date('2025-01-01T00:05:00Z'),
+        state: AlertState.ALERT,
+      });
+      expect(result.get(alert2Id.toString())).toBeNull();
+    });
+
+    it('ignores histories created after now', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveAlert(alertId, new Date('2025-01-01T00:00:00Z'));
+      await saveAlert(alertId, new Date('2025-01-01T00:10:00Z'));
+
+      const result = await getLatestAlertHistories(
+        [alertId.toString()],
+        new Date('2025-01-01T00:05:00Z'),
+      );
+
+      expect(result.get(alertId.toString())).toEqual({
+        createdAt: new Date('2025-01-01T00:00:00Z'),
+        state: AlertState.OK,
+      });
     });
   });
 
@@ -12118,14 +12602,14 @@ describe('checkAlerts', () => {
       const alertId = new mongoose.Types.ObjectId();
       await saveHistory(alertId, new Date('2025-01-01T00:10:00Z'));
 
-      const aggregateSpy = jest.spyOn(AlertHistory, 'aggregate');
+      const findSpy = jest.spyOn(AlertHistory, 'find');
 
       const result = await getConsecutiveWindowHistories(
         [makeAlert(alertId, 1), makeAlert(new mongoose.Types.ObjectId())],
         new Date('2025-01-01T00:17:00Z'),
       );
 
-      expect(aggregateSpy).not.toHaveBeenCalled();
+      expect(findSpy).not.toHaveBeenCalled();
       expect(result.size).toBe(0);
     });
 
@@ -12179,6 +12663,143 @@ describe('checkAlerts', () => {
       expect(result.get(alertId.toString())!.map(h => h.state)).toEqual([
         AlertState.ALERT,
       ]);
+    });
+  });
+  describe('alert history query shape', () => {
+    const server = getServer();
+
+    beforeAll(async () => {
+      await server.start();
+    });
+
+    afterEach(async () => {
+      await server.clearDBs();
+    });
+
+    afterAll(async () => {
+      await server.stop();
+    });
+
+    const saveHistory = (
+      id: mongoose.Types.ObjectId,
+      createdAt: Date,
+      state: AlertState,
+      group?: string,
+    ) => new AlertHistory({ alert: id, createdAt, state, group }).save();
+
+    it('getPreviousAlertHistories ignores ERROR rows', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveHistory(
+        alertId,
+        new Date('2025-01-01T00:05:00Z'),
+        AlertState.OK,
+        'group-a',
+      );
+      await saveHistory(
+        alertId,
+        new Date('2025-01-01T00:10:00Z'),
+        AlertState.ERROR,
+        'group-a',
+      );
+
+      const result = await getPreviousAlertHistories(
+        [{ id: alertId.toString(), interval: '5m' }],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.get(`${alertId.toString()}||group-a`)!.createdAt).toEqual(
+        new Date('2025-01-01T00:05:00Z'),
+      );
+    });
+
+    it('getLatestAlertHistories ignores ERROR rows', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      await saveHistory(
+        alertId,
+        new Date('2025-01-01T00:00:00Z'),
+        AlertState.OK,
+      );
+      await saveHistory(
+        alertId,
+        new Date('2025-01-01T00:05:00Z'),
+        AlertState.ERROR,
+      );
+
+      const result = await getLatestAlertHistories(
+        [alertId.toString()],
+        new Date('2025-01-01T00:20:00Z'),
+      );
+
+      expect(result.get(alertId.toString())).toEqual({
+        createdAt: new Date('2025-01-01T00:00:00Z'),
+        state: AlertState.OK,
+      });
+    });
+
+    it('getLatestAlertHistories ignores rows older than 7 days', async () => {
+      const now = new Date('2025-01-10T00:00:00Z');
+      const alertId = new mongoose.Types.ObjectId();
+      await saveHistory(
+        alertId,
+        new Date('2025-01-02T00:00:00Z'),
+        AlertState.ALERT,
+      );
+      await saveHistory(
+        alertId,
+        new Date('2025-01-09T12:00:00Z'),
+        AlertState.ERROR,
+      );
+
+      // The ALERT row is 8 days old, so only the ERROR row is in range.
+      const result = await getLatestAlertHistories([alertId.toString()], now);
+      expect(result.get(alertId.toString())).toBeNull();
+
+      // Six days after the ALERT row, it is still found.
+      const sixDaysLater = await getLatestAlertHistories(
+        [alertId.toString()],
+        new Date('2025-01-08T00:00:00Z'),
+      );
+      expect(sixDaysLater.get(alertId.toString())?.state).toBe(
+        AlertState.ALERT,
+      );
+    });
+
+    it('scans the {alert, createdAt} index with tight createdAt bounds', async () => {
+      const alertId = new mongoose.Types.ObjectId();
+      const now = new Date('2025-01-10T00:00:00Z');
+      for (let i = 0; i < 10; i++) {
+        await saveHistory(
+          alertId,
+          new Date(now.getTime() - i * ms('1d')),
+          AlertState.OK,
+        );
+      }
+      await AlertHistory.syncIndexes();
+
+      const explain = z
+        .object({
+          queryPlanner: z.object({ winningPlan: z.unknown() }),
+          executionStats: z.object({ totalKeysExamined: z.number() }),
+        })
+        .parse(
+          await AlertHistory.find({
+            alert: alertId,
+            createdAt: {
+              $lte: now,
+              $gte: new Date(now.getTime() - getAlertHistoryLookbackMs('5m')),
+            },
+            state: { $ne: AlertState.ERROR },
+          })
+            // On 10 rows DocumentDB's planner often picks a seq scan; pin the index.
+            .hint('alert_1_createdAt_-1')
+            .explain('executionStats'),
+        );
+
+      expect(JSON.stringify(explain.queryPlanner.winningPlan)).toContain(
+        'alert_1_createdAt_-1',
+      );
+      // 1d lookback: only today's and yesterday's rows are touched.
+      expect(explain.executionStats.totalKeysExamined).toBeLessThanOrEqual(2);
     });
   });
 });

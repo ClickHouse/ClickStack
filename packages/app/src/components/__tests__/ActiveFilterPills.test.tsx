@@ -1,6 +1,7 @@
 import type { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import { act, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { ActiveFilterPills } from '@/components/ActiveFilterPills';
 import { useGetKeyValues } from '@/hooks/useMetadata';
@@ -25,7 +26,7 @@ jest.mock('@/useFormatTime', () => ({
   useFormatTime: () => (value: unknown) => `formatted(${String(value)})`,
 }));
 
-const mockedUseGetKeyValues = useGetKeyValues as jest.Mock;
+const mockedUseGetKeyValues = jest.mocked(useGetKeyValues);
 
 // Mantine's Combobox calls scrollIntoView when its dropdown opens; jsdom lacks
 // it. jsdom also has no layout, so portaled options compute as "hidden" and
@@ -71,7 +72,9 @@ function renderPills(searchFilters: FilterStateHook) {
 describe('ActiveFilterPills', () => {
   beforeEach(() => {
     jest.useFakeTimers();
-    mockedUseGetKeyValues.mockReturnValue({ data: [], isFetching: false });
+    mockedUseGetKeyValues.mockReturnValue(
+      fromPartial({ data: [], isFetching: false }),
+    );
   });
   afterEach(() => {
     jest.useRealTimers();
@@ -149,6 +152,56 @@ describe('ActiveFilterPills', () => {
     renderPills(searchFilters);
     expect(screen.getByText('duration')).toBeInTheDocument();
     expect(screen.getByText('100 – 500')).toBeInTheDocument();
+  });
+
+  it('renders pattern filters and removes them through their handler', () => {
+    const patternFilter = {
+      condition: "NOT match(Body, '^x$')",
+      valueExpression: 'Body',
+      template: 'Connection to db <*> <*> timed out',
+      action: 'exclude' as const,
+    };
+    const onRemovePatternFilter = jest.fn();
+    renderWithMantine(
+      <ActiveFilterPills
+        searchFilters={makeSearchFilters({})}
+        chartConfig={CHART_CONFIG}
+        patternFilters={[patternFilter]}
+        onRemovePatternFilter={onRemovePatternFilter}
+      />,
+    );
+    expect(screen.getByText('Pattern')).toBeInTheDocument();
+    expect(
+      screen.getByText('Connection to db … timed out'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button'));
+    expect(onRemovePatternFilter).toHaveBeenCalledWith(patternFilter);
+  });
+
+  it('counts pattern pills toward MAX_VISIBLE_PILLS after the facet pills', () => {
+    const values = new Set<string | boolean>(
+      Array.from({ length: 7 }, (_, i) => `val${i}`),
+    );
+    const patternFilters = ['first <*>', 'second <*>'].map(template => ({
+      condition: `NOT match(Body, '${template}')`,
+      valueExpression: 'Body',
+      template,
+      action: 'exclude' as const,
+    }));
+    renderWithMantine(
+      <ActiveFilterPills
+        searchFilters={makeSearchFilters({
+          field: { included: values, excluded: new Set<string | boolean>() },
+        })}
+        chartConfig={CHART_CONFIG}
+        patternFilters={patternFilters}
+      />,
+    );
+    // Seven facet pills and the first pattern pill fill the eight slots.
+    expect(screen.getAllByTestId('active-filter-pill-pattern')).toHaveLength(1);
+    fireEvent.click(screen.getByText('+1 more'));
+    expect(screen.getAllByTestId('active-filter-pill-pattern')).toHaveLength(2);
+    expect(screen.getByText('Show less')).toBeInTheDocument();
   });
 
   it('calls setFilterValue when removing an included pill', () => {
@@ -507,16 +560,19 @@ describe('ActiveFilterPills', () => {
     expect(mockedUseGetKeyValues).toHaveBeenCalled();
     const { chartConfig: passedConfig } =
       mockedUseGetKeyValues.mock.calls[0][0];
-    expect(passedConfig.where).toBe('');
-    expect(passedConfig.filters).toEqual([]);
+    expect(passedConfig).toBeDefined();
+    expect(passedConfig?.where).toBe('');
+    expect(passedConfig?.filters).toEqual([]);
   });
 
   it('shows a value picker populated from useGetKeyValues', async () => {
     jest.useRealTimers();
-    mockedUseGetKeyValues.mockReturnValue({
-      data: [{ key: 'status', value: ['200', '404', '500'] }],
-      isFetching: false,
-    });
+    mockedUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: [{ key: 'status', value: ['200', '404', '500'] }],
+        isFetching: false,
+      }),
+    );
     const user = userEvent.setup();
     const searchFilters = makeSearchFilters({
       status: {
@@ -539,10 +595,12 @@ describe('ActiveFilterPills', () => {
 
   it('replaces the value from the menu, preserving include polarity', async () => {
     jest.useRealTimers();
-    mockedUseGetKeyValues.mockReturnValue({
-      data: [{ key: 'status', value: ['200', '404', '500'] }],
-      isFetching: false,
-    });
+    mockedUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: [{ key: 'status', value: ['200', '404', '500'] }],
+        isFetching: false,
+      }),
+    );
     const user = userEvent.setup();
     const searchFilters = makeSearchFilters({
       status: {
@@ -568,10 +626,12 @@ describe('ActiveFilterPills', () => {
 
   it('submits the highlighted option when navigating with the keyboard and pressing Enter', async () => {
     jest.useRealTimers();
-    mockedUseGetKeyValues.mockReturnValue({
-      data: [{ key: 'status', value: ['200', '404', '500'] }],
-      isFetching: false,
-    });
+    mockedUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: [{ key: 'status', value: ['200', '404', '500'] }],
+        isFetching: false,
+      }),
+    );
     const user = userEvent.setup();
     const searchFilters = makeSearchFilters({
       status: {
@@ -599,10 +659,12 @@ describe('ActiveFilterPills', () => {
 
   it('replaces with a free-typed value not in the suggestion list', async () => {
     jest.useRealTimers();
-    mockedUseGetKeyValues.mockReturnValue({
-      data: [{ key: 'status', value: ['200', '404', '500'] }],
-      isFetching: false,
-    });
+    mockedUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: [{ key: 'status', value: ['200', '404', '500'] }],
+        isFetching: false,
+      }),
+    );
     const user = userEvent.setup();
     const searchFilters = makeSearchFilters({
       status: {
@@ -627,10 +689,12 @@ describe('ActiveFilterPills', () => {
 
   it('replaces the value from the menu, preserving exclude polarity', async () => {
     jest.useRealTimers();
-    mockedUseGetKeyValues.mockReturnValue({
-      data: [{ key: 'status', value: ['500', '502', '503'] }],
-      isFetching: false,
-    });
+    mockedUseGetKeyValues.mockReturnValue(
+      fromPartial({
+        data: [{ key: 'status', value: ['500', '502', '503'] }],
+        isFetching: false,
+      }),
+    );
     const user = userEvent.setup();
     const searchFilters = makeSearchFilters({
       status: {

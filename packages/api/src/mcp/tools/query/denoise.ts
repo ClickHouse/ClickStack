@@ -1,19 +1,21 @@
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { getFirstTimestampValueExpression } from '@hyperdx/common-utils/dist/core/utils';
 import {
-  DENOISE_NOISE_THRESHOLD,
+  buildNoisyBodyMatcher,
   DENOISE_SAMPLE_SIZE,
-  flattenBody,
   minePatterns,
-  TemplateMiner,
-  TemplateMinerConfig,
+  selectNoisyPatterns,
 } from '@hyperdx/common-utils/dist/drain';
 import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
 import { DisplayType } from '@hyperdx/common-utils/dist/types';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
+import type { McpContext } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 
 import { resolveBodyExpression } from './helpers';
@@ -40,7 +42,7 @@ export interface DenoiseResult {
 
 /**
  * Denoise search results by mining patterns from a random sample, identifying
- * "noisy" patterns (those accounting for >10% of the sample), and filtering
+ * "noisy" patterns (those accounting for >5% of the sample), and filtering
  * them out of the result rows.
  *
  * This mirrors the web app's "Denoise Results" feature
@@ -48,7 +50,7 @@ export interface DenoiseResult {
  * the shared TypeScript Drain implementation.
  */
 export async function denoiseSearchResults(
-  teamId: string,
+  context: McpContext,
   sourceId: string,
   startDate: Date,
   endDate: Date,
@@ -63,7 +65,7 @@ export async function denoiseSearchResults(
   }
 
   // ── Resolve source & connection ──
-  const source = await getSource(teamId, sourceId);
+  const source = await getMcpSource(context, sourceId);
   if (!source) {
     return { rows, removedPatterns: [], skipped: 'source_not_found' };
   }
@@ -73,20 +75,16 @@ export async function denoiseSearchResults(
     return { rows, removedPatterns: [], skipped: 'no_body_column' };
   }
 
-  const connection = await getConnectionById(
-    teamId,
-    source.connection.toString(),
-    true,
-  );
-  if (!connection) {
+  let clickhouseClient: ClickhouseClient;
+  try {
+    clickhouseClient = await getMcpClickhouseClient(
+      context,
+      source.connection.toString(),
+    );
+  } catch (e) {
+    if (!(e instanceof McpConnectionNotFoundError)) throw e;
     return { rows, removedPatterns: [], skipped: 'connection_not_found' };
   }
-
-  const clickhouseClient = new ClickhouseClient({
-    host: connection.host,
-    username: connection.username,
-    password: connection.password,
-  });
   const metadata = getMetadata(clickhouseClient);
 
   const tsExpr = getFirstTimestampValueExpression(
@@ -203,39 +201,22 @@ export async function denoiseSearchResults(
     return { rows, removedPatterns: [] };
   }
 
-  // ── Identify noisy patterns (>10% of sampled events) ──
-  // Key by template string rather than cluster ID so we are not coupled to
-  // the auto-incrementing IDs generated inside minePatterns(). The matching
-  // miner below produces its own IDs; comparing template strings is stable.
-  const sampledRowCount = sampleRows.length;
-  const noisyTemplates = new Set<string>();
-  const removedPatterns: DenoiseResult['removedPatterns'] = [];
-
-  for (const p of patterns) {
-    if (p.sampleCount / sampledRowCount > DENOISE_NOISE_THRESHOLD) {
-      noisyTemplates.add(p.pattern);
-      removedPatterns.push({
-        pattern: p.pattern,
-        estimatedCount: p.estimatedCount,
-        sampleCount: p.sampleCount,
-      });
-    }
-  }
+  const noisy = selectNoisyPatterns(
+    patterns,
+    p => p.sampleCount,
+    sampleRows.length,
+  );
+  const noisyTemplates = new Set(noisy.map(p => p.pattern));
+  const removedPatterns: DenoiseResult['removedPatterns'] = noisy.map(p => ({
+    pattern: p.pattern,
+    estimatedCount: p.estimatedCount,
+    sampleCount: p.sampleCount,
+  }));
 
   if (noisyTemplates.size === 0) {
     return { rows, removedPatterns: [] };
   }
 
-  // ── Build a miner trained on the same sample for row matching ──
-  const drainConfig = new TemplateMinerConfig();
-  const miner = new TemplateMiner(drainConfig);
-  for (const row of sampleRows) {
-    const raw = row.__hdx_pattern_body;
-    const bodyText = flattenBody(raw != null ? String(raw) : '');
-    miner.addLogMessage(bodyText);
-  }
-
-  // ── Match each result row and filter out noisy ones ──
   const bodyColumnKey = findBodyColumnKey(rows[0], bodyColumn);
   if (!bodyColumnKey) {
     return {
@@ -245,13 +226,15 @@ export async function denoiseSearchResults(
     };
   }
 
+  const isNoisy = buildNoisyBodyMatcher(
+    patterns.map(p => p.pattern),
+    noisyTemplates,
+    { masked: true },
+  );
   const filteredRows = rows.filter(row => {
     const bodyValue = row[bodyColumnKey];
     if (bodyValue == null) return true; // Keep rows with no body
-    const bodyText = flattenBody(String(bodyValue));
-    const match = miner.match(bodyText, 'fallback');
-    if (!match) return true; // No pattern match — keep the row
-    return !noisyTemplates.has(match.getTemplate());
+    return !isNoisy(String(bodyValue));
   });
 
   return {

@@ -2,18 +2,20 @@ import { SourceSchemaNoId } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 
 import * as config from '@/config';
-import { validateConnectionId } from '@/controllers/connection';
-import { createSource, getSource, updateSource } from '@/controllers/sources';
+import { createSource, updateSource } from '@/controllers/sources';
 import { UPSERT_TOOL } from '@/mcp/tools/annotations';
-import type { ToolRegistrar } from '@/mcp/tools/types';
+import type { McpContext, ToolRegistrar } from '@/mcp/tools/types';
+import { validateMcpConnectionId } from '@/mcp/utils/connections';
 import {
   mcpServerError,
   mcpUserError,
   validateObjectId,
 } from '@/mcp/utils/errors';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { isDuplicateKeyError } from '@/utils/errors';
 
-import { buildSourceInput, mcpSaveSourceSchema } from './schemas';
+import { buildMcpSaveSourceSchema, buildSourceInput } from './schemas';
 
 export function registerSaveSource({
   context,
@@ -40,7 +42,7 @@ export function registerSaveSource({
         'spanNameExpression, spanKindExpression; session needs traceSourceId; ' +
         'metric needs metricTables and resourceAttributesExpression. Get ' +
         'connection and source IDs from clickstack_list_sources.',
-      inputSchema: mcpSaveSourceSchema,
+      inputSchema: buildMcpSaveSourceSchema(isPromqlEnabled(context)),
     },
     async input => {
       const sourceId = input.id;
@@ -52,9 +54,9 @@ export function registerSaveSource({
       // Reject a connection that isn't a valid ObjectId owned by this team
       // (createSource/updateSource don't check, so this avoids a 500 CastError
       // or a cross-team credential reference).
-      const connectionCheck = await validateConnectionId(
+      const connectionCheck = await validateMcpConnectionId(
+        context,
         input.connection,
-        new mongoose.Types.ObjectId(teamId),
       );
       if (!connectionCheck.ok) {
         return mcpUserError(connectionCheck.message);
@@ -73,7 +75,7 @@ export function registerSaveSource({
       const sourceData = parsed.data as Parameters<typeof createSource>[1];
 
       const correlatedIdError = await validateCorrelatedSourceIds(
-        teamId,
+        context,
         parsed.data as Record<string, unknown>,
         sourceId,
       );
@@ -124,7 +126,7 @@ const CORRELATED_SOURCE_ID_FIELDS = [
  * user-facing error string, or null when all references are valid.
  */
 async function validateCorrelatedSourceIds(
-  teamId: string,
+  context: McpContext,
   parsed: Record<string, unknown>,
   selfId: string | undefined,
 ): Promise<string | null> {
@@ -132,7 +134,7 @@ async function validateCorrelatedSourceIds(
     const value = parsed[field];
     if (typeof value !== 'string' || value.length === 0) continue;
     if (selfId != null && value === selfId) continue;
-    const referenced = await getSource(teamId, value);
+    const referenced = await getMcpSource(context, value);
     if (!referenced) {
       return `${field} must reference an existing source in this team`;
     }

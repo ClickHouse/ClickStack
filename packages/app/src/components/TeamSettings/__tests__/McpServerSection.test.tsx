@@ -52,11 +52,10 @@ describe('McpServerSection', () => {
     setMe('k_test');
   });
 
-  it('renders the section header and the install panel', () => {
+  it('renders the install panel', () => {
     renderSection();
 
     expect(screen.getByTestId('mcp-server-section')).toBeInTheDocument();
-    expect(screen.getByText(/^Connect your AI Agents$/)).toBeInTheDocument();
   });
 
   it('renders nothing while the me payload is still loading', () => {
@@ -89,6 +88,14 @@ describe('McpServerSection', () => {
     expect(screen.queryByTestId('mcp-server-section')).not.toBeInTheDocument();
   });
 
+  it('leads with the CLI installer command', () => {
+    renderSection();
+
+    expect(
+      screen.getByText(/^npx @hyperdx\/cli mcp install --app-url /),
+    ).toBeInTheDocument();
+  });
+
   it('renders the fixed clickstack server name in the install snippet', () => {
     renderSection();
 
@@ -119,9 +126,7 @@ describe('McpServerSection', () => {
         /codex mcp add clickstack --url .*--bearer-token-env-var/s,
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/^claude mcp add clickstack /),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/claude mcp add/)).not.toBeInTheDocument();
   });
 
   it('renders the Cursor deeplink button with a cursor:// href when Cursor is selected', async () => {

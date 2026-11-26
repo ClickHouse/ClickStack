@@ -9,15 +9,22 @@ import {
   MetadataCache,
 } from '@hyperdx/common-utils/dist/core/metadata';
 import { FilterState } from '@hyperdx/common-utils/dist/filters';
-import { BuilderChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
+import {
+  BuilderChartConfigWithDateRange,
+  MapKeyIndexPartSelection,
+  SourceKind,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import api from '@/api';
 import {
   deduplicate2dArray,
   intersect2dArray,
   useGetKeyValues,
+  useMergeTreeSettings,
   useMultipleAllFields,
   useMultipleGetKeyValues,
 } from '@/hooks/useMetadata';
@@ -27,7 +34,7 @@ import { useSources } from '@/source';
 const createMockChartConfig = (
   overrides: Partial<BuilderChartConfigWithDateRange> = {},
 ): BuilderChartConfigWithDateRange =>
-  ({
+  fromPartial<BuilderChartConfigWithDateRange>({
     timestampValueExpression: '',
     connection: 'foo',
     from: {
@@ -35,10 +42,13 @@ const createMockChartConfig = (
       tableName: 'traces',
     },
     ...overrides,
-  }) as BuilderChartConfigWithDateRange;
+  });
 
 const createMockMetadata = () =>
-  new Metadata({} as ClickhouseClient, {} as MetadataCache);
+  new Metadata(
+    fromPartial<ClickhouseClient>({}),
+    fromPartial<MetadataCache>({}),
+  );
 
 jest.mock('@/source', () => ({
   useSources: jest.fn().mockReturnValue({
@@ -453,6 +463,87 @@ describe('useGetKeyValues', () => {
     ).toEqual([{ kvRollupTable: 'logs_kv' }, { kvRollupTable: 'traces_kv' }]);
   });
 
+  // Sources here only carry the fields the hook reads.
+  const mockSources = (data: Parameters<typeof fromPartial<TSource>>[0][]) =>
+    jest
+      .mocked(useSources)
+      .mockReturnValue(fromPartial({ data, isLoading: false }));
+
+  it("passes log and trace sources' part settings to 'all' mode lookups, and no others", async () => {
+    const defaultSources = jest.mocked(useSources)();
+    // Not a log or trace source, so its fields don't apply. Declared outside
+    // the array literal so the part settings, which metric sources don't
+    // define, aren't rejected as excess properties.
+    const metricsSource = {
+      id: 'metrics',
+      kind: SourceKind.Metric as const,
+      mapKeyIndexMaxParts: 9,
+      mapKeyIndexPartSelection: MapKeyIndexPartSelection.Smallest,
+    };
+    mockSources([
+      {
+        id: 'logs',
+        kind: SourceKind.Log,
+        mapKeyIndexMaxParts: 7,
+        mapKeyIndexPartSelection: MapKeyIndexPartSelection.Largest,
+      },
+      metricsSource,
+    ]);
+    const streamAllKeyValues = mockLookups.all([], []);
+
+    try {
+      const { result } = renderValues({
+        mode: 'all',
+        chartConfigs: [
+          logsConfig,
+          createMockChartConfig({
+            source: 'metrics',
+            from: { databaseName: 'db', tableName: 'metrics' },
+          }),
+        ],
+      });
+      await waitForSettled(result);
+
+      expect(
+        streamAllKeyValues.mock.calls.map(([args]) => [
+          args.tableName,
+          args.mapKeyIndexMaxParts,
+          args.mapKeyIndexPartSelection,
+        ]),
+      ).toEqual([
+        ['logs', 7, 'largest'],
+        ['metrics', undefined, undefined],
+      ]);
+    } finally {
+      jest.mocked(useSources).mockReturnValue(defaultSources);
+    }
+  });
+
+  it("refetches 'all' mode values when the source's part settings change", async () => {
+    const defaultSources = jest.mocked(useSources)();
+    const withParts = (mapKeyIndexMaxParts: number) =>
+      mockSources([{ id: 'logs', kind: SourceKind.Log, mapKeyIndexMaxParts }]);
+    const streamAllKeyValues = mockLookups.all([], []);
+
+    try {
+      withParts(20);
+      const { result, rerender } = renderValues({
+        mode: 'all',
+        chartConfigs: [logsConfig],
+      });
+      await waitForSettled(result);
+
+      withParts(5);
+      rerender();
+      await waitFor(() => expect(streamAllKeyValues).toHaveBeenCalledTimes(2));
+      expect(
+        streamAllKeyValues.mock.calls.map(([args]) => args.mapKeyIndexMaxParts),
+      ).toEqual([20, 5]);
+    } finally {
+      jest.mocked(useSources).mockReturnValue(defaultSources);
+    }
+  });
+
   it("passes limit to 'all' mode lookups as maxValuesPerKey", async () => {
     const streamAllKeyValues = mockLookups.all([]);
 
@@ -520,7 +611,8 @@ describe('useGetKeyValues', () => {
     const allKeys = [
       "LogAttributes['a']",
       "LogAttributes['b']",
-      "LogAttributes['c']",
+      // Quoting doesn't make it a different column
+      "`LogAttributes`['c']",
       "`Resource-Attributes`['x']",
       'ServiceName',
       'SeverityText',
@@ -532,6 +624,7 @@ describe('useGetKeyValues', () => {
       "`Resource-Attributes`['x']",
       'ServiceName',
       'SeverityText',
+      'SpanName',
     ];
 
     const { result } = renderHook(
@@ -567,6 +660,79 @@ describe('useGetKeyValues', () => {
     expect(getKeyValuesWithMVs.mock.calls[0][0].keyConditions).toBeUndefined();
   });
 
+  describe("'exact' mode with plain columns and nested keys", () => {
+    const mixedKeys = [
+      "LogAttributes['a']",
+      'ServiceName',
+      "ResourceAttributes['b']",
+      '`__hdx_materialized_k8s.pod.name`',
+      "`LogAttributes`['c']",
+      'Body.`user`',
+    ];
+    const renderMixed = () =>
+      renderValues({
+        mode: 'exact',
+        chartConfigs: [logsConfig],
+        keys: mixedKeys,
+      });
+
+    it('shows plain columns before the nested keys finish', async () => {
+      let releaseNested: () => void = () => {};
+      const nested = new Promise<void>(resolve => {
+        releaseNested = resolve;
+      });
+      const getKeyValuesWithMVs = jest
+        .spyOn(mockMetadata, 'getKeyValuesWithMVs')
+        .mockImplementation(async ({ keys }) => {
+          if (keys.includes('ServiceName'))
+            return [{ key: 'ServiceName', value: ['api'] }];
+          if (keys.includes("ResourceAttributes['b']"))
+            return [{ key: "ResourceAttributes['b']", value: ['y'] }];
+          await nested;
+          return [{ key: keys[0], value: ['x'] }];
+        });
+
+      const { result } = renderMixed();
+
+      await waitFor(() =>
+        expect(result.current.data).toEqual(
+          expect.arrayContaining([
+            { key: 'ServiceName', value: ['api'] },
+            { key: "ResourceAttributes['b']", value: ['y'] },
+          ]),
+        ),
+      );
+      expect(result.current.data).toHaveLength(2);
+      expect(result.current.isFetching).toBe(true);
+      expect(getKeyValuesWithMVs.mock.calls.map(([args]) => args.keys)).toEqual(
+        [
+          ['ServiceName', '`__hdx_materialized_k8s.pod.name`', 'Body.`user`'],
+          ["LogAttributes['a']", "`LogAttributes`['c']"],
+          ["ResourceAttributes['b']"],
+        ],
+      );
+
+      releaseNested();
+
+      await waitForSettled(result);
+      expect(result.current.data).toHaveLength(3);
+    });
+
+    it('errors when either group fails', async () => {
+      jest
+        .spyOn(mockMetadata, 'getKeyValuesWithMVs')
+        .mockImplementation(async ({ keys }) => {
+          if (keys.includes('ServiceName')) return [];
+          throw new Error('nested failed');
+        });
+
+      const { result } = renderMixed();
+
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(result.current.error?.message).toBe('nested failed');
+    });
+  });
+
   it("retries a failed 'exact' mode lookup per the client's defaults", async () => {
     queryClient.setDefaultOptions({ queries: { retry: 1, retryDelay: 0 } });
     mockLookups.exact(new Error('transient'), [
@@ -583,11 +749,13 @@ describe('useGetKeyValues', () => {
   });
 
   it('should be in a loading state while fetching sources', async () => {
-    jest.mocked(useSources).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      isFetching: true,
-    } as any);
+    jest.mocked(useSources).mockReturnValue(
+      fromPartial({
+        data: undefined,
+        isLoading: true,
+        isFetching: true,
+      }),
+    );
 
     // Arrange
     const mockChartConfig = createMockChartConfig();
@@ -654,19 +822,18 @@ describe('useMultipleAllFields', () => {
   ];
   const columnsB = [column('col_b', 'String')];
 
-  let team: { fieldMetadataDisabled?: boolean };
+  let team: { fieldMetadataDisabled?: boolean; filterKeysFetchLimit?: number };
 
   beforeEach(() => {
     jest.clearAllMocks();
     team = {};
     mockMetadata = createMockMetadata();
     jest.spyOn(metadataModule, 'getMetadata').mockReturnValue(mockMetadata);
-    jest.spyOn(api, 'useMe').mockImplementation(
-      () =>
-        ({
-          data: { team },
-          isFetched: true,
-        }) as any,
+    jest.spyOn(api, 'useMe').mockImplementation(() =>
+      fromPartial({
+        data: { team },
+        isFetched: true,
+      }),
     );
     jest
       .spyOn(mockMetadata, 'getColumns')
@@ -730,6 +897,29 @@ describe('useMultipleAllFields', () => {
       }),
     );
   });
+
+  it.each([
+    [undefined, 1000],
+    [100, 1000],
+    [5000, 5000],
+  ])(
+    'with a filter key limit of %s, discovers up to %s keys per Map column',
+    async (filterKeysFetchLimit, maxKeys) => {
+      team.filterKeysFetchLimit = filterKeysFetchLimit;
+      const getAllFields = jest
+        .spyOn(mockMetadata, 'getAllFields')
+        .mockResolvedValue(fieldsA);
+
+      const { result } = renderHook(() => useMultipleAllFields([tcA]), {
+        wrapper,
+      });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(getAllFields).toHaveBeenCalledWith(
+        expect.objectContaining({ maxKeys }),
+      );
+    },
+  );
 
   it('should deduplicate fields across successful connections', async () => {
     jest
@@ -945,6 +1135,62 @@ describe('useMultipleAllFields', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data).toEqual(fieldsA);
+  });
+});
+
+describe('useMergeTreeSettings', () => {
+  let wrapper: React.ComponentType<{ children: any }>;
+  let mockMetadata: Metadata;
+  const settings = new Map([['enable_block_number_column', '1']]);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockMetadata = createMockMetadata();
+    jest.spyOn(metadataModule, 'getMetadata').mockReturnValue(mockMetadata);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    wrapper = ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+  });
+
+  it('keeps a successful result fresh across mounts', async () => {
+    const spy = jest
+      .spyOn(mockMetadata, 'getMergeTreeSettings')
+      .mockResolvedValue(settings);
+
+    const first = renderHook(() => useMergeTreeSettings('conn1'), { wrapper });
+    await waitFor(() => expect(first.result.current.data).toEqual(settings));
+    first.unmount();
+
+    const second = renderHook(() => useMergeTreeSettings('conn1'), { wrapper });
+    expect(second.result.current.data).toEqual(settings);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null on failure and refetches on the next mount', async () => {
+    const spy = jest
+      .spyOn(mockMetadata, 'getMergeTreeSettings')
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(settings);
+
+    const first = renderHook(() => useMergeTreeSettings('conn1'), { wrapper });
+    await waitFor(() => expect(first.result.current.data).toBeNull());
+    first.unmount();
+
+    const second = renderHook(() => useMergeTreeSettings('conn1'), { wrapper });
+    await waitFor(() => expect(second.result.current.data).toEqual(settings));
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not query without a connection', () => {
+    const spy = jest.spyOn(mockMetadata, 'getMergeTreeSettings');
+
+    const { result } = renderHook(() => useMergeTreeSettings(''), { wrapper });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,5 @@
 import objectHash from 'object-hash';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 // Basic Enums
 export enum MetricsDataType {
@@ -27,6 +27,17 @@ export enum UseTextIndex {
 }
 
 export const UseTextIndexSchema = z.nativeEnum(UseTextIndex);
+
+/** Which data parts, by row count, text index key and value lookups read. */
+export enum MapKeyIndexPartSelection {
+  Median = 'median',
+  Smallest = 'smallest',
+  Largest = 'largest',
+}
+
+export const MapKeyIndexPartSelectionSchema = z.nativeEnum(
+  MapKeyIndexPartSelection,
+);
 
 // --------------------------
 //  UI
@@ -259,9 +270,9 @@ export const RootValueExpressionSchema = z
  * number-tile colors, reference lines, and threshold rules.
  *
  * Tokens map to CSS variables in
- * `packages/app/src/theme/themes/<theme>/_tokens.scss`:
- *   chart-{hue}                 -> --color-chart-{hue}                    (10 hues, unified across themes)
- *   chart-success/warning/error -> --color-chart-{success|warning|error}  (semantic; unified across brands)
+ * `packages/app/src/theme/_tokens.scss`:
+ *   chart-{hue}                 -> --color-chart-{hue}                    (10 hues)
+ *   chart-success/warning/error -> --color-chart-{success|warning|error}  (semantic)
  *
  * `chart-info` is a render-time CSS variable (defined in the shared
  * `chart-semantic-tokens` SCSS mixin) but is intentionally *not* in the
@@ -269,7 +280,7 @@ export const RootValueExpressionSchema = z
  * brand-primary (e.g. info-level log series, `getChartColorInfo()`).
  *
  * Storing tokens (not hex) lets user choices reflow correctly across
- * themes and color modes; see notes/repo-conventions/hyperdx/tile-styling.md.
+ * color modes; see notes/repo-conventions/hyperdx/tile-styling.md.
  *
  * Lives in common-utils because the schema is shared between the app
  * and the API; the theme-aware CSS resolver (`getColorFromCSSToken`)
@@ -1090,6 +1101,14 @@ export type TagResourceType = z.infer<typeof TagResourceTypeSchema>;
 
 export const alertNoteSchema = z.string().min(1).max(4096).nullish();
 
+// nullish() (not optional()): persisted alerts store this as null, which
+// optional() would reject.
+export const alertNumConsecutiveWindowsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .nullish();
+
 export const MAX_ALERT_DISPLAY_NAME_LENGTH = 512;
 export const alertDisplayNameSchema = z
   .string()
@@ -1128,7 +1147,7 @@ export const AlertBaseObjectSchema = z.object({
       until: z.string(),
     })
     .optional(),
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 // Keep AlertBaseSchema as a ZodObject for backwards compatibility with
@@ -1335,10 +1354,15 @@ export const AdhocFilterOperatorSchema = z.enum([
   '!~',
   'LIKE',
   'NOT LIKE',
+  'IN',
 ]);
 
 export type AdhocFilterOperator = z.infer<typeof AdhocFilterOperatorSchema>;
 
+/**
+ * `IN` conditions sharing a key are OR'd together when rendered; every other
+ * condition is AND'd.
+ */
 export const SQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] =
   AdhocFilterOperatorSchema.options;
 
@@ -1347,6 +1371,7 @@ export const PROMQL_ADHOC_FILTER_OPERATORS: readonly AdhocFilterOperator[] = [
   '!=',
   '=~',
   '!~',
+  'IN',
 ];
 
 /** One `key operator value` condition picked in an ad hoc filter. */
@@ -2328,12 +2353,28 @@ export const DashboardContainerSchema = z.object({
 
 export type DashboardContainer = z.infer<typeof DashboardContainerSchema>;
 
+export enum SourceKind {
+  Log = 'log',
+  Trace = 'trace',
+  Session = 'session',
+  Metric = 'metric',
+  Promql = 'promql',
+}
+
+/** The source kinds builder and raw SQL charts can query. */
+export const NON_PROMQL_SOURCE_KINDS: readonly SourceKind[] = Object.values(
+  SourceKind,
+).filter(kind => kind !== SourceKind.Promql);
+
 /** Type of dashboard filter, determining how its dropdown values are populated. */
 export const DashboardFilterType = z.enum([
   'QUERY_EXPRESSION',
   'STATIC_LIST',
   'PROMETHEUS_LABEL',
   'ADHOC',
+  'SQL_QUERY',
+  'DATA_SOURCE',
+  'CONNECTION',
 ]);
 
 /** Allowed variable names for dashboard filters. Alphanumeric + underscore, must start with a letter. */
@@ -2443,6 +2484,27 @@ export const PromqlLabelDashboardFilterSchema =
   });
 
 /**
+ * A filter whose dropdown lists the first column returned by a free-form
+ * ClickHouse query. The query can use the time macros and other filters'
+ * variables, but not `$__sourceTable` or `$__filters`, as it has no source.
+ */
+export const SqlQueryDashboardFilterSchema = dashboardFilterBaseSchema.extend({
+  type: z.literal(DashboardFilterType.enum.SQL_QUERY),
+  /** ID of the ClickHouse connection the query runs on. */
+  connection: z.string().min(1),
+  /**
+   * ID of the source `$__sourceTable` and `$__filters` resolve against, on the
+   * same connection, or a data source variable reference. Optional, as for raw
+   * SQL tiles.
+   */
+  source: z.string().min(1).optional(),
+  sqlTemplate: z.string().min(1),
+  // Variable-only: there is no column to broadcast
+  isBroadcastEnabled: z.literal(false),
+  isVariableEnabled: z.literal(true),
+});
+
+/**
  * A filter whose conditions (`key operator value`) are picked freely from the
  * keys of its sources: columns and map keys for SQL sources, labels for PromQL
  * sources. Selection limits and requirements have no meaning for a list of
@@ -2457,12 +2519,59 @@ export const AdhocDashboardFilterSchema = dashboardFilterBaseSchema
     /** IDs of the sources whose keys and values the filter offers, all of `sourceType`. */
     sources: z.array(z.string().min(1)).min(1),
     /**
+     * Narrows the rows keys and values are suggested from, as a queried filter's
+     * `where` narrows its dropdown. SQL sources only, and never broadcast.
+     */
+    where: QueryExpressionDashboardFilterSchema.shape.where,
+    whereLanguage: QueryExpressionDashboardFilterSchema.shape.whereLanguage,
+    /**
      * Sources the conditions are broadcast to, all of `sourceType`. Undefined /
      * empty means the filter's `sources`.
      */
     appliesToSourceIds: z.array(z.string().min(1)).optional(),
-    /** Undefined / missing means ENABLED, as for QUERY_EXPRESSION filters. */
-    isBroadcastEnabled: z.boolean().optional(),
+    // Ad hoc conditions can't be referenced as variables, so broadcast is how they apply.
+    isBroadcastEnabled: z.literal(true),
+    /**
+     * Keeps `variableName` unique among the dashboard's variable names, which
+     * share the `filters=` param. Not referenceable as `$variableName`.
+     */
+    isVariableEnabled: z.literal(true),
+  })
+  .strict();
+
+/**
+ * A variable whose single selected value is a source ID. Tiles and other
+ * filters reference it as `$variableName` in place of a source ID. Always
+ * single-select and required, since a tile cannot query without a source.
+ */
+export const DataSourceDashboardFilterSchema = dashboardFilterBaseSchema
+  .extend({
+    type: z.literal(DashboardFilterType.enum.DATA_SOURCE),
+    /** The kinds of sources offered as values. */
+    allowedSourceKinds: z.array(z.nativeEnum(SourceKind)).min(1),
+    /**
+     * Limits the offered sources to one connection: a connection ID, or a
+     * `$name` reference to a connection variable.
+     */
+    connection: z.string().min(1).optional(),
+    minSelections: z.literal(1),
+    maxSelections: z.literal(1),
+    isBroadcastEnabled: z.literal(false),
+    isVariableEnabled: z.literal(true),
+  })
+  .strict();
+
+/**
+ * A variable whose single selected value is a connection ID. Raw SQL tiles
+ * and data source variables reference it as `$variableName` in place of a
+ * connection ID.
+ */
+export const ConnectionDashboardFilterSchema = dashboardFilterBaseSchema
+  .extend({
+    type: z.literal(DashboardFilterType.enum.CONNECTION),
+    minSelections: z.literal(1),
+    maxSelections: z.literal(1),
+    isBroadcastEnabled: z.literal(false),
     isVariableEnabled: z.literal(true),
   })
   .strict();
@@ -2472,6 +2581,9 @@ export const DashboardFilterSchema = z.discriminatedUnion('type', [
   StaticListDashboardFilterSchema,
   PromqlLabelDashboardFilterSchema,
   AdhocDashboardFilterSchema,
+  SqlQueryDashboardFilterSchema,
+  DataSourceDashboardFilterSchema,
+  ConnectionDashboardFilterSchema,
 ]);
 
 export type QueryExpressionDashboardFilter = z.infer<
@@ -2484,6 +2596,15 @@ export type PromqlLabelDashboardFilter = z.infer<
   typeof PromqlLabelDashboardFilterSchema
 >;
 export type AdhocDashboardFilter = z.infer<typeof AdhocDashboardFilterSchema>;
+export type SqlQueryDashboardFilter = z.infer<
+  typeof SqlQueryDashboardFilterSchema
+>;
+export type DataSourceDashboardFilter = z.infer<
+  typeof DataSourceDashboardFilterSchema
+>;
+export type ConnectionDashboardFilter = z.infer<
+  typeof ConnectionDashboardFilterSchema
+>;
 export type DashboardFilter = z.infer<typeof DashboardFilterSchema>;
 
 export enum PresetDashboard {
@@ -2607,6 +2728,7 @@ export const TeamClickHouseSettingsSchema = z.object({
   // Target number of exemplar markers shown per chart (0 = unlimited). Not a
   // ClickHouse setting, but lives in the same team-config bag for reuse.
   maxExemplars: z.number().optional(),
+  filterValuesExactByDefault: z.boolean().optional(),
 });
 
 /** Accepts null to unset (reset to default) a setting. */
@@ -2621,6 +2743,7 @@ export const TeamClickHouseSettingsUpdateSchema = z.object({
   // client-side only, and a fractional or negative value reaches the chart's
   // marker-budget arithmetic directly.
   maxExemplars: z.number().int().min(0).max(1000).nullish(),
+  filterValuesExactByDefault: z.boolean().nullish(),
 });
 export type TeamClickHouseSettingsUpdate = z.infer<
   typeof TeamClickHouseSettingsUpdateSchema
@@ -2646,13 +2769,6 @@ export type Team = z.infer<typeof TeamSchema>;
 // --------------------------
 // TABLE SOURCES
 // --------------------------
-export enum SourceKind {
-  Log = 'log',
-  Trace = 'trace',
-  Session = 'session',
-  Metric = 'metric',
-  Promql = 'promql',
-}
 
 // --------------------------
 // TABLE SOURCE FORM VALIDATION
@@ -2735,6 +2851,15 @@ export type MetadataMaterializedViews = z.infer<
   typeof MetadataMaterializedViewsSchema
 >;
 
+/**
+ * How many parts key and value discovery reads from a text index. Unset uses
+ * DEFAULT_MAP_KEY_INDEX_MAX_PARTS. A cleared form NumberInput yields `''`.
+ */
+const MapKeyIndexMaxPartsSchema = z.preprocess(
+  v => (v === '' || v === null ? undefined : v),
+  z.number().int().min(1).optional(),
+);
+
 // Log source form schema
 export const LogSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Log),
@@ -2772,6 +2897,11 @@ export const LogSourceSchema = BaseSourceSchema.extend({
   implicitColumnExpression: z.string().optional(),
   knownColumnsListExpression: z.string().optional(),
   /**
+   * Comma-separated expressions that together identify one row. When set, the
+   * row side panel looks rows up by these instead of table metadata.
+   */
+  rowKeyExpression: z.string().optional(),
+  /**
    * @deprecated Application-side SQL predicate AND'd into every query against
    * the source. Not a security boundary; bypassable by direct table SELECT.
    * For hard tenant isolation, use a ClickHouse ROW POLICY at the DB level:
@@ -2787,6 +2917,8 @@ export const LogSourceSchema = BaseSourceSchema.extend({
     HighlightedAttributeExpressionsSchema.optional(),
   materializedViews: z.array(MaterializedViewConfigurationSchema).optional(),
   metadataMaterializedViews: MetadataMaterializedViewsSchema.optional(),
+  mapKeyIndexMaxParts: MapKeyIndexMaxPartsSchema,
+  mapKeyIndexPartSelection: MapKeyIndexPartSelectionSchema.optional(),
   orderByExpression: z.string().optional(),
   useTextIndexForImplicitColumn: UseTextIndexSchema.optional(),
 });
@@ -2825,6 +2957,8 @@ export const TraceSourceSchema = BaseSourceSchema.extend({
   spanLinksValueExpression: z.string().optional(),
   implicitColumnExpression: z.string().optional(),
   knownColumnsListExpression: z.string().optional(),
+  /** See `rowKeyExpression` on `LogSourceSchema`. */
+  rowKeyExpression: z.string().optional(),
   displayedTimestampValueExpression: z.string().optional(),
   highlightedTraceAttributeExpressions:
     HighlightedAttributeExpressionsSchema.optional(),
@@ -2832,6 +2966,8 @@ export const TraceSourceSchema = BaseSourceSchema.extend({
     HighlightedAttributeExpressionsSchema.optional(),
   materializedViews: z.array(MaterializedViewConfigurationSchema).optional(),
   metadataMaterializedViews: MetadataMaterializedViewsSchema.optional(),
+  mapKeyIndexMaxParts: MapKeyIndexMaxPartsSchema,
+  mapKeyIndexPartSelection: MapKeyIndexPartSelectionSchema.optional(),
   orderByExpression: z.string().optional(),
   useTextIndexForImplicitColumn: UseTextIndexSchema.optional(),
 });
@@ -2867,6 +3003,22 @@ export const MinAutoGranularitySchema = z.preprocess(
   SQLIntervalSchema.optional(),
 );
 
+/**
+ * How a PromQL source on a ClickHouse connection is evaluated: through the
+ * Prometheus HTTP API (`clickhouse-http`, which needs ClickHouse 26.6+ with the
+ * `prometheus_api_v1` handler configured) or through the `prometheusQuery`
+ * table functions (`table-function`). `auto`, which is also what an unset
+ * value means, probes the server on first use and prefers the HTTP API. A
+ * connection that is itself a Prometheus endpoint ignores it.
+ */
+export const PROMQL_SOURCE_BACKENDS = [
+  'auto',
+  'clickhouse-http',
+  'table-function',
+] as const;
+export const PromqlSourceBackendSchema = z.enum(PROMQL_SOURCE_BACKENDS);
+export type PromqlSourceBackend = z.infer<typeof PromqlSourceBackendSchema>;
+
 // Metric source form schema
 export const MetricSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Metric),
@@ -2894,6 +3046,7 @@ export const MetricSourceSchema = BaseSourceSchema.extend({
 export const PromqlSourceSchema = BaseSourceSchema.extend({
   kind: z.literal(SourceKind.Promql),
   minAutoGranularity: MinAutoGranularitySchema,
+  promqlBackend: PromqlSourceBackendSchema.optional(),
 });
 
 // Union of all source form schemas for validation
@@ -3141,7 +3294,7 @@ export const AlertsPageItemSchema = z.object({
     })
     .optional(),
   executionErrors: z.array(AlertErrorSchema).optional(),
-  numConsecutiveWindows: z.number().int().min(1).nullish(),
+  numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
 });
 
 export type AlertsPageItem = z.infer<typeof AlertsPageItemSchema>;
@@ -3431,6 +3584,56 @@ export const RotateAccessKeyApiResponseSchema = z.object({
 
 export type RotateAccessKeyApiResponse = z.infer<
   typeof RotateAccessKeyApiResponseSchema
+>;
+
+// Team-owned bearer keys for external API v2 and MCP. They outlive the admin
+// who created them; the plaintext `key` is only returned on create.
+export const OrgApiKeyExpirySchema = z.enum(['30d', '1y', 'never']);
+export type OrgApiKeyExpiry = z.infer<typeof OrgApiKeyExpirySchema>;
+
+const OrgApiKeyDescriptionSchema = z.string().trim().min(1).max(100);
+
+export const CreateOrgApiKeyRequestSchema = z.object({
+  description: OrgApiKeyDescriptionSchema,
+  expiry: OrgApiKeyExpirySchema,
+});
+export type CreateOrgApiKeyRequest = z.infer<
+  typeof CreateOrgApiKeyRequestSchema
+>;
+
+export const UpdateOrgApiKeyRequestSchema = z.object({
+  description: OrgApiKeyDescriptionSchema,
+});
+export type UpdateOrgApiKeyRequest = z.infer<
+  typeof UpdateOrgApiKeyRequestSchema
+>;
+
+export const OrgApiKeyApiResponseSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string().nullable(),
+  lastUsedAt: z.string().nullable(),
+  // Null once the creating user has been removed from the team.
+  createdBy: z
+    .object({
+      id: z.string(),
+      name: z.string().optional(),
+      email: z.string(),
+    })
+    .nullable(),
+});
+export type OrgApiKeyApiResponse = z.infer<typeof OrgApiKeyApiResponseSchema>;
+
+export const OrgApiKeysApiResponseSchema = z.object({
+  data: z.array(OrgApiKeyApiResponseSchema),
+});
+export type OrgApiKeysApiResponse = z.infer<typeof OrgApiKeysApiResponseSchema>;
+
+export const CreateOrgApiKeyApiResponseSchema =
+  OrgApiKeyApiResponseSchema.extend({ key: z.string() });
+export type CreateOrgApiKeyApiResponse = z.infer<
+  typeof CreateOrgApiKeyApiResponseSchema
 >;
 
 // IaC (Terraform) export

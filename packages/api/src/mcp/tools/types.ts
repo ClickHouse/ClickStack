@@ -3,7 +3,7 @@ import type {
   CallToolResult,
   ToolAnnotations,
 } from '@modelcontextprotocol/sdk/types.js';
-import type { AnyZodObject } from 'zod';
+import type { AnyZodObject } from 'zod/v3';
 
 import type { ToolBehaviorAnnotations } from '@/mcp/tools/annotations';
 import type { McpClientInfo } from '@/mcp/utils/mcpClient';
@@ -15,6 +15,11 @@ export type McpContext = {
    * Identity of the calling MCP client application, parsed from User-Agent.
    */
   mcpClient?: McpClientInfo;
+  /**
+   * Whether PromQL sources, tiles and filters are exposed. Defaults to the
+   * deployment's ENABLE_PROMQL; read it through `isPromqlEnabled`.
+   */
+  promqlEnabled?: boolean;
 };
 
 /**

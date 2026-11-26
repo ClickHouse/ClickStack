@@ -6,6 +6,952 @@ PR — keep the `hyperdx-release-notes` comment marker intact when editing so yo
 edits survive regeneration. Per-package detail lives in each
 `packages/*/CHANGELOG.md`.
 
+## v2.47.0 — 2026-11-23
+
+<!-- hyperdx-release-notes version=2.47.0 inputs=ef75e537752a -->
+
+**RED metrics and a duration heatmap for traces**
+
+Trace search now opens on RED metrics — Throughput, Errors and Duration — in
+place of the single count histogram, so you can see how a service is behaving
+before you read a single span. A RED/Heatmap switch sits alongside them, swapping
+the three charts for the duration distribution over time, and whichever view you
+pick is kept in the URL so a reload or a shared link reopens it. Loading filter
+keys and values on large tables is a great deal faster and lighter on memory,
+and the collector's schema migration now gives the seeded tables much larger text
+index dictionary blocks on ClickHouse 26.6 and later. A SQL query dashboard
+filter can also now take a source, so its SQL can use `$__sourceTable` and
+`$__filters` the way raw SQL tiles do. Note before upgrading that changing a
+ClickHouse connection's host now requires you to supply its password again.
+
+### 💥 Breaking Changes
+
+- **`NEXT_PUBLIC_ENABLE_ADHOC_FILTERS` has been removed**: ad-hoc filters are now
+  generally available and always on, and the flag no longer has any effect.
+  Remove it from your deployment configuration; if you were leaving it unset to
+  keep ad-hoc filters hidden, they will now be visible to everyone.
+- **Changing a connection's host requires its password**: updating a
+  connection's host without sending its password used to keep the stored
+  password, so that password was then sent to the new host on the next query.
+  Both `PUT /connections/:id` and `PUT /api/v2/connections/:id` now return 400 in
+  that case, so anything that edits a connection's host — a provisioning script,
+  say — has to send the password with it. The connection form asks for the
+  password when you edit the host and shows the API's error message, and
+  Prometheus endpoints, which never use the stored password, have it cleared
+  instead.
+
+### ✨ New Features
+
+- **RED metrics above trace search results**: Throughput, Errors and Duration
+  charts replace the count histogram on trace searches. The three share a synced
+  hover cursor, Errors toggles between rate and volume, and clicking a status
+  series on the volume chart filters the results. Logs and other sources keep the
+  existing histogram.
+- **A duration heatmap for trace search**: a RED/Heatmap switch on the trace
+  search results view shows the duration distribution over time as the same tile
+  your dashboards render, so you can spot a slow tail without building a chart
+  for it. The choice is kept in the URL, so a reload or a shared link reopens the
+  same view.
+- **SQL query dashboard filters can take a source**: a SQL query filter can now
+  pick a source on its connection, or a data source variable, and can do so on a
+  connection variable too. With one chosen, its SQL can use `$__sourceTable` and
+  `$__filters`, which applies the dashboard's filter selections for that source
+  just as raw SQL tiles do. The external API and MCP read and write it as
+  `sourceId`.
+- **Saving a temporary dashboard keeps its content**: a temporary dashboard now
+  saves with its content intact, so work you started on an ad hoc dashboard
+  carries over when you decide to keep it.
+- **Silence and unsilence alerts through the external API**: `POST` and
+  `DELETE /api/v2/alerts/{id}/silenced` now silence an alert and lift that
+  silence again, so a planned maintenance window can quieten an alert from a
+  script instead of someone clicking through the UI.
+- **A preset ingestion API key on the app image**: the app image ignored
+  `INGESTION_API_KEY`, so an external collector had to use the team's generated
+  key, which changes whenever the team is recreated. Set
+  `ENABLE_INGESTION_API_KEY=true` on the API and a key you choose is accepted
+  alongside the team key, so a collector's configuration survives the team being
+  recreated. Behaviour is unchanged while the variable is unset.
+
+### 🔧 Improvements
+
+- **Larger text index dictionary blocks on the seeded tables**: on ClickHouse
+  26.6 and later, the collector's schema migration now sets
+  `text_index_dictionary_block_size = 8192` on `otel_logs`, `otel_traces` and
+  `hyperdx_sessions`, where the default is 512, making each part's text index
+  sparse index 16x smaller. Reading filter values loads that index for every part
+  on every read, and on a 537M-row table even 4,096-token blocks made those reads
+  about 10x cheaper per part, searches for a rare attribute value 3-7x faster and
+  searches for a common value 10-30% faster. Existing installs get it too — new
+  parts use the larger blocks and existing parts keep theirs until they are
+  merged — while a table that already sets the setting is left alone. If you
+  manage these tables yourself, turn the change off with
+  `HYPERDX_OTEL_EXPORTER_SET_TEXT_INDEX_BLOCK_SIZE=false`; ClickHouse 26.2–26.5
+  has no such setting and keeps 512-token blocks.
+- **Filter values arrive most frequent first on large-block text indexes**: for a
+  Map key=value text index with dictionary blocks of 2,048 or more — what the
+  collector's migration now sets — "all values" lookups read each key separately,
+  in parallel queries of at most 10 keys, and stop after 20,000 tokens per key,
+  so a key with a value per row such as a request ID or UUID can no longer hold
+  up the others. A capped list now holds the most common values, most common
+  first, rather than the alphabetically first ones. Indexes with smaller blocks,
+  including ClickHouse's default of 512, keep the previous query shape but also
+  run in parallel queries of at most 10 keys, so a cut-off affects at most nine
+  other keys, and text indexes on plain columns likewise return their most
+  frequent values.
+- **Text index lookups read 20 parts rather than every part**: map key discovery
+  and "all values" lookups read the index dictionary of every part in the time
+  range, which is slow on tables with many parts, and now read the 20 parts
+  closest to the median size instead. Log and trace sources can change the count
+  with the new "Map key index parts" setting (`mapKeyIndexMaxParts`) and which
+  parts are read with "Map key index part size" (`mapKeyIndexPartSelection`:
+  median, smallest or largest). "Load more" on a single filter key still reads
+  every part in the time range.
+- **The search page loads its filter keys and values faster**: the filter panel,
+  search bar and group-by each sent their own read for the same Map keys when the
+  page opened, which on large tables can use several GiB of memory apiece;
+  concurrent requests for the same keys now share one query. In exact mode,
+  several keys on one Map column are read with a single `groupUniqArrayMap`, and
+  plain columns and each Map or JSON column are queried separately so a slow
+  attribute map doesn't hold up the rest.
+- **"Filter Keys Fetch Limit" goes up to 10,000**: the team setting's input
+  stopped at 1,000 keys per column and now accepts up to 10,000. Map key
+  discovery returns up to the setting's value per Map column, and never fewer
+  than 1,000.
+- **A team-wide default for the search filters' "Show All Values" setting**: a
+  team can now set the default mode — All or Exact — for the search filters,
+  so everyone starts from whichever suits your tables instead of changing it
+  themselves on each visit.
+- **Autocomplete in the SQL query filter editor**: the editor for a SQL query
+  dashboard filter now suggests the tables and columns of the selected
+  connection's sources, the same way the Raw SQL tile editor does, so you can
+  write a values query without going to look up a column name.
+- **A clearer name for the "Queried values" filter type**: the dashboard filter
+  type formerly called "Queried values" is now "SQL expression values", which
+  separates it from "SQL query values" and "PromQL label values".
+- **Sidebar layout icons for the search filters panel**: showing and hiding the
+  search filters now uses the sidebar layout icons, so the control reads as a
+  panel toggle at a glance.
+- **Field backgrounds sit properly on dark popovers**: in dark mode the field
+  background now carries opacity, so it works over whatever is behind it — a
+  popover, for instance — rather than resolving to a solid colour through a
+  Click UI token. It is set directly in the theme tokens.
+- **Alert checks read far less history on each tick**: the check-alerts task no
+  longer scans seven days of alert history for every alert on every tick — a
+  one-row lookup skips alerts already evaluated in the current window and gives a
+  non-grouped alert its previous state, and a grouped alert scans only a window
+  the size of its own interval. Deployments carrying a long alert history should
+  see each tick do noticeably less work.
+- **MCP query tools explain `hasToken()` separator errors**: a SQL filter calling
+  `hasToken()` with a needle containing `_`, `-`, `.`, `@`, `:` or a space fails
+  in ClickHouse with "Needle must not contain whitespace or separator
+  characters". The query tools now append a hint — reach for a Lucene term, or in
+  SQL `position()` for the exact term, with `hasAllTokens()` as an optional
+  text-index speed-up — and the `whereLanguage` description warns about it, so an
+  assistant can correct the query rather than relaying an opaque failure.
+- **Failed ClickHouse proxy requests are categorised in HyperDX's own
+  telemetry**: a request that fails through the ClickHouse proxy now carries an
+  `error_category` on its server span and on the `clickhouse_proxy.query` SLI,
+  including the errors ClickHouse writes after it has already returned a 200. The
+  span also records the upstream status, the ClickHouse error code and type, and
+  the body of upstream errors that carry no ClickHouse code, so proxy failures
+  can be told apart when you monitor your own deployment instead of arriving as
+  one undifferentiated error count.
+
+### 🐛 Bug Fixes
+
+- **Filters on native JSON column keys survive a second filter**: adding another
+  filter, or clicking "Load more" on a filter, no longer rewrites an earlier
+  filter on a key inside a native JSON column to `col['key']` — a form ClickHouse
+  rejects with `Illegal type Dynamic of argument of function in`, or
+  `First argument for function 'arrayElement' must be array, got 'JSON'` on older
+  versions.
+- **"Add to Filters" matches values inside JSON arrays**: filtering on a value in
+  an array in a native JSON column now uses 1-based array subscripts such as
+  `events[1]` rather than quoted keys such as `events.0`, so the filter matches
+  rows instead of silently returning none. Arrays inside a JSON string — a String
+  `Body` column, for example — are handled the same way.
+- **Changing a dashboard filter's type no longer blocks the save**: switching a
+  filter from "PromQL label values" to another type used to fail with "Select a
+  PromQL source", because the old type's validation still applied. The save now
+  goes through.
+- **An edited Order By on a chart table is the one that runs**: a chart in table
+  form now orders by the Order By you edited, instead of falling back to the last
+  column header you sorted by.
+- **Gauge and sum metric charts can be grouped by a time expression**: a table,
+  pie or bar chart on a gauge or sum metric grouped by an expression over the
+  time column, such as `toStartOfHour(TimeUnix)` or `toDate(TimeUnix)`, failed
+  with `Unknown identifier TimeUnix`, because the bucketed CTE the outer query
+  reads did not carry the time column. `TimeUnix` now resolves to each metric
+  bucket's start when the group-by references it, so the values match the same
+  chart without the time group-by.
+- **`min` and `max` on a time column return the real earliest and latest time**:
+  taking `min` or `max` of a Date, DateTime or DateTime64 column such as
+  `Timestamp` returned 0, because every aggregation cast its value to Float64
+  first. Tables, number tiles and the MCP `clickstack_table` tool now give you the
+  timestamp itself, while line, bar, pie and other charts, ratios, formulas and
+  number tiles with several series keep the numeric cast.
+- **`clickstack_search` returns the rows it found instead of timing out**: the
+  MCP search tool now scans newest-first over the same progressive time windows
+  as the search page, under a 25 second budget. When the budget runs out you get
+  the rows found so far plus a `partial` block — the range you asked for, the
+  range fully covered, and the window that was cut off — and a hint for the next
+  call, rather than a failure after 30 seconds.
+- **The same log line is no longer split into one pattern per day**: the MCP
+  `event_patterns` and `emerging_signals` tools, search denoise and the CLI now
+  mask the date part of a timestamp — weekday, day, month and year — to `<DATE>`
+  before mining, so a dated line recurring across days, months or years lands in
+  one template rather than appearing as one "new" pattern and one that has gone.
+  Times and ids are left unmasked and lines within a single day group as they did
+  before, except that klog lines with differing severity letters are no longer
+  merged, and the `event_patterns` drill-down still matches the events its
+  pattern describes. The web app's Event patterns view uses its own
+  configuration and is unchanged.
+
+### 📦 Build / Packaging
+
+- **Security fix in the collector's migration tool**: the migration tool now
+  builds against `clickhouse-go/v2` v2.51.0, which pulls in
+  `github.com/andybalholm/brotli` v1.2.7 and fixes GO-2026-6888
+  (CVE-2026-111497), a denial of service in the brotli decompressor.
+
+<!-- hyperdx-package-list -->
+
+### 📦 Package changelogs
+
+- `@hyperdx/api` 2.46.0 → 2.47.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/api/CHANGELOG.md#2470)
+- `@hyperdx/app` 2.46.0 → 2.47.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/app/CHANGELOG.md#2470)
+- `@hyperdx/cli` 0.9.1 → 0.9.2 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/cli/CHANGELOG.md#092)
+- `@hyperdx/common-utils` 0.36.0 → 0.36.1 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/common-utils/CHANGELOG.md#0361)
+- `@hyperdx/otel-collector` 2.46.0 → 2.47.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/otel-collector/CHANGELOG.md#2470)
+
+<!-- /hyperdx-package-list -->
+
+## v2.46.0 — 2026-11-18
+
+<!-- hyperdx-release-notes version=2.46.0 inputs=d9a37b017d91 -->
+
+**Data source variables and pattern filters**
+
+Dashboards can now take data source and connection variables, so a single
+dashboard can be pointed at a different source or ClickHouse connection — raw
+SQL tiles and SQL query filters included — instead of being duplicated once per
+source. Event Patterns gains "Filter for this pattern" and "Exclude this
+pattern" buttons, so you can narrow a search to a pattern — or hide it — across
+every event in the time range rather than the sampled rows alone. Ad hoc
+dashboard filters gain an `IN` operator and can now be created, read and updated
+through the external API and the MCP dashboard tools; note before upgrading that
+every ad hoc filter now broadcasts and its name is only an identifier, so a
+query that referred to it as a `$variable` no longer picks up its value. Log and
+trace sources can now carry an optional "Row key expression", so the side panel
+looks a row up using exactly the columns you nominate instead of guessing keys
+from table metadata, and one MCP tool is renamed:
+`clickstack_trace_top_time_consuming_operations` is now
+`clickstack_trace_top_time_consuming_ops`. The app and collector images also
+clear their critical CVEs, which drops the unused `goose` binary — a custom
+entrypoint that called it needs to call `migrate` instead — and the collector
+base moves up to v0.165.0, which changes the names of the Kubernetes attributes
+it emits.
+
+### 💥 Breaking Changes
+
+- **Ad hoc filters always broadcast, and are no longer `$variable`s**:
+  broadcasting is now always on for an ad hoc filter (`isBroadcastEnabled:
+  true`), so one that had it switched off now applies wherever its sources are
+  used, and the filter's name is only a unique identifier — it is no longer
+  declared as a `$variable`. Check whether a tile query or another filter on
+  your dashboards refers to an ad hoc filter by its `$name` before you upgrade,
+  because that reference no longer resolves to it.
+- **The MCP trace operations tool has a shorter name**:
+  `clickstack_trace_top_time_consuming_operations` is now
+  `clickstack_trace_top_time_consuming_ops`. The old name was the longest tool
+  name the server offered and exceeded the tool-name length limit some MCP
+  clients enforce, so anything calling the tool by its old name needs to switch
+  to the new one.
+- **`goose` is no longer in the app and collector images**: the unused `goose`
+  binary has been dropped as part of clearing the images' critical CVEs. A
+  custom entrypoint that called `goose` directly should call `migrate` with the
+  same schema directory instead, otherwise it will fail at startup with the
+  binary missing.
+- **`k8sattributes` emits the stable Kubernetes semantic conventions only**: pod,
+  node and namespace `labels.*` and `annotations.*` are now `label.*` and
+  `annotation.*`, and `container.image.tag` is now `container.image.tags`, so a
+  dashboard, alert or saved search that matches the old attribute names stops
+  matching once you upgrade the collector. Set
+  `OTEL_AGENT_FEATURE_GATE_ARG=--feature-gates=-processor.k8sattributes.DontEmitV0K8sConventions`
+  to keep emitting the legacy names alongside the new ones while you migrate.
+- **The OpAMP supervisor refuses to start with `reports_remote_config`**: the
+  custom OTel Collector base moves from contrib v0.155.0 (core 1.61.0) to
+  v0.165.0 (core 1.71.0), picking up upstream Go and dependency CVE fixes in the
+  collector and OpAMP supervisor binaries. A custom supervisor config that sets
+  `reports_remote_config` must drop it — the supervisor has rejected it since
+  v0.163.0, and `accepts_remote_config` now covers both.
+
+### ✨ New Features
+
+- **Data source variables on dashboards**: dashboards take a new data source
+  variable type that you can use in dashboard filters and tiles, and a tile or
+  filter can draw its source from that variable rather than a fixed one — so you
+  can repoint a whole dashboard at another source from its filter bar instead of
+  keeping a copy per source. Data source variables are supported through the
+  external API and MCP as well.
+- **Connection variables for raw SQL tiles and SQL query filters**: a connection
+  variable supplies the ClickHouse connection a raw SQL tile or SQL query filter
+  runs against, and can scope a data source variable to the sources belonging to
+  the chosen connection, so one dashboard can be run against a different
+  connection without editing every tile. Both kinds of variable accept a source
+  or connection name in place of an id, so a value set by hand — in a dashboard
+  URL, say — can name what it points at.
+- **Filter for or exclude a pattern from Event Patterns**: each row in Event
+  Patterns now has "Filter for this pattern" and "Exclude this pattern" buttons
+  on hover, and each adds a filter matching every event that fits the pattern in
+  the time range, not only the sampled rows, so the results table, histogram and
+  counts all update together. Exclusions stack and show as pills next to your
+  other filters, survive sidebar filter changes, and are kept in the URL and in
+  saved searches; a new include replaces the previous one, and switching source
+  removes pattern filters.
+- **Ad hoc dashboard filters through the API and MCP**: `/api/v2/dashboards` now
+  accepts and returns `ADHOC` filters — with SQL and PromQL source types, and
+  their `adhoc` entries in `savedFilterValues` — and
+  `clickstack_save_dashboard`, `clickstack_get_dashboard` and
+  `clickstack_patch_dashboard` handle the same filters and their saved
+  conditions, so an assistant can hand you a dashboard with its ad hoc filters
+  already in place. Each filter's sources must exist and be a kind its
+  `sourceType` supports. Over MCP, PromQL ad hoc filters are offered only while
+  PromQL is enabled and are otherwise hidden and kept as they are on update, and
+  a saved condition that names no ad hoc filter, or uses an operator its filter
+  can't apply, comes back as a warning.
+- **Row key expression on log and trace sources**: set an optional row key
+  expression on a source and the side panel's row lookup selects and filters on
+  only those columns, instead of detecting keys from table metadata. Leave it
+  empty and nothing changes — detection behaves exactly as it does today.
+- **Find settings and preferences from the Cmd+K menu**: the command menu now
+  lists team settings sections — sources, connections, team members, API keys,
+  MCP server, webhooks, query settings and more — and jumps straight to the
+  right tab and section. "Preferences" opens the preferences modal, and "Use
+  light mode", "Use dark mode" and "Use system color mode" switch the theme on
+  the spot.
+- **Keep several ClickStack MCP servers side by side**: `hdx mcp install
+  --name <server-name>` adds the MCP server under a name you choose, so
+  installing a second ClickStack instance no longer overwrites the first. When
+  your key belongs to more than one team, the installer asks which teams to add
+  a server for and adds one entry per team, and when it finds more than one
+  agent it asks which to set up.
+- **SQL query dashboard filters**: a dashboard filter can now take its values
+  from a ClickHouse SQL query — the filter editor offers a "SQL query values"
+  type with a connection, a SQL editor and a preview of the values, and the
+  dropdown lists the query's first column in the order it returns, up to 10,000
+  values, with the time macros and other filters' variables available inside the
+  query. The filter is variable-only, and a template that uses `$__sourceTable`
+  or `$__filters`, or whose macros and variable references can't expand, is
+  rejected when you save the dashboard — as is a filter pointing at a connection
+  that doesn't belong to your team. You can read and write it through the API,
+  external API and MCP as well, where MCP also warns about unknown variables and
+  source-only macros in the SQL.
+
+### 🔧 Improvements
+
+- **An `IN` operator for ad hoc filters, and a shorter filter input**: ad hoc
+  filters take an `IN` operator, and `IN` conditions on the same key are OR'd
+  into a single `IN (...)` condition for SQL, or one `=~"a|b"` matcher for
+  PromQL, so picking several values for one key reads as one condition rather
+  than a stack of them. The filter input collapses to three conditions behind a
+  "+N more" toggle, and you are warned when another ad hoc filter already
+  applies to the same sources.
+- **PromQL sources are named after the connection behind them**: a PromQL
+  source's type now reads "Time Series" when it queries a ClickHouse TimeSeries
+  table and "Prometheus" when it queries an external Prometheus API, and "Time
+  Series / Prometheus" where no connection is known yet — the source form before
+  you pick a connection, or a data source variable's kinds. The stored kind is
+  still `promql`, and the source that onboarding auto-detection and the local
+  dev defaults create is now named "Time Series" rather than "PromQL".
+- **Alert checks scale better with the number of alerts**: each alert is now
+  evaluated against only its own previous history, so a single check-alerts tick
+  no longer re-scans every alert's group history once per alert. Deployments
+  with many alerts should see noticeably lighter alert-checking work each tick.
+- **Dashboard tile alerts can check every minute**: the 1 minute interval is no
+  longer limited to development, so an alert on a dashboard tile can run at the
+  shortest interval in your own deployment.
+- **`clickstack_save_alert` handles notes and consecutive windows**: the MCP
+  tool now accepts `note` and `numConsecutiveWindows`, and an update that leaves
+  either field out keeps the stored value instead of clearing it. Send `null`
+  when you actually want to clear one.
+- **Claude Code and Codex commands are back in the MCP setup panel**: the setup
+  panel shows the Claude Code and Codex CLI commands again, alongside the
+  `hdx mcp install` command, so connecting one of those agents no longer needs
+  another CLI installed first.
+- **Bare-text search falls back to a log source's body expression**: when a log
+  source has no implicit search column set, bare-text MCP searches, pattern
+  filters, event deltas and alert alias queries now search the source's body
+  expression instead, so those features have something sensible to match on
+  without one configured.
+- **One pattern predicate behind the app and MCP**: `templateToRegex`,
+  `buildPatternPredicate` and a new, much shorter `buildCompactPatternPredicate`
+  now live in `@hyperdx/common-utils/dist/drain`, so the app's new pattern
+  filters and the MCP `clickstack_event_patterns` drill-down build their match
+  from one implementation — the compact form being short enough to carry in a
+  URL. `parsePatternPredicate` reads either form back into its value expression
+  and template, and new options match templates mined with extra delimiters or
+  by Python Drain3. The MCP drill-down snippet itself is unchanged.
+
+### 🐛 Bug Fixes
+
+- **Numeric range searches work on String attributes**: a range search with
+  numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, used to fail outright with "no
+  supertype for types String, UInt8". Those bounds now compare with
+  `toFloat64OrNull`, and values that aren't numbers simply don't match. `>`,
+  `<`, `>=` and `<=` still compare String fields as text, so reach for a range
+  such as `:[1000 TO *]` when you want a numeric comparison.
+- **Event Deltas no longer leaves a blank panel on an unsupported source**:
+  switching from a trace source in Event Deltas mode to a source that doesn't
+  support deltas, such as a log source, left the search panel empty. The view
+  now falls back to the results table and shows a notification telling you why.
+- **Time chart series keep their colour across refreshes**: a series no longer
+  changes colour when a chart reloads, because series are now ordered by name
+  instead of by the order ClickHouse returned them. A chart you are watching
+  stays readable from one refresh to the next.
+- **Stacked charts no longer repeat Y-axis labels**: stacked bar and stacked
+  line charts showed the same label twice when rounding collapsed two ticks onto
+  one value — an axis reading "0, 500, 1k, 2k, 2k" where 1.5k rounded up to 2k.
+  The ticks are now distinct.
+- **Typing in the source selector replaces the name you picked**: clicking the
+  source selector now selects its current label, so what you type replaces the
+  old name instead of landing in the middle of it.
+- **The team switcher and user preferences are reachable on a phone**: the app
+  shell and nav were sized with `100vh`, which on mobile browsers counts the
+  area behind the retractable toolbar, so the bottom of the nav sat off screen
+  with no way to scroll to it. Both now size to the small viewport, putting
+  those items back within reach.
+- **The organisation API keys empty state fills its section**: the "No
+  organization API keys yet" message now spans the full width of the team
+  settings section instead of sitting in a narrow column.
+
+### 📦 Build / Packaging
+
+- **Critical CVEs cleared from the app and collector images**: the collector
+  moves to Alpine 3.24 and gomplate v5, and the unused `goose` and `esbuild`
+  binaries are gone from the images, so neither image ships those critical CVEs
+  any more. See the breaking change above if a custom entrypoint of yours calls
+  `goose`.
+- **Vulnerable Node dependencies updated in the app image**: the Node packages
+  flagged as vulnerable in the app image — axios, the MCP SDK, express, js-yaml,
+  brace-expansion and others — have been updated. MCP tool validation errors
+  still name the field that failed under the new MCP SDK, and they list the
+  accepted values when a tile's `displayType` is wrong.
+- **`uuid` updated to 11.1.1 in the API**: the API now depends on `uuid` 11.1.1,
+  which carries the fix for GHSA-w5hq-g745-h8pq. No action is needed beyond
+  upgrading.
+
+<!-- hyperdx-package-list -->
+
+### 📦 Package changelogs
+
+- `@hyperdx/api` 2.45.0 → 2.46.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/api/CHANGELOG.md#2460)
+- `@hyperdx/app` 2.45.0 → 2.46.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/app/CHANGELOG.md#2460)
+- `@hyperdx/cli` 0.9.0 → 0.9.1 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/cli/CHANGELOG.md#091)
+- `@hyperdx/common-utils` 0.35.0 → 0.36.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/common-utils/CHANGELOG.md#0360)
+- `@hyperdx/otel-collector` 2.45.0 → 2.46.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/otel-collector/CHANGELOG.md#2460)
+
+<!-- /hyperdx-package-list -->
+
+## v2.45.0 — 2026-11-13
+
+<!-- hyperdx-release-notes version=2.45.0 inputs=8861d0a1698f -->
+
+**PromQL evaluation choice and ClickHouse 26.10**
+
+You can now choose how a PromQL source on ClickHouse is evaluated — through the
+Prometheus HTTP API or the `prometheusQuery` table functions — instead of
+leaving HyperDX to probe the server on every query. The service map can also now
+be split by up to three extra group-by expressions, so a single slow or failing
+pod no longer disappears into its service average. This release also moves the
+all-in-one image and the Docker Compose files to ClickHouse 26.10.3.7. Two
+things change underneath you: TimeSeries tables created from now on default to
+schema version 8, which keeps each series' time range in a separate inner table,
+and ClickHouse's own `system.metric_log` switches to the bucketed schema. Your
+existing TimeSeries tables keep the layout they already have, but metric_log
+rows written before the upgrade are left behind in `system.metric_log_0`, so
+check anything that reads that table before you upgrade.
+
+### 💥 Breaking Changes
+
+- **`system.metric_log` moves to the bucketed schema**: ClickHouse now writes
+  `system.metric_log` in its bucketed form, and the rows recorded before the
+  upgrade move to `system.metric_log_0`. A dashboard, alert or saved query
+  reading ClickHouse's own metrics from `system.metric_log` will see only
+  post-upgrade rows until you point it at both tables.
+- **New TimeSeries tables default to schema version 8**: TimeSeries tables
+  created after the upgrade keep each series' time range in a separate inner
+  table. Existing tables are untouched and keep their current layout, so a table
+  created after the upgrade no longer matches the shape of one created before
+  it.
+- **`clickstack_service_health` no longer returns a verdict**: the MCP tool has
+  stopped labelling services critical, degraded or healthy, and no longer tells
+  an agent a service needs "no action" — each service keeps its threshold flags,
+  score and a factual summary, so agents reason from the numbers rather than a
+  verdict that service-wide totals can get wrong. `summary.statusCounts` is
+  replaced by `summary.servicesFlagged`, and the span attributes
+  `mcp.service_health.critical_count` and `mcp.service_health.degraded_count`
+  are replaced by `mcp.service_health.flagged_count`, so update anything that
+  reads those fields.
+
+### ✨ New Features
+
+- **Choose how a PromQL source is evaluated**: a PromQL source on ClickHouse can
+  now be set to use either the Prometheus HTTP API or the `prometheusQuery`
+  table functions, rather than having HyperDX work it out for itself. A source
+  pinned to the HTTP API against a server that does not serve it now fails with
+  a clear error instead of an obscure one, and onboarding pins a PromQL source
+  it detects to the HTTP API when the server serves it.
+- **Split the service map by extra dimensions**: you can now add up to three
+  extra group-by SQL expressions to the service map — for example
+  `ResourceAttributes['k8s.pod.name']` — so a node becomes a service plus those
+  values and a slow or failing pod stands on its own instead of being averaged
+  into its service.
+
+### 🔧 Improvements
+
+- **PromQL label lookups go through ClickHouse's Prometheus HTTP API**: on
+  ClickHouse 26.9+ with the `prometheus_api_v1` handler, label and label-value
+  lookups for a ClickHouse-backed PromQL source now proxy to the handler instead
+  of querying the TimeSeries tags table with SQL. Older servers, servers without
+  the handler, and sources set to `table-function` keep the SQL path, so a
+  source that runs queries over HTTP on 26.6-26.8 still gets label
+  autocomplete.
+- **The MCP `describe_source` tool reads its label catalogue the same way**:
+  asked about a ClickHouse-backed PromQL source, `describe_source` now lists
+  label and metric names through the `prometheus_api_v1` handler on ClickHouse
+  26.9+, so an agent sees the same catalogue the app does. It falls back to SQL
+  on older servers, servers without the handler, and sources set to
+  `table-function`.
+- **Fewer probes for sources without an explicit choice**: a PromQL source that
+  does not say how it should be evaluated is still probed, but the answer is now
+  kept for 5 minutes instead of being worked out again on every query.
+
+### 🐛 Bug Fixes
+
+- **`{{note}}` is filled in when an alert actually fires**: a webhook body using
+  `{{note}}` now carries the alert's note on real alert notifications, not only
+  on "Send test", so the context you wrote on the alert reaches the people
+  paged by it.
+- **MCP webhook and alert tools are declared open-world**: saving a webhook or
+  an alert sends HTTP requests to third-party endpoints, so
+  `clickstack_save_webhook` and `clickstack_save_alert` now carry
+  `openWorldHint: true`. MCP clients that treat open-world tools differently —
+  by asking you to confirm before they run, for instance — will now do so for
+  these two.
+
+### 📦 Build / Packaging
+
+- **Bundled ClickHouse is now 26.10.3.7**: the all-in-one image and the Docker
+  Compose files use `clickhouse/clickhouse-server:26.10.3.7-alpine`.
+
+<!-- hyperdx-package-list -->
+
+### 📦 Package changelogs
+
+- `@hyperdx/api` 2.44.0 → 2.45.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/api/CHANGELOG.md#2450)
+- `@hyperdx/app` 2.44.0 → 2.45.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/app/CHANGELOG.md#2450)
+- `@hyperdx/common-utils` 0.34.0 → 0.35.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/common-utils/CHANGELOG.md#0350)
+- `@hyperdx/otel-collector` 2.44.0 → 2.45.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/otel-collector/CHANGELOG.md#2450)
+
+<!-- /hyperdx-package-list -->
+
+## v2.44.0 — 2026-11-11
+
+<!-- hyperdx-release-notes version=2.44.0 inputs=99e8264954db -->
+
+**Time zone picker and optional webhook emoji**
+
+You can now pick a time zone straight from the time picker on the search and
+dashboard pages, overriding the one set in your User Preferences, and teams can
+create their own API keys — with a description and an expiry — that keep working
+after the person who created them leaves. Webhooks now take an optional
+`titleEmoji` setting: set it to `false` and notification titles sent through that
+webhook arrive without the emoji prefix. Columns added to a ClickHouse table
+after HyperDX starts — a new MATERIALIZED column, say — are now visible within
+five minutes, with no restart needed. Note before upgrading that the app now
+always uses ClickStack branding — brand selection, the HyperDX palette and the
+font picker are gone — that HyperDX instruments itself with the ClickStack SDKs
+now, which changes the shape of its own telemetry and where that telemetry goes
+by default, and that webhooks pointing at private or reserved addresses are now
+blocked unless you allowlist their hostnames.
+
+### 💥 Breaking Changes
+
+- **ClickStack branding is now the only theme**: brand selection, the HyperDX
+  palette and the font picker have been removed, so the app always uses
+  ClickStack branding and its standard font. If you or your team had chosen the
+  HyperDX palette or a different font, that choice no longer applies. Light,
+  dark and system colour mode stay in Preferences.
+- **Webhooks to private or reserved addresses are blocked**: generic and
+  incident.io webhooks whose hostname resolves to a private or reserved address
+  are now rejected, and the check runs on the address actually dialled, so it
+  also covers DNS rebinding. If your self-hosted setup notifies an internal
+  hostname, add it to `WEBHOOK_HOSTNAME_ALLOWLIST` before upgrading or those
+  notifications will stop going out.
+- **HyperDX self-instruments with the ClickStack SDKs**: HyperDX's own telemetry
+  now comes from `@clickhouse/clickstack-node` and
+  `@clickhouse/clickstack-browser` in place of `@hyperdx/node-opentelemetry` and
+  `@hyperdx/browser`, and it changes shape. HTTP spans carry the stable semantic
+  convention keys (`http.request.method`, `http.response.status_code`,
+  `url.full`), pino records arrive under the
+  `@opentelemetry/instrumentation-pino` scope with real severity numbers instead
+  of the `node-logger` scope at severity number 0, console capture covers every
+  `console` call in the API, browser console output is recorded as log records
+  rather than spans, uncaught exceptions are recorded as FATAL log records, and
+  an API error is an exception event on the Express span instead of a separate
+  error span. Browser telemetry names the user as `user.id`, `user.email` and
+  `user.name` instead of `userEmail` and `userName`, keeps the team name as
+  `teamName`, no longer records a `user navigated` action, and no longer records
+  request and response headers or bodies on fetch and XHR spans; browser
+  sessions restart once after the upgrade. Update anything — a saved search,
+  alert or dashboard — keyed on the old attribute names before you upgrade.
+- **Self-telemetry is configured with the OpenTelemetry variables**:
+  `HYPERDX_API_KEY` still enables self-instrumentation, but without
+  `OTEL_EXPORTER_OTLP_ENDPOINT` server-side self-telemetry now goes to
+  `http://localhost:4318` instead of `https://in-otel.hyperdx.io`, so set the
+  endpoint explicitly. `HDX_NODE_*` variables are no longer read; capture
+  request headers and bodies with `OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_*`
+  and `CLICKSTACK_CAPTURE_HTTP_BODY` instead. Browser traces and logs are now
+  sent gzip-compressed every 5 seconds, so if the browser sends to a collector
+  other than ClickStack's, that collector's CORS `allowed_headers` must be `"*"`
+  or include `content-type` and `content-encoding` (and `authorization`), and a
+  proxy in front of it must forward `Content-Encoding` unchanged. The per-signal
+  browser endpoints and `NEXT_PUBLIC_OTEL_RESOURCE_ATTRIBUTES` work as before.
+- **The Next.js server reports telemetry from production builds too**: with
+  `HYPERDX_API_KEY` or `OTEL_EXPORTER_OTLP_HEADERS` set, the Next.js server now
+  sends its own telemetry in production builds, not only under `next dev`. It
+  reports under its own service name — the configured one plus `-next`
+  (`hdx-oss-app-next` in the docker-compose `app` service and when no name is
+  set) — so its spans stay apart from the API's and the browser's, and the
+  HyperDX images now default `OTEL_SERVICE_NAME` to `hdx-oss-app`. Each `/api`
+  request gains Next.js server spans for the proxy hop, while requests for build
+  and `public/` assets such as `/_next/static/*`, `/__ENV.js` and `/pyodide/*`
+  are not traced. `HDX_EXPORTER_ENABLED=false` turns it off along with browser
+  telemetry.
+
+### ✨ New Features
+
+- **Pick a time zone from the time picker**: the search and dashboard pages let
+  you choose the time zone they display, overriding the zone set in User
+  Preferences. The picker shows the zone it is using, and your choice is kept in
+  the URL and carried through links from charts and tables, so a shared link
+  opens in the same zone you were reading.
+- **Emoji prefix in webhook titles is now optional**: webhooks take a new
+  `titleEmoji` option, and setting it to `false` sends notification titles
+  through that webhook without the leading emoji — useful where the receiving
+  system renders it poorly or your team would rather read a plain title.
+- **Team-owned API keys**: team members can now create API keys that belong to
+  the team rather than to the person who made them, each with a description and
+  an expiry. A key keeps working after its creator leaves, so an integration no
+  longer stops the day someone moves on.
+- **Ad hoc dashboard filters can narrow their own suggestions**: an ad hoc
+  filter on a SQL source can now carry a SQL or Lucene "Keys and values filter",
+  much like a queried filter's dropdown values filter, limiting the rows its
+  keys and values are suggested from, and it can reference the dashboard's other
+  variables. While it points at a required filter with nothing selected, the ad
+  hoc filter won't add or edit conditions and names the filter it is waiting on,
+  and a suggestion lookup that fails now shows the database's error message.
+- **Browser events on the trace waterfall and in the row side panel**: the
+  waterfall now plots the request timings an OpenTelemetry browser SDK records
+  as dots along fetch and XHR spans, and shows the click that triggered a
+  browser trace, so you can see where time went in the browser without leaving
+  the trace. The row side panel summarises the clicks, navigations and console
+  messages those SDKs record, and navigation rows no longer show an HTTP Request
+  section that never applied to them.
+- **JavaScript stack traces broken into frames**: the Exception panel now parses
+  the JavaScript stack traces that OpenTelemetry SDKs report into individual
+  frames, with its own section for each `Caused by:` error, so you can follow an
+  exception and the errors behind it instead of reading one block of text.
+- **Session IDs from older browser SDKs land on `session.id`**: spans, logs and
+  session replay events from older `@hyperdx/browser` SDKs carry the session id
+  only in the `rum.sessionId` resource attribute, and the collector now gives
+  them the OpenTelemetry `session.id` attribute as well, so anything keyed off
+  the standard attribute sees them too. An existing `session.id` is never
+  overwritten and `rum.sessionId` is kept; if you override pipeline
+  `processors:` lists in `CUSTOM_OTELCOL_CONFIG_FILE`, add `transform/session_id`
+  to keep this. Newly created `hyperdx_sessions` and `otel_logs` tables also get
+  `MATERIALIZED` session id columns with skip indexes, so session queries no
+  longer read the attribute maps — existing tables need an
+  `ALTER TABLE ... ADD COLUMN` to benefit.
+- **Filter the v2 list alerts endpoint**: the v2 API for listing alerts now
+  accepts tag, search, source and state filters, so you can ask for just the
+  alerts you care about rather than fetching them all and filtering yourself.
+- **Connect an AI agent without pasting a key**: the new
+  `npx @hyperdx/cli mcp install` asks for a personal access key or an
+  organisation API key with hidden input, checks it, and adds the ClickStack MCP
+  server to Claude Code, Codex, Cursor and VS Code. Team Settings now leads with
+  this command, so a key no longer has to go into a copied command or an agent
+  chat; the per-agent snippets are still there for setting up one agent by hand.
+- **Describe any table over MCP**: the new `clickstack_describe_table` tool
+  lists the tables in a database and describes one that is not a registered
+  source — its columns, keys, engine, skipping indices, approximate size and an
+  optional row sample — so an assistant can look into data you have not set up
+  as a source yet.
+- **Set a dashboard's saved filter values over MCP**: the MCP dashboard tools
+  can now set a dashboard's `savedFilterValues`, so an assistant building or
+  updating a dashboard can leave its filters pre-filled rather than having you
+  set them by hand afterwards.
+- **Run up to ten MCP SQL queries in parallel**: `clickstack_sql` now accepts a
+  `queries` array and runs up to ten independent queries at once under a shared
+  60 second deadline, with each query reporting its own `ok`, `error` or
+  `timeout` status so one failure does not take the others down with it.
+  Single-query calls using `sql` behave exactly as before.
+- **Narrower MCP table queries**: `clickstack_table` now takes an optional
+  `limit` and `having`, so an assistant can cut a grouped result down to the
+  rows worth reading rather than filtering them afterwards. Grouped results with
+  no `orderBy` now come back ordered by the first select item, descending, which
+  puts the largest values first instead of leaving the order to ClickHouse.
+
+### 🧪 Experimental
+
+PromQL support is gated behind the `ENABLE_PROMQL` flag; these changes apply
+once it is on.
+
+- **PromQL sources and tiles over MCP**: `clickstack_describe_source` now
+  returns a PromQL source's label names and metric names — from a ClickHouse
+  TimeSeries table or a Prometheus-compatible endpoint — instead of a column
+  schema, and both it and `clickstack_list_sources` say which backend the source
+  uses, explaining how to read a TimeSeries table with `clickstack_sql`.
+  Prometheus endpoint sources no longer show a placeholder table, and the MCP
+  dashboard tools read and write PromQL tiles and `PROMETHEUS_LABEL` filters.
+  With `ENABLE_PROMQL` off, MCP hides PromQL sources from listing, describing
+  and deleting, `clickstack_save_source` no longer accepts `kind: "promql"`, and
+  the dashboard tools hide PromQL tiles rather than discarding them, so a
+  dashboard edited through MCP keeps its PromQL tiles intact.
+- **Run a PromQL query over MCP**: the new `clickstack_promql` tool runs PromQL
+  against a PromQL source, and the MCP prompts and instructions now cover
+  PromQL sources, tiles and label filters while PromQL is enabled, so an
+  assistant knows how to reach them. Label lookups and queries also refuse a
+  Prometheus endpoint response over 8 MB rather than buffering the whole thing
+  into memory.
+- **Query a PromQL tile over MCP**: the `query_tile` and `query_tiles` tools now
+  run PromQL tiles as well, against both Prometheus-compatible endpoints and
+  ClickHouse TimeSeries tables, so an assistant can read the numbers behind a
+  PromQL tile rather than only its definition. PromQL table and histogram
+  heatmap tiles come back in the rows the dashboard itself draws, so what the
+  assistant reads matches what you see on the dashboard.
+
+### 🔧 Improvements
+
+- **The ClickStack hexagon and bolt mark across the app**: the logo, the
+  collapsed nav and the favicon now carry the ClickStack hexagon and bolt mark,
+  so the browser tab and the sidebar match the branding the rest of the app
+  uses. The expanded sidebar spells out the ClickStack name as text beside the
+  symbol, and a new favicon set, an SVG included, covers the browser tab,
+  bookmarks and touch icon.
+- **A tighter trace side panel**: the trace waterfall starts higher up the
+  panel, because a span no longer repeats its name in a box under the panel
+  title or shows its service as a chip beside the metadata row that already
+  names it, and the "⌘/Ctrl + scroll to zoom" hint has moved into the timeline's
+  top-left corner instead of claiming a row of its own. Span names too long for
+  the title keep their box, and log panels are unchanged.
+- **Opening a row queries it once**: the side panel ran the same `SELECT *` row
+  query twice, once for the panel and again when its Overview or Column Values
+  tab mounted. A row that was found is now reused from the cache, so that tab
+  and later tab switches do not query it again; a different row or source still
+  runs the query, and a row that was not found is looked up again.
+- **One name when you alert on a search**: creating an alert from the search
+  page now asks for a single name rather than two. An unsaved search is named
+  once in the alert modal's header and the alert inherits that name and its
+  tags; on a saved search the alert's own field is labelled "Alert name" and
+  shows the inherited name as its placeholder instead of pre-filling a
+  duplicate.
+- **Collapsed pinned filters stay collapsed**: a pinned filter you collapse in
+  the search sidebar stays collapsed the next time that source loads, instead of
+  opening again every time.
+- **Better compression for newly created tables**: the collector's seed schemas
+  now pin `ZSTD(3)` rather than `ZSTD(1)`, which compresses your data further
+  for a small insert-time CPU cost and no change to read performance. Only
+  tables created from here on are affected; existing tables keep the codecs they
+  already have.
+- **Logs with a severity number but no severity text get a level**: logs that
+  arrive with a severity number and an empty severity text, such as those from
+  the new browser SDK, now get the matching level text (`info`, `error`, and so
+  on), so they read and filter like every other log. Severity text set by the
+  producer is never overwritten.
+- **Browsers cache the collector's CORS preflights for 10 minutes**: the OTLP
+  receiver now answers preflight requests with `Access-Control-Max-Age: 600`.
+  Browsers previously cached a preflight for only 5 seconds, which is exactly
+  how often the browser SDK exports, so about half of its requests to the
+  collector were preflights.
+- **Persisted `_block_number` and `_block_offset` columns detected more
+  reliably**: when a table's `CREATE` query omits them, HyperDX now falls back to
+  the server's MergeTree settings to work out whether they are persisted —
+  reading `system.shared_merge_tree_settings` first on ClickHouse Cloud, then
+  `system.merge_tree_settings` per key — so the features that rely on those
+  columns keep working on tables where the setting is applied server-side rather
+  than spelled out in the schema.
+- **Sharper query guidance for MCP agents**: the MCP tool descriptions and the
+  query guide now recommend the quoted Lucene form `field:"value"` for exact
+  matches, and bare terms or phrases for log body text, so the queries an
+  assistant writes still make use of the primary key and the text index.
+- **`minAutoGranularity` documented in the external API**: `GET`, `POST` and
+  `PUT /api/v2/sources` already accepted and returned `minAutoGranularity` on
+  metric and PromQL sources, but the OpenAPI spec left it out, so clients
+  generated from the spec dropped or rejected the field. The spec now documents
+  it, and generated clients can set and read it like any other source setting.
+
+### 🐛 Bug Fixes
+
+- **Metric points with no recorded value stay out of charts and alerts**: when a
+  scraped series goes away or a scrape fails, the collector's `prometheus`
+  receiver sends a point flagged "no recorded value" — a Prometheus staleness
+  marker — and the ClickHouse exporter stores it as zeros. Charts and alerts
+  read that as a real measurement, so a gauge's `min` and `avg` dropped and its
+  `count` still included the series that had gone, and a counter or histogram
+  that came back after the marker counted its whole total over again. Metric
+  queries now skip points carrying the flag.
+- **Cached table columns refresh after 5 minutes**: the metadata cache kept each
+  table's `DESCRIBE` result for the life of the process, so columns added with
+  `ALTER TABLE`, such as new MATERIALIZED columns, were not picked up until the
+  API restarted. Cached columns now expire after 5 minutes; other cached
+  metadata is unchanged.
+- **Alerts can no longer be set on tiles that never fire**: dashboard tiles the
+  alert checker does not evaluate — PromQL tiles, and builder tiles with an
+  unsupported display type — now reject alerts outright, instead of accepting
+  one that stayed silent forever. Any such alert already saved is dropped the
+  next time its dashboard is saved, so move it to a tile the checker supports if
+  you were relying on it.
+- **Resolved grouped alerts name the group that resolved**: when a group
+  vanishes from the data, the alert resolves with that group's values filled in
+  for `{{attributes.*}}` in the title and message, and `{{var.*}}` in the webhook
+  body, so you can tell from the notification which group went quiet.
+- **Row detail lookups work on FIPS ClickHouse and with special characters in
+  JSON keys**: looking up a JSON row no longer relies on MD5, which FIPS-enabled
+  deployments refuse to run — the lookup uses SHA256 instead — and path segments
+  containing special characters, a key prefixed with `@`, say, now stay quoted.
+  Row details and drill-down return the row rather than failing or reading the
+  key as something else.
+- **Row details no longer open the wrong row on tables with a single block
+  column**: the key-only lookup is used only where a table persists both
+  `_block_number` and `_block_offset`. One block column on its own — from a
+  server-wide `enable_block_offset_column`, say — is not unique against a
+  second-precision primary key and could open a different row, so it is now
+  added only as a tiebreaker to the full-row lookup.
+- **"Denoise results" removes noise on ordinary data again**: a pattern now
+  counts as noisy above 5% of the sampled events rather than 10%, a bar that
+  often matched nothing at all, so denoising a typical result set actually hides
+  the repetitive lines it was meant to — and patterns containing error or
+  warning lines are never hidden. Denoise also mines the source's body column
+  instead of whatever the last column in the table happened to be, strips
+  ANSI-coloured rows matching a noisy pattern, tells you when results can't be
+  denoised, and lists what it hid as a short, expandable summary. The MCP
+  `denoise` option uses the same 5% threshold.
+- **Charts show a spinner while they load**: a chart tile now shows a spinner
+  and "Loading Chart Data..." while its query is in flight, including when the
+  previous result was empty — before, it kept reading "No data found within time
+  range." until the new query finished, which looked like an answer rather than
+  a wait. Loaders are a neutral grey now instead of yellow.
+- **Row details show a loader while they load**: expanded search rows and the
+  trace viewer's span details read "Empty" or "No body for this event." while
+  the row was still on its way, which looked like a row with nothing in it. Both
+  now show a loader until the row arrives.
+- **Session replays from separate page loads no longer collide**: browser SDKs
+  up to `@clickhouse/clickstack-browser` 1.2.0 number replay events from 1 again
+  on every page load, so when a page closed before all the chunks of a large
+  event were sent, its leftover chunk could be joined onto a later page's event
+  of the same number — that snapshot then failed to parse and never rendered.
+  Chunks are now grouped by event number and full-precision timestamp, and
+  replay rows are ordered by that timestamp, so rows from two page loads in the
+  same second no longer interleave. The app's own browser telemetry moves to
+  `@clickhouse/clickstack-browser` 1.2.1, whose replay event numbers no longer
+  repeat across page loads.
+- **Legacy `STATUS_CODE_ERROR` spans count as errors on the service map and
+  trace waterfall**: spans from collectors that emit the long status form were
+  not recognised as errored in either view, so both undercounted errors. That
+  value is now counted alongside the short `Error` form.
+- **Prometheus connections with credentials in the host work again**: a host
+  such as `http://user:pass@prometheus:9090` failed every PromQL query with
+  "Failed to reach Prometheus", because `fetch` rejects URLs carrying
+  credentials. Those credentials are now sent as a Basic auth header instead.
+- **PromQL label lookups work on ClickHouse 26.10's TimeSeries tables**: schema
+  version 8, the default from ClickHouse 26.10, keeps each series' time range in
+  a separate time ranges table rather than in the tags table's
+  `min_time`/`max_time`, so dashboard variables and label autocomplete failed
+  with "requires store_min_time_and_max_time = 1" and time-bounded lookups read
+  the whole tags table. Those lookups now read the time ranges table, so they
+  resolve on version 8 tables and stay bounded by the window you asked for, and
+  a lookup with `match[]` reads only the matched metrics' tags rows when every
+  selector names its metric, rather than every metric's.
+- **Saving a search no longer reloads the page**: the newly saved search opens
+  with a client-side navigation instead of a full page load, which also fixes
+  the 404 this caused on the static ClickStack build.
+- **Heatmap tooltips no longer shift the tile**: hovering a heatmap added
+  scrollbars and nudged the tile, because the tooltip was drawn inside the
+  chart. It now sits above the chart, so the tile stays put as you read across
+  it.
+- **The sidebar toggle works on narrow screens**: on compact viewports the
+  toggle did nothing at all. It now opens the full nav as an overlay over the
+  page, so you can reach every section without widening the window.
+- **The app loads in browsers reporting a POSIX-style language**: a browser
+  whose language reads as something like `en-US@posix` crashed the app on load.
+  Those locales are handled now, so the app starts as it should.
+- **Dashboards and saved searches keep their team and owner**: a PATCH request
+  that included `team` or `createdBy` could move a dashboard or saved search to
+  another team, or rewrite who owned it. Both fields are now ignored on update,
+  so neither can be changed that way.
+- **Usage stats run against password-protected ClickHouse connections**: the
+  usage stats job failed ClickHouse authentication whenever the connection
+  required a password. It now authenticates correctly, so those deployments
+  report usage stats again.
+- **Event pattern drill-downs return the events they describe**: each pattern
+  from `clickstack_event_patterns` now carries a SQL `whereSnippet` that keeps
+  the template's token order and variable positions and includes both the
+  caller's filter and the source table filter, so handing it to
+  `clickstack_search` returns that pattern's events. Previously a template like
+  `Sending <*> rows` produced `Body:"Sending rows"`, which matched nothing, and
+  map fields produced Lucene that would not parse. Patterns can also be mined
+  from a key inside a JSON body, and the tool now reports its sample coverage
+  and the trend bucket interval and boundaries it actually used.
+  `clickstack_event_patterns`, `clickstack_emerging_signals` and dashboard
+  event-pattern tiles also apply the log source's `tableFilterExpression` now,
+  so their counts can drop for sources that set one, and each cluster is
+  reported with its own template rather than occasionally that of a different
+  cluster of the same length.
+- **Oversized MCP responses keep more of what you asked for**: a response over
+  the size budget now shortens a long string with a `…(+N chars)` suffix instead
+  of replacing it outright, and records what it cut in `trimNotes`.
+  `clickstack_event_patterns` and `clickstack_emerging_signals` drop samples and
+  shorten long patterns before they discard whole patterns, so the `topN` you
+  asked for survives wherever it can.
+
+### 📦 Build / Packaging
+
+- **systeminformation updated past its command injection advisories**: the API
+  pulls systeminformation in through
+  `@opentelemetry/instrumentation-host-metrics`, but the root `resolutions` pin
+  held the lockfile at 5.30.7, which carries known command injection advisories
+  — among them two high-severity ones in `networkInterfaces()` on Linux
+  (GHSA-5xpp-75jx-m839, GHSA-hvx9-hwr7-wjj9). The pin now starts at 5.33.19, the
+  newest 5.x release, which fixes all of them.
+- **The app image is now published as `clickhouse/clickstack` as well**: the
+  HyperDX image goes out under `clickhouse/clickstack` alongside the existing
+  `hyperdx/hyperdx`, matching the other `clickhouse/clickstack-*` images, so you
+  can pull it under either name. Release workflows no longer log in to ghcr.io,
+  which was receiving no pushes.
+- **Project links and the bundled compose file point at ClickStack**: the GitHub
+  links the app and packages carry — changelog, support and package metadata —
+  now point at `ClickHouse/ClickStack`, and `docker-compose.yml` pulls the app
+  image as `clickhouse/clickstack`.
+- **App builds no longer fail on extensionless Google Fonts URLs**: the app
+  moves to Next.js 16.4.3, fixing the intermittent build failures that happened
+  when Google Fonts returned a font URL without a file extension. Only builds of
+  the app from source are affected.
+
+<!-- hyperdx-package-list -->
+
+### 📦 Package changelogs
+
+- `@hyperdx/api` 2.43.1 → 2.44.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/api/CHANGELOG.md#2440)
+- `@hyperdx/app` 2.43.1 → 2.44.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/app/CHANGELOG.md#2440)
+- `@hyperdx/cli` 0.8.0 → 0.9.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/cli/CHANGELOG.md#090)
+- `@hyperdx/common-utils` 0.33.0 → 0.34.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/common-utils/CHANGELOG.md#0340)
+- `@hyperdx/otel-collector` 2.43.1 → 2.44.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/otel-collector/CHANGELOG.md#2440)
+
+<!-- /hyperdx-package-list -->
+
 ## v2.43.1 — 2026-10-31
 
 <!-- hyperdx-release-notes version=2.43.1 inputs=b9b44254f52c -->

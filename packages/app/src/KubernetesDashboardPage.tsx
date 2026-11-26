@@ -58,7 +58,7 @@ import { SourceSelectControlled } from './components/SourceSelect';
 import { useQueriedChartConfig } from './hooks/useChartConfig';
 import { useDashboardRefresh } from './hooks/useDashboardRefresh';
 import { useJsonColumns } from './hooks/useMetadata';
-import { usePageTitle } from './theme/ThemeProvider';
+import { usePageTitle } from './brand';
 import {
   convertV1ChartConfigToV2,
   K8S_CPU_PERCENTAGE_NUMBER_FORMAT,
@@ -1222,8 +1222,6 @@ function KubernetesDashboardPage() {
   });
 
   const whereClause = searchQuery;
-
-  const [_searchQuery, _setSearchQuery] = React.useState<string | null>(null);
 
   const { data: logSourceJsonColumns, isLoading: isLoadingJsonColumns } =
     useJsonColumns(

@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
-import cx from 'classnames';
 import { inferNumericColumn } from '@hyperdx/common-utils/dist/clickhouse';
-import { isRatioChartConfig } from '@hyperdx/common-utils/dist/core/renderChartConfig';
+import {
+  isRatioChartConfig,
+  quotedColumnName,
+} from '@hyperdx/common-utils/dist/core/renderChartConfig';
 import {
   isBuilderChartConfig,
   isPromqlChartConfig,
@@ -35,11 +37,15 @@ import type { TileFilterHandler } from '@/types';
 import { useIntersectionObserver } from '@/utils';
 
 import ChartContainer from './charts/ChartContainer';
+import ChartEmptyState from './charts/ChartEmptyState';
 import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
 import type { CellFilterHandler } from './DBTable/DBRowTableFieldWithPopover';
-import { getClientSideSortingFn } from './DBTable/sorting';
+import {
+  getAliasedResultColumns,
+  getClientSideSortingFn,
+} from './DBTable/sorting';
 import MVOptimizationIndicator from './MaterializedViews/MVOptimizationIndicator';
 
 export default function DBTableChart({
@@ -75,6 +81,18 @@ export default function DBTableChart({
   onFilter?: TileFilterHandler;
 }) {
   const [sort, setSort] = useState<SortingState>([]);
+
+  // A header sort only overrides the Order By it was clicked against. Clear it
+  // when the config's own Order By changes (e.g. the tile was edited), so it
+  // can't come back if the Order By is later changed back.
+  const configOrderByKey = JSON.stringify(
+    isBuilderChartConfig(config) ? (config.orderBy ?? null) : null,
+  );
+  const [sortOrderByKey, setSortOrderByKey] = useState(configOrderByKey);
+  if (sortOrderByKey !== configOrderByKey) {
+    setSortOrderByKey(configOrderByKey);
+    setSort([]);
+  }
 
   const { data: source } = useSource({
     id: config.source,
@@ -139,25 +157,14 @@ export default function DBTableChart({
   });
   const { observerRef: fetchMoreRef } = useIntersectionObserver(fetchNextPage);
 
-  // Returns an array of aliases, so we can check if something is using an alias
-  const aliasMap = useMemo(() => {
-    if (isRawSqlChartConfig(config) || isPromqlChartConfig(config)) {
-      return [];
-    }
-
-    // If the config.select is a string, we can't infer this.
-    // One day, we could potentially run this through chSqlToAliasMap but AST parsing
-    //  doesn't work for most DBTableChart queries.
-    if (typeof config.select === 'string') {
-      return [];
-    }
-    return config.select.reduce((acc, select) => {
-      if (select.alias) {
-        acc.push(select.alias);
-      }
-      return acc;
-    }, [] as string[]);
-  }, [config]);
+  const resultMeta = data?.meta;
+  const aliasedColumns = useMemo(
+    () =>
+      isBuilderChartConfig(queriedConfig) && resultMeta
+        ? getAliasedResultColumns(queriedConfig, resultMeta)
+        : new Set<string>(),
+    [queriedConfig, resultMeta],
+  );
 
   const { formatByColumn } = useChartNumberFormats(queriedConfig, data?.meta);
 
@@ -257,8 +264,8 @@ export default function DBTableChart({
     return orderedKeys
       .filter(key => !hiddenColumns?.includes(key))
       .map(key => ({
-        // If it's an alias, wrap in quotes to support a variety of formats (ex "Time (ms)", "Req/s", etc)
-        id: aliasMap.includes(key) ? `"${key}"` : key,
+        // The sort id becomes the ORDER BY expression (see queriedConfig).
+        id: aliasedColumns.has(key) ? quotedColumnName(key) : key,
         dataKey: key,
         displayName: key,
         numberFormat: groupByKeys.includes(key)
@@ -276,7 +283,7 @@ export default function DBTableChart({
     queriedConfig,
     hiddenColumns,
     filterKeyByColumn,
-    aliasMap,
+    aliasedColumns,
     formatByColumn,
     colorByColumn,
     rulesByColumn,
@@ -335,20 +342,11 @@ export default function DBTableChart({
   return (
     <ChartContainer title={title} toolbarItems={toolbarItemsMemo}>
       {isLoading && !data ? (
-        <div className="d-flex h-100 w-100 align-items-center justify-content-center text-muted">
-          Loading Chart Data...
-        </div>
+        <ChartEmptyState isLoading />
       ) : isError && error ? (
         <ChartErrorState error={error} variant={errorVariant} />
       ) : data?.data.length === 0 ? (
-        <div
-          className={cx(
-            'd-flex h-100 w-100 align-items-center justify-content-center text-muted',
-            { 'effect-pulse': isPlaceholderData },
-          )}
-        >
-          No data found within time range.
-        </div>
+        <ChartEmptyState isLoading={isPlaceholderData} />
       ) : (
         <Table
           data={data?.data ?? []}

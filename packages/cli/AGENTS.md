@@ -34,6 +34,7 @@ hdx auth logout                     # Clear saved session
 hdx team list                       # List teams the user belongs to (multi-team)
 hdx team current                    # Show the active team
 hdx team use <name|id>              # Switch the active team (kubectx-style)
+hdx mcp install                     # Add the MCP server to Claude Code, Codex, Cursor, VS Code (interactive only: agents hand it to the user)
 hdx upload-sourcemaps               # Upload JS source maps
 ```
 
@@ -73,6 +74,7 @@ src/
 │   ├── ColumnValues.tsx # Shared key-value renderer (used by Column Values tab + Event Details)
 │   ├── LoginForm.tsx    # Email/password login form (used inside TUI App)
 │   └── SourcePicker.tsx # Arrow-key source selector
+├── mcp/                 # `hdx mcp install`: key check, per-agent config writers, Ink prompt
 ├── shared/
 │   ├── tileConfig.ts    # Tile → queryable chart config resolution + per-displayType
 │   │                    #   transforms (ports of web DBDashboardPage / ChartUtils)

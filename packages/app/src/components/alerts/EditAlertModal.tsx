@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { Controller, useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import {
   type Alert,
   alertDisplayNameSchema,
   AlertIntervalSchema,
+  alertNumConsecutiveWindowsSchema,
   AlertSource,
   alertTagsSchema,
   AlertThresholdType,
@@ -34,6 +35,7 @@ import { IconChartLine, IconInfoCircleFilled } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import api from '@/api';
+import { useBrandDisplayName } from '@/brand';
 import { AlertDisplayFields } from '@/components/AlertDisplayFields';
 import { AlertNoteField } from '@/components/AlertNoteField';
 import { AlertChannelForm } from '@/components/Alerts';
@@ -42,7 +44,6 @@ import { AlertScheduleFields } from '@/components/AlertScheduleFields';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { useSavedSearch } from '@/savedSearch';
 import { useSource } from '@/source';
-import { useBrandDisplayName } from '@/theme/ThemeProvider';
 import type { AlertsPageItem } from '@/types';
 import { optionsToSelectData } from '@/utils';
 import {
@@ -74,9 +75,7 @@ const EditAlertFormSchema = z
     channels: zAlertChannels.optional(),
     displayName: alertDisplayNameSchema,
     tags: alertTagsSchema,
-    // nullish() (not optional()): persisted alerts store this as null, which
-    // optional() would reject.
-    numConsecutiveWindows: z.number().int().min(1).nullish(),
+    numConsecutiveWindows: alertNumConsecutiveWindowsSchema,
   })
   .passthrough()
   .superRefine(validateAlertChannelSelection)

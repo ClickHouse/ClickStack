@@ -1,11 +1,12 @@
 import PQueue from '@esm2cjs/p-queue';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import { parseTimeRange, runConfigTile } from '@/mcp/tools/query/helpers';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
-import { runWithTimeout } from '@/mcp/utils/timeout';
+import { isPromqlEnabled } from '@/mcp/utils/promql';
+import { withDeadline } from '@/mcp/utils/timeout';
 import Dashboard from '@/models/dashboard';
 import {
   convertToExternalDashboard,
@@ -18,7 +19,12 @@ import {
   getRawSqlTileMacroWarnings,
   getTileVariableWarnings,
 } from './validation';
-import { mcpVariableValuesParam, resolveDashboardVariables } from './variables';
+import {
+  getReferenceTargets,
+  mcpVariableValuesParam,
+  resolveDashboardVariables,
+  resolveTileVariableReferences,
+} from './variables';
 
 /**
  * How many tiles to query against ClickHouse at once. Kept lowish so a batch
@@ -63,49 +69,6 @@ const BATCH_DEADLINE_MS = 60_000;
 function isMarkdownTile(tile: ExternalDashboardTileWithId): boolean {
   if (!isConfigTile(tile)) return true;
   return tile.config.displayType === 'markdown';
-}
-
-/**
- * Marker error so the per-tile catch can render a clear timeout message.
- * Raised both when a started query overruns the deadline and when a queued
- * tile's deadline has already passed before it could start.
- *
- * @internal Exported for testing only.
- */
-export class TileDeadlineError extends Error {
-  constructor() {
-    super('Tile query exceeded the batch wall-clock deadline');
-    this.name = 'TileDeadlineError';
-  }
-}
-
-/**
- * Run `startWork` under a SHARED absolute deadline (epoch millis) — every tile
- * in a batch passes the same `deadlineAt`, making the budget whole-call.
- *
- * `startWork` is a thunk, not an already-started promise, so the deadline is
- * checked BEFORE the query is issued: once the budget is spent, tiles PQueue
- * schedules during the drain fail fast without touching ClickHouse.
- *
- * A tile that did start runs under `runWithTimeout`: at the deadline its
- * query is cancelled and the tile rejects with `TileDeadlineError`.
- *
- * @internal Exported for testing only.
- */
-export async function withDeadline<T>(
-  startWork: (signal: AbortSignal) => Promise<T>,
-  deadlineAt: number,
-): Promise<T> {
-  const remaining = deadlineAt - Date.now();
-  // Budget already spent — fail fast without starting the work at all.
-  if (remaining <= 0) {
-    throw new TileDeadlineError();
-  }
-  const outcome = await runWithTimeout(startWork, { timeoutMs: remaining });
-  if (outcome.timedOut) {
-    throw new TileDeadlineError();
-  }
-  return outcome.value;
 }
 
 /**
@@ -225,7 +188,7 @@ export function registerQueryTiles({
       }
 
       const externalDashboard = convertToExternalDashboard(dashboard, {
-        hidePromqlTiles: true,
+        hidePromql: !isPromqlEnabled(context),
       });
       const allTiles = externalDashboard.tiles;
 
@@ -272,6 +235,8 @@ export function registerQueryTiles({
         .slice(MAX_TILES_PER_CALL)
         .map(t => t.id);
 
+      const referenceTargets = await getReferenceTargets(context);
+
       // Fix one shared deadline for the whole batch that every tile races.
       const deadlineAt = Date.now() + BATCH_DEADLINE_MS;
 
@@ -293,6 +258,17 @@ export function registerQueryTiles({
               return { ...base, status: 'skipped' };
             }
 
+            const resolvedTile = resolveTileVariableReferences(
+              tile,
+              externalDashboard.filters,
+              variableValues,
+              externalDashboard.savedFilterValues,
+              referenceTargets,
+            );
+            if ('error' in resolvedTile) {
+              return { ...base, status: 'error', error: resolvedTile.error };
+            }
+
             // Run the query under the shared deadline. It's passed as a thunk
             // so withDeadline can skip issuing it entirely once the budget is
             // spent (see withDeadline). withDeadline hands the thunk an
@@ -305,10 +281,13 @@ export function registerQueryTiles({
             try {
               const result = await withDeadline(
                 signal =>
-                  runConfigTile(teamId.toString(), tile, startDate, endDate, {
-                    abortSignal: signal,
-                    variables,
-                  }),
+                  runConfigTile(
+                    context,
+                    resolvedTile.tile,
+                    startDate,
+                    endDate,
+                    { abortSignal: signal, variables },
+                  ),
                 deadlineAt,
               );
 

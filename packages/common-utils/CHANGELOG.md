@@ -1,5 +1,231 @@
 # @hyperdx/common-utils
 
+## 0.36.1
+
+### Patch Changes
+
+- e36cec3a2: perf: share one Map key read between concurrent callers
+
+  The search page's filter panel, search bar and group-by each load the same Map
+  keys when the page opens. Each sent its own text index read, which on large
+  tables can use several GiB of memory. Concurrent requests for the same keys now
+  share one query.
+
+- 1a4c116b2: perf: load search filter values faster in exact mode by reading several keys on
+  one Map column with a single `groupUniqArrayMap`, and by querying plain columns
+  and each Map or JSON column separately so slow attribute maps don't hold up the
+  rest
+- 351f19400: feat: allow up to 10,000 in the team "Filter Keys Fetch Limit" setting
+
+  The setting's input in Team settings stopped at 1,000 keys per column; it now
+  accepts up to 10,000. Map key discovery returns up to the setting's value per
+  Map column, and never fewer than 1,000.
+
+- 86acf27c0: perf: read only 20 median-sized parts for text index key and value lookups
+
+  Map key discovery and "all values" lookups on text indexes read the index
+  dictionary of every part in the time range, which is slow on tables with many
+  parts. They now read the 20 parts closest to the median size. Log and trace
+  sources can change the count with the new "Map key index parts" setting
+  (`mapKeyIndexMaxParts`), and which parts are read with "Map key index part size"
+  (`mapKeyIndexPartSelection`: median, smallest, or largest). "Load more" on a
+  single filter key still reads every part in the time range.
+
+- 2f61137e2: fix: return partial rows from `clickstack_search` instead of timing out
+
+  The MCP search tool now scans newest-first over the same progressive time
+  windows as the app's search page, under a 25s budget. When time runs out it
+  returns the rows found so far with a `partial` block (requested range, the range
+  fully covered, and the window that was cut off) and a hint for the next call,
+  instead of failing after 30s. The time-window helpers moved from the app to
+  `@hyperdx/common-utils/core/searchWindows`; the app's behavior is unchanged.
+
+- 64a55d5b7: fix: allow grouping gauge and sum metric charts by an expression over the time column
+
+  A table, pie or bar chart on a gauge or sum metric grouped by a time expression
+  such as `toStartOfHour(TimeUnix)` or `toDate(TimeUnix)` failed with
+  `Unknown identifier TimeUnix`, because the bucketed CTE the outer query reads
+  did not carry the time column. When the group-by references it, `TimeUnix` now
+  resolves to each metric bucket's start, so values are the same as the chart
+  without the time group-by.
+
+- e8d1d9add: fix: return the actual earliest/latest time for min/max on a date or time column
+
+  `min` and `max` on a Date, DateTime, or DateTime64 column (for example
+  `Timestamp`) returned 0, because every aggregation cast its value to Float64
+  first. Tables, number tiles, and the MCP `clickstack_table` tool now return the
+  timestamp itself. Line, bar, pie, and other charts, ratios, formulas, and number
+  tiles with several series keep the numeric cast.
+
+- d99be7650: fix: MCP `event_patterns`, `emerging_signals` and search denoise, and the CLI,
+  no longer split the same log line by its date. Before mining, the Drain miner
+  masks the date of a timestamp (weekday, day, month, year) to `<DATE>`, so dated
+  lines from different days, months or years get the same template instead of one
+  "new" and one "gone". Times and ids are not masked. Within one day lines group
+  as before, except that klog lines with different severity letters are no longer
+  merged. No mask changes a line's token count: the `event_patterns` drill-down
+  predicate matches `<DATE>` as one or more non-whitespace characters, also inside
+  a token (the new `masks` option of the pattern predicate builders, which only
+  the MCP drill-down sets), and search denoise masks bodies the same way before
+  matching. Masking instructions get an optional `perWord` flag (default off, as
+  in drain3). The web app's Event patterns view uses its own drain3 config and is
+  unchanged.
+- 2cec94f7d: feat: let SQL query dashboard filters use an optional source
+
+  A SQL query filter can now pick a source on its connection, or a data source variable, and can do so on a connection variable too. With one, its SQL can use `$__sourceTable` and `$__filters`, which applies the dashboard's filter selections for that source, the same way raw SQL tiles do. The external API and MCP read and write it as `sourceId`.
+
+- 7afa31c71: feat: Add a team-wide default (All or Exact) for the search filters "Show All Values" setting
+- f11b9f58b: perf: read large-block Map text index values per key, most frequent first
+
+  "All values" lookups on Map key=value text indexes with large dictionary blocks
+  (2048 or more, e.g. `text_index_dictionary_block_size = 8192`, which the
+  collector's migration now sets on ClickHouse 26.6+)
+  now read each key separately, in parallel queries of at most 10 keys, and stop
+  after 20,000 tokens per key, so a key with a value per row (request IDs, UUIDs)
+  can't hold up the others. Values come from `topKWeighted(limit)` weighted by
+  each token's row count, so a capped list holds the most common values, most
+  common first. These reads no longer apply `max_rows_to_read`: the index is read
+  in sorted token order, so the cap left every key that sorts after a
+  high-cardinality key with no values.
+
+  Indexes with smaller blocks, including ClickHouse's default of 512, keep the
+  previous query shape (one read for all of a query's keys, the alphabetically
+  first values, and the `max_rows_to_read` cap), now in parallel queries of at
+  most 10 keys, so the cap's cut-off affects at most 9 other keys. Every read loads
+  each part's sparse index, which is large with small blocks, so one read per key
+  would multiply that cost. The block size comes from the index definition, then
+  the table's `text_index_dictionary_block_size`, then the server's.
+
+  Text indexes on plain columns now return the most frequent values with
+  `topKWeighted`, in parallel queries of at most 10 columns, without the row cap.
+
+## 0.36.0
+
+### Minor Changes
+
+- fe96b722b: feat: add `buildCompactPatternPredicate`
+
+  It builds the same match as `buildPatternPredicate` in much shorter SQL, for
+  pattern filters that are kept in a URL. `parsePatternPredicate` reads both
+  forms.
+
+- d311d82e2: feat: share the Event Patterns drill-down predicate
+
+  `templateToRegex` and `buildPatternPredicate`, which the MCP server uses to
+  build the `clickstack_event_patterns` drill-down filter, are now in
+  `@hyperdx/common-utils/dist/drain`. New options match templates mined with extra
+  delimiters (`extraDelimiters`) or by Python Drain3 (`whitespace: 'python'`), and
+  `parsePatternPredicate` reads a predicate back into its value expression and
+  template. Without options the output is the same as the MCP server's.
+
+- 743c3c1a6: feat: add an optional "Row key expression" to log and trace sources. When set,
+  the side panel's row lookup selects and filters on only those columns instead of
+  detecting keys from table metadata.
+- a7744e82a: feat: add data source and connection variable types to dashboards
+- a7744e82a: feat: add connection variables for raw SQL tiles, SQL query filters, and
+  connection-scoped data source variables
+
+### Patch Changes
+
+- f15b849da: feat: Ad hoc dashboard filter finishing touches
+
+  - Add an `IN` operator. `IN` conditions on the same key are OR'd into one
+    `IN (...)` condition for SQL, or one `=~"a|b"` matcher for PromQL.
+  - Ad hoc filters always broadcast (`isBroadcastEnabled: true`), and their
+    variable name is only a unique identifier. It is no longer declared as a
+    `$variable`.
+  - Warn when another ad hoc filter already applies to the same sources.
+  - Collapse the filter input to three conditions behind a "+N more" toggle.
+
+- 02a40929d: feat: `clickstack_save_alert` accepts `note` and `numConsecutiveWindows`
+
+  Updates that omit either field now keep the stored value instead of clearing it;
+  send `null` to clear.
+
+- 272c51486: fix: support numeric range searches on String attributes
+
+  Range searches with numeric bounds on a String-typed field, such as
+  `LogAttributes.duration_ms:[10 TO 20]`, failed with "no supertype for types
+  String, UInt8". They now compare with `toFloat64OrNull`; values that aren't
+  numbers don't match. `>`, `<`, `>=` and `<=` still compare String fields as
+  text; use a range such as `:[1000 TO *]` for a numeric comparison.
+
+- 3acd5ba1a: feat: create SQL query dashboard filters and fill their dropdowns
+
+  Dashboard filters can now take their values from a ClickHouse SQL query. The filter editor offers a "SQL query values" type with a connection, a SQL editor, and a preview of the values. The dropdown lists the query's first column in the order it returns, up to 10,000 values, and the query can use the time macros and other filters' variables.
+
+- 5b50c31c9: feat: add the SQL query dashboard filter type to the dashboard schema
+
+  A `SQL_QUERY` filter stores a ClickHouse connection and a SQL template whose first column fills the filter's dropdown. It is variable-only. Validation flags templates that use `$__sourceTable` or `$__filters`, or whose macros and variable references can't expand. The filter is not yet exposed through the external API or MCP, and has no editor or values lookup yet.
+
+## 0.35.0
+
+### Minor Changes
+
+- 2d17de5d7: feat: serve PromQL label lookups from ClickHouse's Prometheus HTTP API
+
+  On ClickHouse 26.9+ with the `prometheus_api_v1` handler, `/labels` and `/label/:name/values` for a ClickHouse-backed PromQL source now proxy to the handler instead of querying the TimeSeries tags table with SQL. Older servers, servers without the handler, and sources set to `table-function` keep the SQL path, so a source that runs queries over HTTP on 26.6-26.8 still gets label autocomplete.
+
+### Patch Changes
+
+- ac913ceb3: feat: Choose how a PromQL source on ClickHouse is evaluated (the Prometheus HTTP API or the `prometheusQuery` table functions) instead of probing the server on every query. Without a choice the server is still probed, but the answer is now kept for 5 minutes. A source set to the HTTP API against a server that does not serve it fails with a clear error. Onboarding pins a PromQL source it detects to the HTTP API when the server serves it.
+
+## 0.34.0
+
+### Minor Changes
+
+- 142c9cc87: feat: narrow ad hoc dashboard filter suggestions with a condition
+
+  An ad hoc filter on SQL sources can now carry a SQL or Lucene "Keys and values
+  filter", like a queried filter's dropdown values filter, that limits the rows
+  its keys and values are suggested from. It can reference the dashboard's other
+  variables. While it references a required filter with nothing selected, the ad
+  hoc filter can't add or edit conditions and names the filter it is waiting on.
+  Failed suggestions now show the database's error message.
+
+- cd0e9edfa: feat: add optional `titleEmoji` webhook option; `false` removes the emoji prefix from notification titles sent through that webhook
+- 0b7926d1d: feat: Team members can create team-owned API keys with a description and expiry that keep working after their creator leaves.
+
+### Patch Changes
+
+- 9269f7784: fix: "Denoise results" now removes noise on typical data. A pattern now counts as noisy above 5% of sampled events instead of 10%, which often matched nothing. Patterns that include error or warning lines are never hidden. The MCP `denoise` option uses the same 5% threshold. Denoise also mines the source's body column instead of the last table column, removes ANSI-colored rows that match a noisy pattern, says when results can't be denoised, and shows hidden patterns as a short summary with a shortened, expandable list.
+- e2754d203: fix: use SHA256 instead of MD5 for JSON row lookup WHERE clauses so row
+  details and drill-down work on FIPS-enabled ClickHouse deployments
+- 22f824c6e: fix: keep JSON path segments with special characters quoted in row detail lookups
+- 642533255: perf: PromQL label lookups with `match[]` read only the matched metrics' tags
+  rows when every selector names its metric
+- d0dd06fe8: fix: count legacy STATUS_CODE_ERROR spans as errors on the service map and trace
+  waterfall
+- 5584f84bb: fix: make clickstack_event_patterns drill-down snippets executable
+
+  Each pattern's `whereSnippet` is now a SQL predicate (`whereLanguage: "sql"`) that keeps the template's token order and variable positions and includes the caller's filter and the source table filter, so passing it to `clickstack_search` returns the pattern's events. Before, a template like `Sending <*> rows` produced `Body:"Sending rows"`, which matched nothing, and map fields produced Lucene that failed to parse. `bodyExpression` now also accepts `JSONExtractString(<column>, '<key>', ...)` to mine a field inside JSON bodies, and the tool reports sample coverage and the actual trend bucket interval and boundaries.
+
+  `clickstack_event_patterns`, `clickstack_emerging_signals` and dashboard event-pattern tiles now apply the log source's `tableFilterExpression`, so their counts can drop for sources that set one. `minePatterns` now reports each cluster's own template; before, it could report the template of a different same-length cluster that some members did not fit.
+
+- 41b2b742a: feat: fall back to server MergeTree settings to detect persisted `_block_number` and `_block_offset` columns when the table's CREATE query omits them
+- 442d6dfd9: fix: refresh cached table columns after 5 minutes
+
+  The shared metadata cache kept each table's `DESCRIBE` result for the life of
+  the process, so the API did not see columns added with `ALTER TABLE`, such as
+  new MATERIALIZED columns, until it restarted. Cached columns now expire after 5
+  minutes. Other cached metadata is unchanged.
+
+- eb2439ed0: fix: leave metric points with no recorded value out of charts and alerts
+
+  When a scraped series goes away or a scrape fails, the collector's `prometheus`
+  receiver sends a point flagged "no recorded value" (a Prometheus staleness
+  marker), and the ClickHouse exporter stores it as zeros. Metric charts and
+  alerts read it as a real value: a gauge's `min` and `avg` dropped and `count`
+  included the series that went away, and a counter or histogram that came back
+  after the marker counted its whole total again. Metric queries now skip points
+  with this flag.
+
+- 0a5237e6c: fix: reject alerts on dashboard tiles the alert checker never evaluates (PromQL
+  tiles, and builder tiles with unsupported display types), and drop them when a
+  dashboard is saved
+- 78143c81a: feat: on ClickHouse Cloud, read `system.shared_merge_tree_settings` when detecting `_block_number` and `_block_offset` columns, falling back to `system.merge_tree_settings` per key
+- b1d4e60f8: fix: PromQL label lookups (dashboard variables, label autocomplete) now work on TimeSeries tables of schema version 8, the default from ClickHouse 26.10. These keep each series' time range in a separate time ranges table instead of the tags table's min_time/max_time, so match[] failed with "requires store_min_time_and_max_time = 1" and time-bounded lookups read the whole tags table.
+
 ## 0.33.0
 
 ### Minor Changes

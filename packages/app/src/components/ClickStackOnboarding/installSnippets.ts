@@ -263,6 +263,15 @@ function buildMcpJsonBlock(deployment: DeploymentShape): string {
 }
 
 /**
+ * `npx` command for the CLI installer. It prompts for the API key itself, so
+ * the key never appears in a copied command or shell history.
+ */
+export function buildCliInstallCommand(deployment: DeploymentShape): string {
+  const appUrl = deployment.apiUrl.replace(/\/api\/?$/, '');
+  return `npx @hyperdx/cli mcp install --app-url ${appUrl}`;
+}
+
+/**
  * Build every host's snippet in one call. The component pulls the
  * field matching the current host out of the result; tests assert
  * round-trip shape through this entry point.

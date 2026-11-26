@@ -41,9 +41,9 @@ jest.mock('@/source', () => ({
   useSource: () => ({ data: undefined }),
 }));
 
-jest.mock('@/theme/ThemeProvider', () => ({
+jest.mock('@/brand', () => ({
   __esModule: true,
-  useBrandDisplayName: () => 'HyperDX',
+  useBrandDisplayName: () => 'ClickStack',
 }));
 
 // Heavy / visual child components are stubbed so the form still renders and
@@ -131,8 +131,9 @@ const renderModal = (alert: AlertsPageItem) => {
 };
 
 const submitForm = async () => {
-  const saveButton = await screen.findByText('Save Alert');
-  fireEvent.click(saveButton.closest('button') as HTMLButtonElement);
+  const saveButton = (await screen.findByText('Save Alert')).closest('button');
+  if (!saveButton) throw new Error('Save Alert button not found');
+  fireEvent.click(saveButton);
   await waitFor(() => {
     expect(updateAlertMutateAsync).toHaveBeenCalledTimes(1);
   });

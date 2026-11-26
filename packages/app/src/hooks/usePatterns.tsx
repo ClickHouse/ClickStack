@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { timeBucketByGranularity, toStartOfInterval } from '@/ChartUtils';
 import { useConfigWithAdditionalSelect } from '@/components/DBRowTable';
+import { DRAIN_EXTRA_DELIMITERS } from '@/components/Patterns/drainDelimiters';
 import { reconstructTemplate } from '@/components/Patterns/reconstructTemplate';
 import { useQueriedChartConfig } from '@/hooks/useChartConfig';
 import { getFirstTimestampValueExpression } from '@/source';
@@ -55,12 +56,11 @@ class Miner {
     await this.pyodide.runPythonAsync(`
 import js
 import json
-import string
 from drain3 import TemplateMiner
 from drain3.template_miner_config import TemplateMinerConfig
 
 _config = TemplateMinerConfig()
-_config.drain_extra_delimiters = list(string.punctuation)
+_config.drain_extra_delimiters = json.loads(${JSON.stringify(JSON.stringify(DRAIN_EXTRA_DELIMITERS))})
 
 ${this.minerVariableName} = TemplateMiner(None, _config)
     `);
@@ -80,18 +80,11 @@ ${this.minerVariableName} = TemplateMiner(None, _config)
     );
   }
 
-  async matchLogs(logs: string[]) {
-    const tempLogs = `temp_logs_${this.id}`;
-    const tempResults = `temp_results_${this.id}`;
-    this.pyodide.globals.set(tempLogs, logs);
-
+  /** Final template of every cluster, keyed by cluster id. */
+  async getTemplates(): Promise<Record<string, string>> {
     return JSON.parse(
       await this.pyodide.runPythonAsync(`
-      ${tempResults} = []
-      for log in ${tempLogs}:
-        match = ${this.minerVariableName}.match(log)
-        ${tempResults}.append(match.cluster_id if match else None)
-      json.dumps(${tempResults})
+      json.dumps({str(c.cluster_id): c.get_template() for c in ${this.minerVariableName}.drain.clusters})
     `),
     );
   }
@@ -100,9 +93,11 @@ ${this.minerVariableName} = TemplateMiner(None, _config)
 async function mineEventPatterns(logs: string[], pyodide: any) {
   const miner = new Miner(pyodide);
   await miner.init();
+  const patterns = await miner.minePatterns(logs);
   return {
     miner,
-    patterns: await miner.minePatterns(logs),
+    patterns,
+    templates: await miner.getTemplates(),
   };
 }
 
@@ -121,6 +116,11 @@ type SampleLog = {
 export type Pattern = {
   id: string;
   pattern: string;
+  /**
+   * The cluster's Drain template, which `pattern` reconstructs for display.
+   * Missing when the miner returned none for the cluster.
+   */
+  template?: string;
   count: number;
   samples: SampleLog[];
 };
@@ -205,6 +205,7 @@ function usePatterns({
           additionalKeysLength:
             configWithPrimaryAndPartitionKey.additionalKeysLength,
           miner: response.miner,
+          clusterTemplates: response.templates,
         };
       });
     },
@@ -306,6 +307,8 @@ export function useGroupedPatterns({
       fullPatternGroups[patternId] = {
         id: patternId,
         pattern: reconstructedPattern, // last pattern is usually the most up to date templated pattern
+        template:
+          results?.clusterTemplates?.[patternId] ?? lastRow?.__hdx_pattern,
         count,
         countStr: `~${count}`,
         level: lastRow?.[LEVEL_COLUMN_ALIAS], // last level is usually representative of the entire pattern set
@@ -335,6 +338,7 @@ export function useGroupedPatterns({
     isLoading,
     error,
     miner: results?.miner,
+    clusterTemplates: results?.clusterTemplates,
     sampledRowCount,
     patternQueryConfig,
   };

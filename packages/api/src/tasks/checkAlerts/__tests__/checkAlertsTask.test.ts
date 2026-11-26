@@ -1,13 +1,22 @@
 import { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/node';
+import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import mongoose from 'mongoose';
 
 import * as config from '@/config';
 import { ObjectId } from '@/models';
-import { AlertSource, AlertThresholdType, IAlert } from '@/models/alert';
+import {
+  AlertSource,
+  AlertState,
+  AlertThresholdType,
+  IAlert,
+} from '@/models/alert';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
 import * as checkAlerts from '@/tasks/checkAlerts';
-import CheckAlertTask from '@/tasks/checkAlerts';
+import CheckAlertTask, {
+  AggregatedAlertHistory,
+  partitionPreviousMapsByAlert,
+} from '@/tasks/checkAlerts';
 import {
   AlertDetails,
   AlertProvider,
@@ -22,6 +31,130 @@ jest.mock('@/tasks/checkAlerts/providers', () => {
     ...jest.requireActual('@/tasks/checkAlerts/providers'),
     loadProvider: jest.fn(),
   };
+});
+
+type TestHistory = Omit<AggregatedAlertHistory, '_id'>;
+
+const buildHistory = (group?: string): TestHistory => ({
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  state: AlertState.OK,
+  group,
+});
+
+const buildPartitionTask = (
+  alerts: { id: string; previousMap: Map<string, TestHistory> }[],
+  teamId = new mongoose.Types.ObjectId(),
+): AlertTask =>
+  fromPartial({
+    alerts: alerts.map(({ id, previousMap }) => ({
+      alert: {
+        id,
+        team: { _id: teamId },
+        source: AlertSource.SAVED_SEARCH,
+        threshold: 10,
+        thresholdType: AlertThresholdType.ABOVE,
+        interval: '1m',
+        channel: { type: 'webhook', webhookId: 'webhook-123' },
+      },
+      taskType: AlertTaskType.SAVED_SEARCH,
+      previousMap,
+    })),
+    conn: {
+      id: 'conn-123',
+      _id: new mongoose.Types.ObjectId(),
+      host: config.CLICKHOUSE_HOST,
+      username: config.CLICKHOUSE_USER,
+      password: config.CLICKHOUSE_PASSWORD,
+      name: '',
+      team: teamId,
+    },
+    now: new Date(),
+  });
+
+describe('partitionPreviousMapsByAlert', () => {
+  it('gives each alert only its own entries from a shared map, keys unchanged', () => {
+    const groupedA = buildHistory('service:api');
+    const groupedB = buildHistory('service:web');
+    const ungrouped = buildHistory();
+    const otherAlert = buildHistory();
+    const shared = new Map([
+      ['grouped||service:api', groupedA],
+      ['grouped||service:web', groupedB],
+      ['ungrouped', ungrouped],
+      ['not-in-tick', otherAlert],
+    ]);
+
+    const [task] = partitionPreviousMapsByAlert([
+      buildPartitionTask([
+        { id: 'grouped', previousMap: shared },
+        { id: 'ungrouped', previousMap: shared },
+        { id: 'no-history', previousMap: shared },
+      ]),
+    ]);
+
+    expect(task.alerts[0].previousMap).toEqual(
+      new Map([
+        ['grouped||service:api', groupedA],
+        ['grouped||service:web', groupedB],
+      ]),
+    );
+    expect(task.alerts[1].previousMap).toEqual(
+      new Map([['ungrouped', ungrouped]]),
+    );
+    expect(task.alerts[2].previousMap.size).toBe(0);
+  });
+
+  it('keeps a group name that contains the delimiter with its alert', () => {
+    const history = buildHistory('path:a||b');
+    const shared = new Map([['alert-1||path:a||b', history]]);
+
+    const [task] = partitionPreviousMapsByAlert([
+      buildPartitionTask([{ id: 'alert-1', previousMap: shared }]),
+    ]);
+
+    expect(task.alerts[0].previousMap).toEqual(
+      new Map([['alert-1||path:a||b', history]]),
+    );
+  });
+
+  it('splits maps shared across tasks and keeps already separate maps', () => {
+    const shared = new Map([
+      ['alert-1', buildHistory()],
+      ['alert-2||g:1', buildHistory('g:1')],
+    ]);
+    const own = new Map([['alert-3', buildHistory()]]);
+
+    const tasks = partitionPreviousMapsByAlert([
+      buildPartitionTask([{ id: 'alert-1', previousMap: shared }]),
+      buildPartitionTask([
+        { id: 'alert-2', previousMap: shared },
+        { id: 'alert-3', previousMap: own },
+      ]),
+    ]);
+
+    expect([...tasks[0].alerts[0].previousMap.keys()]).toEqual(['alert-1']);
+    expect([...tasks[1].alerts[0].previousMap.keys()]).toEqual([
+      'alert-2||g:1',
+    ]);
+    expect([...tasks[1].alerts[1].previousMap.keys()]).toEqual(['alert-3']);
+  });
+
+  it('does not mutate the input tasks or maps', () => {
+    const shared = new Map([
+      ['alert-1', buildHistory()],
+      ['alert-2', buildHistory()],
+    ]);
+    const input = buildPartitionTask([
+      { id: 'alert-1', previousMap: shared },
+      { id: 'alert-2', previousMap: shared },
+    ]);
+
+    partitionPreviousMapsByAlert([input]);
+
+    expect(shared.size).toBe(2);
+    expect(input.alerts[0].previousMap).toBe(shared);
+    expect(input.alerts[1].previousMap).toBe(shared);
+  });
 });
 
 describe('CheckAlertTask', () => {
@@ -44,7 +177,7 @@ describe('CheckAlertTask', () => {
         buildLogSearchLink: jest.fn(),
         getClickHouseClient: jest
           .fn()
-          .mockResolvedValue({} as ClickhouseClient),
+          .mockResolvedValue(fromPartial<ClickhouseClient>({})),
       };
 
       jest.mocked(loadProvider).mockResolvedValue(mockAlertProvider);
@@ -59,7 +192,9 @@ describe('CheckAlertTask', () => {
     });
 
     it('should throw error for invalid task name', async () => {
-      const args = { taskName: 'invalid-task' } as any;
+      const args = fromAny<CheckAlertsTaskArgs, { taskName: string }>({
+        taskName: 'invalid-task',
+      });
       const task = new CheckAlertTask(args);
 
       await expect(task.execute()).rejects.toThrow(
@@ -105,7 +240,7 @@ describe('CheckAlertTask', () => {
       const args: CheckAlertsTaskArgs = { taskName: TaskName.CHECK_ALERTS };
       const task = new CheckAlertTask(args);
 
-      const mockAlert = {
+      const mockAlert: IAlert = fromPartial({
         id: 'alert-123',
         team: { _id: new mongoose.Types.ObjectId() },
         source: AlertSource.SAVED_SEARCH,
@@ -113,22 +248,22 @@ describe('CheckAlertTask', () => {
         thresholdType: AlertThresholdType.ABOVE,
         interval: '5m',
         channel: { type: 'webhook', webhookId: 'webhook-123' },
-      } as IAlert;
+      });
 
-      const mockSource = {
+      const mockSource: ISource = fromPartial({
         id: 'source-123',
         from: { databaseName: 'default', tableName: 'otel_logs' },
         timestampValueExpression: 'Timestamp',
-      } as ISource;
+      });
 
       const mockAlertTask = {
         alerts: [
-          {
+          fromPartial<AlertDetails>({
             alert: mockAlert,
             source: mockSource,
             taskType: AlertTaskType.SAVED_SEARCH,
             previousMap: new Map(),
-          } as AlertDetails,
+          }),
         ],
         conn: {
           id: 'conn-123',
@@ -145,10 +280,10 @@ describe('CheckAlertTask', () => {
       const teamWebhooksById = new Map<string, IWebhook>([
         [
           'webhook-123',
-          {
+          fromAny({
             _id: 'webhook-123',
             url: 'http://example.com/webhook',
-          } as unknown as IWebhook,
+          }),
         ],
       ]);
 
@@ -181,7 +316,7 @@ describe('CheckAlertTask', () => {
       const team1Id = new mongoose.Types.ObjectId();
       const team2Id = new mongoose.Types.ObjectId();
 
-      const mockAlert1 = {
+      const mockAlert1: IAlert = fromPartial({
         id: 'alert-123',
         team: { _id: team1Id },
         source: AlertSource.SAVED_SEARCH,
@@ -189,9 +324,9 @@ describe('CheckAlertTask', () => {
         thresholdType: AlertThresholdType.ABOVE,
         interval: '5m',
         channel: { type: 'webhook', webhookId: 'webhook-team1' },
-      } as IAlert;
+      });
 
-      const mockAlert2 = {
+      const mockAlert2: IAlert = fromPartial({
         id: 'alert-456',
         team: { _id: team2Id },
         source: AlertSource.SAVED_SEARCH,
@@ -199,22 +334,22 @@ describe('CheckAlertTask', () => {
         thresholdType: AlertThresholdType.BELOW,
         interval: '1m',
         channel: { type: 'webhook', webhookId: 'webhook-team2' },
-      } as IAlert;
+      });
 
-      const mockSource = {
+      const mockSource: ISource = fromPartial({
         id: 'source-123',
         from: { databaseName: 'default', tableName: 'otel_logs' },
         timestampValueExpression: 'Timestamp',
-      } as ISource;
+      });
 
       const mockAlertTask1 = {
         alerts: [
-          {
+          fromPartial<AlertDetails>({
             alert: mockAlert1,
             source: mockSource,
             taskType: AlertTaskType.SAVED_SEARCH,
             previousMap: new Map(),
-          } as AlertDetails,
+          }),
         ],
         conn: {
           id: 'conn-123',
@@ -230,12 +365,12 @@ describe('CheckAlertTask', () => {
 
       const mockAlertTask2 = {
         alerts: [
-          {
+          fromPartial<AlertDetails>({
             alert: mockAlert2,
             source: mockSource,
             taskType: AlertTaskType.SAVED_SEARCH,
             previousMap: new Map(),
-          } as AlertDetails,
+          }),
         ],
         conn: {
           id: 'conn-456',
@@ -253,24 +388,24 @@ describe('CheckAlertTask', () => {
       const team1WebhooksById = new Map<string, IWebhook>([
         [
           'webhook-team1',
-          {
+          fromAny({
             _id: 'webhook-team1',
             name: 'Team1 Webhook',
             url: 'http://team1.example.com/webhook',
             team: team1Id,
-          } as unknown as IWebhook,
+          }),
         ],
       ]);
 
       const team2WebhooksById = new Map<string, IWebhook>([
         [
           'webhook-team2',
-          {
+          fromAny({
             _id: 'webhook-team2',
             name: 'Team2 Webhook',
             url: 'http://team2.example.com/webhook',
             team: team2Id,
-          } as unknown as IWebhook,
+          }),
         ],
       ]);
 
@@ -331,6 +466,53 @@ describe('CheckAlertTask', () => {
       );
     });
 
+    it('should pass each alert only its own previous history', async () => {
+      const args: CheckAlertsTaskArgs = { taskName: TaskName.CHECK_ALERTS };
+      const task = new CheckAlertTask(args);
+
+      const groupA = buildHistory('g:a');
+      const groupB = buildHistory('g:b');
+      const ungrouped = buildHistory();
+      const shared = new Map([
+        ['alert-1||g:a', groupA],
+        ['alert-1||g:b', groupB],
+        ['alert-2', ungrouped],
+      ]);
+
+      mockAlertProvider.getAlertTasks.mockResolvedValue([
+        buildPartitionTask([
+          { id: 'alert-1', previousMap: shared },
+          { id: 'alert-2', previousMap: shared },
+        ]),
+      ]);
+      mockAlertProvider.getWebhooks.mockResolvedValue(new Map());
+      mockAlertProvider.getClickHouseClient.mockResolvedValue(
+        new ClickhouseClient({}),
+      );
+      const receivedMaps = new Map<string, Map<string, unknown>>();
+      mockProcessAlert.mockImplementation(
+        async (_now: Date, details: AlertDetails) => {
+          receivedMaps.set(details.alert.id, details.previousMap);
+        },
+      );
+
+      await task.execute();
+
+      expect(receivedMaps).toEqual(
+        new Map([
+          [
+            'alert-1',
+            new Map([
+              ['alert-1||g:a', groupA],
+              ['alert-1||g:b', groupB],
+            ]),
+          ],
+          ['alert-2', new Map([['alert-2', ungrouped]])],
+        ]),
+      );
+      expect(shared.size).toBe(3);
+    });
+
     describe('when a connection fails', () => {
       // The task queue runs batches fire-and-forget, and the worker's global
       // unhandledRejection handler exits the process, so a single failing
@@ -343,7 +525,7 @@ describe('CheckAlertTask', () => {
         alertId: string,
         teamId: mongoose.Types.ObjectId,
       ) =>
-        ({
+        fromPartial<AlertTask>({
           alerts: [
             {
               alert: {
@@ -374,7 +556,7 @@ describe('CheckAlertTask', () => {
             team: teamId,
           },
           now: new Date(),
-        }) as unknown as AlertTask;
+        });
 
       beforeEach(() => {
         unhandledRejections = [];

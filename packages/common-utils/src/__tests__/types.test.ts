@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { MAX_FORMULA_EXPRESSION_LENGTH } from '@/core/formula';
 import {
@@ -678,6 +678,48 @@ describe('DashboardFilterSchema static-list variant', () => {
   });
 });
 
+describe('DashboardFilterSchema SQL query variant', () => {
+  const sqlFilter = {
+    id: 'f1',
+    type: 'SQL_QUERY' as const,
+    name: 'Environment',
+    connection: 'conn-1',
+    sqlTemplate: 'SELECT DISTINCT env FROM envs',
+    isBroadcastEnabled: false,
+    isVariableEnabled: true,
+    variableName: 'env',
+  };
+
+  it('parses a SQL query filter', () => {
+    expect(DashboardFilterSchema.parse(sqlFilter)).toEqual(sqlFilter);
+  });
+
+  it.each(['connection', 'sqlTemplate'] as const)(
+    'requires a non-empty %s',
+    field => {
+      for (const value of [undefined, '']) {
+        expect(
+          DashboardFilterSchema.safeParse({ ...sqlFilter, [field]: value })
+            .success,
+        ).toBe(false);
+      }
+    },
+  );
+
+  it.each([
+    ['broadcast enabled', { isBroadcastEnabled: true }],
+    ['variables disabled', { isVariableEnabled: false }],
+  ])('rejects a SQL query filter with %s', (_label, overrides) => {
+    const result = DashboardFilterSchema.safeParse({
+      ...sqlFilter,
+      ...overrides,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].path).toEqual([Object.keys(overrides)[0]]);
+  });
+});
+
 describe('DashboardFilterSchema query-expression variant', () => {
   const queryFilter = {
     id: 'f1',
@@ -709,6 +751,46 @@ describe('DashboardFilterSchema query-expression variant', () => {
   // before either field existed broadcasts, and must keep parsing.
   it('accepts a filter carrying neither mode flag', () => {
     expect(DashboardFilterSchema.parse(queryFilter)).toEqual(queryFilter);
+  });
+});
+
+describe('DashboardFilterSchema ad hoc variant', () => {
+  const adhocFilter = {
+    id: 'f1',
+    type: 'ADHOC' as const,
+    isBroadcastEnabled: true as const,
+    name: 'Conditions',
+    sourceType: 'sql' as const,
+    sources: ['source-1'],
+    isVariableEnabled: true as const,
+  };
+
+  it('keeps the condition that narrows its suggestions', () => {
+    const filter = {
+      ...adhocFilter,
+      where: 'Namespace IN ($namespace)',
+      whereLanguage: 'sql' as const,
+    };
+    expect(DashboardFilterSchema.parse(filter)).toEqual(filter);
+  });
+
+  it('rejects a PromQL condition language', () => {
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...adhocFilter,
+        where: 'up',
+        whereLanguage: 'promql',
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([false, undefined])('rejects isBroadcastEnabled: %s', value => {
+    expect(
+      DashboardFilterSchema.safeParse({
+        ...adhocFilter,
+        isBroadcastEnabled: value,
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -918,6 +1000,43 @@ describe('PromqlSourceSchema.minAutoGranularity', () => {
   it('rejects a malformed interval', () => {
     expect(parse('1 fortnight').success).toBe(false);
     expect(parse('minute').success).toBe(false);
+  });
+});
+
+describe('PromqlSourceSchema.promqlBackend', () => {
+  const base = {
+    id: 'source-1',
+    kind: 'promql' as const,
+    name: 'Prometheus',
+    connection: 'conn-1',
+    from: { databaseName: 'default', tableName: 'metrics_ts' },
+    timestampValueExpression: 'timestamp',
+  };
+  const parse = (promqlBackend: unknown) =>
+    PromqlSourceSchema.safeParse({ ...base, promqlBackend });
+
+  it.each(['auto', 'clickhouse-http', 'table-function'])(
+    'accepts %s',
+    value => {
+      const result = parse(value);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.promqlBackend).toBe(value);
+      }
+    },
+  );
+
+  it('accepts an absent setting', () => {
+    const result = parse(undefined);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.promqlBackend).toBeUndefined();
+    }
+  });
+
+  it('rejects anything else', () => {
+    expect(parse('http').success).toBe(false);
+    expect(parse('').success).toBe(false);
   });
 });
 

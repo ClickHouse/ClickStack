@@ -7,6 +7,7 @@ import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import { AlertRowMenu } from '@/components/alerts/AlertRowMenu';
 import type { AlertsPageItem } from '@/types';
@@ -45,15 +46,15 @@ jest.mock('@/components/alerts/EditInlineAlertModal', () => ({
 
 const confirm = jest.fn().mockResolvedValue(true);
 jest.mock('@/useConfirm', () => ({ useConfirm: () => confirm }));
-jest.mock('@/theme/ThemeProvider', () => ({
-  useBrandDisplayName: () => 'HyperDX',
+jest.mock('@/brand', () => ({
+  useBrandDisplayName: () => 'ClickStack',
 }));
 
 // ObjectId hex: buildImportBlock refuses to emit Terraform for anything else,
 // so a placeholder id would throw the moment the export panel opens.
 const TILE_ALERT_ID = '655b1b7d9143aa1b1b73f4f4';
 
-const savedSearchAlert = {
+const savedSearchAlert = fromPartial<AlertsPageItem>({
   _id: 'alert-1',
   interval: '5m',
   threshold: 1,
@@ -65,16 +66,16 @@ const savedSearchAlert = {
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
   history: [],
-} as unknown as AlertsPageItem;
+});
 
-const tileAlert = {
+const tileAlert = fromPartial<AlertsPageItem>({
   ...savedSearchAlert,
   _id: 'alert-2',
   source: AlertSource.TILE,
   savedSearchId: undefined,
   dashboardId: 'dashboard-1',
   tileId: 'tile-1',
-} as unknown as AlertsPageItem;
+});
 
 const inlineAlert: AlertsPageItem = {
   ...savedSearchAlert,

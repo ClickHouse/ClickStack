@@ -91,6 +91,22 @@ describe('Metadata.streamDistinctIndexValues', () => {
     ]);
   });
 
+  it('applies source query settings', async () => {
+    const metadata = buildMetadata();
+    mockQuery.mockResolvedValue(resultSetOf([]));
+
+    await drain(
+      metadata.streamDistinctIndexValues({
+        ...ARGS,
+        querySettings: [{ setting: 'max_threads', value: '2' }],
+      }),
+    );
+
+    expect(mockQuery.mock.calls[0][0].clickhouse_settings).toMatchObject({
+      max_threads: '2',
+    });
+  });
+
   it('reads the primary index with DISTINCT and no ORDER BY', async () => {
     const metadata = buildMetadata();
     mockQuery.mockResolvedValue(resultSetOf([]));

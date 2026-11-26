@@ -9,14 +9,17 @@ import {
   DisplayType,
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { ClickhouseClient } from '@/clickhouse';
-import { getConnectionById } from '@/controllers/connection';
-import { getSource } from '@/controllers/sources';
+import type { ClickhouseClient } from '@/clickhouse';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
+import {
+  getMcpClickhouseClient,
+  McpConnectionNotFoundError,
+} from '@/mcp/utils/clickhouse';
 import { mcpUserError } from '@/mcp/utils/errors';
+import { getMcpSource } from '@/mcp/utils/sources';
 import { MCP_QUERY_MAX_EXECUTION_SEC } from '@/mcp/utils/timeout';
 import { trimToolResponse } from '@/utils/trimToolResponse';
 
@@ -158,8 +161,6 @@ function topDeltasForProperty(
 // ─── Tool definition ─────────────────────────────────────────────────────────
 
 export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
-  const { teamId } = context;
-
   registerTool(
     'clickstack_event_deltas',
     {
@@ -239,7 +240,7 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
         );
       }
 
-      const source = await getSource(teamId.toString(), input.sourceId);
+      const source = await getMcpSource(context, input.sourceId);
       if (!source) {
         return mcpUserError(
           `Source not found: ${input.sourceId}. Call clickstack_list_sources to find available source IDs.`,
@@ -251,22 +252,18 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
         );
       }
 
-      const connection = await getConnectionById(
-        teamId.toString(),
-        source.connection.toString(),
-        true,
-      );
-      if (!connection) {
+      let clickhouseClient: ClickhouseClient;
+      try {
+        clickhouseClient = await getMcpClickhouseClient(
+          context,
+          source.connection.toString(),
+        );
+      } catch (e) {
+        if (!(e instanceof McpConnectionNotFoundError)) throw e;
         return mcpUserError(
           `Connection not found for source: ${input.sourceId}`,
         );
       }
-
-      const clickhouseClient = new ClickhouseClient({
-        host: connection.host,
-        username: connection.username,
-        password: connection.password,
-      });
       const metadata = getMetadata(clickhouseClient);
 
       // Build a stable per-source ORDER BY for sampling (matches what the
@@ -296,6 +293,8 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
           'implicitColumnExpression' in source
             ? source.implicitColumnExpression
             : undefined,
+        bodyExpression:
+          source.kind === SourceKind.Log ? source.bodyExpression : undefined,
         orderBy: stableSampleExpr,
         limit: { limit: sampleSize },
         dateRange: [startDate, endDate],
@@ -463,12 +462,17 @@ export function registerEventDeltas({ context, registerTool }: ToolRegistrar) {
           'are dropped by default — set includeHidden:true to inspect them.',
       };
 
-      const { data: trimmedOutput, isTrimmed } = trimToolResponse(output);
+      const {
+        data: trimmedOutput,
+        isTrimmed,
+        notes: trimNotes,
+      } = trimToolResponse(output);
 
       const finalOutput = isTrimmed
         ? {
             ...trimmedOutput,
             note: 'Result was trimmed for context size. Narrow the time range, add filters, or reduce topN/topValuesPerProperty to reduce data.',
+            trimNotes,
           }
         : trimmedOutput;
 

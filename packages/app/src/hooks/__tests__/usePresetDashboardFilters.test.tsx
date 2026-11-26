@@ -6,6 +6,7 @@ import {
   PresetDashboardFilter,
 } from '@hyperdx/common-utils/dist/types';
 import { act, renderHook } from '@testing-library/react';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import api from '@/api';
 import useDashboardFilters from '@/hooks/useDashboardFilters';
@@ -87,30 +88,42 @@ describe('usePresetDashboardFilters', () => {
     mockSetFilterValue = jest.fn();
 
     // Mock usePresetDashboardFilters query
-    jest.mocked(api.usePresetDashboardFilters).mockReturnValue({
-      data: mockFilters,
-      refetch: mockRefetch,
-    } as any);
+    jest.mocked(api.usePresetDashboardFilters).mockReturnValue(
+      fromPartial({
+        data: mockFilters,
+        refetch: mockRefetch,
+      }),
+    );
 
     // Mock create mutation
-    jest.mocked(api.useCreatePresetDashboardFilter).mockReturnValue({
-      mutate: mockCreateMutate,
-    } as any);
+    jest.mocked(api.useCreatePresetDashboardFilter).mockReturnValue(
+      fromPartial({
+        mutate: mockCreateMutate,
+      }),
+    );
 
     // Mock update mutation
-    jest.mocked(api.useUpdatePresetDashboardFilter).mockReturnValue({
-      mutate: mockUpdateMutate,
-    } as any);
+    jest.mocked(api.useUpdatePresetDashboardFilter).mockReturnValue(
+      fromPartial({
+        mutate: mockUpdateMutate,
+      }),
+    );
 
     // Mock delete mutation
-    jest.mocked(api.useDeletePresetDashboardFilter).mockReturnValue({
-      mutate: mockDeleteMutate,
-    } as any);
+    jest.mocked(api.useDeletePresetDashboardFilter).mockReturnValue(
+      fromPartial({
+        mutate: mockDeleteMutate,
+      }),
+    );
 
     // Mock useDashboardFilters
     jest.mocked(useDashboardFilters).mockReturnValue({
       selectionByFilterId: mockSelectionByFilterId,
       setFilterValue: mockSetFilterValue,
+      referenceVariableValues: new Map(),
+      resolvedFilters: [],
+      unresolvedReferenceVariablesByFilterId: new Map(),
+      incompatibleReferenceVariablesByFilterId: new Map(),
       adhocConditionsByFilterId: new Map(),
       setAdhocConditions: jest.fn(),
       applyAdhocAction: jest.fn(),
@@ -142,10 +155,12 @@ describe('usePresetDashboardFilters', () => {
   });
 
   it('should return empty array when no data is available', () => {
-    jest.mocked(api.usePresetDashboardFilters).mockReturnValue({
-      data: undefined,
-      refetch: mockRefetch,
-    } as any);
+    jest.mocked(api.usePresetDashboardFilters).mockReturnValue(
+      fromPartial({
+        data: undefined,
+        refetch: mockRefetch,
+      }),
+    );
 
     const { result } = renderHook(() =>
       usePresetDashboardFilters({
@@ -216,10 +231,12 @@ describe('usePresetDashboardFilters', () => {
   });
 
   it('should pass empty array to useDashboardFilters when no data', () => {
-    jest.mocked(api.usePresetDashboardFilters).mockReturnValue({
-      data: undefined,
-      refetch: mockRefetch,
-    } as any);
+    jest.mocked(api.usePresetDashboardFilters).mockReturnValue(
+      fromPartial({
+        data: undefined,
+        refetch: mockRefetch,
+      }),
+    );
 
     renderHook(() =>
       usePresetDashboardFilters({

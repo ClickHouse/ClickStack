@@ -3,11 +3,11 @@ import { add, Duration, sub } from 'date-fns';
 import { useAtom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { Separator } from '@clickhouse/click-ui';
 import {
   Button,
   Card,
   CloseButton,
-  Divider,
   getDefaultZIndex,
   Group,
   Popover,
@@ -25,9 +25,15 @@ import { DateInput, DateInputProps } from '@mantine/dates';
 import { useDisclosure } from '@mantine/hooks';
 import { IconBolt, IconCalendarFilled } from '@tabler/icons-react';
 
+import { useTimeZoneOverride } from '@/timeZoneOverride';
 import { useDisplayTimeZone } from '@/useDisplayTimeZone';
 import { useUserPreferences } from '@/useUserPreferences';
 
+import {
+  TimePickerTimeZoneBadge,
+  TimePickerTimeZoneSelect,
+  useTimePickerTimeZoneLabel,
+} from './TimePickerTimeZone';
 import { TimePickerMode } from './types';
 import { useTimePickerForm } from './useTimePickerForm';
 import {
@@ -143,12 +149,13 @@ const TimePickerComponent = ({
     userPreferences: { timeFormat },
   } = useUserPreferences();
   const timeZone = useDisplayTimeZone();
+  // Pages that can override the time zone show it in the picker.
+  const showTimeZone = useTimeZoneOverride() != null;
 
   const [opened, { close, toggle }] = useDisclosure(false);
 
   useHotkeys('d', () => toggle(), { preventDefault: true }, [toggle]);
 
-  // eslint-disable-next-line no-restricted-syntax
   const today = React.useMemo(() => new Date(), []);
 
   const relativeTimeOptions = React.useMemo(() => {
@@ -166,6 +173,7 @@ const TimePickerComponent = ({
   const dateRange = React.useMemo(() => {
     return parseTimeRangeInput(value, timeZone);
   }, [value, timeZone]);
+  const timeZoneLabel = useTimePickerTimeZoneLabel(dateRange);
 
   React.useEffect(() => {
     // Only update form values from external dateRange when popover is closed
@@ -287,7 +295,11 @@ const TimePickerComponent = ({
       position="bottom-start"
       closeOnEscape
       opened={opened}
-      onClose={close}
+      // A controlled popover reports outside clicks and Escape (closeOnEscape)
+      // only through onChange; onClose fires after `opened` is already false.
+      onChange={next => {
+        if (!next) close();
+      }}
       zIndex={getDefaultZIndex('popover') + 2}
     >
       <Popover.Target>
@@ -307,12 +319,22 @@ const TimePickerComponent = ({
                 : 'var(--color-text)',
             },
           }}
+          // Sized to the label: offsets like "UTC-3:30/-2:30" run long.
+          rightSectionWidth={
+            showTimeZone
+              ? `calc(${timeZoneLabel.label.length}ch + ${opened ? 40 : 16}px)`
+              : undefined
+          }
+          rightSectionPointerEvents="none"
           rightSection={
-            opened && (
-              <Text size="xxs" bg="var(--color-bg-neutral)" px={4} c="white">
-                d
-              </Text>
-            )
+            <Group gap={6} wrap="nowrap" justify="flex-end" w="100%" pr={8}>
+              {showTimeZone && <TimePickerTimeZoneBadge {...timeZoneLabel} />}
+              {opened && (
+                <Text size="xxs" bg="var(--color-bg-neutral)" px={4} c="white">
+                  d
+                </Text>
+              )}
+            </Group>
           }
           value={value}
           onChange={event => onChange(event.currentTarget.value)}
@@ -388,7 +410,7 @@ const TimePickerComponent = ({
               <Stack gap={0} p="xs">
                 {relativeTimeOptions.map((item, index) => {
                   if (item === 'divider') {
-                    return <Divider key={index} my={4} />;
+                    return <Separator key={index} size="sm" />;
                   }
                   const isDisabledForLiveTail =
                     isRelative && !item[2] && item[0] !== LIVE_TAIL_TIME_QUERY;
@@ -555,6 +577,7 @@ const TimePickerComponent = ({
             </Group>
           </Card>
         </Group>
+        <TimePickerTimeZoneSelect comboboxProps={dateComponentPopoverProps} />
       </Popover.Dropdown>
     </Popover>
   );
