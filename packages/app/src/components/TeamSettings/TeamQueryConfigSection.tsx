@@ -1,8 +1,6 @@
 import { useCallback, useState } from 'react';
 import { SubmitHandler, useForm } from 'react-hook-form';
-import { Separator } from '@clickhouse/click-ui';
 import { DEFAULT_METADATA_MAX_ROWS_TO_READ } from '@hyperdx/common-utils/dist/core/metadata';
-import { type TeamClickHouseSettings } from '@hyperdx/common-utils/dist/types';
 import {
   Box,
   Button,
@@ -28,10 +26,12 @@ import {
   DEFAULT_SEARCH_ROW_LIMIT,
 } from '@/defaults';
 
+import { QUERY_SETTINGS, querySettingAnchor } from './settingsPages';
+
 type ClickhouseSettingType = 'number' | 'boolean';
 
 interface ClickhouseSettingFormProps {
-  settingKey: keyof TeamClickHouseSettings;
+  settingKey: keyof typeof QUERY_SETTINGS;
   label: string;
   tooltip?: string;
   type: ClickhouseSettingType;
@@ -157,7 +157,7 @@ function ClickhouseSettingForm({
   const isCustomValue = currentValue !== undefined;
 
   return (
-    <Stack gap="xs" mb="md">
+    <Stack gap="xs" mb="md" id={querySettingAnchor(settingKey)}>
       <Group gap="xs">
         <InputLabel size="md">{label}</InputLabel>
         {tooltip && (
@@ -283,13 +283,11 @@ export default function TeamQueryConfigSection() {
 
   return (
     <Box id="team_query_config">
-      <Text size="md">ClickHouse Client Settings</Text>
-      <Separator size="lg" />
       <Card>
         <Stack>
           <ClickhouseSettingForm
             settingKey="searchRowLimit"
-            label="Search Row Limit"
+            label={QUERY_SETTINGS.searchRowLimit.label}
             tooltip="The number of rows per query for the Search page or search dashboard tiles"
             type="number"
             defaultValue={DEFAULT_SEARCH_ROW_LIMIT}
@@ -300,7 +298,7 @@ export default function TeamQueryConfigSection() {
           />
           <ClickhouseSettingForm
             settingKey="queryTimeout"
-            label="Query Timeout (seconds)"
+            label={QUERY_SETTINGS.queryTimeout.label}
             tooltip="Sets the max execution time of a query in seconds."
             type="number"
             defaultValue={DEFAULT_QUERY_TIMEOUT}
@@ -310,7 +308,7 @@ export default function TeamQueryConfigSection() {
           />
           <ClickhouseSettingForm
             settingKey="metadataMaxRowsToRead"
-            label="Max Rows to Read (METADATA ONLY)"
+            label={QUERY_SETTINGS.metadataMaxRowsToRead.label}
             tooltip="The maximum number of rows that can be read from a table when running a query"
             type="number"
             defaultValue={DEFAULT_METADATA_MAX_ROWS_TO_READ}
@@ -320,7 +318,7 @@ export default function TeamQueryConfigSection() {
           />
           <ClickhouseSettingForm
             settingKey="filterKeysFetchLimit"
-            label="Filter Keys Fetch Limit"
+            label={QUERY_SETTINGS.filterKeysFetchLimit.label}
             tooltip="The number of filter keys to fetch per map column (e.g. LogAttributes, ResourceAttributes) on the search page"
             type="number"
             defaultValue={DEFAULT_FILTER_KEYS_FETCH_LIMIT}
@@ -333,7 +331,7 @@ export default function TeamQueryConfigSection() {
           {IS_EXEMPLARS_ENABLED && (
             <ClickhouseSettingForm
               settingKey="maxExemplars"
-              label="Max exemplars per chart"
+              label={QUERY_SETTINGS.maxExemplars.label}
               tooltip="How many exemplar markers a time chart draws. Markers are sampled to this many, keeping the slowest trace in each time bucket"
               type="number"
               defaultValue={DEFAULT_MAX_EXEMPLARS}
@@ -345,21 +343,21 @@ export default function TeamQueryConfigSection() {
           )}
           <ClickhouseSettingForm
             settingKey="filterValuesExactByDefault"
-            label="Default filter values"
+            label={QUERY_SETTINGS.filterValuesExactByDefault.label}
             tooltip="Default for the search page's Show All Values filter setting. All shows every known value; Exact shows only values matching the current query. Users can still override this in their filter settings."
             type="boolean"
             displayValue={value => (value ? 'Exact' : 'All')}
           />
           <ClickhouseSettingForm
             settingKey="fieldMetadataDisabled"
-            label="Field Metadata Queries"
+            label={QUERY_SETTINGS.fieldMetadataDisabled.label}
             tooltip="Enable to fetch field metadata from ClickHouse"
             type="boolean"
             displayValue={value => (value ? 'Disabled' : 'Enabled')}
           />
           <ClickhouseSettingForm
             settingKey="parallelizeWhenPossible"
-            label="Parallelize Queries When Possible"
+            label={QUERY_SETTINGS.parallelizeWhenPossible.label}
             tooltip={`${brandName} sends windowed queries to ClickHouse in series. This setting parallelizes those queries when it makes sense to. This may cause increased peak load on ClickHouse`}
             type="boolean"
             displayValue={value => (value ? 'Enabled' : 'Disabled')}
