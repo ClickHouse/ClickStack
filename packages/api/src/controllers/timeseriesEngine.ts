@@ -6,6 +6,7 @@ import {
 import {
   supportsPrometheusHttpApi,
   supportsPrometheusLabelsApi,
+  timeSeriesSelectorTakesReturnColumns,
 } from '@hyperdx/common-utils/dist/core/clickhouseVersion';
 import {
   Metadata,
@@ -107,21 +108,27 @@ const TIMESERIES_MAX_TIME_MS = 10413791999999; // 2299-12-31T23:59:59.999Z
  * Returns a predicate keeping only the series matched by at least one of
  * the given `match` selectors.
  */
-function getSeriesSelectorCondition({
+export function getSeriesSelectorCondition({
   databaseName,
   tableName,
   match,
   startMs,
   endMs,
+  takesReturnColumns,
 }: {
   databaseName: string;
   tableName: string;
   match: string[];
   startMs?: number;
   endMs?: number;
+  /** ClickHouse 26.11+ requires the `return_columns` argument. */
+  takesReturnColumns: boolean;
 }): ChSql {
   const minTime = { Int64: startMs ?? TIMESERIES_MIN_TIME_MS };
   const maxTime = { Int64: endMs ?? TIMESERIES_MAX_TIME_MS };
+  // Only `id` is read. 'samples' matches the bucketed layout that 26.11 tables
+  // use; 'timestamp_and_value' would unfold every bucket with arrayJoin.
+  const returnColumns = takesReturnColumns ? chSql`, 'samples'` : chSql``;
   const idsPerSelector = match.map(
     selector => chSql`
       SELECT id
@@ -130,7 +137,7 @@ function getSeriesSelectorCondition({
         ${{ String: tableName }},
         ${{ String: selector }},
         fromUnixTimestamp64Milli(${minTime}),
-        fromUnixTimestamp64Milli(${maxTime})
+        fromUnixTimestamp64Milli(${maxTime})${returnColumns}
       )`,
   );
 
@@ -185,6 +192,7 @@ async function getSeriesFilterConditions({
         'match[] requires a TimeSeries table that stores time ranges (store_time_ranges = 1, or store_min_time_and_max_time = 1 before version 8), or the prometheus_api_v1 HTTP handler on ClickHouse 26.9+',
       );
     }
+    const version = await metadata.getServerVersion({ connectionId });
     conditions.push(
       getSeriesSelectorCondition({
         databaseName,
@@ -192,6 +200,7 @@ async function getSeriesFilterConditions({
         match: selectors,
         startMs,
         endMs,
+        takesReturnColumns: timeSeriesSelectorTakesReturnColumns(version),
       }),
     );
   }

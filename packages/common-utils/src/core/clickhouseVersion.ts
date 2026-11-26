@@ -194,3 +194,21 @@ export function supportsPrometheusLabelsApi(
 ): boolean {
   return isClickHouseVersionAtLeast(version, PROMETHEUS_LABELS_API_MIN);
 }
+
+/**
+ * First release whose `timeSeriesSelector()` takes a `return_columns`
+ * argument. From 26.11 it is required, and the 5-argument
+ * `('db', 'table', selector, min, max)` call reads 'db' as the table.
+ */
+const TIME_SERIES_SELECTOR_RETURN_COLUMNS_MIN: ClickHouseVersion = [
+  26, 11, 0, 0,
+];
+
+export function timeSeriesSelectorTakesReturnColumns(
+  version: ClickHouseVersion | undefined,
+): boolean {
+  return isClickHouseVersionAtLeast(
+    version,
+    TIME_SERIES_SELECTOR_RETURN_COLUMNS_MIN,
+  );
+}
