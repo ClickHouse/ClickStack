@@ -7,9 +7,10 @@ import userEvent from '@testing-library/user-event';
 import { DBSearchPage } from '@/DBSearchPage';
 
 const mockRouterPush = jest.fn();
-const mockSetSearchedConfig = jest
-  .fn()
-  .mockResolvedValue(new URLSearchParams());
+const mockSetSearchedConfig = jest.fn(async (next: Record<string, any>) => {
+  mockSearchedConfig = { ...mockSearchedConfig, ...next };
+  return new URLSearchParams();
+});
 const mockCreateSavedSearch = jest.fn();
 const mockUpdateSavedSearch = jest.fn();
 
@@ -62,6 +63,8 @@ jest.mock('nuqs', () => ({
         return [true, jest.fn()];
       case 'denoise':
         return [false, jest.fn()];
+      case 'mode':
+        return ['results', jest.fn()];
       default:
         return [null, jest.fn()];
     }
@@ -184,7 +187,23 @@ jest.mock('@/components/SQLEditor/SQLInlineEditor', () => ({
   SQLInlineEditorControlled: () => <div />,
 }));
 jest.mock('@/components/Tags', () => ({
-  Tags: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Tags: ({
+    children,
+    values,
+    onChange,
+  }: {
+    children: React.ReactNode;
+    values: string[];
+    onChange: (values: string[]) => void;
+  }) => (
+    <div>
+      {children}
+      <button
+        data-testid="mock-add-tag"
+        onClick={() => onChange([...values, 'new-tag'])}
+      />
+    </div>
+  ),
 }));
 jest.mock('@/components/TimePicker', () => ({
   TimePicker: () => <div />,
@@ -192,7 +211,12 @@ jest.mock('@/components/TimePicker', () => ({
 jest.mock('../components/ChartSQLPreview', () => ({
   SQLPreview: () => <div />,
 }));
-jest.mock('../components/DBSqlRowTableWithSidebar', () => () => <div />);
+jest.mock('../components/DBSqlRowTableWithSidebar', () => ({
+  __esModule: true,
+  default: ({ toolbarLeading }: { toolbarLeading?: React.ReactNode }) => (
+    <div>{toolbarLeading}</div>
+  ),
+}));
 jest.mock('../components/PatternTable', () => () => <div />);
 jest.mock('../components/Search/DBSearchHeatmapChart', () => ({
   DBSearchHeatmapChart: () => <div />,
@@ -224,6 +248,7 @@ jest.mock('../api', () => ({
 }));
 
 jest.mock('@/utils', () => ({
+  ...jest.requireActual('@/utils'),
   QUERY_LOCAL_STORAGE: 'query-local-storage',
   useLocalStorage: (_key: string, initialValue: unknown) => [
     initialValue,
@@ -339,6 +364,139 @@ describe('DBSearchPage save search flow', () => {
           select: 'Body',
           orderBy: 'Body DESC',
         }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('previews and saves the saved clauses after a tag and an unchanged Apply', async () => {
+    window.history.pushState(
+      {},
+      '',
+      '/search/saved-1?from=100&to=200&isLive=false',
+    );
+    mockSavedSearch = {
+      id: 'saved-1',
+      name: 'Errors',
+      source: 'log-source',
+      select: 'ServiceName',
+      where: '',
+      whereLanguage: 'lucene',
+      orderBy: 'ServiceName DESC',
+      filters: [],
+      tags: [],
+    };
+    mockSearchedConfig = {
+      ...mockSearchedConfig,
+      where: '',
+      select: 'ServiceName',
+      orderBy: 'ServiceName DESC',
+    };
+    const user = userEvent.setup();
+    render(<DBSearchPage />, {
+      wrapper: ({ children }) => <MantineProvider>{children}</MantineProvider>,
+    });
+
+    await user.click(await screen.findByTestId('mock-add-tag'));
+    await user.click(await screen.findByTestId('search-columns-button'));
+    await user.click(await screen.findByTestId('search-columns-button-apply'));
+    await user.click(await screen.findByTestId('update-search-button'));
+
+    const modal = await screen.findByTestId('save-search-modal');
+    await waitFor(() => {
+      expect(modal).toHaveTextContent('ServiceName DESC');
+    });
+    expect(modal).not.toHaveTextContent('Timestamp');
+
+    await user.click(screen.getByTestId('save-search-submit-button'));
+    await waitFor(() => {
+      expect(mockUpdateSavedSearch).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          id: 'saved-1',
+          select: 'ServiceName',
+          orderBy: 'ServiceName DESC',
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('keeps a saved search clause when a tag is added after a blank Apply', async () => {
+    window.history.pushState(
+      {},
+      '',
+      '/search/saved-1?from=100&to=200&isLive=false',
+    );
+    mockSavedSearch = {
+      id: 'saved-1',
+      name: 'Errors',
+      source: 'log-source',
+      select: 'Timestamp, Body',
+      where: 'level:error',
+      whereLanguage: 'lucene',
+      orderBy: 'Body DESC',
+      filters: [],
+      tags: [],
+    };
+    mockSearchedConfig = {
+      ...mockSearchedConfig,
+      select: '',
+      orderBy: '',
+    };
+    const user = userEvent.setup();
+    render(<DBSearchPage />, {
+      wrapper: ({ children }) => <MantineProvider>{children}</MantineProvider>,
+    });
+
+    await user.click(await screen.findByTestId('mock-add-tag'));
+
+    expect(mockUpdateSavedSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'saved-1',
+        select: 'Timestamp, Body',
+        orderBy: 'Body DESC',
+        tags: ['new-tag'],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('saves the columns applied in the popover on Update', async () => {
+    window.history.pushState(
+      {},
+      '',
+      '/search/saved-1?from=100&to=200&isLive=false',
+    );
+    mockSavedSearch = {
+      id: 'saved-1',
+      name: 'Errors',
+      source: 'log-source',
+      select: 'Timestamp, Body',
+      where: 'level:error',
+      whereLanguage: 'lucene',
+      orderBy: 'Timestamp DESC',
+      filters: [],
+      tags: [],
+    };
+    mockSearchedConfig = {
+      ...mockSearchedConfig,
+      select: 'Timestamp, Body',
+      orderBy: 'Timestamp DESC',
+    };
+    const user = userEvent.setup();
+    render(<DBSearchPage />, {
+      wrapper: ({ children }) => <MantineProvider>{children}</MantineProvider>,
+    });
+
+    await user.click(await screen.findByTestId('search-columns-button'));
+    await user.click(await screen.findByLabelText('Remove Body'));
+    await user.click(screen.getByTestId('search-columns-button-apply'));
+    await user.click(await screen.findByTestId('update-search-button'));
+    await user.click(await screen.findByTestId('save-search-submit-button'));
+
+    await waitFor(() => {
+      expect(mockUpdateSavedSearch).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'saved-1', select: 'Timestamp' }),
         expect.anything(),
       );
     });

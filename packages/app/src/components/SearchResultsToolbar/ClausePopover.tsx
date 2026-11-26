@@ -1,9 +1,17 @@
-import { type ReactNode, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { completionStatus } from '@codemirror/autocomplete';
 import { EditorView } from '@codemirror/view';
-import { Button, Group, Popover, SegmentedControl, Stack } from '@mantine/core';
+import {
+  Button,
+  Group,
+  Popover,
+  SegmentedControl,
+  SimpleGrid,
+  Stack,
+} from '@mantine/core';
 
 import { SplitValueButton } from '@/components/SplitValueButton/SplitValueButton';
+import { useStableCallback } from '@/hooks/useStableCallback';
 import { useConfirm } from '@/useConfirm';
 
 export type ClauseMode = 'pick' | 'sql';
@@ -161,6 +169,26 @@ export function ClausePopover({
     setOpened(false);
   };
 
+  // The dropdown only sees Escape while focus is inside it. Focus stays on the
+  // toolbar button after opening, and lands on the page when a focused row is
+  // removed, so catch those two cases here. Any other target is a control that
+  // handles Escape itself.
+  const closeOnEscape = useStableCallback((event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    const target = event.target;
+    const onPageOrTrigger =
+      target === document.body ||
+      (target instanceof Element &&
+        target.closest(`[data-testid="${testId}"]`) != null);
+    if (onPageOrTrigger) requestClose();
+  });
+
+  useEffect(() => {
+    if (!opened) return;
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [opened, closeOnEscape]);
+
   return (
     <Popover
       opened={opened}
@@ -225,21 +253,7 @@ export function ClausePopover({
             data-testid={`${testId}-mode`}
           />
           {mode === 'pick' ? renderPick(apply) : renderSql(apply)}
-          <Group
-            justify="space-between"
-            gap="xs"
-            wrap="wrap"
-            // The SQL completion list overflows the editor onto these buttons.
-            // Fields mode uses an in-popover Autocomplete, which must stay above them.
-            style={
-              mode === 'sql'
-                ? {
-                    position: 'relative',
-                    zIndex: 'var(--mantine-z-index-max)',
-                  }
-                : undefined
-            }
-          >
+          <Group justify="space-between" gap="xs" wrap="wrap">
             <Button
               variant="link"
               size="xs"
@@ -249,7 +263,8 @@ export function ClausePopover({
             >
               Reset to default
             </Button>
-            <Group gap="xs" wrap="nowrap" ml="auto">
+            {/* Equal columns size both buttons to the wider label. */}
+            <SimpleGrid cols={2} spacing="xs" ml="auto">
               <Button
                 variant="secondary"
                 size="xs"
@@ -266,7 +281,7 @@ export function ClausePopover({
               >
                 Apply
               </Button>
-            </Group>
+            </SimpleGrid>
           </Group>
         </Stack>
       </Popover.Dropdown>

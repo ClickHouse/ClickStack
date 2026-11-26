@@ -631,7 +631,16 @@ function SaveSearchModalComponent({
 
   const isPending = createSavedSearch.isPending || updateSavedSearch.isPending;
 
-  const { data: chartConfig } = useSearchedConfigToChartConfig(searchedConfig);
+  // The preview has to match what Update saves, so it falls back to the saved
+  // clauses before the source defaults.
+  const savedClauseDefaults = useMemo(
+    () => ({ select: savedClauses?.select, orderBy: savedClauses?.orderBy }),
+    [savedClauses?.select, savedClauses?.orderBy],
+  );
+  const { data: chartConfig } = useSearchedConfigToChartConfig(
+    searchedConfig,
+    savedClauseDefaults,
+  );
 
   return (
     <Modal
@@ -1799,12 +1808,14 @@ function DBSearchPageContent() {
           {
             id: savedSearch.id,
             name: savedSearch.name,
-            select: searchedConfig.select ?? '',
+            // An empty SELECT or ORDER BY in the URL means "the saved clause",
+            // so writing it back as-is would erase the saved one.
+            select: searchedConfig.select || savedSearch.select || '',
             where: searchedConfig.where ?? '',
             whereLanguage:
               searchedConfig.whereLanguage ?? getStoredLanguage() ?? 'lucene',
             source: searchedConfig.source ?? '',
-            orderBy: searchedConfig.orderBy ?? '',
+            orderBy: searchedConfig.orderBy || savedSearch.orderBy || '',
             filters: searchedConfig.filters ?? [],
             tags: newTags,
           },

@@ -147,7 +147,13 @@ export function SortPopover({
                         option => option === key.id || !used.has(option),
                       )}
                       limit={50}
-                      comboboxProps={{ withinPortal: false }}
+                      // The rows scroll, which clips an absolute list. Fixed
+                      // escapes the clip and stays inside the popover, so a
+                      // pick is not an outside click.
+                      comboboxProps={{
+                        withinPortal: false,
+                        floatingStrategy: 'fixed',
+                      }}
                       style={{ flex: 1 }}
                     />
                     <SegmentedControl
@@ -163,7 +169,7 @@ export function SortPopover({
                     />
                     <ActionIcon
                       variant="subtle"
-                      size="sm"
+                      size="input-xs"
                       onClick={() =>
                         commitKeys(keys.filter((_, i) => i !== index))
                       }

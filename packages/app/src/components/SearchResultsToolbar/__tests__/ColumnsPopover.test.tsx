@@ -359,6 +359,56 @@ describe('ColumnsPopover', () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
   });
 
+  describe('Escape with focus outside the popover', () => {
+    it('closes an unchanged popover while focus is still on the button', async () => {
+      renderPopover();
+      openPopover();
+      await screen.findByTestId('search-columns-button-popover');
+      fireEvent.keyDown(screen.getByTestId('search-columns-button'), {
+        key: 'Escape',
+      });
+      await waitFor(() =>
+        expect(screen.getByTestId('search-columns-button')).toHaveAttribute(
+          'aria-expanded',
+          'false',
+        ),
+      );
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('asks to discard after removing a column drops focus to the page', async () => {
+      renderPopover();
+      openPopover();
+      fireEvent.click(await screen.findByLabelText('Remove Body'));
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    });
+
+    it('ignores Escape aimed at another control', async () => {
+      renderPopover();
+      openPopover();
+      await screen.findByTestId('search-columns-button-popover');
+      const other = document.createElement('input');
+      document.body.appendChild(other);
+      fireEvent.keyDown(other, { key: 'Escape' });
+      other.remove();
+      expect(screen.getByTestId('search-columns-button')).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      );
+      expect(confirm).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not raise the Apply row over the SQL completion list', async () => {
+    renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByText('SQL'));
+    const footer = screen.getByTestId('search-columns-button-apply')
+      .parentElement?.parentElement;
+    expect(footer?.style.zIndex).toBe('');
+  });
+
   it('lets Escape close the column suggestions without closing the popover', async () => {
     renderPopover();
     openPopover();

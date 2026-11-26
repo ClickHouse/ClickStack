@@ -69,6 +69,26 @@ describe('SortPopover', () => {
     expect(onApply).toHaveBeenCalledWith('Timestamp ASC');
   });
 
+  it('positions a sort field list so the scrolling rows do not clip it', async () => {
+    renderPopover();
+    openPopover();
+    const field = await screen.findByLabelText('Sort field 1');
+    fireEvent.focus(field);
+    fireEvent.click(field);
+    fireEvent.change(field, { target: { value: 'B' } });
+    const listbox = await waitFor(() => {
+      const list = document.getElementById(
+        field.getAttribute('aria-controls') ?? '',
+      );
+      if (list == null) throw new Error('listbox not found');
+      return list;
+    });
+    expect(listbox.closest('[data-fixed]')).not.toBeNull();
+    expect(
+      screen.getByTestId('search-sort-button-popover').contains(listbox),
+    ).toBe(true);
+  });
+
   it('lists a tuple sort that spans more than one line', async () => {
     const orderBy = '(toDateTime(Timestamp),\n Timestamp) DESC';
     renderPopover({ value: orderBy, defaultValue: orderBy });
