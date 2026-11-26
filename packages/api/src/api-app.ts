@@ -43,7 +43,10 @@ const sess: session.SessionOptions & { cookie: session.CookieOptions } = {
     maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
   },
   rolling: true,
-  store: new MongoStore({ mongoUrl: config.MONGO_URI }),
+  store: new MongoStore({
+    mongoUrl: config.MONGO_URI,
+    touchAfter: config.SESSION_TOUCH_AFTER_SEC,
+  }),
 };
 
 app.set('trust proxy', 1);
