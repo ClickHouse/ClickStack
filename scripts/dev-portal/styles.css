@@ -583,6 +583,34 @@ body {
   border-bottom-color: var(--accent);
 }
 
+.toggle-all-btn {
+  margin-left: auto;
+  align-self: center;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toggle-all-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.toggle-all-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.toggle-all-btn[aria-expanded='true'] .expand,
+.toggle-all-btn[aria-expanded='false'] .collapse {
+  display: none;
+}
+
 /* --- History --- */
 .history-header {
   display: flex;

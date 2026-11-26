@@ -95,6 +95,17 @@
           <button class="tab" id="tab-history" onclick="switchTab('history')">
             History
           </button>
+          <button
+            type="button"
+            class="toggle-all-btn"
+            id="toggle-all-btn"
+            aria-expanded="true"
+            hidden
+            onclick="toggleAllStacks()"
+          >
+            <span class="expand">Expand all</span>
+            <span class="collapse">Collapse all</span>
+          </button>
         </div>
 
         <div id="error-banner" class="error-banner"></div>
@@ -184,6 +195,7 @@
       const logTitle = document.getElementById('log-title');
       const logSlotLabel = document.getElementById('log-slot-label');
       const logStreamBadge = document.getElementById('log-stream-badge');
+      const toggleAllBtn = document.getElementById('toggle-all-btn');
 
       let activeTab = 'live';
       let currentLogSlot = null;
@@ -464,22 +476,49 @@
         JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) || '[]'),
       );
 
-      function onStackHeaderClick(event, header) {
-        if (event.target.closest('a')) return;
-        const card = header.closest('.stack-card');
-        const key = card.dataset.key;
-        const collapsed = !collapsedStacks.has(key);
-        if (collapsed) collapsedStacks.add(key);
-        else collapsedStacks.delete(key);
+      function saveCollapsedStacks() {
         localStorage.setItem(
           COLLAPSED_STORAGE_KEY,
           JSON.stringify([...collapsedStacks]),
         );
+      }
+
+      function setStackCollapsed(card, collapsed) {
+        if (collapsed) collapsedStacks.add(card.dataset.key);
+        else collapsedStacks.delete(card.dataset.key);
         card.classList.toggle('collapsed', collapsed);
         card.querySelector('.services-table').hidden = collapsed;
         card
           .querySelector('.stack-toggle')
           .setAttribute('aria-expanded', String(!collapsed));
+      }
+
+      function onStackHeaderClick(event, header) {
+        if (event.target.closest('a')) return;
+        const card = header.closest('.stack-card');
+        setStackCollapsed(card, !card.classList.contains('collapsed'));
+        saveCollapsedStacks();
+        updateToggleAllButton();
+      }
+
+      // Reads "Collapse all" only when every card is open; when some are
+      // collapsed it expands them all.
+      function updateToggleAllButton() {
+        const cards = [...contentEl.querySelectorAll('.stack-card')];
+        toggleAllBtn.hidden = activeTab !== 'live' || cards.length === 0;
+        toggleAllBtn.setAttribute(
+          'aria-expanded',
+          String(cards.every(card => !card.classList.contains('collapsed'))),
+        );
+      }
+
+      function toggleAllStacks() {
+        const collapse = toggleAllBtn.getAttribute('aria-expanded') === 'true';
+        for (const card of contentEl.querySelectorAll('.stack-card')) {
+          setStackCollapsed(card, collapse);
+        }
+        saveCollapsedStacks();
+        updateToggleAllButton();
       }
 
       function slotLabel(stacks) {
@@ -670,6 +709,7 @@
           historyEl.style.display = '';
           refreshHistory();
         }
+        updateToggleAllButton();
       }
 
       // --- History rendering ---
@@ -973,6 +1013,7 @@
             ? document.activeElement.closest('.stack-card').dataset.key
             : null;
           contentEl.innerHTML = renderStacks(stacks);
+          updateToggleAllButton();
           if (focusedKey !== null) {
             [...contentEl.querySelectorAll('.stack-card')]
               .find(card => card.dataset.key === focusedKey)
