@@ -172,6 +172,20 @@ with:
 > `packages/api/src/mcp/tools/query/builderCatalog.ts`. It isn't auto-derived,
 > so it drifts silently.
 
+### Query cost metadata
+
+`clickstack_query_tiles` reports the cost of each tile, and `clickstack_promql`
+and PromQL tiles report the cost of the call:
+
+- `elapsedMs` is wall time, including the source lookup and network overhead. In
+  `clickstack_query_tiles` it starts when the tile's query starts, so time
+  waiting in the batch queue is not counted. A tile whose query started reports
+  it even when the query fails; a tile that never started has none.
+- `rowsRead` and `bytesRead` are the rows and bytes ClickHouse scanned, not the
+  rows returned or the size of the response. Builder and SQL tiles report them
+  when available. PromQL and event-pattern tiles report only `elapsedMs`.
+- A successful PromQL response carries its time at `result.elapsedMs`.
+
 ### Metric Sources
 
 `clickstack_timeseries`, `clickstack_table`, and the dashboard builder tile

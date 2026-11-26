@@ -165,8 +165,9 @@ export function registerQueryTiles({
         'unrunTileIds — call again with those as tileIds to run the remainder. ' +
         'Drill into a specific failing tile with clickstack_query_tile. ' +
         'Each tile that ran reports elapsedMs, its wall time; builder and SQL ' +
-        'tiles also report rowsRead and bytesRead. PromQL tiles report only ' +
-        'elapsedMs: the Prometheus API returns no read counts.',
+        'tiles also report rowsRead and bytesRead when available (event-pattern ' +
+        'tiles do not). PromQL tiles report only elapsedMs: the Prometheus API ' +
+        'returns no read counts.',
       inputSchema: z.object({
         dashboardId: objectIdSchema.describe(
           'Dashboard ID, from clickstack_get_dashboard (no id lists dashboards) ' +
