@@ -101,8 +101,6 @@ export default function WebhooksSection() {
 
   return (
     <>
-      <Text mb="xs">Webhooks</Text>
-
       <Stack>
         {groupedWebhooks.length === 0 ? (
           <Text

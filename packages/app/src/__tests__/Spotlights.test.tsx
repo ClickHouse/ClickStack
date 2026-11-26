@@ -127,11 +127,17 @@ describe('useSpotlightActions', () => {
     await userEvent.click(await screen.findByRole('button', { name }));
   };
 
-  it('opens the anchored team settings section', async () => {
-    await selectSpotlightAction('mcp', /MCP server/);
+  it('opens the team settings page', async () => {
+    await selectSpotlightAction('mcp', /AI agents/);
+
+    expect(mockPush).toHaveBeenCalledWith('/team?tab=mcp');
+  });
+
+  it('opens a setting inside a team settings page', async () => {
+    await selectSpotlightAction('parallelize', /Parallelize queries/);
 
     expect(mockPush).toHaveBeenCalledWith(
-      '/team?tab=api-agents#team-api-agents-mcp-server',
+      '/team?tab=query-settings#setting-parallelizeWhenPossible',
     );
   });
 

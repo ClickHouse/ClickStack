@@ -2,7 +2,7 @@ import { fromPartial } from '@total-typescript/shoehorn';
 import type { LanguageModel } from 'ai';
 
 const mockAnthropicModel: LanguageModel = fromPartial({
-  modelId: 'claude-sonnet-4-5-20250929',
+  modelId: 'claude-sonnet-5-5',
 });
 
 const mockOpenAIModel: LanguageModel = fromPartial({
@@ -151,9 +151,7 @@ describe('anthropic provider', () => {
       AI_API_KEY: 'sk-test',
     });
     getAIModel();
-    expect(mockAnthropicFactory).toHaveBeenCalledWith(
-      'claude-sonnet-4-5-20250929',
-    );
+    expect(mockAnthropicFactory).toHaveBeenCalledWith('claude-sonnet-5-5');
   });
 
   it('uses custom model name when AI_MODEL_NAME is set', () => {
