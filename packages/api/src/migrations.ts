@@ -133,15 +133,21 @@ export async function backfillAlertDisplayFields() {
 // connect-mongo's touch() never adds lastModified, so without it older
 // sessions keep being rewritten on every request.
 export async function backfillSessionLastModified() {
-  await mongoose.connection.collection('sessions').updateMany(
-    { lastModified: { $exists: false } },
-    {
-      $set: {
-        lastModified: new Date(
-          Date.now() - config.SESSION_TOUCH_AFTER_SEC * 1000,
-        ),
+  const result = await mongoose.connection
+    .collection<{ _id: string; lastModified?: Date }>('sessions')
+    .updateMany(
+      { lastModified: { $exists: false } },
+      {
+        $set: {
+          lastModified: new Date(
+            Date.now() - config.SESSION_TOUCH_AFTER_SEC * 1000,
+          ),
+        },
       },
-    },
+    );
+  logger.info(
+    { updatedCount: result.modifiedCount },
+    'Backfilled session lastModified',
   );
 }
 

@@ -19,6 +19,8 @@ describe('session store writes', () => {
 
   beforeAll(async () => {
     await server.start();
+    // Registration fails if an earlier suite left a team behind.
+    await server.clearDBs();
   });
 
   afterEach(async () => {
@@ -68,6 +70,14 @@ describe('session store writes', () => {
     await agent.get('/me').expect(200);
 
     expect(await storedExpiry(sid)).toEqual(before);
+  });
+
+  it('still removes the session on logout', async () => {
+    const { agent, sid } = await login();
+
+    await agent.get('/logout').expect(302);
+
+    expect(await sessions().findOne({ _id: sid })).toBeNull();
   });
 
   it('extends the session once the touch interval has passed', async () => {
