@@ -10,8 +10,10 @@ jest.mock('@mantine/notifications', () => ({
   notifications: { show: jest.fn() },
 }));
 jest.mock('nuqs', () => ({
-  parseAsJson: jest.fn(),
   useQueryState: jest.fn(),
+}));
+jest.mock('@/utils/queryParsers', () => ({
+  parseAsJsonEncoded: jest.fn(),
 }));
 jest.mock('@tanstack/react-query', () => ({
   useQuery: jest.fn(),

@@ -99,6 +99,32 @@ function sourcePicker(page: Page, index = 0) {
   return page.getByPlaceholder('Data Source').nth(index);
 }
 
+/** Minimal builder config that can actually query the seeded log source. */
+function chartConfig(source: string, connection: string) {
+  return {
+    name: '',
+    select: [
+      {
+        aggFn: 'count',
+        aggCondition: '',
+        aggConditionLanguage: 'lucene',
+        valueExpression: '',
+      },
+    ],
+    where: '',
+    whereLanguage: 'lucene',
+    displayType: 'line',
+    granularity: 'auto',
+    alignDateRangeToGranularity: true,
+    source,
+    connection,
+  };
+}
+
+function chartConfigParam(page: Page): string {
+  return new URL(page.url()).searchParams.get('config') ?? '';
+}
+
 async function expectParamCanonicalized(
   page: Page,
   param: string,
@@ -461,24 +487,7 @@ test.describe('Source name deeplinks', { tag: ['@full-stack'] }, () => {
 
     // A minimal builder config with the source given by *name*. `connection`
     // comes from the API so the chart can actually query — /chart autoRuns.
-    const config = {
-      name: '',
-      select: [
-        {
-          aggFn: 'count',
-          aggCondition: '',
-          aggConditionLanguage: 'lucene',
-          valueExpression: '',
-        },
-      ],
-      where: '',
-      whereLanguage: 'lucene',
-      displayType: 'line',
-      granularity: 'auto',
-      alignDateRangeToGranularity: true,
-      source: DEFAULT_LOGS_SOURCE_NAME,
-      connection: logsSource.connection,
-    };
+    const config = chartConfig(DEFAULT_LOGS_SOURCE_NAME, logsSource.connection);
 
     await page.goto(
       `/chart?config=${encodeURIComponent(JSON.stringify(config))}`,
@@ -497,6 +506,49 @@ test.describe('Source name deeplinks', { tag: ['@full-stack'] }, () => {
     await expect(
       page.locator('.recharts-responsive-container').first(),
     ).toBeVisible({ timeout: 20000 });
+  });
+
+  test('opens a legacy raw-JSON chart link and rewrites it percent-encoded', async ({
+    page,
+  }) => {
+    const logSources = await getSources(page, 'log');
+    const logsSource = logSources.find(
+      (s: { name: string }) => s.name === DEFAULT_LOGS_SOURCE_NAME,
+    );
+    expect(logsSource).toBeDefined();
+
+    const config = {
+      ...chartConfig(DEFAULT_LOGS_SOURCE_NAME, logsSource.connection),
+      name: 'Synthetic chart',
+    };
+    // The old nuqs serializer wrote literal JSON and used '+' for spaces,
+    // which chat clients and terminals treat as the end of the link.
+    const legacyParam = JSON.stringify(config).replace(/ /g, '+');
+    await page.goto(`/chart?config=${legacyParam}`);
+
+    await expect(page.getByTestId('chart-explorer-page')).toBeVisible({
+      timeout: 15000,
+    });
+    const chartForm = page.getByTestId('chart-explorer-form');
+    await expect(chartForm.getByTestId('source-selector')).toHaveValue(
+      DEFAULT_LOGS_SOURCE_NAME,
+      { timeout: 15000 },
+    );
+    await expect(
+      page.locator('.recharts-responsive-container').first(),
+    ).toBeVisible({ timeout: 20000 });
+
+    // The page writes config back on load. The new serializer must leave only
+    // %XX sequences in the URL — no raw JSON punctuation, spaces, or '+'s.
+    await expect
+      .poll(() => chartConfigParam(page), { timeout: 15000 })
+      .toMatch(/^%7B/);
+    const encodedConfig = chartConfigParam(page);
+    expect(encodedConfig).not.toMatch(/[{}[\]"+ \\\s]/);
+    const parsed: unknown = JSON.parse(decodeURIComponent(encodedConfig));
+    expect(parsed).toEqual(
+      expect.objectContaining({ source: expect.any(String) }),
+    );
   });
 
   test('warns and keeps the link when the session source does not exist', async ({

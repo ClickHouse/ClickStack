@@ -24,8 +24,10 @@ jest.mock('@mantine/notifications', () => ({
   notifications: { show: jest.fn() },
 }));
 jest.mock('nuqs', () => ({
-  parseAsJson: () => ({}),
   useQueryState: () => [localDashboardValue, setLocalDashboard],
+}));
+jest.mock('@/utils/queryParsers', () => ({
+  parseAsJsonEncoded: () => ({}),
 }));
 jest.mock('@tanstack/react-query', () => ({
   useMutation: () => ({ mutate: jest.fn() }),

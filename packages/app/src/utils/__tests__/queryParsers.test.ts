@@ -158,6 +158,39 @@ describe('parseAsJsonEncoded', () => {
   });
 });
 
+describe('chart config URL round-trip', () => {
+  // A synthetic raw-SQL chart config with the characters that break raw JSON
+  // links in chat clients and terminals.
+  const config = {
+    name: 'Synthetic chart',
+    configType: 'sql' as const,
+    connection: 'synthetic-connection',
+    source: 'synthetic-source',
+    sqlTemplate: `SELECT
+  'frontend [web]' AS "service + tier",
+  '100%' AS "percent %"
+FROM synthetic_logs`,
+  };
+  const parser = parseAsJsonEncoded<typeof config>();
+  const serialized = parser.serialize(config);
+
+  it('round-trips a multi-line SQL config', () => {
+    expect(serialized).toBe(encodeURIComponent(JSON.stringify(config)));
+    expect(parser.parse(serialized)).toEqual(config);
+  });
+
+  it('contains no raw JSON punctuation, spaces, or newlines', () => {
+    expect(serialized).not.toMatch(/[{}[\]"+ \\\s]/);
+    // Literal '%' and JSON's escaped newline are both percent-encoded.
+    expect(serialized).toContain('%25');
+    expect(serialized).toContain('%5Cn');
+  });
+
+  it('still parses the raw JSON written by the old nuqs parser', () => {
+    expect(parser.parse(JSON.stringify(config))).toEqual(config);
+  });
+});
+
 describe('parseAsSortingStateString', () => {
   describe('parse', () => {
     it('parses a single column with DESC', () => {
