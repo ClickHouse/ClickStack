@@ -21,6 +21,11 @@
   --table-border: rgba(48, 54, 61, 0.5);
   --modal-backdrop: rgba(0, 0, 0, 0.6);
   --hover-overlay: rgba(255, 255, 255, 0.05);
+  /* Pill text, at least 4.5:1 against the pill's tinted background */
+  --pill-text: #c1c2c5;
+  --pill-green: #25e2a5;
+  --pill-yellow: #efb118;
+  --pill-blue: #79c0ff;
 }
 
 :root[data-theme='light'] {
@@ -45,6 +50,10 @@
   --table-border: rgba(0, 0, 0, 0.08);
   --modal-backdrop: rgba(0, 0, 0, 0.3);
   --hover-overlay: rgba(0, 0, 0, 0.05);
+  --pill-text: #495057;
+  --pill-green: #06694c;
+  --pill-yellow: #8a5100;
+  --pill-blue: #154f8e;
 }
 
 * {
@@ -280,17 +289,17 @@ body {
 
 .env-badge.dev {
   background: rgba(37, 226, 165, 0.15);
-  color: var(--accent);
+  color: var(--pill-green);
 }
 
 .env-badge.e2e {
   background: rgba(88, 166, 255, 0.15);
-  color: #58a6ff;
+  color: var(--pill-blue);
 }
 
 .env-badge.int {
   background: rgba(239, 177, 24, 0.15);
-  color: var(--yellow);
+  color: var(--pill-yellow);
 }
 
 .services-table tr.env-separator td {
@@ -396,7 +405,7 @@ body {
   font-size: 11px;
   font-weight: 600;
   font-family: 'SF Mono', 'Fira Code', monospace;
-  color: var(--text-muted);
+  color: var(--pill-text);
   background: var(--card-surface);
   border: 1px solid var(--border);
   padding: 1px 6px;
@@ -482,12 +491,12 @@ body {
 
 .type-badge.docker {
   background: rgba(37, 226, 165, 0.12);
-  color: var(--accent);
+  color: var(--pill-green);
 }
 
 .type-badge.local {
   background: rgba(239, 177, 24, 0.12);
-  color: var(--yellow);
+  color: var(--pill-yellow);
 }
 
 .log-btn {
