@@ -346,6 +346,113 @@ describe('rewriteSqlFilterWithKvItems', () => {
     });
   });
 
+  describe('toString() wrapper', () => {
+    // Ad hoc and dashboard filters render keys as toString(<key>).
+    it.each([
+      [
+        "toString(LogAttributes['k']) = 'v'",
+        "has(`LogAttributeItems`, concat('k', '=', 'v'))",
+      ],
+      [
+        "toString(LogAttributes['k']) IN ('a')",
+        "has(`LogAttributeItems`, concat('k', '=', 'a'))",
+      ],
+      [
+        "toString(LogAttributes['k']) IN ('a', 'b')",
+        "hasAny(`LogAttributeItems`, array(concat('k', '=', 'a'), concat('k', '=', 'b')))",
+      ],
+    ])('rewrites %s', (condition, expected) => {
+      expect(rewriteSqlFilterWithKvItems(condition, defaultLookup)).toBe(
+        expected,
+      );
+    });
+
+    it('rewrites wrapped and bare subscripts in the same condition', () => {
+      expect(
+        rewriteSqlFilterWithKvItems(
+          "toString(LogAttributes['a']) = 'x' AND LogAttributes['b'] = 'y'",
+          defaultLookup,
+        ),
+      ).toBe(
+        "has(`LogAttributeItems`, concat('a', '=', 'x')) AND has(`LogAttributeItems`, concat('b', '=', 'y'))",
+      );
+    });
+
+    it.each([
+      ["toString(LogAttributes['k']) = ''", 'empty value'],
+      ["toString(LogAttributes['k']) != 'v'", '!='],
+      ["toString(LogAttributes['k']) NOT IN ('a')", 'NOT IN'],
+      ["toString(LogAttributes['k']) LIKE '%v%'", 'LIKE'],
+      ["toString(ServiceName) = 'v'", 'no subscript'],
+      ["toString(OtherMap['k']) = 'v'", 'map not in lookup'],
+      ["toString(LogAttributes['k'], 'UTC') = 'v'", 'two arguments'],
+      ["lower(LogAttributes['k']) = 'v'", 'other function'],
+      ["toString(toString(LogAttributes['k'])) = 'v'", 'nested toString'],
+      ["TOSTRING(LogAttributes['k']) = 'v'", 'wrong case'],
+      ["toStringCutToZero(LogAttributes['k']) = 'v'", 'name prefix match'],
+      ["'v' = toString(LogAttributes['k'])", 'wrapper on the right'],
+      ["toString(LogAttributes['k']) = toString('v')", 'non-literal value'],
+      ["toString(LogAttributes['k']) = 5", 'numeric value'],
+      ["toString(LogAttributes['k']) IN ('a', '')", 'empty IN value'],
+      ["toString(LogAttributes['k']) IN ('a', 5)", 'numeric IN value'],
+      ["toString(LogAttributes['k']['k2']) = 'v'", 'chained subscript'],
+      ["toString(LogAttributes) = 'v'", 'whole map'],
+      ["match(toString(LogAttributes['k']), '^v')", 'regex'],
+      ["NOT match(toString(LogAttributes['k']), '^v')", 'negated regex'],
+    ])('leaves %s untouched (%s)', condition => {
+      expect(rewriteSqlFilterWithKvItems(condition, defaultLookup)).toBe(
+        condition,
+      );
+    });
+
+    it('rewrites only the eligible side of a mixed OR', () => {
+      expect(
+        rewriteSqlFilterWithKvItems(
+          "toString(LogAttributes['a']) = 'x' OR toString(LogAttributes['b']) != 'y'",
+          defaultLookup,
+        ),
+      ).toBe(
+        "has(`LogAttributeItems`, concat('a', '=', 'x')) OR toString(LogAttributes['b']) != 'y'",
+      );
+    });
+
+    it.each([
+      "(toString(LogAttributes['k']) = 'v')",
+      "(toString(LogAttributes['k'])) = 'v'",
+    ])('rewrites the parenthesized %s', condition => {
+      expect(rewriteSqlFilterWithKvItems(condition, defaultLookup)).toBe(
+        "has(`LogAttributeItems`, concat('k', '=', 'v'))",
+      );
+    });
+
+    it('keeps escaped quotes in the value as written', () => {
+      expect(
+        rewriteSqlFilterWithKvItems(
+          "toString(LogAttributes['k']) = 'it''s'",
+          defaultLookup,
+        ),
+      ).toBe("has(`LogAttributeItems`, concat('k', '=', 'it''s'))");
+    });
+
+    it('falls back to an OR chain for IN without hasAny support', () => {
+      expect(
+        rewriteSqlFilterWithKvItems(
+          "toString(LogAttributes['k']) IN ('a', 'b') AND Severity = 'error'",
+          legacyLookup,
+        ),
+      ).toBe(
+        "(has(`LogAttributeItems`, concat('k', '=', 'a')) OR has(`LogAttributeItems`, concat('k', '=', 'b'))) AND Severity = 'error'",
+      );
+    });
+
+    it('returns an unparseable condition verbatim', () => {
+      const condition = "toString(LogAttributes['k'] = 'v'";
+      expect(rewriteSqlFilterWithKvItems(condition, defaultLookup)).toBe(
+        condition,
+      );
+    });
+  });
+
   describe('hasAny fallback (useHasAny: false)', () => {
     it("still rewrites Map['key'] = 'value' to has(...)", () => {
       const result = rewriteSqlFilterWithKvItems(

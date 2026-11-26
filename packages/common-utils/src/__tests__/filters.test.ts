@@ -1269,7 +1269,22 @@ describe('filters', () => {
       ).toEqual({
         sql: `SELECT DISTINCT toString(tupleElement(tuple(*), 1)) AS value FROM (\nSELECT env, count() FROM envs GROUP BY env\n) LIMIT ${SQL_QUERY_FILTER_VALUES_LIMIT}`,
         params: {},
+        expandedSql: 'SELECT env, count() FROM envs GROUP BY env',
       });
+    });
+
+    it('returns the expanded SQL without the values wrapper', () => {
+      const { expandedSql } = renderSqlQueryFilterValuesQuery({
+        sqlTemplate:
+          ' SELECT env FROM $__sourceTable WHERE $__timeFilter(ts) AND $__filter(svc, $svc) AND $__filters; ',
+        variables: [svc(['api'])],
+        sourceTables: { from: { databaseName: 'db', tableName: 'logs' } },
+        filtersSQL: "(cloud = 'aws')",
+        dateRange,
+      });
+      expect(expandedSql).toBe(
+        "SELECT env FROM `db`.`logs` WHERE ts >= toDateTime(fromUnixTimestamp64Milli({startDateMilliseconds:Int64})) AND ts <= toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64})) AND (svc IN ('api')) AND (cloud = 'aws')",
+      );
     });
 
     it('sends the time range when a time macro reads it', () => {

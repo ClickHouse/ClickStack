@@ -412,6 +412,25 @@ function kvItemsConcatSql(
   return `concat(${keySql}, ${SqlString.format('?', [separator])}, ${valueSql})`;
 }
 
+// Ad hoc and dashboard filters wrap keys in toString(). The KV items rewrite
+// only applies to maps whose values are strings, where toString() is a no-op,
+// so the wrapper can be dropped.
+function unwrapToString(
+  node: SQLParser.ExpressionValue | SQLParser.ExprList,
+): SQLParser.ExpressionValue | SQLParser.ExprList {
+  if (node.type !== 'function' || !('name' in node)) return node;
+  const nameParts = node.name.name;
+  const args = node.args?.value;
+  if (
+    nameParts.length !== 1 ||
+    nameParts[0].value !== 'toString' ||
+    args?.length !== 1
+  ) {
+    return node;
+  }
+  return args[0];
+}
+
 export const rewriteSqlFilterWithKvItems = (
   condition: string,
   textIndexInfoLookup: TextIndexInfoLookup,
@@ -431,7 +450,7 @@ export const rewriteSqlFilterWithKvItems = (
       if (!('operator' in node)) return;
       const op = String(node.operator ?? '').toUpperCase();
       if (op !== '=' && op !== 'IN') return;
-      const left = node.left;
+      const left = node.left && unwrapToString(node.left);
       if (
         left?.type !== 'column_ref' ||
         ('column' in left && typeof left.column === 'string')

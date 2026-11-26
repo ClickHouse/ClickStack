@@ -314,7 +314,7 @@ function getAnthropicModel(): LanguageModel {
   const anthropic = createAnthropic(anthropicConfig);
 
   // Use custom model name if configured, otherwise use default
-  const modelName = config.AI_MODEL_NAME || 'claude-sonnet-4-5-20250929';
+  const modelName = config.AI_MODEL_NAME || 'claude-sonnet-5-5';
 
   return anthropic(modelName);
 }
