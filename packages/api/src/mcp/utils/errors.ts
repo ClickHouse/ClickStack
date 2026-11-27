@@ -84,7 +84,8 @@ export function sanitizeFetchError(e: unknown): string {
   return message.replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
-function formatZodPath(path: (string | number)[]): string {
+/** A Zod issue path as one string, e.g. `indicator.latency.unit`. */
+export function formatZodPath(path: (string | number)[]): string {
   return path
     .map((segment, index) =>
       typeof segment === 'number'
