@@ -16,6 +16,7 @@ import {
   Text,
   Tooltip,
   UnstyledButton,
+  VisuallyHidden,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -414,7 +415,13 @@ export const AppNavLink = ({
     >
       <span className={styles.navItemContent}>
         <span className={styles.navItemIcon}>{icon}</span>
-        {!isCollapsed && <span>{label}</span>}
+        {/* The collapsed rail shows only the icon. Keep the label for screen
+            readers, or the link has no accessible name. */}
+        {isCollapsed ? (
+          <VisuallyHidden>{label}</VisuallyHidden>
+        ) : (
+          <span>{label}</span>
+        )}
       </span>
       {!isCollapsed && isBeta && (
         <Badge

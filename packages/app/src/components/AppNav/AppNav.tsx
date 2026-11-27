@@ -6,7 +6,15 @@ import cx from 'classnames';
 import { Badge } from '@clickhouse/click-ui';
 import { setAttributes, setUser } from '@clickhouse/clickstack-browser';
 import { SavedSearchListApiResponse } from '@hyperdx/common-utils/dist/types';
-import { Anchor, Collapse, Flex, Group, ScrollArea, Text } from '@mantine/core';
+import {
+  Anchor,
+  Collapse,
+  Flex,
+  Group,
+  ScrollArea,
+  Text,
+  VisuallyHidden,
+} from '@mantine/core';
 import { useDisclosure, useFocusTrap, useLocalStorage } from '@mantine/hooks';
 import {
   IconBell,
@@ -20,7 +28,7 @@ import {
 } from '@tabler/icons-react';
 
 import api from '@/api';
-import { useLogomark, useWordmark } from '@/brand';
+import { useBrandDisplayName, useLogomark, useWordmark } from '@/brand';
 import { AlertStatusIcon } from '@/components/AlertStatusIcon';
 import { InstanceLabel } from '@/components/AppNav/InstanceLabel';
 import { useMobileNavOverlay } from '@/components/AppNav/useMobileNavOverlay';
@@ -110,6 +118,7 @@ const NAV_LINKS: NavLinkConfig[] = [
 export default function AppNav({ fixed = false }: { fixed?: boolean }) {
   const wordmark = useWordmark();
   const logomark = useLogomark({ size: 22 });
+  const brandDisplayName = useBrandDisplayName();
 
   useEffect(() => {
     let redirectUrl;
@@ -388,7 +397,11 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
           >
             <Link href="/search" className={styles.logoLink}>
               {isCollapsed ? (
-                <div className={styles.logoIconWrapper}>{logomark}</div>
+                <div className={styles.logoIconWrapper}>
+                  {logomark}
+                  {/* The mark is aria-hidden, so name the link for screen readers. */}
+                  <VisuallyHidden>{brandDisplayName}</VisuallyHidden>
+                </div>
               ) : (
                 <Group
                   gap="xs"
