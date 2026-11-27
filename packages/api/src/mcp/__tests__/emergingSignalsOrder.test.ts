@@ -358,6 +358,7 @@ describe('clickstack_emerging_signals with one Drain tree', () => {
     ]);
     const variant = out.emerging.find(p => p.status === 'new_variant');
     expect(variant).toMatchObject({
+      pattern: 'user login failed: account locked',
       baselinePattern: 'user login failed: invalid password',
       sample: 'user login failed: account locked',
       variantShare: 0.3333,
@@ -412,6 +413,28 @@ describe('clickstack_emerging_signals with one Drain tree', () => {
         variantShare: 0.5,
       }),
     );
+  });
+
+  it('reports a new and a stopped message in one pattern', async () => {
+    const out = await run(
+      [
+        ...repeat('status ok code 1', 10),
+        ...repeat('status failed code 1', 10),
+      ],
+      [...repeat('status ok code 1', 10), ...repeat('status ok code 2', 10)],
+    );
+    expect(out.emerging).toEqual([
+      expect.objectContaining({
+        status: 'new_variant',
+        pattern: 'status ok code 2',
+      }),
+    ]);
+    expect(out.disappeared).toEqual([
+      expect.objectContaining({
+        status: 'gone_variant',
+        pattern: 'status failed code 1',
+      }),
+    ]);
   });
 
   it('needs 3 current rows to report a gone variant', async () => {

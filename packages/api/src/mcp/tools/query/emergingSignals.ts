@@ -337,7 +337,10 @@ export function registerEmergingSignals({
         if (b.rows >= 3 && now !== undefined && now !== b.tokens.join(' '))
           changed.set(key, b.tokens);
       }
-      const variants = new Map<string, { rows: number; sample: string }>();
+      const variants = new Map<
+        string,
+        { rows: number; tokens: string[]; sample: string }
+      >();
       curSample.sampleRows.forEach((row, i) => {
         const key = String(curRes.rowClusterIds.at(i));
         const tmpl = changed.get(key);
@@ -350,8 +353,12 @@ export function registerEmergingSignals({
         )
           return;
         const v = variants.get(key);
-        if (v) v.rows++;
-        else variants.set(key, { rows: 1, sample: raw });
+        if (!v) variants.set(key, { rows: 1, tokens, sample: raw });
+        else {
+          v.rows++;
+          if (v.tokens.length === tokens.length)
+            v.tokens = miner.drain.createTemplate(tokens, v.tokens);
+        }
       });
 
       // The reverse: a baseline message that is gone although the rest of
@@ -386,6 +393,7 @@ export function registerEmergingSignals({
         {
           rows: number;
           fit: number;
+          fitSample: string;
           tokens: string[];
           sample: string;
           currentPattern: string;
@@ -405,6 +413,7 @@ export function registerEmergingSignals({
           g = {
             rows: 0,
             fit: 0,
+            fitSample: '',
             tokens: [],
             sample: '',
             currentPattern: t.tokens.join(' '),
@@ -412,7 +421,7 @@ export function registerEmergingSignals({
           goneVariants.set(key, g);
         }
         if (fits) {
-          g.fit++;
+          if (g.fit++ === 0) g.fitSample = raw;
         } else if (g.rows++ === 0) {
           g.tokens = tokens;
           g.sample = raw;
@@ -443,11 +452,46 @@ export function registerEmergingSignals({
           found && found.rows / sampled >= newPatternShareFloor
             ? found
             : undefined;
-        const gone = v ? undefined : goneVariants.get(key);
-        if (gone && gone.rows >= 2 && gone.fit > 0) {
-          // Mirror of a new variant: the stopped message is its own
-          // disappeared entry, and the message that goes on is classified on
-          // its own.
+        const foundGone = goneVariants.get(key);
+        const gone =
+          foundGone && foundGone.rows >= 2 && foundGone.fit > 0
+            ? foundGone
+            : undefined;
+        if (!v && !gone) {
+          const verdict = classifyShift(a, ratio, newPatternShareFloor);
+          if (verdict === 'emerging') emerging.push(a);
+          else if (verdict === 'disappeared') disappeared.push(a);
+          continue;
+        }
+        // A new message is its own emerging entry and a stopped one its own
+        // disappeared entry; a cluster can have both. The rest of the cluster
+        // (the message in both windows) is classified on its own, so a surge
+        // or drop of it is still reported next to them.
+        const b = baseline.get(key);
+        let rest: Agg = a;
+        if (v) {
+          const baselinePattern = (b?.tokens ?? []).join(' ');
+          const variantCount = Math.round(v.rows * curRes.sampleMultiplier);
+          emerging.push({
+            pattern: v.tokens.join(' '),
+            curShare: v.rows / sampled,
+            baseShare: 0,
+            curCount: variantCount,
+            baseCount: 0,
+            sample: v.sample,
+            variant: { baselinePattern, share: v.rows / sampled },
+          });
+          rest = {
+            pattern: baselinePattern,
+            curShare:
+              Math.max(Math.round(a.curShare * sampled) - v.rows, 0) / sampled,
+            baseShare: a.baseShare,
+            curCount: Math.max(a.curCount - variantCount, 0),
+            baseCount: a.baseCount,
+            sample: b?.sample ?? baselinePattern,
+          };
+        }
+        if (gone) {
           const goneCount = Math.round(gone.rows * baseRes.sampleMultiplier);
           disappeared.push({
             pattern: gone.tokens.join(' '),
@@ -461,49 +505,15 @@ export function registerEmergingSignals({
               share: gone.rows / baseSampled,
             },
           });
-          const rest = {
-            pattern: gone.currentPattern,
-            curShare: a.curShare,
+          rest = {
+            pattern: v ? rest.pattern : gone.currentPattern,
+            curShare: rest.curShare,
             baseShare: gone.fit / baseSampled,
-            curCount: a.curCount,
-            baseCount: Math.max(a.baseCount - goneCount, 0),
-            sample: a.sample,
+            curCount: rest.curCount,
+            baseCount: Math.max(rest.baseCount - goneCount, 0),
+            sample: gone.fitSample,
           };
-          const restVerdict = classifyShift(rest, ratio, newPatternShareFloor);
-          if (restVerdict === 'emerging') emerging.push(rest);
-          else if (restVerdict === 'disappeared') disappeared.push(rest);
-          continue;
         }
-        if (!v) {
-          const verdict = classifyShift(a, ratio, newPatternShareFloor);
-          if (verdict === 'emerging') emerging.push(a);
-          else if (verdict === 'disappeared') disappeared.push(a);
-          continue;
-        }
-        // The new message is its own emerging entry. The rest of the cluster
-        // (the baseline message) is classified on its own, so a surge or drop
-        // of the baseline message is still reported next to the variant.
-        const b = baseline.get(key);
-        const baselinePattern = (b?.tokens ?? []).join(' ');
-        const variantCount = Math.round(v.rows * curRes.sampleMultiplier);
-        emerging.push({
-          pattern: a.pattern,
-          curShare: v.rows / sampled,
-          baseShare: 0,
-          curCount: variantCount,
-          baseCount: 0,
-          sample: v.sample,
-          variant: { baselinePattern, share: v.rows / sampled },
-        });
-        const rest = {
-          pattern: baselinePattern,
-          curShare:
-            Math.max(Math.round(a.curShare * sampled) - v.rows, 0) / sampled,
-          baseShare: a.baseShare,
-          curCount: Math.max(a.curCount - variantCount, 0),
-          baseCount: a.baseCount,
-          sample: b?.sample ?? baselinePattern,
-        };
         const restVerdict = classifyShift(rest, ratio, newPatternShareFloor);
         if (restVerdict === 'emerging') emerging.push(rest);
         else if (restVerdict === 'disappeared') disappeared.push(rest);
@@ -579,13 +589,15 @@ export function registerEmergingSignals({
           'emerging = patterns newly present or >= minShareRatio× more frequent ' +
           '(by share of window) now vs baseline; status "new" means absent from ' +
           'baseline entirely; status "new_variant" means new messages that ' +
-          'merged into a baseline pattern (baselinePattern is the old ' +
-          'template, sample a new line, variantShare their share); if the ' +
+          'merged into a baseline pattern (pattern is the template of the new ' +
+          'lines, baselinePattern the old template, sample a new line, ' +
+          'variantShare their share); if the ' +
           'old message dropped, it is listed in disappeared. ' +
           'disappeared = the reverse; status "gone_variant" means baseline ' +
           'messages that stopped while the rest of their pattern goes on ' +
-          '(currentPattern is the template of the current rows, sample an old ' +
-          'line, variantShare their share of the baseline). Shares are fractions of ' +
+          '(pattern is the template of the stopped lines, currentPattern the ' +
+          'template of the current rows, sample an old line, variantShare ' +
+          'their share of the baseline). Shares are fractions of ' +
           "each window's sampled rows, so they are comparable across windows of " +
           'different volume. An empty emerging list means nothing novel crossed ' +
           'the threshold — a valid finding.',
