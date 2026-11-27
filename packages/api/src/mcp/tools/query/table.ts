@@ -264,12 +264,14 @@ export function registerTable({ context, registerTool }: ToolRegistrar) {
       description:
         'Compute aggregated metrics as a table, single number, pie chart, or bar chart. ' +
         'Use this for grouped aggregations, top-N queries, single-value KPIs, ' +
-        'or proportional breakdowns. For trends over time use clickstack_timeseries.\n\n' +
+        'or proportional breakdowns. For trends over time use clickstack_timeseries.\n' +
+        '"having" filters aggregated groups; groupBy and valueExpression accept ' +
+        'ClickHouse expressions (e.g. JSONExtractString); each select item has its own ' +
+        '"where" for conditional counts or cohort comparisons. Top-level "where" ' +
+        'scopes every select item.\n\n' +
         PREFER_BUILDER_OVER_SQL_NUDGE +
         '\n\n' +
         'Requires sourceId — call clickstack_list_sources then clickstack_describe_source first.\n\n' +
-        'The top-level "where" scopes the whole query. Each select item can add its own ' +
-        '"where" (compiles to <aggFn>If(...)) for per-metric cohort comparisons; both are ANDed.\n\n' +
         'Columns: top-level columns are PascalCase (Duration, StatusCode). ' +
         "Map attributes use brackets, SpanAttributes['http.method'], and work in groupBy " +
         "and valueExpression, e.g. toFloat64OrZero(SpanAttributes['key']).\n\n" +

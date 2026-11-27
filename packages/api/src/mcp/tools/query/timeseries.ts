@@ -80,7 +80,10 @@ export function registerTimeseries({ context, registerTool }: ToolRegistrar) {
       description:
         'Plot metrics over time as a line or stacked bar chart. ' +
         'Use this when you need to visualize trends, compare time-series, ' +
-        'or monitor metric changes over a time window.\n\n' +
+        'or monitor metric changes over a time window.\n' +
+        'groupBy and valueExpression accept ClickHouse expressions ' +
+        '(e.g. JSONExtractString); each select item can set its own "where" ' +
+        'for conditional series.\n\n' +
         PREFER_BUILDER_OVER_SQL_NUDGE +
         '\n\n' +
         'Requires sourceId — call clickstack_list_sources then clickstack_describe_source first. ' +
