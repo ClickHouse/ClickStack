@@ -3,9 +3,12 @@ import http from 'http';
 
 import { getLoggedInAgent, getServer } from '@/fixtures';
 import Connection from '@/models/connection';
+import { cachedClickHouseVersion } from '@/utils/clickhouseVersion';
 import * as instrumentation from '@/utils/instrumentation';
 
 jest.unmock('http-proxy-middleware');
+
+const UPSTREAM_VERSION = '26.10.3.7';
 
 const TIMEOUT_TRAILER =
   'Code: 159. DB::Exception: Timeout exceeded: elapsed 15.0 seconds, maximum: 15. (TIMEOUT_EXCEEDED) (version 25.3.1.1)\n';
@@ -69,8 +72,15 @@ describe('clickhouse-proxy outcome', () => {
   beforeAll(async () => {
     await server.start();
     upstream = http.createServer((req, res) => {
-      req.resume();
+      let body = '';
+      req.on('data', (chunk: Buffer) => (body += chunk));
       req.on('end', () => {
+        // The proxy's own version lookup, not a scripted query.
+        if (body.includes('SELECT version()')) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: [{ version: UPSTREAM_VERSION }] }));
+          return;
+        }
         const id = new URL(req.url ?? '', 'http://x').searchParams.get(
           'query_id',
         );
@@ -135,6 +145,30 @@ describe('clickhouse-proxy outcome', () => {
       outcome: 'success',
       attributes: undefined,
     });
+  });
+
+  it('records the ClickHouse version once it has been read', async () => {
+    const send = await connect();
+    await send('ok').expect(200);
+    const connection = await Connection.findOne({ host: upstreamUrl });
+    const key = {
+      id: connection!._id.toString(),
+      host: upstreamUrl,
+      username: 'default',
+    };
+    for (let i = 0; i < 50 && !cachedClickHouseVersion(key); i++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    recordSpy.mockClear();
+    setAttributes.mockClear();
+
+    await send('ok').expect(200);
+    await proxyOutcome();
+    expect(setAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'hyperdx.clickhouse_proxy.clickhouse.version': UPSTREAM_VERSION,
+      }),
+    );
   });
 
   it('categorises an exception written after a 200', async () => {
@@ -222,6 +256,11 @@ describe('clickhouse-proxy outcome', () => {
       outcome: 'error',
       attributes: { error_category: 'upstream_unavailable' },
     });
+    expect(setAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'hyperdx.clickhouse_proxy.clickhouse.version': undefined,
+      }),
+    );
   });
 
   it('categorises a request the client abandoned', async () => {

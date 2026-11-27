@@ -50,6 +50,17 @@ describe('ClickHouse proxy body capture', () => {
     expect(req._hdxProxyBody).toBe(body);
   });
 
+  it('retains the inflated bytes when parsed inside the router mount', () => {
+    const req = Object.assign(makeRequest('/', '/'), {
+      baseUrl: '/clickhouse-proxy',
+    });
+    const body = Buffer.from('SELECT 1');
+
+    captureProxyBody(req, response, body);
+
+    expect(req._hdxProxyBody).toBe(body);
+  });
+
   it.each([
     undefined,
     '',

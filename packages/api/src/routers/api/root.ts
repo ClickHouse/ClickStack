@@ -7,6 +7,7 @@ import { validateRequest } from 'zod-express-middleware';
 import * as config from '@/config';
 import { createTeam, isTeamExisting } from '@/controllers/team';
 import { handleAuthError, redirectToDashboard } from '@/middleware/auth';
+import { parsePublicBody } from '@/middleware/bodyParser';
 import {
   loginRateLimiter,
   markRejectedLogin,
@@ -74,6 +75,7 @@ router.get('/installation', async (_, res: InstallationEspRes, next) => {
 
 router.post(
   '/login/password',
+  parsePublicBody,
   loginRateLimiter,
   passport.authenticate('local', {
     failWithError: true,
@@ -86,6 +88,7 @@ router.post(
 
 router.post(
   '/register/password',
+  parsePublicBody,
   validateRequest({ body: registrationSchema }),
   async (req, res, next) => {
     try {
@@ -155,7 +158,7 @@ router.get('/logout', (req, res, next) => {
 });
 
 // TODO: rename this ?
-router.post('/team/setup/:token', async (req, res, next) => {
+router.post('/team/setup/:token', parsePublicBody, async (req, res, next) => {
   try {
     const { password } = req.body;
     const { token } = req.params;

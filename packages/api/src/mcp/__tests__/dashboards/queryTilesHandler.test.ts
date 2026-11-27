@@ -123,6 +123,9 @@ describe('clickstack_query_tiles handler — per-tile failure isolation', () => 
     expect(good.status).toBe('ok');
     expect(boom.status).toBe('error');
     expect(boom.error).toContain('source lookup exploded');
+    // Failed tiles report their time too: the slow ones often fail.
+    expect(good.elapsedMs).toEqual(expect.any(Number));
+    expect(boom.elapsedMs).toEqual(expect.any(Number));
   });
 
   it('does not issue a query for tiles scheduled after the deadline has passed', async () => {
@@ -176,6 +179,8 @@ describe('clickstack_query_tiles handler — per-tile failure isolation', () => 
       );
       expect(overflow.status).toBe('error');
       expect(overflow.error).toContain('deadline');
+      // It never ran, so it reports no time (0 would read as cheap).
+      expect(overflow).not.toHaveProperty('elapsedMs');
       const queriedIds = mockRunConfigTile.mock.calls.map((call: unknown[]) => {
         const t = call[1];
         return t && typeof t === 'object' && 'id' in t ? t.id : undefined;

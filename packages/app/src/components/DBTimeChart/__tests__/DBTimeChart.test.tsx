@@ -54,11 +54,20 @@ jest.mock('@/source', () => ({
     .mockReturnValue({ formatByColumn: new Map(), chartFormat: undefined }),
 }));
 
-jest.mock('../MaterializedViews/MVOptimizationIndicator', () =>
+jest.mock('@/hooks/useExemplars', () => ({
+  useExemplars: jest
+    .fn()
+    .mockReturnValue({ exemplars: [], isLoading: false, isError: false }),
+  useExemplarTraceMeta: jest
+    .fn()
+    .mockReturnValue({ data: null, isLoading: false }),
+}));
+
+jest.mock('@/components/MaterializedViews/MVOptimizationIndicator', () =>
   jest.fn(() => null),
 );
 
-jest.mock('../charts/DateRangeIndicator', () => jest.fn(() => null));
+jest.mock('@/components/charts/DateRangeIndicator', () => jest.fn(() => null));
 
 describe('DBTimeChart', () => {
   const mockUseQueriedChartConfig = jest.mocked(useQueriedChartConfig);
