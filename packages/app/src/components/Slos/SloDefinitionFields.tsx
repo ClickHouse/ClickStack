@@ -9,7 +9,10 @@ import {
 } from 'react-hook-form';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { buildSloAvailabilityCondition } from '@hyperdx/common-utils/dist/core/slo';
-import { SloWindowSchema } from '@hyperdx/common-utils/dist/slo';
+import {
+  SloTemplateSchema,
+  SloWindowSchema,
+} from '@hyperdx/common-utils/dist/slo';
 import { SourceKind, type TSource } from '@hyperdx/common-utils/dist/types';
 import {
   Button,
@@ -26,8 +29,10 @@ import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
 import { SourceSelectControlled } from '@/components/SourceSelect';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 
+import { SloEligibleFilters } from './SloEligibleFilters';
 import type { SloFormValues } from './sloForm';
 import { SloFormRow } from './SloFormLayout';
+import { SloLatencyFields } from './SloLatencyFields';
 import { formatSloWindow } from './sloUtils';
 
 const SLO_SOURCE_KINDS = [SourceKind.Trace, SourceKind.Log];
@@ -45,7 +50,10 @@ export function SloIndicatorFields({
   setValue: UseFormSetValue<SloFormValues>;
   source?: TSource;
 }) {
-  const sourceId = useWatch({ control, name: 'source' });
+  const [sourceId, template] = useWatch({
+    control,
+    name: ['source', 'indicator.template'],
+  });
   const { errors } = useFormState({ control, name: 'indicator.good' });
   const tableConnection = tcFromSource(source);
 
@@ -67,6 +75,32 @@ export function SloIndicatorFields({
 
   return (
     <>
+      <SloFormRow
+        label="Type"
+        helpText="Availability: good events match a condition. Latency: good events finish within a threshold."
+        inline
+      >
+        <Controller
+          control={control}
+          name="indicator.template"
+          render={({ field }) => (
+            <Radio.Group
+              value={field.value}
+              onChange={value => {
+                const next = SloTemplateSchema.safeParse(value);
+                if (next.success) field.onChange(next.data);
+              }}
+              aria-label="Type"
+              data-testid="slo-template"
+            >
+              <Group>
+                <Radio value="availability" label="Availability" />
+                <Radio value="latency" label="Latency" />
+              </Group>
+            </Radio.Group>
+          )}
+        />
+      </SloFormRow>
       <SloFormRow label="Source">
         {/* The select shows its own error. */}
         <div data-testid="slo-source">
@@ -92,21 +126,35 @@ export function SloIndicatorFields({
           lucenePlaceholder="For example ServiceName:checkout"
           data-testid="slo-eligible-input"
         />
-      </SloFormRow>
-      <SloFormRow
-        label="Good events"
-        helpText="The SQL condition a good event matches. An event where it evaluates to NULL counts as bad."
-      >
-        <SQLInlineEditorControlled
-          tableConnection={tableConnection}
-          sourceId={sourceId}
+        <SloEligibleFilters
           control={control}
-          name="indicator.good"
-          placeholder="For example StatusCode != 'Error'"
-          size="sm"
+          setValue={setValue}
+          source={source}
         />
-        <Input.Error mt={4}>{errors.indicator?.good?.message}</Input.Error>
       </SloFormRow>
+      {template === 'latency' ? (
+        <SloLatencyFields
+          control={control}
+          getValues={getValues}
+          setValue={setValue}
+          source={source}
+        />
+      ) : (
+        <SloFormRow
+          label="Good events"
+          helpText="The SQL condition a good event matches. An event where it evaluates to NULL counts as bad."
+        >
+          <SQLInlineEditorControlled
+            tableConnection={tableConnection}
+            sourceId={sourceId}
+            control={control}
+            name="indicator.good"
+            placeholder="For example StatusCode != 'Error'"
+            size="sm"
+          />
+          <Input.Error mt={4}>{errors.indicator?.good?.message}</Input.Error>
+        </SloFormRow>
+      )}
     </>
   );
 }

@@ -37,7 +37,7 @@ export const DEFAULT_SLO_FORM_VALUES: SloFormValues = {
   indicator: {
     template: 'availability',
     // SQL like the good condition, so both inputs read the same way.
-    eligible: { where: '', whereLanguage: 'sql' },
+    eligible: { where: '', whereLanguage: 'sql', filters: [] },
     good: '',
     latency: DEFAULT_LATENCY,
   },
@@ -54,8 +54,7 @@ export function sloToFormValues(slo: SloApiResponse): SloFormValues {
     source: slo.source,
     indicator: {
       template,
-      // Kept as saved, with any filters the builder does not show.
-      eligible,
+      eligible: { ...eligible, filters: eligible.filters ?? [] },
       good: good ?? '',
       latency: latency ?? DEFAULT_LATENCY,
     },
@@ -74,7 +73,10 @@ export function sloToFormValues(slo: SloApiResponse): SloFormValues {
  * Any other expression is read as a number with a cast, which also works for
  * string attributes, in the unit the user picks.
  */
-function getNativeDuration(expression: string, source: TSource | undefined) {
+export function getNativeDuration(
+  expression: string,
+  source: TSource | undefined,
+) {
   const native = source ? getSloDefaultDuration(source) : undefined;
   return native != null && native.expression === expression.trim()
     ? native
@@ -82,7 +84,7 @@ function getNativeDuration(expression: string, source: TSource | undefined) {
 }
 
 /** The latency settings as saved, with the unit of a native duration. */
-function toSloLatency(
+export function toSloLatency(
   latency: SloFormValues['indicator']['latency'],
   source: TSource | undefined,
 ): SloLatency {
