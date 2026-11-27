@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://hyperdx.io">
+  <a href="https://clickhouse.com/clickstack">
     <img alt="ClickStack logo" src="./packages/app/public/favicons/clickstack/favicon.svg" width="128">
   </a>
 </p>
@@ -17,13 +17,13 @@
   <a href="https://trendshift.io/repositories/2030?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-2030" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/2030" alt="ClickHouse%2FClickStack | Trendshift" width="250" height="55"/></a>
 </p>
 
-[ClickStack](https://clickhouse.com/use-cases/observability) (formerly HyperDX)
+[ClickStack](https://clickhouse.com/clickstack) (formerly HyperDX)
 helps engineers quickly figure out why production is broken by making it easy to
 search & visualize logs and traces on top of any ClickHouse cluster (imagine
 Kibana, for ClickHouse).
 
 <p align="center">
-  <a href="https://clickhouse.com/docs/use-cases/observability/clickstack/overview">Documentation</a> • <a href="https://hyperdx.io/discord">Chat on Discord</a>  • <a href="https://play.hyperdx.io/search">Live Demo</a>  • <a href="https://github.com/ClickHouse/ClickStack/issues/new">Bug Reports</a> • <a href="./CONTRIBUTING.md">Contributing</a> • <a href="https://clickhouse.com/use-cases/observability">Website</a>
+  <a href="https://clickhouse.com/docs/use-cases/observability/clickstack/overview">Documentation</a> • <a href="https://hyperdx.io/discord">Chat on Discord</a>  • <a href="https://play-clickstack.clickhouse.com/">Live Demo</a>  • <a href="https://github.com/ClickHouse/ClickStack/issues/new">Bug Reports</a> • <a href="./CONTRIBUTING.md">Contributing</a> • <a href="https://clickhouse.com/clickstack">Website</a>
 </p>
 
 - 🕵️ Correlate/search logs, metrics, session replays and traces all in one place
