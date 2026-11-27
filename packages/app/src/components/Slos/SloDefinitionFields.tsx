@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import {
   type Control,
+  Controller,
   type UseFormGetValues,
   type UseFormSetValue,
   useFormState,
@@ -8,8 +9,18 @@ import {
 } from 'react-hook-form';
 import { tcFromSource } from '@hyperdx/common-utils/dist/core/metadata';
 import { buildSloAvailabilityCondition } from '@hyperdx/common-utils/dist/core/slo';
+import { SloWindowSchema } from '@hyperdx/common-utils/dist/slo';
 import { SourceKind, type TSource } from '@hyperdx/common-utils/dist/types';
-import { Input } from '@mantine/core';
+import {
+  Button,
+  Group,
+  Input,
+  NumberInput,
+  Radio,
+  TagsInput,
+  Text,
+  Textarea,
+} from '@mantine/core';
 
 import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
 import { SourceSelectControlled } from '@/components/SourceSelect';
@@ -17,8 +28,10 @@ import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEdito
 
 import type { SloFormValues } from './sloForm';
 import { SloFormRow } from './SloFormLayout';
+import { formatSloWindow } from './sloUtils';
 
 const SLO_SOURCE_KINDS = [SourceKind.Trace, SourceKind.Log];
+const TARGET_PRESETS = [99, 99.5, 99.9, 99.95];
 
 /** Which events count, and which of them are good. */
 export function SloIndicatorFields({
@@ -93,6 +106,135 @@ export function SloIndicatorFields({
           size="sm"
         />
         <Input.Error mt={4}>{errors.indicator?.good?.message}</Input.Error>
+      </SloFormRow>
+    </>
+  );
+}
+
+/** The target and the rolling window it applies to. */
+export function SloObjectiveFields({
+  control,
+  setValue,
+}: {
+  control: Control<SloFormValues>;
+  setValue: UseFormSetValue<SloFormValues>;
+}) {
+  const [target, sloWindow] = useWatch({
+    control,
+    name: ['target', 'window'],
+  });
+  return (
+    <>
+      <SloFormRow
+        label="Target"
+        helpText="The share of eligible events that must be good over the window."
+      >
+        <Group gap="xs" align="flex-start" wrap="nowrap">
+          <Controller
+            control={control}
+            name="target"
+            render={({ field, fieldState }) => (
+              <NumberInput
+                aria-label="Target"
+                suffix="%"
+                decimalScale={3}
+                step={0.1}
+                // Out-of-range values get an error rather than a silent change.
+                clampBehavior="none"
+                value={field.value}
+                onChange={v => field.onChange(typeof v === 'number' ? v : 0)}
+                error={fieldState.error?.message}
+                w={120}
+                data-testid="slo-target"
+              />
+            )}
+          />
+          {TARGET_PRESETS.map(t => (
+            <Button
+              key={t}
+              variant={target === t ? 'primary' : 'secondary'}
+              onClick={() => setValue('target', t, { shouldValidate: true })}
+            >
+              {t}%
+            </Button>
+          ))}
+        </Group>
+        <Text size="xs" c="dimmed" mt={4}>
+          Error budget: {Number((100 - (target ?? 0)).toFixed(3))}% of eligible
+          events may be bad over {formatSloWindow(sloWindow)}.
+        </Text>
+      </SloFormRow>
+      <SloFormRow
+        label="Window"
+        helpText="The SLI and the error budget cover this many days up to now."
+        inline
+      >
+        <Controller
+          control={control}
+          name="window"
+          render={({ field }) => (
+            <Radio.Group
+              value={field.value}
+              onChange={value => {
+                const next = SloWindowSchema.safeParse(value);
+                if (next.success) field.onChange(next.data);
+              }}
+              aria-label="Window"
+              data-testid="slo-window"
+            >
+              <Group>
+                {SloWindowSchema.options.map(w => (
+                  <Radio
+                    key={w}
+                    value={w}
+                    label={`Rolling ${formatSloWindow(w)}`}
+                  />
+                ))}
+              </Group>
+            </Radio.Group>
+          )}
+        />
+      </SloFormRow>
+    </>
+  );
+}
+
+/** What the SLO is for, and tags to find it by. */
+export function SloDetailsFields({
+  control,
+}: {
+  control: Control<SloFormValues>;
+}) {
+  return (
+    <>
+      <SloFormRow label="Description">
+        <Controller
+          control={control}
+          name="description"
+          render={({ field }) => (
+            <Textarea
+              {...field}
+              aria-label="Description"
+              placeholder="Optional. What this SLO covers and who owns it."
+              autosize
+              minRows={2}
+            />
+          )}
+        />
+      </SloFormRow>
+      <SloFormRow label="Tags">
+        <Controller
+          control={control}
+          name="tags"
+          render={({ field }) => (
+            <TagsInput
+              aria-label="Tags"
+              value={field.value}
+              onChange={field.onChange}
+              clearable
+            />
+          )}
+        />
       </SloFormRow>
     </>
   );

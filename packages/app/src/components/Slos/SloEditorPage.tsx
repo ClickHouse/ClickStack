@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import Link from 'next/link';
@@ -21,15 +22,20 @@ import { usePageTitle } from '@/brand';
 import { InlineNameInputControlled } from '@/components/InlineNameInput/InlineNameInput';
 import { PageHeader } from '@/components/PageHeader';
 import { withAppNavForSurface } from '@/layout';
-import { useSaveSlo, useSlosEnabledGuard } from '@/slo';
+import { useSaveSlo, useSlo, useSlosEnabledGuard } from '@/slo';
 import { useSource } from '@/source';
 import { getApiErrorMessage } from '@/utils/apiErrors';
 
-import { SloIndicatorFields } from './SloDefinitionFields';
+import {
+  SloDetailsFields,
+  SloIndicatorFields,
+  SloObjectiveFields,
+} from './SloDefinitionFields';
 import {
   DEFAULT_SLO_FORM_VALUES,
   sloFormResolver,
   type SloFormValues,
+  sloToFormValues,
   toSloInput,
 } from './sloForm';
 import { SloFormSection } from './SloFormLayout';
@@ -37,22 +43,36 @@ import { SloFormSection } from './SloFormLayout';
 function SloEditorPage() {
   const enabled = useSlosEnabledGuard();
   const router = useRouter();
-  const title = usePageTitle('New SLO');
+  const editId =
+    typeof router.query.sloId === 'string' ? router.query.sloId : undefined;
+  const { data: existing } = useSlo(editId);
+  const title = usePageTitle(editId ? 'Edit SLO' : 'New SLO');
 
-  const { control, handleSubmit, setValue, getValues } = useForm<SloFormValues>(
-    {
+  const { control, handleSubmit, reset, setValue, getValues } =
+    useForm<SloFormValues>({
       defaultValues: DEFAULT_SLO_FORM_VALUES,
       resolver: sloFormResolver,
-    },
-  );
+    });
   const { errors } = useFormState({ control, name: 'name' });
   const sourceId = useWatch({ control, name: 'source' });
   const { data: source } = useSource({ id: sourceId || undefined });
+
+  // Load the SLO being edited, once.
+  const initializedRef = useRef(false);
+  useEffect(() => {
+    if (initializedRef.current || !router.isReady) return;
+    if (editId) {
+      if (!existing) return;
+      reset(sloToFormValues(existing));
+    }
+    initializedRef.current = true;
+  }, [router.isReady, editId, existing, reset]);
 
   const save = useSaveSlo();
   const onSave = handleSubmit(async values => {
     try {
       const saved = await save.mutateAsync({
+        id: editId,
         slo: toSloInput(values, source),
       });
       notifications.show({ color: 'green', message: `Saved ${saved.name}` });
@@ -79,6 +99,16 @@ function SloEditorPage() {
             <Anchor component={Link} href="/slos" fz="sm" c="dimmed">
               SLOs
             </Anchor>
+            {editId && existing && (
+              <Anchor
+                component={Link}
+                href={`/slos/${editId}`}
+                fz="sm"
+                c="dimmed"
+              >
+                {existing.name}
+              </Anchor>
+            )}
           </Breadcrumbs>
         }
       >
@@ -102,7 +132,11 @@ function SloEditorPage() {
             )}
           </Box>
           <Group gap="xs" wrap="nowrap">
-            <Button component={Link} href="/slos" variant="secondary">
+            <Button
+              component={Link}
+              href={editId ? `/slos/${editId}` : '/slos'}
+              variant="secondary"
+            >
               Cancel
             </Button>
             <Button
@@ -111,7 +145,7 @@ function SloEditorPage() {
               loading={save.isPending}
               data-testid="slo-save"
             >
-              Create SLO
+              {editId ? 'Save SLO' : 'Create SLO'}
             </Button>
           </Group>
         </Flex>
@@ -131,6 +165,12 @@ function SloEditorPage() {
                   setValue={setValue}
                   source={source}
                 />
+              </SloFormSection>
+              <SloFormSection title="Objective">
+                <SloObjectiveFields control={control} setValue={setValue} />
+              </SloFormSection>
+              <SloFormSection title="Details">
+                <SloDetailsFields control={control} />
               </SloFormSection>
             </Stack>
           </Grid.Col>
