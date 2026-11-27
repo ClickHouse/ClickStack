@@ -149,6 +149,8 @@ const emergingSignalsSchema = z.object({
 export const EMERGING_SIGNALS_REDUCTIONS: Reduction[] = [
   { path: 'emerging[].pattern', maxChars: 2000 },
   { path: 'disappeared[].pattern', maxChars: 2000 },
+  { path: 'emerging[].baselinePattern', maxChars: 2000 },
+  { path: 'disappeared[].currentPattern', maxChars: 2000 },
 ];
 
 export function registerEmergingSignals({
