@@ -7,6 +7,8 @@ set -euo pipefail
 if [ "$(id -u)" = 0 ]; then
   # Volumes may be root-owned or hold lost+found, and initdb needs an empty dir it owns.
   install -d -o postgres -g postgres -m 700 "$PGDATA"
+  # Data dirs created before postgres was pinned to UID 70 hold files under the old UID.
+  find "$PGDATA" ! -user postgres -exec chown -h postgres:postgres {} +
   exec su-exec postgres "$0" "$@"
 fi
 

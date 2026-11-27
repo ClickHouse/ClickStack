@@ -57,14 +57,18 @@ echo "Exporting data to ClickHouse:
   Database: $HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE
 "
 
+# Images before DocumentDB kept MongoDB data in /data/db, which this image cannot read.
+# Starting empty would reopen first-user signup on an auth install, so it needs an opt-in.
+if [ -f /data/db/WiredTiger ] && [ ! -f /data/db/pgdata/.documentdb-initialised ] \
+  && [ "${HYPERDX_ACCEPT_EMPTY_METADATA}" != "true" ]; then
+  echo "ERROR: found MongoDB data in /data/db, which this image cannot read." >&2
+  echo "ERROR: Migrate it to DocumentDB as described in the release notes, or set" >&2
+  echo "ERROR: HYPERDX_ACCEPT_EMPTY_METADATA=true to start with an empty database." >&2
+  exit 1
+fi
+
 # Start Clickhouse Server
 /entrypoint.sh > /var/log/clickhouse.log 2>&1 &
-
-# Images before DocumentDB kept MongoDB data directly in /data/db, which this image cannot read.
-if [ -f /data/db/WiredTiger ] && [ ! -f /data/db/pgdata/.documentdb-initialised ]; then
-  echo "WARNING: found MongoDB data in /data/db. This image stores metadata in DocumentDB"
-  echo "WARNING: under /data/db/pgdata and starts empty; see the release notes to migrate it."
-fi
 
 # Start DocumentDB (Postgres + Mongo wire-protocol gateway on :10260)
 DOCDB_USER=hyperdx DOCDB_PASSWORD=hyperdx PGDATA=/data/db/pgdata \
