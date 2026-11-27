@@ -1,9 +1,11 @@
 import { getSloBurnRule, type SloBurnCounts } from '@/core/slo';
 import {
   compareSloGroupsWorstFirst,
+  compareSlosWorstFirst,
   computeSloBurnRate,
   computeSloBurnStats,
   computeSloGroupBurnFromRows,
+  computeSloHistory,
   computeSloStats,
   deriveGroupedSloState,
   deriveSloGroupState,
@@ -34,6 +36,8 @@ const hour = (partial: Partial<SloBurnStats>): SloBurnStats => ({
   shortBurnRate: 0,
   ...partial,
 });
+
+const HOUR_MS = 60 * 60 * 1000;
 
 describe('SLO stats', () => {
   it('derives bad events as eligible minus good', () => {
@@ -242,5 +246,73 @@ describe('SLO groups', () => {
     expect(
       [...groups].sort(compareSloGroupsWorstFirst).map(g => g.value),
     ).toEqual(['c', 'd', 'a', 'b']);
+  });
+});
+
+describe('SLO history', () => {
+  it('builds a burndown that ends at the budget left', () => {
+    const points = computeSloHistory(
+      [
+        { ts: 0, eligible: 1000, good: 1000 },
+        { ts: HOUR_MS, eligible: 1000, good: 990 },
+      ],
+      { target: 99, bucketMs: HOUR_MS, burnWindowMs: HOUR_MS },
+    );
+    expect(points[0].budgetRemaining).toBeCloseTo(1);
+    expect(points[1].budgetRemaining).toBeCloseTo(0.5);
+    expect(points[1].burnRate).toBeCloseTo(1);
+  });
+
+  it('reads the burn rate over the trailing burn window', () => {
+    // Hourly buckets against a 6 hour window: the bad hour keeps counting
+    // until it is more than 6 hours old, like the slow alert sees it.
+    const buckets = Array.from({ length: 8 }, (_, i) => ({
+      ts: i * HOUR_MS,
+      eligible: 100,
+      good: i === 0 ? 40 : 100,
+    }));
+    const points = computeSloHistory(buckets, {
+      target: 99,
+      bucketMs: HOUR_MS,
+      burnWindowMs: 6 * HOUR_MS,
+    });
+    // 60 bad of 100 in the first hour: 60x against a 1% budget.
+    expect(points[0].burnRate).toBeCloseTo(60);
+    // 60 bad of 600 over six hours: 10x.
+    expect(points[5].burnRate).toBeCloseTo(10);
+    // The bad hour has left the window.
+    expect(points[6].burnRate).toBeCloseTo(0);
+  });
+
+  it('measures the trailing window in time, not in buckets', () => {
+    // A missing bucket (no events) must not stretch the window.
+    const points = computeSloHistory(
+      [
+        { ts: 0, eligible: 100, good: 0 },
+        { ts: 3 * HOUR_MS, eligible: 100, good: 100 },
+      ],
+      { target: 99, bucketMs: HOUR_MS, burnWindowMs: 2 * HOUR_MS },
+    );
+    expect(points[1].burnRate).toBeCloseTo(0);
+  });
+});
+
+describe('SLO ordering', () => {
+  it('orders SLOs worst first', () => {
+    const slo = (
+      name: string,
+      state: 'healthy' | 'breached' | 'burning',
+      budget: number,
+    ) => ({
+      name,
+      status: { state, budgetRemaining: budget },
+    });
+    const sorted = [
+      slo('a', 'healthy', 0.9),
+      slo('b', 'breached', -0.5),
+      slo('c', 'burning', 0.4),
+      slo('d', 'breached', -2),
+    ].sort(compareSlosWorstFirst);
+    expect(sorted.map(s => s.name)).toEqual(['d', 'b', 'c', 'a']);
   });
 });

@@ -12,6 +12,7 @@ import {
   SLO_GROUP_MIN_EVENTS,
   type SloBurnStats,
   type SloGroupState,
+  type SloHistoryBucket,
   type SloState,
   type SloStats,
   type SloWindow,
@@ -229,4 +230,82 @@ export function compareSloGroupsWorstFirst(
     (a.budgetRemaining ?? Infinity) - (b.budgetRemaining ?? Infinity);
   if (budget !== 0 && !Number.isNaN(budget)) return budget;
   return a.value.localeCompare(b.value);
+}
+
+/** Worst first: by state, then by error budget left, then by name. */
+export function compareSlosWorstFirst(
+  a: {
+    name: string;
+    status?: { state: SloState; budgetRemaining: number | null } | null;
+  },
+  b: {
+    name: string;
+    status?: { state: SloState; budgetRemaining: number | null } | null;
+  },
+): number {
+  const byState =
+    stateSeverity(b.status?.state ?? 'no_data') -
+    stateSeverity(a.status?.state ?? 'no_data');
+  if (byState !== 0) return byState;
+  const budget =
+    (a.status?.budgetRemaining ?? Infinity) -
+    (b.status?.budgetRemaining ?? Infinity);
+  if (budget !== 0 && !Number.isNaN(budget)) return budget;
+  return a.name.localeCompare(b.name);
+}
+
+export type SloHistoryPoint = {
+  ts: number;
+  eligible: number;
+  bad: number;
+  sli: number | null;
+  /** Over the trailing burn window that ends with this bucket. */
+  burnRate: number | null;
+  /** Fraction of the window's error budget left after this bucket. */
+  budgetRemaining: number | null;
+};
+
+/**
+ * Computed on read from bucketed counts, so nothing is stored for charts.
+ * The burndown measures spend against the budget of the whole displayed
+ * window, so its last point matches the current budget remaining. The burn
+ * rate is read over the trailing burn window, as the alert reads it, so a
+ * point at or above the threshold is one where the long window burned.
+ */
+export function computeSloHistory(
+  buckets: SloHistoryBucket[],
+  {
+    target,
+    bucketMs,
+    burnWindowMs,
+  }: { target: number; bucketMs: number; burnWindowMs: number },
+): SloHistoryPoint[] {
+  const totalEligible = buckets.reduce((sum, b) => sum + b.eligible, 0);
+  const budget = getAllowedBadFraction(target) * totalEligible;
+  let spent = 0;
+  const trailing: SloHistoryBucket[] = [];
+  let trailingEligible = 0;
+  let trailingGood = 0;
+  return buckets.map(b => {
+    const bad = Math.max(0, b.eligible - b.good);
+    spent += bad;
+    trailing.push(b);
+    trailingEligible += b.eligible;
+    trailingGood += b.good;
+    // Buckets that ended before the burn window began drop out.
+    const windowStart = b.ts + bucketMs - burnWindowMs;
+    while (trailing.length > 0 && trailing[0].ts < windowStart) {
+      const dropped = trailing.shift();
+      trailingEligible -= dropped?.eligible ?? 0;
+      trailingGood -= dropped?.good ?? 0;
+    }
+    return {
+      ts: b.ts,
+      eligible: b.eligible,
+      bad,
+      sli: b.eligible > 0 ? b.good / b.eligible : null,
+      burnRate: computeSloBurnRate(trailingEligible, trailingGood, target),
+      budgetRemaining: budget > 0 ? 1 - spent / budget : null,
+    };
+  });
 }
