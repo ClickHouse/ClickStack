@@ -16,6 +16,7 @@ import {
   Text,
   Tooltip,
   UnstyledButton,
+  VisuallyHidden,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -33,6 +34,7 @@ import {
   IconUserCog,
 } from '@tabler/icons-react';
 
+import { useBrandDisplayName, useLogomark } from '@/brand';
 import { IS_LOCAL_MODE } from '@/config';
 import { useConnections } from '@/connection';
 import { setHdxClickHouseVersions } from '@/hdxDebug';
@@ -54,6 +56,19 @@ export const AppNavContext = React.createContext<{
   isCollapsed: false,
   pathname: '/',
 });
+
+// The collapsed nav's logo. The mark is aria-hidden, so the brand name is kept
+// for screen readers, or the logo link has no accessible name.
+export const AppNavCollapsedLogo = () => {
+  const logomark = useLogomark({ size: 22 });
+  const brandDisplayName = useBrandDisplayName();
+  return (
+    <div className={styles.logoIconWrapper}>
+      {logomark}
+      <VisuallyHidden>{brandDisplayName}</VisuallyHidden>
+    </div>
+  );
+};
 
 export const AppNavCloudBanner = () => {
   return (
@@ -414,7 +429,13 @@ export const AppNavLink = ({
     >
       <span className={styles.navItemContent}>
         <span className={styles.navItemIcon}>{icon}</span>
-        {!isCollapsed && <span>{label}</span>}
+        {/* The collapsed rail shows only the icon. Keep the label for screen
+            readers, or the link has no accessible name. */}
+        {isCollapsed ? (
+          <VisuallyHidden>{label}</VisuallyHidden>
+        ) : (
+          <span>{label}</span>
+        )}
       </span>
       {!isCollapsed && isBeta && (
         <Badge
