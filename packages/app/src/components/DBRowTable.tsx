@@ -4,6 +4,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import cx from 'classnames';
@@ -61,11 +62,14 @@ import { FetchNextPageOptions } from '@tanstack/react-query';
 import {
   ColumnDef,
   ColumnResizeMode,
+  ColumnSizingState,
   flexRender,
+  functionalUpdate,
   getCoreRowModel,
   Row as TableRow,
   SortingState,
   TableOptions,
+  Updater,
   useReactTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -120,6 +124,10 @@ import ChartErrorState, {
   ChartErrorStateVariant,
 } from './charts/ChartErrorState';
 import { getAdhocCellCondition } from './DBTable/adhocCellCondition';
+import {
+  getFittedColumnWidth,
+  measureColumnContentWidth,
+} from './DBTable/columnFit';
 import DBRowTableFieldWithPopover from './DBTable/DBRowTableFieldWithPopover';
 import DBRowTableRowButtons from './DBTable/DBRowTableRowButtons';
 import {
@@ -516,6 +524,7 @@ export const RawLogTable = memo(
       },
       [],
     );
+    const tableRef = useRef<HTMLTableElement>(null);
 
     const [containerWidth, setContainerWidth] = useState(0);
     useEffect(() => {
@@ -798,13 +807,8 @@ export const RawLogTable = memo(
     }, [fetchMoreOnBottomReached, tableContainerRef]);
 
     const reactTableProps = useMemo((): TableOptions<any> => {
-      //TODO: fix any
-      const onColumnSizingChange = (updaterOrValue: any) => {
-        const state =
-          updaterOrValue instanceof Function
-            ? updaterOrValue()
-            : updaterOrValue;
-        setColumnSizeStorage({ ...columnSizeStorage, ...state });
+      const onColumnSizingChange = (updater: Updater<ColumnSizingState>) => {
+        setColumnSizeStorage(sizes => functionalUpdate(updater, sizes));
       };
 
       const initReactTableProps = {
@@ -855,6 +859,27 @@ export const RawLogTable = memo(
     ]);
 
     const table = useReactTable(reactTableProps);
+
+    // Fits a column to its widest rendered cell. The last column fills the
+    // space the others leave, so it goes back to filling it instead: any
+    // narrower leaves a gap, and any wider scrolls the table sideways.
+    const fitColumnToContent = (columnId: string, isLast: boolean) => {
+      if (isLast) {
+        table.getColumn(columnId)?.resetSize();
+        return;
+      }
+      if (tableRef.current == null || tableContainerRef == null) return;
+      const contentWidth = measureColumnContentWidth(
+        tableRef.current,
+        columnId,
+      );
+      // The width now, not the last one the resize observer reported
+      const width = getFittedColumnWidth(
+        contentWidth,
+        tableContainerRef.clientWidth,
+      );
+      table.setColumnSizing(sizes => ({ ...sizes, [columnId]: width }));
+    };
 
     // Sum actual column widths to derive a pixel min-width for the table.
     // This enables horizontal scrolling when the viewport is narrower than
@@ -1087,6 +1112,7 @@ export const RawLogTable = memo(
               })}
               style={{ minWidth: tableMinWidth }}
               id={tableId}
+              ref={tableRef}
             >
               <thead className={styles.tableHead}>
                 {displayedColumns.length > 0 &&
@@ -1101,6 +1127,15 @@ export const RawLogTable = memo(
                             key={header.id}
                             header={header}
                             isLast={isLast}
+                            // Only saved widths feed the last column's fill
+                            // width, so elsewhere a fit would leave the rows
+                            // out of line with the header.
+                            onFitToContent={
+                              tableId
+                                ? () =>
+                                    fitColumnToContent(header.column.id, isLast)
+                                : undefined
+                            }
                             onRemoveColumn={
                               onRemoveColumn &&
                               (header.column.columnDef.meta as any)?.column
@@ -1299,6 +1334,9 @@ export const RawLogTable = memo(
                               return (
                                 <div
                                   key={cell.id}
+                                  // measureColumnContentWidth finds the cell by
+                                  // this id and measures its first child
+                                  data-column-id={cell.column.id}
                                   className={cx(
                                     'flex-shrink-0 overflow-hidden position-relative',
                                     columnCustomClassName,

@@ -316,4 +316,78 @@ export class TableComponent {
       'raw-log-table-sort-indicator',
     );
   }
+
+  /**
+   * Get the header cell of a column in the row table, by the column's id
+   */
+  getColumnHeaderCell(columnId: string) {
+    return this.tableContainer.locator(`th[data-column-id="${columnId}"]`);
+  }
+
+  /**
+   * Get the handle that resizes a column on drag and fits it on double-click
+   */
+  getColumnResizeHandle(columnId: string) {
+    return this.getColumnHeaderCell(columnId).getByTestId(
+      'column-resize-handle',
+    );
+  }
+
+  async getColumnWidth(columnId: string) {
+    const box = await this.getColumnHeaderCell(columnId).boundingBox();
+    if (box == null) {
+      throw new Error(`The ${columnId} column header is not visible`);
+    }
+    return box.width;
+  }
+
+  /**
+   * Drag a column's resize handle by `deltaX` pixels (negative narrows it)
+   */
+  async dragColumnResizeHandle(columnId: string, deltaX: number) {
+    const box = await this.getColumnResizeHandle(columnId).boundingBox();
+    if (box == null) {
+      throw new Error(`The ${columnId} resize handle is not visible`);
+    }
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await this.page.mouse.move(x, y);
+    await this.page.mouse.down();
+    await this.page.mouse.move(x + deltaX, y, { steps: 8 });
+    await this.page.mouse.up();
+  }
+
+  async fitColumnToContent(columnId: string) {
+    // A font that loads late changes how wide the text is.
+    await this.page.evaluate(async () => {
+      await document.fonts.ready;
+    });
+    await this.getColumnResizeHandle(columnId).dblclick();
+  }
+
+  /**
+   * Count the rendered cells of a column whose value is cut off
+   */
+  countTruncatedCells(columnId: string) {
+    return this.tableContainer
+      .locator(`tbody [data-column-id="${columnId}"]`)
+      .evaluateAll(
+        cells =>
+          cells.filter(cell => {
+            // The element that clips the value: cell > field > value text
+            const text = cell.firstElementChild?.firstElementChild;
+            return text != null && text.scrollWidth > text.clientWidth;
+          }).length,
+      );
+  }
+
+  /**
+   * Whether a column's header label is cut off
+   */
+  isColumnHeaderLabelTruncated(columnId: string) {
+    return this.getColumnHeaderCell(columnId)
+      .locator('.mantine-Text-root')
+      .first()
+      .evaluate(label => label.scrollWidth > label.clientWidth);
+  }
 }

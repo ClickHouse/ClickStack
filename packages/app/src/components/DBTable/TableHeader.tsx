@@ -14,11 +14,14 @@ export default function TableHeader({
   header,
   lastItemButtons,
   onRemoveColumn,
+  onFitToContent,
 }: {
   isLast: boolean;
   header: Header<any, any>;
   lastItemButtons?: React.ReactNode;
   onRemoveColumn?: () => void;
+  /** Fits the column to its content when the resize handle is double-clicked. */
+  onFitToContent?: () => void;
 }) {
   'use no memo'; // todo: table headers arent being resized properly with the react compiler
   return (
@@ -33,6 +36,10 @@ export default function TableHeader({
         minWidth: header.getSize() === UNDEFINED_WIDTH ? 0 : header.getSize(),
         textAlign: 'left',
       }}
+      // measureColumnContentWidth finds the header by this id and measures its
+      // first child, the whole row, since the remove button and resize handle
+      // take space the label needs to show in full
+      data-column-id={header.column.id}
     >
       <Group wrap="nowrap" gap={0} align="center">
         {!header.column.getCanSort() ? (
@@ -100,7 +107,14 @@ export default function TableHeader({
             <div
               onMouseDown={header.getResizeHandler()}
               onTouchStart={header.getResizeHandler()}
+              onDoubleClick={onFitToContent}
+              title={
+                onFitToContent
+                  ? 'Drag to resize, double-click to fit'
+                  : undefined
+              }
               className={headerStyles.resizer}
+              data-testid="column-resize-handle"
             />
           )}
         </Group>
