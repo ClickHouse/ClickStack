@@ -29,7 +29,6 @@ const OnboardingChecklist = ({
     steps,
     phaseLabel,
     completedCount,
-    activeStepId,
     isCelebrating,
     shouldShow,
     dismiss,
@@ -73,11 +72,7 @@ const OnboardingChecklist = ({
       <Collapse expanded={!isCollapsed}>
         <Stack gap={6}>
           {steps.map(step => (
-            <StepRow
-              key={step.id}
-              step={step}
-              isActive={step.id === activeStepId}
-            />
+            <StepRow key={step.id} step={step} />
           ))}
 
           {isCelebrating && (

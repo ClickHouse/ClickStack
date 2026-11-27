@@ -3,7 +3,6 @@ import Link from 'next/link';
 import {
   Group,
   Loader,
-  Paper,
   Text,
   ThemeIcon,
   Tooltip,
@@ -13,13 +12,7 @@ import { IconCheck, IconChevronRight } from '@tabler/icons-react';
 
 import { OnboardingStep } from './onboardingTasks';
 
-export function StepRow({
-  step,
-  isActive,
-}: {
-  step: OnboardingStep;
-  isActive: boolean;
-}) {
+export function StepRow({ step }: { step: OnboardingStep }) {
   const isActionable =
     !step.isComplete && (step.href != null || step.onClick != null);
 
@@ -43,7 +36,7 @@ export function StepRow({
       size={16}
       radius="xl"
       variant="outline"
-      style={{ borderColor: 'var(--color-border)', color: 'transparent' }}
+      style={{ borderColor: 'var(--color-text-muted)', color: 'transparent' }}
     />
   );
 
@@ -53,7 +46,6 @@ export function StepRow({
       <Text
         size="sm"
         c={step.isComplete ? 'dimmed' : undefined}
-        fw={isActive ? 600 : 400}
         td={step.isComplete ? 'line-through' : undefined}
         flex={1}
       >
@@ -69,12 +61,7 @@ export function StepRow({
     </Group>
   );
 
-  // The active step is elevated onto a surface card.
-  const rowBody = isActive ? (
-    <Paper withBorder radius="md" px="sm" py="xs" bg="var(--color-bg-surface)">
-      {stepContent}
-    </Paper>
-  ) : (
+  const rowBody = (
     <Group px="sm" py={4}>
       {stepContent}
     </Group>
