@@ -6,6 +6,192 @@ PR — keep the `hyperdx-release-notes` comment marker intact when editing so yo
 edits survive regeneration. Per-package detail lives in each
 `packages/*/CHANGELOG.md`.
 
+## v2.48.0 — 2026-11-27
+
+<!-- hyperdx-release-notes version=2.48.0 inputs=ca804a68f1d0 -->
+
+**Exemplar overlays and a team settings sidebar**
+
+Time charts on metric and PromQL sources can now overlay exemplars — individual
+trace-linked data points you can hover for trace metadata and open the trace
+from — behind the `NEXT_PUBLIC_ENABLE_EXEMPLARS` flag and a per-chart toggle.
+Team settings has been rebuilt as a sidebar with one page per setting and a
+search box that jumps straight to an individual setting, and live mode now lets
+you pick how often a dashboard refreshes. This release also closes an
+authentication gap in the preset ingestion API key added in v2.47.0: if you set
+`ENABLE_INGESTION_API_KEY` on a deployment where no team had been created yet,
+the collector's OTLP receiver accepted telemetry without any authentication, so
+upgrade if you run the app image with that variable set. Failed password logins
+are now limited to 10 per email every two minutes, the API no longer parses a
+request body before it knows who sent it, alert webhooks identify themselves as
+`ClickStack-Alerts`, so receivers that blocked the old default User-Agent will
+start accepting them, and the image itself picks up the latest Alpine security
+fixes and Node 22.23.5.
+
+### ✨ New Features
+
+- **A sidebar and a search box for team settings**: team settings now has a
+  sidebar with one page per setting, and a search box that finds individual
+  settings — "Parallelize queries when possible", for instance — and jumps to
+  them, so you no longer have to know which tab a setting lived under. API keys
+  and organisation API keys share one page, and old `?tab=` links redirect to
+  the new pages.
+- **Pattern mining can read just the start of each body**: the MCP tools
+  `clickstack_event_patterns` and `clickstack_emerging_signals` take a new
+  `maxBodyChars` argument that truncates each body in the query itself, so long
+  stack traces and dumps collapse into patterns you can drill into instead of
+  each one looking unique.
+- **MCP query results report what they cost**: `clickstack_query_tiles` now
+  reports each tile's wall time as `elapsedMs`, plus the rows and bytes read for
+  builder and SQL tiles, and PromQL results from `clickstack_promql` and
+  `clickstack_query_tile` carry `elapsedMs` too — so an agent working through a
+  dashboard can tell which tile is the expensive one rather than guessing.
+- **SQL query filters preview the SQL they generate**: the SQL query filter
+  preview now shows the generated SQL with variables and macros filled in, so
+  you can see exactly what will run against your source before you apply the
+  filter.
+- **Pick a dashboard's live mode refresh interval**: live mode no longer refreshes
+  on a fixed cadence — you can choose an interval from 30 seconds up to the
+  default for the dashboard's time range, so a wall-mounted dashboard can poll
+  as often as you actually need it to.
+
+### 🧪 Experimental
+
+- **Exemplar overlays on metric and PromQL time charts**: a time chart on a
+  metric or PromQL source can overlay exemplars — individual trace-linked data
+  points — with the "Show exemplars" toggle in the chart editor's display
+  settings. Hovering a marker shows the exemplar's own value and time plus trace
+  metadata from a trace source you nominate, with a button to open the trace.
+  Markers are sampled the way Grafana samples them: bucketed at the chart's
+  granularity, keeping the slowest trace in each bucket plus any further trace
+  more than 2σ below it, so the overlay shows the shape of the latency
+  distribution rather than tracing the top of the chart. A marker sits at the
+  trace's own measurement, so it is only drawn where that is honest — a single
+  non-ratio histogram series with no group by, aggregated in a way that leaves
+  the axis on the observation scale, or for PromQL an expression that plots a
+  duration — and markers outside the rendered window, or below a fitted y-axis
+  floor, are dropped rather than moved, with the count surfaced on the chart.
+  Off for the whole deployment unless you set `NEXT_PUBLIC_ENABLE_EXEMPLARS`,
+  and off per chart until you turn the toggle on; how many markers a chart draws
+  is the team setting Max Exemplars per Chart.
+- **Exemplar settings on API- and agent-authored tiles**: `enableExemplars` and
+  `exemplarTraceSourceId` are now accepted on line and stacked-bar tiles through
+  the external v2 API and the MCP dashboard tools, survive the tile conversion in
+  both directions, and are documented in the OpenAPI spec — previously they
+  validated on write and were dropped before persistence, so they could not be
+  set through any surface. `exemplarTraceSourceId` has to be an ObjectId naming a
+  source that exists for your team and is actually a Trace source, so a tile can
+  no longer save cleanly with every marker's "view trace" link pointing nowhere.
+
+### 🔧 Improvements
+
+- **Filters on Map keys use the key=value index**: an ad hoc or dashboard filter
+  on a Map key renders as `toString(Map['k']) = 'v'`, a shape the
+  `has(<items>, ...)` rewrite skipped, so the query decoded the whole Map for
+  every row it read. Those filters now go through the Map's KV items index like
+  the rest.
+- **Claude Sonnet 5.5 is the default for the Anthropic assistant**: the
+  assistant now uses Claude Sonnet 5.5 by default, and its rates are included in
+  the LLM cost estimates, so those estimates stay accurate on the new default.
+- **"Copy debug info" reports each connection's ClickHouse version**: the debug
+  info report now includes the ClickHouse server version behind every
+  connection, so a bug report carries the version your queries actually ran
+  against without anyone having to go and ask for it.
+- **ClickHouse proxy spans record the server version**: a query that goes through
+  the ClickHouse proxy now carries the server's version on its span, as
+  `hyperdx.clickhouse_proxy.clickhouse.version`, so when you monitor your own
+  deployment you can compare query errors and latency either side of a ClickHouse
+  upgrade.
+
+### 🐛 Bug Fixes
+
+- **The preset ingestion key is enforced before a team exists**: with
+  `ENABLE_INGESTION_API_KEY` set and no team created yet, the app image's OTLP
+  receiver accepted data without authentication, so anyone who could reach the
+  endpoint on a fresh deployment could write to it. The receiver now requires the
+  `INGESTION_API_KEY` you set, so a collector pointed at a brand-new deployment
+  has to present that key.
+- **Failed password logins are rate-limited**: an email address can now make at
+  most 10 failed password login attempts every two minutes, so a password is no
+  longer open to being guessed at full speed.
+- **Request bodies are read only after the caller is authenticated**: an
+  anonymous request could make the API parse up to 32 MB of body before it
+  answered 401. The body is now read once the caller is known, and public routes
+  such as login and register accept bodies up to 100 KB, while signed-in users
+  and API keys keep the 32 MB limit.
+- **Alert webhooks send a ClickStack User-Agent**: generic and incident.io alert
+  webhooks went out as `User-Agent: undici`, which some receivers' firewalls
+  reject with a 403. They now send `ClickStack-Alerts/<version>`, and a
+  User-Agent you set in the webhook's own headers still takes precedence.
+- **Table charts sort on formula, group-by and multi-series aliases**: clicking
+  one of those columns in a table chart did not sort by it, because the aliased
+  column was not matched to the underlying series. Sorting now follows the column
+  you clicked.
+- **Source query settings apply to metric and facet lookups**: the metric
+  explorer, and the metric name, attribute and Kubernetes facet lookups behind
+  it, ran without the query settings configured on the source. They now use
+  them, so those lists behave like the rest of your queries against that source.
+- **Daily and coarser time charts label every tick with its date**: a time chart
+  bucketed by a day or longer repeated the time — `00:00:00` — on every tick
+  after the first, leaving you to count buckets to work out which day you were
+  looking at. Each tick now shows its date, and a daily bucket that doesn't start
+  at midnight in the display time zone shows the date and the time.
+- **Drilling down from a zero-value chart point filters to zero**: clicking a
+  time chart point whose value was 0 searched every event in that time bucket
+  rather than the ones it was drawn from. It now filters to events with a value
+  of 0, as it already did for every other value.
+- **Adding or removing a table column no longer reloads the search histogram**:
+  changing the columns shown in the search results table refetched the histogram
+  above them, so you waited on a query whose result could not have changed. The
+  histogram now stays as it is.
+- **The time picker closes when you click away from it**: the time picker stayed
+  open once opened, including on top of the row side panel you get from clicking
+  a search result. It now closes on a click outside it or on Escape.
+- **The collapsed side nav's links have accessible names**: with the nav
+  collapsed to icons, the page links and the logo link had no text, so screen
+  readers announced each of them only as "link". The labels now stay in the
+  page, visually hidden.
+- **PromQL label lookups work on ClickHouse 26.11**: a label lookup with
+  `match[]` failed on ClickHouse 26.11, which requires the `return_columns`
+  argument of `timeSeriesSelector()`. Those lookups now pass it, so they resolve
+  on 26.11 as they do on earlier versions.
+- **Describing a PromQL source no longer runs out of memory**: the MCP tool
+  `clickstack_describe_source`, pointed at a PromQL source over a ClickHouse
+  TimeSeries table, could exhaust memory on a large table. It now reads metric
+  names from the tags table with no time window, and lists label names for a
+  single metric when you pass the new `metricName` argument.
+- **Emerging signals no longer reports one pattern as both new and gone**: the
+  MCP tool `clickstack_emerging_signals` mines both windows in a single Drain
+  tree, in a fixed order with the baseline first, and compares them by cluster,
+  so a token that is constant in one window and varies in the other no longer
+  splits a pattern into one "new" entry and one that has gone. A new message that
+  Drain merges into a baseline pattern is reported as `new_variant` rather than
+  hidden by the merge, a baseline message that stops while the rest of its
+  pattern carries on is reported as `gone_variant`, and the baseline window
+  excludes its end, so a row on the boundary is counted once.
+- **MCP tool calls reject unknown arguments**: an argument a tool doesn't define
+  was silently ignored, so a misspelt argument name left the tool running on its
+  defaults and quietly answering a different question. Such a call is now
+  rejected, so the mistake surfaces and can be corrected.
+
+### 📦 Build / Packaging
+
+- **Alpine security fixes in the HyperDX image**: the image now runs
+  `apk upgrade` as it is built, so it carries the Alpine security fixes — OpenSSL
+  and zlib among them — released after the Node and ClickHouse base images were
+  built. Node also moves from 22.23.4 to 22.23.5 in the image and in `.nvmrc`.
+
+<!-- hyperdx-package-list -->
+
+### 📦 Package changelogs
+
+- `@hyperdx/api` 2.47.0 → 2.48.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/api/CHANGELOG.md#2480)
+- `@hyperdx/app` 2.47.0 → 2.48.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/app/CHANGELOG.md#2480)
+- `@hyperdx/common-utils` 0.36.1 → 0.37.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/common-utils/CHANGELOG.md#0370)
+- `@hyperdx/otel-collector` 2.47.0 → 2.48.0 — [changelog](https://github.com/ClickHouse/ClickStack/blob/main/packages/otel-collector/CHANGELOG.md#2480)
+
+<!-- /hyperdx-package-list -->
+
 ## v2.47.0 — 2026-11-23
 
 <!-- hyperdx-release-notes version=2.47.0 inputs=ef75e537752a -->
