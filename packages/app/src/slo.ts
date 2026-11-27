@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
 import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { hdxServer } from './api';
 import { IS_SLOS_ENABLED } from './config';
@@ -29,5 +29,14 @@ export function useSlos() {
     queryFn: () => hdxServer('slos').json<SloApiResponse[]>(),
     enabled: IS_SLOS_ENABLED,
     refetchInterval: SLO_POLL_MS,
+  });
+}
+
+export function useDeleteSlo() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => hdxServer(`slos/${id}`, { method: 'DELETE' }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: SLOS_QUERY_KEY }),
   });
 }

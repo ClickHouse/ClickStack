@@ -1,7 +1,12 @@
 import { useMemo } from 'react';
 import Head from 'next/head';
-import { parseAsStringEnum, useQueryState } from 'nuqs';
-import { compareSlosWorstFirst } from '@hyperdx/common-utils/dist/core/sloStats';
+import {
+  parseAsArrayOf,
+  parseAsString,
+  parseAsStringEnum,
+  useQueryState,
+} from 'nuqs';
+import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
 import {
   Alert,
   Button,
@@ -18,7 +23,15 @@ import EmptyState from '@/components/EmptyState';
 import { PageHeader } from '@/components/PageHeader';
 import { withAppNavForSurface } from '@/layout';
 import { useSlos, useSlosEnabledGuard } from '@/slo';
+import { useSources } from '@/source';
 
+import {
+  compareSlos,
+  DEFAULT_SLO_SORT,
+  SLO_SORT_VALUES,
+  type SloSort,
+} from './sloListSort';
+import { SloListToolbar } from './SloListToolbar';
 import { SloTable } from './SloTable';
 import {
   getSloDisplayState,
@@ -27,24 +40,61 @@ import {
   sloStateLabel,
 } from './sloUtils';
 
+function matchesSearch(slo: SloApiResponse, term: string) {
+  return [slo.name, slo.description ?? '', ...slo.tags]
+    .join(' ')
+    .toLowerCase()
+    .includes(term.toLowerCase());
+}
+
 export default function SlosListPage() {
   const enabled = useSlosEnabledGuard();
   const title = usePageTitle('SLOs');
   const { data: slos, isPending, isError, refetch } = useSlos();
 
+  const { data: allSources } = useSources();
+  const [search, setSearch] = useQueryState('search');
   const [stateFilter, setStateFilter] = useQueryState(
     'state',
     parseAsStringEnum<SloDisplayState>(SLO_DISPLAY_STATES),
   );
-
-  // Worst first, so what needs attention is on top.
-  const filtered = useMemo(
-    () =>
-      (slos ?? [])
-        .filter(slo => !stateFilter || getSloDisplayState(slo) === stateFilter)
-        .sort(compareSlosWorstFirst),
-    [slos, stateFilter],
+  const [tagFilter, setTagFilter] = useQueryState(
+    'tag',
+    parseAsArrayOf(parseAsString).withDefault([]),
   );
+  const [sourceFilter, setSourceFilter] = useQueryState('source');
+  // Worst first by default, so what needs attention is on top.
+  const [sort, setSort] = useQueryState(
+    'sort',
+    parseAsStringEnum<SloSort>(SLO_SORT_VALUES).withDefault(DEFAULT_SLO_SORT),
+  );
+
+  const filtered = useMemo(() => {
+    const term = search?.trim() ?? '';
+    const tags = tagFilter.map(tag => tag.toLowerCase());
+    return (slos ?? [])
+      .filter(
+        slo =>
+          (!term || matchesSearch(slo, term)) &&
+          (!stateFilter || getSloDisplayState(slo) === stateFilter) &&
+          // Every tag picked, as the dashboards list filters.
+          tags.every(tag => slo.tags.some(t => t.toLowerCase() === tag)) &&
+          (!sourceFilter || slo.source === sourceFilter),
+      )
+      .sort(compareSlos(sort));
+  }, [slos, search, stateFilter, tagFilter, sourceFilter, sort]);
+
+  // The tags and sources the team's SLOs use, to filter by.
+  const { tagOptions, sourceOptions } = useMemo(() => {
+    const sourceIds = [...new Set((slos ?? []).map(slo => slo.source))];
+    return {
+      tagOptions: [...new Set((slos ?? []).flatMap(slo => slo.tags))].sort(),
+      sourceOptions: sourceIds.map(id => ({
+        value: id,
+        label: allSources?.find(s => s.id === id)?.name ?? 'Unknown source',
+      })),
+    };
+  }, [slos, allSources]);
 
   const counts = useMemo(() => {
     const result = new Map<SloDisplayState, number>();
@@ -96,6 +146,20 @@ export default function SlosListPage() {
                 </Button>
               ))}
             </Group>
+            <SloListToolbar
+              search={search ?? ''}
+              onSearchChange={value => setSearch(value || null)}
+              tags={tagOptions}
+              tagFilter={tagFilter}
+              onTagFilterChange={value =>
+                setTagFilter(value.length > 0 ? value : null)
+              }
+              sources={sourceOptions}
+              sourceFilter={sourceFilter}
+              onSourceFilterChange={setSourceFilter}
+              sort={sort}
+              onSortChange={setSort}
+            />
             {isPending ? (
               <Skeleton h={200} />
             ) : isError ? (
