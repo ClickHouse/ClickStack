@@ -8,6 +8,7 @@ import alertsTools from './tools/alerts/index';
 import dashboardsTools from './tools/dashboards/index';
 import {
   BUILDER_TOOLS_LIST,
+  NOT_REASONS_TO_USE_SQL,
   SQL_FALLBACK_CRITERIA,
 } from './tools/query/builderCatalog';
 import queryTools from './tools/query/index';
@@ -31,6 +32,9 @@ const SERVER_INSTRUCTIONS = [
   `queries the builder tools genuinely cannot express — ${SQL_FALLBACK_CRITERIA}.`,
   'A single-source aggregation, top-N, time-series, or row browse must always',
   'use a builder tool.',
+  '',
+  'NOT reasons to use SQL — builders cover these needs:',
+  NOT_REASONS_TO_USE_SQL,
   '',
   'Discovery flow: clickstack_list_sources → clickstack_describe_source → query.',
   'Fetch the query_guide prompt for detailed syntax, and create_dashboard for',

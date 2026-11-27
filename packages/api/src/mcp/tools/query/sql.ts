@@ -5,7 +5,11 @@ import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError } from '@/mcp/utils/errors';
 
-import { BUILDER_TOOLS_LIST, SQL_FALLBACK_CRITERIA } from './builderCatalog';
+import {
+  BUILDER_TOOLS_LIST,
+  NOT_REASONS_TO_USE_SQL,
+  SQL_FALLBACK_CRITERIA,
+} from './builderCatalog';
 import { parseTimeRange, runConfigTile } from './helpers';
 import { createSourceLookup, prepareSqlQuery } from './prepareSql';
 import { endTimeSchema, startTimeSchema } from './schemas';
@@ -100,25 +104,22 @@ export function registerSql({ context, registerTool }: ToolRegistrar) {
       annotations: READ_ONLY_TOOL,
       description:
         'Execute raw ClickHouse SQL. LAST-RESORT TOOL — do NOT reach for this first.\n\n' +
-        'Default to the builder tools for querying; they are more reliable and produce ' +
-        'richer, structured results:\n' +
+        'Default to builder tools: they are more reliable and produce structured, ' +
+        'chart-ready results:\n' +
         BUILDER_TOOLS_LIST +
         '\n\n' +
-        'ONLY use raw SQL when the query genuinely cannot be expressed by a builder tool — ' +
-        `i.e. it requires ${SQL_FALLBACK_CRITERIA}. ` +
-        'A single-table aggregation, top-N, time-series, or row browse is ALWAYS a ' +
-        'builder-tool job, never raw SQL.\n\n' +
-        'Requires connectionId — call clickstack_list_sources to find connections. Pass sourceId ' +
-        'too when querying a source, so $__sourceTable resolves to its table. ' +
-        'Before writing SQL, get column names from clickstack_describe_source, or ' +
-        'clickstack_describe_table for tables that are not sources (instead of ' +
-        'querying system.columns / system.tables).\n\n' +
-        'Results are always returned as table rows — for time-series semantics, ' +
-        'include a time column and ORDER BY it in your SQL.\n\n' +
-        'To run several independent queries at once (e.g. comparing sources), pass ' +
-        'queries instead of sql. They run in parallel under a shared ' +
-        `${SQL_BATCH_DEADLINE_MS / 1000}s budget, and each result reports its own ` +
-        'status (ok, error, or timeout), so one failing query does not fail the others.',
+        `Use raw SQL only for ${SQL_FALLBACK_CRITERIA}.\n` +
+        'NOT reasons to use SQL — builders cover these needs:\n' +
+        NOT_REASONS_TO_USE_SQL +
+        '\n\n' +
+        'Needs connectionId; pass it with sourceId so $__sourceTable resolves to the ' +
+        "source's table. Get columns from clickstack_describe_source or " +
+        'clickstack_describe_table (not system.columns / system.tables).\n\n' +
+        'Results are table rows. For time-series semantics, include a time column ' +
+        'and ORDER BY it.\n\n' +
+        'Pass queries (instead of sql) to run independent SQL in parallel under a ' +
+        `shared ${SQL_BATCH_DEADLINE_MS / 1000}s budget. Each result reports ok, ` +
+        'error, or timeout independently.',
       inputSchema: sqlSchema,
     },
     async input => {

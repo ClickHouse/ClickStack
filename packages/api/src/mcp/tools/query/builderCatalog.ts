@@ -19,14 +19,24 @@ export const BUILDER_TOOLS_LIST = [
 
 /** When raw SQL is actually warranted. */
 export const SQL_FALLBACK_CRITERIA =
-  'JOINs, sub-queries, CTEs, window functions, tables not registered as sources, or ' +
-  'summary-type metrics (the metricTables.summary table on a metric source, which the ' +
-  'builder tools cannot query)';
+  'joins across sources or tables, window functions or per-row ordering, ' +
+  'aggregating an already-aggregated result, unregistered tables, or ' +
+  'summary metrics (metricTables.summary)';
+
+/** Needs the builder tools already cover, so they never justify raw SQL. */
+export const NOT_REASONS_TO_USE_SQL = [
+  '  • HAVING → clickstack_table `having`',
+  '  • JSON, regex, or derived fields → groupBy / valueExpression expressions',
+  '  • Conditional counts or two windows → per-item `where` or multiIf in groupBy',
+  '  • One trace with its logs → clickstack_trace_waterfall (includeLogs)',
+  '  • Child-span time breakdown → clickstack_trace_top_time_consuming_ops',
+].join('\n');
 
 /**
  * Reciprocal nudge dropped into each builder tool's description. Keep it
  * generic so a single string works for every builder tool.
  */
 export const PREFER_BUILDER_OVER_SQL_NUDGE =
-  'PREFER THIS over clickstack_sql. Only drop to raw SQL for things the ' +
-  `builder tools cannot express — ${SQL_FALLBACK_CRITERIA}.`;
+  'PREFER THIS over clickstack_sql. Use SQL only for ' +
+  `${SQL_FALLBACK_CRITERIA}. ` +
+  'For needs builders already cover, see the server instructions.';
