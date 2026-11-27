@@ -7,10 +7,9 @@ import {
 } from '@/controllers/connection';
 import type { McpContext } from '@/mcp/tools/types';
 
-// MCP tools and prompts look up connections through these helpers, so rules
-// about which connections an MCP caller can use live in one place. Exception:
-// PromQL tools get their connection inside controllers/promql.ts
-// (resolvePromqlTarget, getPromqlLabelCatalog), which the REST API shares.
+// Every MCP tool and prompt looks up connections through these helpers, so
+// rules about which connections an MCP caller can use live in one place.
+// PromQL tools pass getMcpConnection into the shared controllers/promql.ts.
 
 /** All of the team's connections, without passwords. */
 export function getMcpConnections(context: McpContext) {

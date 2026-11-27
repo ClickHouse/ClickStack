@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import { TimePicker } from '@/components/TimePicker';
 
@@ -73,6 +73,43 @@ describe('TimePicker time zone', () => {
     ).not.toHaveLength(0);
     expect(screen.getAllByDisplayValue('2026-10-22 11:00:00')).not.toHaveLength(
       0,
+    );
+  });
+});
+
+describe('TimePicker dismissal', () => {
+  it.each([
+    [
+      'a click outside it',
+      () => fireEvent.mouseDown(screen.getByText('Outside')),
+    ],
+    [
+      'Escape',
+      () =>
+        fireEvent.keyDown(screen.getByTestId('time-picker-popover'), {
+          key: 'Escape',
+        }),
+    ],
+  ])('closes on %s', async (_, dismiss) => {
+    renderWithMantine(
+      <>
+        <button>Outside</button>
+        <TimePicker
+          inputValue="Last 1 hour"
+          setInputValue={jest.fn()}
+          onSearch={jest.fn()}
+        />
+      </>,
+    );
+    fireEvent.click(screen.getByTestId('time-picker-input'));
+    await screen.findByTestId('time-picker-popover');
+
+    dismiss();
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('time-picker-popover'),
+      ).not.toBeInTheDocument(),
     );
   });
 });
