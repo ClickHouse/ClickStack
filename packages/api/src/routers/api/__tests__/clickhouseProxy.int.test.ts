@@ -38,11 +38,18 @@ describe('clickhouse-proxy forwarding', () => {
       const chunks: Buffer[] = [];
       req.on('data', chunk => chunks.push(chunk));
       req.on('end', () => {
+        const body = Buffer.concat(chunks);
+        // The proxy's own version lookup, not a forwarded request.
+        if (body.includes('SELECT version()')) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: [{ version: '26.10.3.7' }] }));
+          return;
+        }
         captured.push({
           method: req.method,
           url: req.url,
           headers: req.headers,
-          body: Buffer.concat(chunks),
+          body,
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ data: [] }));
