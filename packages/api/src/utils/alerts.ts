@@ -168,6 +168,10 @@ export function deriveAlertDisplayFields(
         displayName = normalizeName(alert.chartConfig?.name);
         tags = []; // Inline alerts have no parent to inherit tags from.
         break;
+      case AlertSource.SLO:
+        // The SLO keeps displayName and tags in sync on the alert itself.
+        tags = [];
+        break;
       case AlertSource.SAVED_SEARCH:
       default:
         displayName = normalizeName(savedSearch?.name);

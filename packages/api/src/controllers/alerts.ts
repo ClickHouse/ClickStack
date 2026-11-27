@@ -26,6 +26,7 @@ import Alert, {
 import Connection from '@/models/connection';
 import Dashboard, { IDashboard } from '@/models/dashboard';
 import { ISavedSearch, SavedSearch } from '@/models/savedSearch';
+import Slo from '@/models/slo';
 import { Source } from '@/models/source';
 import { IUser } from '@/models/user';
 import Webhook from '@/models/webhook';
@@ -76,6 +77,10 @@ export const validateAlertInput = async (
   >,
 ) => {
   const refs: AlertRefs = {};
+
+  if (alertInput.source === AlertSource.SLO) {
+    throw new Api400Error(SLO_ALERT_MESSAGE);
+  }
 
   if (alertInput.source === AlertSource.TILE) {
     validateObjectId(alertInput.dashboardId, 'Invalid dashboard ID');
@@ -230,7 +235,15 @@ export const validateAlertInput = async (
     }
   }
 
-  const channels = getAlertChannels(alertInput);
+  await validateAlertChannels(teamId, getAlertChannels(alertInput));
+  return refs;
+};
+
+/** At least one channel, and every webhook belongs to the team. */
+export const validateAlertChannels = async (
+  teamId: ObjectId,
+  channels: AlertChannel[],
+) => {
   if (channels.length === 0) {
     throw new Api400Error('At least one notification channel is required');
   }
@@ -249,8 +262,25 @@ export const validateAlertInput = async (
   if (found !== uniqueIds.length) {
     throw new Api400Error('Webhook not found');
   }
+};
 
-  return refs;
+export const SLO_ALERT_MESSAGE =
+  'This alert belongs to an SLO. Change it from the SLO instead.';
+
+/** Whether the alert is one an SLO owns. */
+export const isSloAlert = async (id: string, teamId: ObjectId) =>
+  (await Alert.exists({ _id: id, team: teamId, source: AlertSource.SLO })) !=
+  null;
+
+/**
+ * SLO alerts are kept in sync with their SLO, so the generic alert APIs
+ * (internal, external and MCP) cannot create or change them. Deleting one is
+ * allowed, and turns the alert off on its SLO (see deleteAlert).
+ */
+const rejectSloAlert = async (id: string, teamId: ObjectId) => {
+  if (await isSloAlert(id, teamId)) {
+    throw new Api400Error(SLO_ALERT_MESSAGE);
+  }
 };
 
 // Exported for unit testing the channel-mirroring invariant (see
@@ -377,6 +407,7 @@ export const updateAlert = async (
   refs: AlertRefs = {},
   userId?: ObjectId,
 ) => {
+  await rejectSloAlert(id, teamId);
   // should consider clearing AlertHistory when updating an alert?
   const alert = await Alert.findOneAndUpdate(
     {
@@ -607,8 +638,25 @@ export const getAlertEnhanced = async (
 };
 
 export const deleteAlert = async (id: string, teamId: ObjectId) => {
-  return Alert.deleteOne({
+  const alert = await Alert.findOne(
+    { _id: id, team: teamId },
+    { source: 1, slo: 1, sloRule: 1 },
+  ).lean();
+  const result = await Alert.deleteOne({
     _id: id,
     team: teamId,
   });
+  // An SLO keeps each burn alert's settings and recreates the alert from
+  // them on save, so deleting the alert turns that burn alert off. The alert
+  // goes first: if this update fails, the SLO shows the alert as not running
+  // rather than an alert firing without settings.
+  if (alert?.source === AlertSource.SLO && alert.slo != null) {
+    const field =
+      alert.sloRule === 'slowBurn' ? 'alerts.slowBurn' : 'alerts.fastBurn';
+    await Slo.updateOne(
+      { _id: alert.slo, team: teamId },
+      { $set: { [field]: null } },
+    );
+  }
+  return result;
 };

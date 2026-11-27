@@ -99,6 +99,7 @@ const formatAlertResponse = (
       savedSearchId: alert.savedSearch._id,
       savedSearch: { name: alert.savedSearch.name },
     }),
+    ...(alert.slo && { sloId: alert.slo, sloRule: alert.sloRule ?? undefined }),
     // Inline alerts carry their persisted config so edit surfaces can seed
     // the chart editor and the detail page can render the query — but only on
     // the single-alert response. Attaching every alert's full config (raw SQL

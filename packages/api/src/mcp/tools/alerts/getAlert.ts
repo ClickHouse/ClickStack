@@ -9,7 +9,7 @@ import { getAlertById } from '@/controllers/alerts';
 import { READ_ONLY_TOOL } from '@/mcp/tools/annotations';
 import type { ToolRegistrar } from '@/mcp/tools/types';
 import { mcpUserError, validateObjectId } from '@/mcp/utils/errors';
-import Alert from '@/models/alert';
+import Alert, { AlertSource } from '@/models/alert';
 import type { IDashboard } from '@/models/dashboard';
 import type { ISavedSearch } from '@/models/savedSearch';
 import { translateAlertDocumentToExternalAlertWithChartConfig } from '@/routers/external-api/v2/utils/alertChartConfig';
@@ -56,6 +56,8 @@ export function registerGetAlert({
       if (!id) {
         const query: Record<string, unknown> = {
           team: new mongoose.Types.ObjectId(teamId),
+          // SLO alerts are managed through their SLO.
+          source: { $ne: AlertSource.SLO },
         };
         if (state) {
           query.state = state;
@@ -93,7 +95,7 @@ export function registerGetAlert({
       if (idError) return idError;
 
       const alert = await getAlertById(id, teamId);
-      if (!alert) {
+      if (!alert || alert.source === AlertSource.SLO) {
         return mcpUserError('Alert not found');
       }
 

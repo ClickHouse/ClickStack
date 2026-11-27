@@ -1,4 +1,8 @@
 import {
+  type SloAlertRule,
+  SloAlertRuleSchema,
+} from '@hyperdx/common-utils/dist/slo';
+import {
   ALERT_INTERVAL_TO_MINUTES,
   AlertChartConfig,
   AlertErrorType,
@@ -74,6 +78,8 @@ export enum AlertSource {
   TILE = 'tile',
   /** Detached alert whose chart config lives inline on the alert (no saved search/tile). */
   INLINE = 'inline',
+  /** Burn-rate alert owned by an SLO; managed only through the SLO. */
+  SLO = 'slo',
 }
 
 export interface IAlert {
@@ -116,6 +122,11 @@ export interface IAlert {
   // Inline alerts: the persisted chart config (same shape as a dashboard
   // tile's config, minus the embedded alert field)
   chartConfig?: AlertChartConfig | null;
+
+  /** The SLO that owns this burn alert (source SLO). */
+  slo?: ObjectId | null;
+  /** Which of the SLO's burn alerts this is. */
+  sloRule?: SloAlertRule | null;
 
   // Silenced
   silenced?: {
@@ -249,6 +260,16 @@ const AlertSchema = new Schema<IAlert>(
     // Inline alerts
     chartConfig: {
       type: Schema.Types.Mixed,
+      required: false,
+    },
+    slo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Slo',
+      required: false,
+    },
+    sloRule: {
+      type: String,
+      enum: SloAlertRuleSchema.options,
       required: false,
     },
     numConsecutiveWindows: {
