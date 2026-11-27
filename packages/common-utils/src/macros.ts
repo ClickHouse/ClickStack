@@ -260,7 +260,7 @@ export const VARIABLE_MACRO_SUGGESTIONS: MacroSuggestion[] = [
     minArgs: 2,
     maxArgs: 2,
     description:
-      '$__conditionalAll(<condition>, $<variable>) — applies the condition only while the variable has a selection, and expands to 1=1 otherwise. Use it for operators IN cannot express, such as NOT IN or LIKE.',
+      '$__conditionalAll(<condition>, $<variable>) — applies the condition only while specific values are selected, and expands to 1=1 when nothing or "All" is selected. Use it for operators IN cannot express, such as NOT IN or LIKE.',
   },
 ];
 

@@ -8,6 +8,7 @@ import {
   parseDashboardFilterValues,
   ParsedDashboardFilterValues,
   resolveFilterSelection,
+  resolveVariableSelection,
   serializeDashboardFilterValues,
   VariableEntryValue,
 } from '@hyperdx/common-utils/dist/dashboardFilterValues';
@@ -19,6 +20,7 @@ import {
   doesFilterApplyToSource,
   FilterState,
   filtersToQuery,
+  filterSupportsAllValue,
   getDashboardVariableFilters,
   getFilterExpression,
   getFilterVariableName,
@@ -26,6 +28,7 @@ import {
   isAdhocFilter,
   isFilterBroadcastEnabled,
   isQueryExpressionFilter,
+  isStaticListFilter,
   mergeAdhocConditions,
 } from '@hyperdx/common-utils/dist/filters';
 import {
@@ -49,6 +52,12 @@ import {
   DashboardFilter,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
+import {
+  expandAllSelections,
+  isAllSelection,
+  selectionHasValue,
+  VariableSelection,
+} from '@hyperdx/common-utils/dist/variableSelection';
 
 import {
   notifyAdhocConditionTooLong,
@@ -69,6 +78,13 @@ const hasSelection = (selection: FilterSelection): boolean =>
  */
 const isRepresentableAsVariable = (selection: FilterSelection): boolean =>
   selection.excluded.size === 0 && selection.range == null;
+
+const toVariableEntryValue = (
+  selection: VariableSelection,
+): VariableEntryValue =>
+  isAllSelection(selection)
+    ? { type: 'variable', values: [], all: true }
+    : { type: 'variable', values: selection };
 
 /** Conditions are identified by content (e.g. pill keys), so drop repeats. */
 const uniqConditions = (conditions: AdhocFilterCondition[]) =>
@@ -97,6 +113,15 @@ const rebuildEntries = (
     if (key.kind !== 'variable') continue;
     declaredVariableNames.add(key.name);
     if (byVariable.has(key.name)) continue; // First definition of a name wins.
+
+    // Read separately because the regular selection can't represent "all"
+    if (filterSupportsAllValue(filter)) {
+      const selection = resolveVariableSelection(filter, parsed);
+      if (selectionHasValue(selection)) {
+        byVariable.set(key.name, toVariableEntryValue(selection));
+      }
+      continue;
+    }
 
     const selection = resolveFilterSelection(filter, parsed);
     if (!selection) continue;
@@ -168,7 +193,7 @@ const useDashboardFilters = (
   );
 
   const setFilterValue = useCallback(
-    (filterId: string, values: string[]) => {
+    (filterId: string, values: VariableSelection) => {
       setFilterValueEntries(prev => {
         const target = filters.find(f => f.id === filterId);
         if (!target) return prev;
@@ -181,8 +206,8 @@ const useDashboardFilters = (
         const key = filterSelectionKey(target);
         if (key.kind === 'variable') {
           // Set even when empty to avoid falling back to a legacy expression-keyed value
-          parsed.byVariable.set(key.name, { type: 'variable', values });
-        } else if (values.length === 0) {
+          parsed.byVariable.set(key.name, toVariableEntryValue(values));
+        } else if (isAllSelection(values) || values.length === 0) {
           delete parsed.byExpression[key.expression];
         } else {
           parsed.byExpression[key.expression] = {
@@ -228,6 +253,7 @@ const useDashboardFilters = (
 
   const {
     selectionByFilterId,
+    variableSelectionByFilterId,
     adhocConditionsByFilterId,
     ignoredExpressions,
     ignoredVariableNames,
@@ -235,6 +261,7 @@ const useDashboardFilters = (
     referenceVariableValues,
   } = useMemo<{
     selectionByFilterId: ReadonlyMap<string, FilterSelection>;
+    variableSelectionByFilterId: ReadonlyMap<string, VariableSelection>;
     adhocConditionsByFilterId: ReadonlyMap<string, AdhocFilterCondition[]>;
     ignoredExpressions: string[];
     ignoredVariableNames: string[];
@@ -247,9 +274,15 @@ const useDashboardFilters = (
 
     // Keyed by filter ID: two definitions may share one expression
     const selectionByFilterId = new Map<string, FilterSelection>();
+    // Filters that can hold "all", in a shape that can represent it
+    const variableSelectionByFilterId = new Map<string, VariableSelection>();
     for (const filter of nonAdhocFilters) {
       const selection = resolveFilterSelection(filter, parsed);
       if (selection) selectionByFilterId.set(filter.id, selection);
+      const variableSelection = resolveVariableSelection(filter, parsed);
+      if (variableSelection) {
+        variableSelectionByFilterId.set(filter.id, variableSelection);
+      }
     }
 
     // Connections first: a data source variable may be limited to the one a
@@ -333,9 +366,12 @@ const useDashboardFilters = (
       name => !declaredVariableNames.has(name),
     );
 
-    const variables: ChartVariable[] = variableFilters.map(
+    const declaredVariables: ChartVariable[] = variableFilters.map(
       ({ filter, name }) => {
         const selection = selectionByFilterId.get(filter.id);
+        const isAll = isAllSelection(
+          variableSelectionByFilterId.get(filter.id),
+        );
         return {
           name,
           expression: getFilterExpression(filter),
@@ -346,8 +382,18 @@ const useDashboardFilters = (
             : [],
           maxSelections:
             'maxSelections' in filter ? filter.maxSelections : undefined,
+          ...(isAll ? { all: true } : {}),
         };
       },
+    );
+    // A static list's options are on its definition, so "all" expands here
+    const variables = expandAllSelections(
+      declaredVariables,
+      new Map(
+        variableFilters.flatMap(({ filter, name }) =>
+          isStaticListFilter(filter) ? [[name, filter.options]] : [],
+        ),
+      ),
     );
 
     const referenceVariableValues = new Map(
@@ -359,6 +405,7 @@ const useDashboardFilters = (
 
     return {
       selectionByFilterId,
+      variableSelectionByFilterId,
       adhocConditionsByFilterId,
       variables,
       referenceVariableValues,
@@ -400,9 +447,16 @@ const useDashboardFilters = (
       unsatisfiedRequiredFilters: getUnsatisfiedRequiredFilters(
         resolvedFilters,
         selectionByFilterId,
+        variableSelectionByFilterId,
       ),
     };
-  }, [filters, referenceVariableValues, sources, selectionByFilterId]);
+  }, [
+    filters,
+    referenceVariableValues,
+    sources,
+    selectionByFilterId,
+    variableSelectionByFilterId,
+  ]);
 
   /** Returns the set of rendered filter conditions corresponding to filters matching the given predicate */
   const getFiltersQueriesFor = useCallback(

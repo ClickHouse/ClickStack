@@ -13,6 +13,7 @@ import {
   validateDashboardFilterModes,
   validateDashboardFilterOptionUniqueness,
   validateDashboardFilterVariableNames,
+  validateDashboardSavedFilterValues,
   validateDashboardTileContainerRefs,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import {
@@ -2127,6 +2128,11 @@ function buildDashboardBodySchema(filterSchema: z.ZodTypeAny): z.ZodEffects<
       validateDashboardFilterFieldGating(data.filters ?? [], ctx);
 
       validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx);
+      validateDashboardSavedFilterValues(
+        data.filters ?? [],
+        data.savedFilterValues ?? [],
+        ctx,
+      );
     });
 }
 

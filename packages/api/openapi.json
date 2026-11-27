@@ -1029,6 +1029,14 @@
             "example": [
               "hdx-oss-dev-api"
             ]
+          },
+          "all": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Set to true to select \"All\"; `values` is then ignored, so send an empty array. Only allowed for filters that set allowAll.\n",
+            "example": true
           }
         }
       },
@@ -4397,6 +4405,11 @@
               "staging",
               "dev"
             ]
+          },
+          "allowAll": {
+            "type": "boolean",
+            "description": "Adds an \"All\" choice to the dropdown, which selects every option.\nOnly allowed on multi-select filters (not with maxSelections 1).\nWith \"All\" selected, `$variableName` and `$__filter` use every\noption, and `$__conditionalAll` expands to 1=1.\n",
+            "example": true
           },
           "isBroadcastEnabled": {
             "type": "boolean",

@@ -1815,6 +1815,12 @@ const mcpStaticListFilterSchema = z
     options: StaticListDashboardFilterSchema.shape.options.describe(
       'The values the dropdown offers, in display order, without duplicates.',
     ),
+    allowAll: StaticListDashboardFilterSchema.shape.allowAll.describe(
+      'Set true to add an "All" choice to the dropdown, which selects every ' +
+        'option. Multi-select filters only (rejected with maxSelections: 1). ' +
+        'With "All" selected, $variableName and $__filter use every option, ' +
+        'and $__conditionalAll expands to 1=1.',
+    ),
   })
   .describe(
     'A variable-only dashboard filter whose dropdown offers a hand-authored options ' +
@@ -2200,6 +2206,10 @@ const mcpVariableSavedFilterValueSchema =
     ),
     values: variableValueShape.values.describe(
       'Selected values for the variable, e.g. ["api", "web"].',
+    ),
+    all: variableValueShape.all.describe(
+      'Set true to save "All" as the selection; `values` is then ignored ' +
+        '(pass []). Only for filters that set allowAll.',
     ),
   });
 

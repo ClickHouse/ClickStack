@@ -2638,6 +2638,33 @@ describe('MCP Dashboard Tools - clickstack_save_dashboard', () => {
       });
     });
 
+    it('round-trips allowAll and a saved "all" value', async () => {
+      const sourceId = ctx.traceSource._id.toString();
+      const allValue = { type: 'variable', name: 'env', values: [], all: true };
+
+      const createResult = await callTool(
+        ctx.client!,
+        'clickstack_save_dashboard',
+        {
+          name: 'All option round-trip',
+          tiles: [traceTile(sourceId)],
+          filters: [staticFilter({ allowAll: true })],
+          savedFilterValues: [allValue],
+        },
+      );
+      expect(createResult.isError).toBeFalsy();
+      const created = JSON.parse(getFirstText(createResult));
+
+      const getResult = await callTool(
+        ctx.client!,
+        'clickstack_get_dashboard',
+        { id: created.id },
+      );
+      const fetched = JSON.parse(getFirstText(getResult));
+      expect(fetched.filters[0].allowAll).toBe(true);
+      expect(fetched.savedFilterValues).toEqual([allValue]);
+    });
+
     describe('required filters', () => {
       const queryFilter = (overrides: Record<string, unknown> = {}) => ({
         type: 'QUERY_EXPRESSION' as const,

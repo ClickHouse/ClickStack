@@ -1,4 +1,5 @@
 import {
+  filterSupportsAllValue,
   getDashboardVariableDeclarations,
   getDashboardVariableFilters,
   getFilterVariableName,
@@ -19,6 +20,7 @@ import type {
   SourceKind,
 } from '@hyperdx/common-utils/dist/types';
 import { isFilterSingleSelect } from '@hyperdx/common-utils/dist/variables';
+import { expandAllSelections } from '@hyperdx/common-utils/dist/variableSelection';
 import { z } from 'zod/v3';
 
 import type { McpContext } from '@/mcp/tools/types';
@@ -62,6 +64,13 @@ export const mcpVariableValuesParam = z
             "For a STATIC_LIST filter's variable, every value must be one of the filter's declared options. " +
             'For a DATA_SOURCE or CONNECTION variable, pass one source or connection ID; it ' +
             "overrides the dashboard's saved selection.",
+        ),
+      all: z
+        .literal(true)
+        .optional()
+        .describe(
+          'Set true to simulate "All" on a filter that sets allowAll; ' +
+            '`values` is then ignored (pass []).',
         ),
     }),
   )
@@ -117,11 +126,30 @@ export function resolveDashboardVariables(
     };
   }
 
+  // Only filters that opt in offer "All", so the dashboard can't produce it elsewhere
+  const allCapableNames = new Set(
+    getDashboardVariableFilters(filters)
+      .filter(({ filter }) => filterSupportsAllValue(filter))
+      .map(({ name }) => name),
+  );
+  const allErrors = variableValues
+    .filter(({ name, all }) => all && !allCapableNames.has(name))
+    .map(
+      ({ name }) =>
+        `Variable "${name}" belongs to a filter that does not offer "All"; ` +
+        'pass specific values, or set allowAll on the filter.',
+    );
+  if (allErrors.length > 0) {
+    return { error: allErrors.join('\n') };
+  }
+  // `values` is ignored for "All", so it isn't checked below
+  const explicitValues = variableValues.filter(({ all }) => !all);
+
   // A static filter's dropdown can only ever offer its declared options, so a
   // simulated selection outside them can never occur in the UI — reject it as
   // a typo rather than running a query the dashboard cannot produce.
   const staticOptionsByName = buildStaticOptionsByName(filters);
-  const optionErrors = variableValues.flatMap(({ name, values }) => {
+  const optionErrors = explicitValues.flatMap(({ name, values }) => {
     const options = staticOptionsByName.get(name);
     if (!options) return [];
     const invalid = values.filter(value => !options.includes(value));
@@ -141,7 +169,7 @@ export function resolveDashboardVariables(
   const singleSelectNames = new Set(
     variables.filter(isFilterSingleSelect).map(variable => variable.name),
   );
-  const singleSelectErrors = variableValues
+  const singleSelectErrors = explicitValues
     .filter(
       ({ name, values }) => values.length > 1 && singleSelectNames.has(name),
     )
@@ -155,12 +183,18 @@ export function resolveDashboardVariables(
   }
 
   // Override the default empty selection with the given variableValues
-  for (const { name, values } of variableValues) {
+  for (const { name, values, all } of variableValues) {
     const variable = byName.get(name);
-    if (variable) variable.values = values;
+    if (!variable) continue;
+    if (all) {
+      variable.all = true;
+      variable.values = [];
+    } else {
+      variable.values = values;
+    }
   }
 
-  return { variables };
+  return { variables: expandAllSelections(variables, staticOptionsByName) };
 }
 
 /** The team's sources and connections that a reference variable may select. */

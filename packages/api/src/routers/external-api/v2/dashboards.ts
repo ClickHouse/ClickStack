@@ -103,6 +103,13 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             type: string
  *             maxLength: 10000
  *           example: ["hdx-oss-dev-api"]
+ *         all:
+ *           type: boolean
+ *           enum: [true]
+ *           description: >
+ *             Set to true to select "All"; `values` is then ignored, so send
+ *             an empty array. Only allowed for filters that set allowAll.
+ *           example: true
  *     AdhocSavedFilterValue:
  *       type: object
  *       required: [type, name, conditions]
@@ -2756,6 +2763,14 @@ const EXTERNAL_DASHBOARD_PROJECTION = {
  *             The values this filter's dropdown offers. Must be non-empty and
  *             free of duplicates.
  *           example: ["prod", "staging", "dev"]
+ *         allowAll:
+ *           type: boolean
+ *           description: |
+ *             Adds an "All" choice to the dropdown, which selects every option.
+ *             Only allowed on multi-select filters (not with maxSelections 1).
+ *             With "All" selected, `$variableName` and `$__filter` use every
+ *             option, and `$__conditionalAll` expands to 1=1.
+ *           example: true
  *         isBroadcastEnabled:
  *           type: boolean
  *           enum: [false]

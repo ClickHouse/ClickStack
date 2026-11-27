@@ -459,6 +459,40 @@ describe('DashboardFiltersModal', () => {
     expect(screen.getByTestId('filter-single-select-checkbox')).toBeChecked();
   });
 
+  it('saves a static filter offering "All" and reopens it checked', async () => {
+    const { onSaveFilter, user } = renderModal();
+
+    await user.click(screen.getByTestId('add-filter-button'));
+    await selectFilterType(user, 'Static values');
+    await user.type(screen.getByTestId('filter-name-input'), 'Environment');
+    await user.type(screen.getByTestId('filter-options-input'), 'prod{Enter}');
+    await user.click(screen.getByTestId('filter-allow-all-checkbox'));
+    await user.click(screen.getByTestId('save-filter-button'));
+
+    await waitFor(() => expect(onSaveFilter).toHaveBeenCalledTimes(1));
+    const saved: StaticListDashboardFilter = onSaveFilter.mock.calls[0][0];
+    expect(saved.allowAll).toBe(true);
+
+    renderModal({ filters: [saved] });
+    await user.click(
+      screen.getAllByTestId(`edit-filter-button-${saved.name}`)[0],
+    );
+
+    expect(screen.getByTestId('filter-allow-all-checkbox')).toBeChecked();
+  });
+
+  it('hides the "All" option for a single-select filter', async () => {
+    const { user } = renderModal();
+
+    await user.click(screen.getByTestId('add-filter-button'));
+    await selectFilterType(user, 'Static values');
+    expect(screen.getByTestId('filter-allow-all-checkbox')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('filter-single-select-checkbox'));
+
+    expect(screen.queryByTestId('filter-allow-all-checkbox')).toBeNull();
+  });
+
   it('offers the requirement scope, unchecked, once the filter is required', async () => {
     const { user } = renderModal();
 

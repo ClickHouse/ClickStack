@@ -638,3 +638,48 @@ describe('maxSelections', () => {
     expect(saved).toMatchObject({ minSelections: 1, maxSelections: 1 });
   });
 });
+
+describe('allowAll', () => {
+  it('round-trips allowAll on a static list filter', () => {
+    const saved = toSavedFilter(
+      formValues({ ...byType.STATIC_LIST, allowAll: true }),
+    );
+
+    expect(saved).toMatchObject({ allowAll: true });
+    expect(toFormValues(saved).allowAll).toBe(true);
+  });
+
+  it('stores nothing for allowAll on a single-select static list filter', () => {
+    const saved = toSavedFilter(
+      formValues({
+        ...byType.STATIC_LIST,
+        allowAll: true,
+        isSingleSelect: true,
+      }),
+    );
+
+    expect(saved).toMatchObject({ allowAll: undefined });
+  });
+
+  it('stores nothing for allowAll when it is off', () => {
+    const saved = toSavedFilter(
+      formValues({ ...byType.STATIC_LIST, allowAll: false }),
+    );
+
+    expect(saved).toMatchObject({ allowAll: undefined });
+  });
+
+  // SQL query filters don't expand "All" yet
+  it('stores nothing for allowAll after switching a static list to a SQL query', () => {
+    const saved = toSavedFilter(
+      formValues({
+        ...byType.STATIC_LIST,
+        allowAll: true,
+        ...byType.SQL_QUERY,
+      }),
+    );
+
+    expect(saved.type).toBe('SQL_QUERY');
+    expect(saved).not.toHaveProperty('allowAll');
+  });
+});

@@ -108,6 +108,7 @@ export class DashboardPage {
   readonly requiredFilterCheckbox: Locator;
   readonly globalRequirementCheckbox: Locator;
   readonly singleSelectCheckbox: Locator;
+  readonly allowAllCheckbox: Locator;
   readonly variableNameInput: Locator;
   private readonly saveButton: Locator;
   private readonly tileSourceSelector: Locator;
@@ -177,6 +178,7 @@ export class DashboardPage {
     this.singleSelectCheckbox = page.getByTestId(
       'filter-single-select-checkbox',
     );
+    this.allowAllCheckbox = page.getByTestId('filter-allow-all-checkbox');
     this.variableNameInput = page.getByTestId('filter-variable-name-input');
     this.saveButton = page.getByTestId('chart-save-button');
 
@@ -1472,6 +1474,7 @@ export class DashboardPage {
     variableOptions?: {
       variableName?: string;
       singleSelect?: boolean;
+      allowAll?: boolean;
     } & FilterRequirementOptions,
   ) {
     await this.addFiltersButton.click();
@@ -1485,6 +1488,9 @@ export class DashboardPage {
     }
     if (variableOptions?.singleSelect !== undefined) {
       await this.singleSelectCheckbox.setChecked(variableOptions.singleSelect);
+    }
+    if (variableOptions?.allowAll !== undefined) {
+      await this.allowAllCheckbox.setChecked(variableOptions.allowAll);
     }
     await this.setFilterRequirement(variableOptions);
     await this.page.getByTestId('save-filter-button').click();

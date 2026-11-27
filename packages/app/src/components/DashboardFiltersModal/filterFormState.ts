@@ -104,6 +104,7 @@ export const toFormValues = (
 
     // STATIC_LIST fields
     options: staticList?.options ?? [],
+    allowAll: staticList?.allowAll ?? false,
 
     // PROMETHEUS_LABEL fields
     label: promqlLabel?.label ?? '',
@@ -127,7 +128,8 @@ export const toFormValues = (
 /** Normalizes the form values into the filter that gets stored. */
 export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
   // Pulled out of the spread below so no key is stored unless it's relevant
-  const { isRequired, isGlobalRequirement, isSingleSelect, ...rest } = values;
+  const { isRequired, isGlobalRequirement, isSingleSelect, allowAll, ...rest } =
+    values;
   const selectionLimits = {
     ...(isRequired
       ? {
@@ -142,6 +144,8 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
     return DashboardFilterSchema.parse({
       ...rest,
       options: values.options.map(option => option.trim()),
+      // Single-select filters don't offer "All", and false isn't stored
+      allowAll: allowAll && !isSingleSelect ? true : undefined,
       isBroadcastEnabled: false,
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),
@@ -166,6 +170,8 @@ export const toSavedFilter = (values: FilterFormValues): DashboardFilter => {
       ...rest,
       source: values.source || undefined,
       sqlTemplate: values.sqlTemplate.trim(),
+      // No allowAll until SQL query filters expand "All": a static list's
+      // checkbox value survives switching the type.
       isBroadcastEnabled: false,
       isVariableEnabled: true,
       variableName: getFilterVariableName(values),

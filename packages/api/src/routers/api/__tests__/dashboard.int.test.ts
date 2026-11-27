@@ -1203,6 +1203,74 @@ describe('dashboard router', () => {
     });
   });
 
+  describe('"All" option', () => {
+    const makeStaticFilter = (overrides = {}) => ({
+      id: new Types.ObjectId().toString(),
+      type: 'STATIC_LIST' as const,
+      name: 'Environment',
+      options: ['prod', 'staging'],
+      isBroadcastEnabled: false,
+      isVariableEnabled: true,
+      variableName: 'env',
+      ...overrides,
+    });
+    const allValue = { type: 'variable', name: 'env', values: [], all: true };
+
+    it('persists allowAll and a saved "all" value', async () => {
+      const filter = makeStaticFilter({ allowAll: true });
+
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [filter],
+          savedFilterValues: [allValue],
+        })
+        .expect(200);
+
+      const stored = await Dashboard.findById(created.body.id).lean();
+      expect(stored?.filters).toEqual([filter]);
+      expect(stored?.savedFilterValues).toEqual([allValue]);
+    });
+
+    it('drops a saved "all" value for a filter without allowAll', async () => {
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [makeStaticFilter()],
+          savedFilterValues: [allValue],
+        })
+        .expect(200);
+
+      const stored = await Dashboard.findById(created.body.id).lean();
+      expect(stored?.savedFilterValues).toEqual([]);
+    });
+
+    it('saves a dashboard whose saved "all" value went stale', async () => {
+      const filter = makeStaticFilter({ allowAll: true });
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [filter],
+          savedFilterValues: [allValue],
+        })
+        .expect(200);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          ...created.body,
+          filters: [{ ...filter, allowAll: false }],
+        })
+        .expect(200);
+
+      const stored = await Dashboard.findById(created.body.id).lean();
+      expect(stored?.savedFilterValues).toEqual([]);
+    });
+  });
+
   describe('required filters', () => {
     const makeFilter = (overrides = {}) => ({
       id: new Types.ObjectId().toString(),

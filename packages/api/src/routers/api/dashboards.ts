@@ -1,3 +1,4 @@
+import { dropUnsupportedAllValues } from '@hyperdx/common-utils/dist/dashboardFilterValues';
 import {
   getVariableReferenceError,
   validateDashboardFilterModes,
@@ -190,6 +191,12 @@ router.post(
       // client-supplied value would otherwise persist and hand the caller's
       // dashboard to the provisioner.
       const dashboard = _.omit(req.body, 'provisioned');
+      if (dashboard.savedFilterValues) {
+        dashboard.savedFilterValues = dropUnsupportedAllValues(
+          dashboard.filters ?? [],
+          dashboard.savedFilterValues,
+        );
+      }
 
       const filterError =
         getVariableReferenceError(req.body.tiles, req.body.filters) ??
@@ -237,6 +244,15 @@ router.patch(
       // Nulls survive: the schema's optional fields are `.nullable()`, and a
       // null still signals field removal downstream.
       const updates = DashboardWithoutIdSchema.partial().parse(req.body);
+      // Dropped rather than rejected: the UI resends the stored defaults on
+      // every save, so a stale "all" left after allowAll is turned off would
+      // otherwise block every later edit.
+      if (updates.savedFilterValues) {
+        updates.savedFilterValues = dropUnsupportedAllValues(
+          updates.filters ?? dashboard.filters ?? [],
+          updates.savedFilterValues,
+        );
+      }
 
       const filterError =
         // Only references this update adds are checked, so a filter edit

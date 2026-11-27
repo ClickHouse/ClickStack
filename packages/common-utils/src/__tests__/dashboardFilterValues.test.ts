@@ -1,5 +1,6 @@
 import {
   configConsumesBroadcastFilters,
+  dropUnsupportedAllValues,
   filterSelectionKey,
   getAdhocFilterTargetsForTile,
   getBlockingRequiredFilterNames,
@@ -7,6 +8,7 @@ import {
   getUnsatisfiedRequiredFilters,
   parseDashboardFilterValues,
   resolveFilterSelection,
+  resolveVariableSelection,
   serializeDashboardFilterValues,
   VariableEntryValue,
 } from '@/dashboardFilterValues';
@@ -674,6 +676,91 @@ describe('dashboardFilterValues', () => {
       expect(
         getUnsatisfiedRequiredFilters(filters, new Map()).map(f => f.name),
       ).toEqual(['A', 'C']);
+    });
+
+    it('omits a required filter with "All" selected', () => {
+      expect(
+        getUnsatisfiedRequiredFilters(
+          [required()],
+          new Map([['f1', included()]]),
+          new Map([['f1', { all: true }]]),
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe('resolveVariableSelection', () => {
+    const allCapable = staticFilter({ allowAll: true });
+    const parse = (...entries: DashboardFilterValue[]) =>
+      parseDashboardFilterValues(entries);
+
+    it('reads "All" and explicit values for a filter that offers "All"', () => {
+      expect(
+        resolveVariableSelection(
+          allCapable,
+          parse({ type: 'variable', name: 'env', values: [], all: true }),
+        ),
+      ).toEqual({ all: true });
+      expect(
+        resolveVariableSelection(
+          allCapable,
+          parse({ type: 'variable', name: 'env', values: ['prod'] }),
+        ),
+      ).toEqual(['prod']);
+    });
+
+    it('is undefined for a filter that does not offer "All"', () => {
+      expect(
+        resolveVariableSelection(
+          staticFilter(),
+          parse({ type: 'variable', name: 'env', values: [], all: true }),
+        ),
+      ).toBeUndefined();
+    });
+
+    it('is undefined when nothing is stored for the filter', () => {
+      expect(resolveVariableSelection(allCapable, parse())).toBeUndefined();
+    });
+  });
+
+  describe('dropUnsupportedAllValues', () => {
+    const all = (name: string): DashboardFilterValue => ({
+      type: 'variable',
+      name,
+      values: [],
+      all: true,
+    });
+
+    it('drops "all" for a filter without allowAll or made single-select', () => {
+      const filters = [
+        staticFilter({ id: 'a', variableName: 'a' }),
+        staticFilter({
+          id: 'b',
+          variableName: 'b',
+          allowAll: true,
+          maxSelections: 1,
+        }),
+      ];
+      expect(dropUnsupportedAllValues(filters, [all('a'), all('b')])).toEqual(
+        [],
+      );
+    });
+
+    it('keeps "all" on a filter that offers it, explicit values, and undeclared names', () => {
+      const prod: DashboardFilterValue = {
+        type: 'variable',
+        name: 'tier',
+        values: ['prod'],
+      };
+      expect(
+        dropUnsupportedAllValues(
+          [
+            staticFilter({ allowAll: true }),
+            staticFilter({ id: 'f2', variableName: 'tier' }),
+          ],
+          [all('env'), prod, all('removed')],
+        ),
+      ).toEqual([all('env'), prod, all('removed')]);
     });
   });
 
