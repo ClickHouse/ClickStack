@@ -745,7 +745,7 @@ function OnboardingModalComponent({
           {
             databaseName: 'otel',
             tableName: 'otel_traces_1m_v2',
-            dimensionColumns: 'ServiceName, SpanName, SpanKind',
+            dimensionColumns: 'ServiceName, StatusCode, SpanName',
             minGranularity: '1 minute',
             timestampColumn: 'Timestamp',
             aggregatedColumns: [
