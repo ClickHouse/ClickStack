@@ -20,7 +20,7 @@ import {
 } from '@tabler/icons-react';
 
 import api from '@/api';
-import { useLogomark, useWordmark } from '@/brand';
+import { useWordmark } from '@/brand';
 import { AlertStatusIcon } from '@/components/AlertStatusIcon';
 import { InstanceLabel } from '@/components/AppNav/InstanceLabel';
 import { useMobileNavOverlay } from '@/components/AppNav/useMobileNavOverlay';
@@ -41,6 +41,7 @@ import {
 
 import {
   AppNavCloudBanner,
+  AppNavCollapsedLogo,
   AppNavContext,
   AppNavHelpMenu,
   AppNavLink,
@@ -109,7 +110,6 @@ const NAV_LINKS: NavLinkConfig[] = [
 
 export default function AppNav({ fixed = false }: { fixed?: boolean }) {
   const wordmark = useWordmark();
-  const logomark = useLogomark({ size: 22 });
 
   useEffect(() => {
     let redirectUrl;
@@ -388,7 +388,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
           >
             <Link href="/search" className={styles.logoLink}>
               {isCollapsed ? (
-                <div className={styles.logoIconWrapper}>{logomark}</div>
+                <AppNavCollapsedLogo />
               ) : (
                 <Group
                   gap="xs"

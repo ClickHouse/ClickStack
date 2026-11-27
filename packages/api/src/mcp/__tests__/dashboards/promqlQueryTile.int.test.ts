@@ -331,8 +331,10 @@ describe('MCP query_tile - PromQL tiles', () => {
         tileId: 'promql-tile',
         status: 'ok',
         hasData: true,
+        elapsedMs: expect.any(Number),
       }),
     ]);
+    expect(tiles[0]).not.toHaveProperty('rowsRead');
   });
 
   it('does not find a PromQL tile with PromQL disabled', async () => {

@@ -5,8 +5,27 @@ import { fromAny } from '@total-typescript/shoehorn';
 import {
   formatMatrixResponse,
   formatVectorResponse,
+  getSeriesSelectorCondition,
   isNoTimeRangesTableError,
 } from '@/controllers/timeseriesEngine';
+
+describe('getSeriesSelectorCondition', () => {
+  const selectorSql = (takesReturnColumns: boolean) =>
+    getSeriesSelectorCondition({
+      databaseName: 'db',
+      tableName: 'ts',
+      match: ['up'],
+      takesReturnColumns,
+    }).sql;
+
+  it("passes return_columns 'samples' from ClickHouse 26.11", () => {
+    expect(selectorSql(true)).toContain("), 'samples'\n");
+  });
+
+  it('keeps the 5-argument call before 26.11', () => {
+    expect(selectorSql(false)).not.toContain('samples');
+  });
+});
 
 describe('isNoTimeRangesTableError', () => {
   // The shape ClickhouseClient throws: the server's error wrapped as `cause`.

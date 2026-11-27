@@ -295,7 +295,11 @@ const TimePickerComponent = ({
       position="bottom-start"
       closeOnEscape
       opened={opened}
-      onClose={close}
+      // A controlled popover reports outside clicks and Escape (closeOnEscape)
+      // only through onChange; onClose fires after `opened` is already false.
+      onChange={next => {
+        if (!next) close();
+      }}
       zIndex={getDefaultZIndex('popover') + 2}
     >
       <Popover.Target>
