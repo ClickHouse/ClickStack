@@ -27,6 +27,8 @@ import { copyTextToClipboard } from '@/utils/clipboard';
 // session id, and a one-shot `report()` that bundles it all into text to drop
 // straight into a bug report.
 
+type HdxClickHouseVersion = { name: string; version?: string };
+
 // Device Info
 type HdxDevice = {
   screen: string;
@@ -77,6 +79,7 @@ let cachedServerVersion: string | null = null;
 let userId: string | undefined;
 let teamId: string | undefined;
 let dynamicFeatures: Record<string, boolean> = {};
+let clickhouseVersions: HdxClickHouseVersion[] = [];
 
 // Only env-configurable flags are worth reporting — the hardcoded-true/false
 // ones (k8s dashboard, metrics, sessions, materialized views) are the same in
@@ -132,6 +135,11 @@ export function setHdxIdentity(next: {
   dynamicFeatures = next.features ?? {};
 }
 
+/** Record the ClickHouse server version of each connection (see AppNav). */
+export function setHdxClickHouseVersions(next: HdxClickHouseVersion[]): void {
+  clickhouseVersions = next;
+}
+
 // Null until the RUM SDK has started, which needs /api/config and never happens
 // in local mode.
 function sessionId(): string | undefined {
@@ -178,6 +186,9 @@ function buildReport(): string {
   const lines = [
     `frontend: ${APP_VERSION}`,
     `backend:  ${cachedServerVersion || 'unknown'}`,
+    ...clickhouseVersions.map(
+      c => `clickhouse: ${c.name} ${c.version ?? 'unknown'}`,
+    ),
     `mode:     ${IS_LOCAL_MODE ? 'local' : isOss ? 'oss' : 'cloud'}${
       IS_CLICKHOUSE_BUILD ? ' (clickstack)' : ''
     }`,

@@ -34,6 +34,9 @@ import {
 } from '@tabler/icons-react';
 
 import { IS_LOCAL_MODE } from '@/config';
+import { useConnections } from '@/connection';
+import { setHdxClickHouseVersions } from '@/hdxDebug';
+import { getMetadata } from '@/metadata';
 import { copyTextToClipboard } from '@/utils/clipboard';
 
 import { HelpSparkle } from './HelpSparkle';
@@ -197,6 +200,22 @@ export const AppNavUserMenu = ({
 
 const AppNavVersionItem = ({ version }: { version?: string }) => {
   const [copied, setCopied] = React.useState(false);
+  const { data: connections } = useConnections();
+
+  // Fetched when the Help menu opens rather than on click: awaiting before the
+  // clipboard write would drop the user gesture Safari requires for it.
+  // getServerVersion is cached per connection, so this is usually free.
+  React.useEffect(() => {
+    if (!connections) return;
+    void Promise.all(
+      connections.map(async c => ({
+        name: c.name,
+        version: (
+          await getMetadata().getServerVersion({ connectionId: c.id })
+        )?.join('.'),
+      })),
+    ).then(setHdxClickHouseVersions);
+  }, [connections]);
 
   return (
     <Menu.Item
