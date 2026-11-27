@@ -14,8 +14,8 @@ const SLO_POLL_MS = 60_000;
 const SLO_FIRST_SNAPSHOT_POLL_MS = 10_000;
 
 /**
- * Direct-URL guard while the feature bakes: the nav only links to SLOs when
- * the flag is on, but the routes must bounce too.
+ * Direct-URL guard while the feature bakes: the nav and Search only link to
+ * SLOs when the flag is on, but the routes must bounce too.
  */
 export function useSlosEnabledGuard(): boolean {
   const router = useRouter();

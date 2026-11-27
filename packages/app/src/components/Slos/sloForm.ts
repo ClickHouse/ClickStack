@@ -15,6 +15,7 @@ import {
 } from '@hyperdx/common-utils/dist/slo';
 import type {
   BuilderChartConfigWithDateRange,
+  Filter,
   TSource,
 } from '@hyperdx/common-utils/dist/types';
 
@@ -73,6 +74,43 @@ export function sloToFormValues(slo: SloApiResponse): SloFormValues {
     window: slo.window,
     // Kept as saved, so editing an SLO keeps its alerts.
     alerts: slo.alerts,
+  };
+}
+
+/** A copy of an SLO, named as such, without its alerts. */
+export function sloCopyFormValues(slo: SloApiResponse): SloFormValues {
+  return {
+    ...sloToFormValues(slo),
+    name: `Copy of ${slo.name}`.slice(0, 256),
+    alerts: DEFAULT_SLO_FORM_VALUES.alerts,
+  };
+}
+
+/** A search carried over by "Create SLO from this search". */
+export type SloSearchPrefill = {
+  source: string;
+  name?: string | null;
+  where?: string | null;
+  whereLanguage?: string | null;
+  filters?: Filter[] | null;
+};
+
+/** A new SLO counting the events of a search. */
+export function sloFormValuesFromSearch(
+  prefill: SloSearchPrefill,
+): SloFormValues {
+  return {
+    ...DEFAULT_SLO_FORM_VALUES,
+    name: prefill.name ?? '',
+    source: prefill.source,
+    indicator: {
+      ...DEFAULT_SLO_FORM_VALUES.indicator,
+      eligible: {
+        where: prefill.where ?? '',
+        whereLanguage: prefill.whereLanguage === 'lucene' ? 'lucene' : 'sql',
+        filters: prefill.filters ?? [],
+      },
+    },
   };
 }
 

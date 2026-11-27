@@ -125,12 +125,13 @@ import SearchWhereInput, {
 } from '@/components/SearchInput/SearchWhereInput';
 import SearchPageActionBar from '@/components/SearchPageActionBar';
 import SearchTotalCountChart from '@/components/SearchTotalCountChart';
+import { CreateSloButton } from '@/components/Slos/CreateSloButton';
 import { TableSourceForm } from '@/components/Sources/SourceForm';
 import { SourceSelectControlled } from '@/components/SourceSelect';
 import { SQLInlineEditorControlled } from '@/components/SQLEditor/SQLInlineEditor';
 import { Tags } from '@/components/Tags';
 import { TimePicker } from '@/components/TimePicker';
-import { IS_LOCAL_MODE } from '@/config';
+import { IS_LOCAL_MODE, IS_SLOS_ENABLED } from '@/config';
 import { useAliasMapFromChartConfig } from '@/hooks/useChartConfig';
 import { useExplainQuery } from '@/hooks/useExplainQuery';
 import { useResolvedSourceParam } from '@/hooks/useResolvedSourceParam';
@@ -2773,6 +2774,15 @@ function DBSearchPageContent() {
                   <AlertStatusIcon alerts={savedSearch?.alerts} />
                 </Group>
               </Button>
+            )}
+            {!IS_LOCAL_MODE && IS_SLOS_ENABLED && (
+              <CreateSloButton
+                source={searchedConfig.source}
+                where={searchedConfig.where}
+                whereLanguage={searchedConfig.whereLanguage}
+                filters={searchedConfig.filters}
+                savedSearchName={savedSearch?.name}
+              />
             )}
             {isCompact && (
               <Button
