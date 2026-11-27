@@ -72,10 +72,30 @@ function isMarkdownTile(tile: ExternalDashboardTileWithId): boolean {
 }
 
 /**
- * Derive a compact data summary from a successful tile query payload. The
- * payload shape is `{ result: <data>, ... }` where `<data>` is either an array
- * of rows or an object carrying a `data: [...]` array (see formatQueryResult in
- * query/helpers.ts). Anything we can't confidently read as rows is reported as
+ * A successful tile query payload: `{ result: <data>, ... }`, where `<data>`
+ * is either an array of rows or an object carrying a `data: [...]` array (see
+ * formatQueryResult in query/helpers.ts).
+ */
+const tilePayloadSchema = z.object({
+  result: z.union([
+    z.array(z.unknown()).transform(rows => ({ rows, statistics: undefined })),
+    z
+      .object({
+        data: z.array(z.unknown()),
+        // ClickHouse's own read counts, present on builder and raw SQL tiles.
+        // Incomplete counts are dropped rather than failing the summary.
+        statistics: z
+          .object({ rows_read: z.number(), bytes_read: z.number() })
+          .optional()
+          .catch(undefined),
+      })
+      .transform(({ data, statistics }) => ({ rows: data, statistics })),
+  ]),
+});
+
+/**
+ * Derive a compact data summary from a successful tile query payload.
+ * Anything we can't confidently read as rows is reported as
  * `hasData: undefined` rather than guessed.
  *
  * @internal Exported for testing only.
@@ -83,6 +103,8 @@ function isMarkdownTile(tile: ExternalDashboardTileWithId): boolean {
 export function summarizeRows(text: string): {
   hasData?: boolean;
   rowCount?: number;
+  rowsRead?: number;
+  bytesRead?: number;
 } {
   let parsed: unknown;
   try {
@@ -90,23 +112,16 @@ export function summarizeRows(text: string): {
   } catch {
     return {};
   }
-  if (parsed == null || typeof parsed !== 'object' || !('result' in parsed)) {
-    return {};
-  }
-  const result: unknown = parsed.result;
-  let rows: unknown[] | undefined;
-  if (Array.isArray(result)) {
-    rows = result;
-  } else if (
-    result != null &&
-    typeof result === 'object' &&
-    'data' in result &&
-    Array.isArray(result.data)
-  ) {
-    rows = result.data;
-  }
-  if (rows == null) return {};
-  return { hasData: rows.length > 0, rowCount: rows.length };
+  const payload = tilePayloadSchema.safeParse(parsed);
+  if (!payload.success) return {};
+  const { rows, statistics } = payload.data.result;
+  return {
+    hasData: rows.length > 0,
+    rowCount: rows.length,
+    ...(statistics
+      ? { rowsRead: statistics.rows_read, bytesRead: statistics.bytes_read }
+      : {}),
+  };
 }
 
 type TileSummary = {
@@ -116,6 +131,10 @@ type TileSummary = {
   status: 'ok' | 'error' | 'skipped';
   hasData?: boolean;
   rowCount?: number;
+  /** Wall time of the tile's query, from when it started (not queued). */
+  elapsedMs?: number;
+  rowsRead?: number;
+  bytesRead?: number;
   error?: string;
   warnings?: string[];
 };
@@ -144,7 +163,11 @@ export function registerQueryTiles({
         'unrecognized tile IDs come back as unknownTileIds rather than failing. ' +
         'At most 50 tiles run per call; any beyond that are returned as ' +
         'unrunTileIds — call again with those as tileIds to run the remainder. ' +
-        'Drill into a specific failing tile with clickstack_query_tile.',
+        'Drill into a specific failing tile with clickstack_query_tile. ' +
+        'Each tile that ran reports elapsedMs, its wall time; builder and SQL ' +
+        'tiles also report rowsRead and bytesRead when available (event-pattern ' +
+        'tiles do not). PromQL tiles report only elapsedMs: the Prometheus API ' +
+        'returns no read counts.',
       inputSchema: z.object({
         dashboardId: objectIdSchema.describe(
           'Dashboard ID, from clickstack_get_dashboard (no id lists dashboards) ' +
@@ -278,23 +301,30 @@ export function registerQueryTiles({
             // results; the try/catch covers an unexpected throw or a deadline
             // timeout, folding either into a status:'error' entry so one
             // misbehaving tile never rejects the whole batch.
+            // Set when the query starts, so a tile the deadline skipped
+            // reports no time rather than 0.
+            let started: number | undefined;
+            const elapsed = () =>
+              started === undefined
+                ? {}
+                : { elapsedMs: Math.round(performance.now() - started) };
             try {
-              const result = await withDeadline(
-                signal =>
-                  runConfigTile(
-                    context,
-                    resolvedTile.tile,
-                    startDate,
-                    endDate,
-                    { abortSignal: signal, variables },
-                  ),
-                deadlineAt,
-              );
+              const result = await withDeadline(signal => {
+                started = performance.now();
+                return runConfigTile(
+                  context,
+                  resolvedTile.tile,
+                  startDate,
+                  endDate,
+                  { abortSignal: signal, variables },
+                );
+              }, deadlineAt);
 
               if ('isError' in result && result.isError) {
                 return {
                   ...base,
                   status: 'error',
+                  ...elapsed(),
                   error: result.content?.[0]?.text ?? 'Unknown error',
                 };
               }
@@ -310,6 +340,7 @@ export function registerQueryTiles({
               return {
                 ...base,
                 status: 'ok',
+                ...elapsed(),
                 ...summarizeRows(text),
                 ...(warnings.length > 0 ? { warnings } : {}),
               };
@@ -317,6 +348,7 @@ export function registerQueryTiles({
               return {
                 ...base,
                 status: 'error',
+                ...elapsed(),
                 error: err instanceof Error ? err.message : String(err),
               };
             }

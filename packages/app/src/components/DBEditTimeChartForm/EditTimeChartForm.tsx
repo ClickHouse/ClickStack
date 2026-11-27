@@ -93,6 +93,7 @@ import {
   PROMQL_DEFAULT_HEATMAP_SCALE_TYPE,
 } from '@/components/DBHeatmapChart';
 import { ErrorBoundary } from '@/components/Error/ErrorBoundary';
+import { getExemplarToggleState } from '@/components/Exemplars';
 import { InputControlled } from '@/components/InputControlled';
 import SaveToDashboardModal from '@/components/SaveToDashboardModal';
 import { getStoredLanguage } from '@/components/SearchInput/SearchWhereInput';
@@ -103,7 +104,7 @@ import {
   useResolvedReference,
   useSourceVariableDeclarations,
 } from '@/components/sourceSelectUtils';
-import { IS_PROMQL_ENABLED } from '@/config';
+import { IS_EXEMPLARS_ENABLED, IS_PROMQL_ENABLED } from '@/config';
 import HDXMarkdownChart from '@/HDXMarkdownChart';
 import {
   getDurationMsExpression,
@@ -494,6 +495,8 @@ export default function EditTimeChartForm({
     colorRules,
     backgroundChart,
     legendTemplate,
+    enableExemplars,
+    exemplarTraceSourceId,
     builderHeatmapScaleType,
     promqlHeatmapScaleType,
   ] = useWatch({
@@ -512,6 +515,8 @@ export default function EditTimeChartForm({
       'colorRules',
       'backgroundChart',
       'legendTemplate',
+      'enableExemplars',
+      'exemplarTraceSourceId',
       'series.0.heatmapScaleType',
       'heatmap.scaleType',
     ],
@@ -534,6 +539,16 @@ export default function EditTimeChartForm({
     [series, tableSource],
   );
 
+  const { showExemplars, exemplarIneligibleReason } = getExemplarToggleState({
+    enabled: IS_EXEMPLARS_ENABLED,
+    configType,
+    sourceKind: tableSource?.kind,
+    promqlExpression: promqlExpressions,
+    series,
+    seriesReturnType,
+    groupBy,
+  });
+
   const displaySettings: ChartConfigDisplaySettings = useMemo(
     () => ({
       alignDateRangeToGranularity,
@@ -549,6 +564,8 @@ export default function EditTimeChartForm({
       colorRules,
       backgroundChart,
       legendTemplate,
+      enableExemplars,
+      exemplarTraceSourceId,
       heatmapScaleType,
     }),
     [
@@ -565,6 +582,8 @@ export default function EditTimeChartForm({
       colorRules,
       backgroundChart,
       legendTemplate,
+      enableExemplars,
+      exemplarTraceSourceId,
       heatmapScaleType,
     ],
   );
@@ -1183,6 +1202,8 @@ export default function EditTimeChartForm({
         colorRules,
         backgroundChart,
         legendTemplate,
+        enableExemplars,
+        exemplarTraceSourceId,
         heatmapScaleType,
       }: ChartConfigDisplaySettings,
       isDirty: boolean,
@@ -1207,6 +1228,8 @@ export default function EditTimeChartForm({
       setValue('color', color);
       setValue('colorRules', colorRules);
       setValue('backgroundChart', backgroundChart);
+      setValue('enableExemplars', enableExemplars);
+      setValue('exemplarTraceSourceId', exemplarTraceSourceId);
       // Empty string (not undefined) so the cleared state survives the URL round-trip.
       if (configType === 'promql') {
         setValue('legendTemplate', legendTemplate ?? '');
@@ -1592,6 +1615,8 @@ export default function EditTimeChartForm({
           }
           onChange={handleUpdateDisplaySettings}
           onClose={closeDisplaySettings}
+          showExemplars={showExemplars}
+          exemplarIneligibleReason={exemplarIneligibleReason}
           // Heatmaps format with the chart-level number format only.
           isPerSeriesNumberFormatAllowed={
             configType !== 'sql' && displayType !== DisplayType.Heatmap
