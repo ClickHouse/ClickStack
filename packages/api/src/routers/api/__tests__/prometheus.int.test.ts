@@ -10,6 +10,7 @@ import {
 import { fromPartial } from '@total-typescript/shoehorn';
 import { Types } from 'mongoose';
 
+import { ClickhouseClient } from '@/clickhouse';
 import * as config from '@/config';
 import {
   clearBackendProbeCache,
@@ -18,7 +19,10 @@ import {
   clickhousePrometheusUpstream,
   joinPrometheusUpstreamUrl,
 } from '@/controllers/promql';
-import { PROMETHEUS_MAX_RESULT_ROWS } from '@/controllers/timeseriesEngine';
+import {
+  PROMETHEUS_MAX_RESULT_BYTES,
+  PROMETHEUS_MAX_RESULT_ROWS,
+} from '@/controllers/timeseriesEngine';
 import {
   DEFAULT_DATABASE,
   dropTimeSeriesTable,
@@ -1377,6 +1381,35 @@ describe('prometheus router', () => {
           expect(res.body.data.result).toHaveLength(1);
         },
       );
+
+      // Each row is a whole series, so max_result_rows alone lets one query
+      // return a body large enough to run the API out of memory.
+      it.each([
+        ['query_range', { start: String(START), end: String(START + 60) }],
+        ['query', { time: String(START + 60) }],
+      ])('caps the result size on /%s', async (endpoint, window) => {
+        const querySpy = jest.spyOn(ClickhouseClient.prototype, 'query');
+        const { agent, team } = await getLoggedInAgent(server);
+        const source = await seedClickHouseSource(team._id, {
+          tableName: TABLE,
+        });
+
+        await agent
+          .get(`/v1/prometheus/${endpoint}`)
+          .query({
+            query: 'fallback_up',
+            ...window,
+            sourceId: source._id.toString(),
+          })
+          .expect(200);
+
+        const call = querySpy.mock.calls.find(([args]) =>
+          args.query.includes('FROM prometheusQuery'),
+        );
+        expect(call?.[0].clickhouse_settings).toMatchObject({
+          max_result_bytes: String(PROMETHEUS_MAX_RESULT_BYTES),
+        });
+      });
     });
 
     it('returns 400 with Prometheus-compatible error when resolution exceeds 11,000 points', async () => {

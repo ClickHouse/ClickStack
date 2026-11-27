@@ -24,6 +24,10 @@ import logger from '@/utils/logger';
 
 export const PROMETHEUS_MAX_EXECUTION_SEC = 30;
 export const PROMETHEUS_MAX_RESULT_ROWS = 100000;
+// prometheusQueryRange() returns one row per series, with all its samples, so
+// max_result_rows alone does not bound the result. ClickHouse counts these
+// bytes in memory: the JSON it sends is about 3 times larger.
+export const PROMETHEUS_MAX_RESULT_BYTES = 8 * 1024 * 1024;
 
 export type TimeSeriesTagsQueryArgs = {
   client: ClickhouseClient;
@@ -406,6 +410,7 @@ const PROMQL_TABLE_FUNCTION_SETTINGS = {
   allow_experimental_time_series_table: 1,
   max_execution_time: PROMETHEUS_MAX_EXECUTION_SEC,
   max_result_rows: String(PROMETHEUS_MAX_RESULT_ROWS),
+  max_result_bytes: String(PROMETHEUS_MAX_RESULT_BYTES),
 } as const;
 
 export async function queryRangeViaTableFunction({

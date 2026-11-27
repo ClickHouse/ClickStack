@@ -41,8 +41,9 @@ export const PROMETHEUS_MAX_RESOLUTION = 11_000;
 /**
  * Largest Prometheus response body fetchPrometheusData will read into memory.
  *
- * Queries to ClickHouse are already capped by `max_result_rows`
- * (PROMETHEUS_MAX_RESULT_ROWS). An external Prometheus has no equivalent:
+ * Queries to ClickHouse are already capped by `max_result_rows` and
+ * `max_result_bytes` (PROMETHEUS_MAX_RESULT_ROWS, PROMETHEUS_MAX_RESULT_BYTES).
+ * An external Prometheus has no equivalent:
  * `/query` and `/query_range` take no row limit, and older servers ignore
  * `limit` on the label APIs. So the only way to bound the memory a response
  * can take is to stop reading at a byte limit. 8 MB fits roughly
