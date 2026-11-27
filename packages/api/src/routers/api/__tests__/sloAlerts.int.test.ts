@@ -17,12 +17,14 @@ import Alert, { AlertSource, AlertThresholdType } from '@/models/alert';
 import Connection from '@/models/connection';
 import Slo from '@/models/slo';
 import { Source } from '@/models/source';
+import type { IUser } from '@/models/user';
 import Webhook from '@/models/webhook';
 
 describe('SLO alerts', () => {
   const server = getServer();
   let agent: Awaited<ReturnType<typeof getLoggedInAgent>>['agent'];
   let team: Awaited<ReturnType<typeof getLoggedInAgent>>['team'];
+  let user: IUser;
   let sourceId: string;
   let webhookId: string;
 
@@ -52,6 +54,7 @@ describe('SLO alerts', () => {
     const result = await getLoggedInAgent(server);
     agent = result.agent;
     team = result.team;
+    user = result.user;
     const connection = await Connection.create({
       team: team._id,
       name: 'Default',
@@ -223,5 +226,36 @@ describe('SLO alerts', () => {
     await Slo.deleteOne({ _id: created.body.id });
     await deleteAlert(alertId, team._id);
     expect(await Alert.exists({ _id: alertId })).toBeNull();
+  });
+
+  it('leaves SLO alerts out of the external API', async () => {
+    const created = await agent
+      .post('/slos')
+      .send(definition(fastOnly()))
+      .expect(200);
+    const alertId = created.body.alertStates.fastBurn.id;
+    const auth = `Bearer ${user.accessKey}`;
+
+    await agent
+      .get(`/api/v2/alerts/${alertId}`)
+      .set('Authorization', auth)
+      .expect(404);
+    await agent
+      .delete(`/api/v2/alerts/${alertId}`)
+      .set('Authorization', auth)
+      .expect(404);
+    await agent
+      .post(`/api/v2/alerts/${alertId}/silenced`)
+      .set('Authorization', auth)
+      .send({ mutedUntil: new Date(Date.now() + 3_600_000).toISOString() })
+      .expect(404);
+    const list = await agent
+      .get('/api/v2/alerts')
+      .set('Authorization', auth)
+      .expect(200);
+    expect(list.body.data.map((a: { id: string }) => a.id)).not.toContain(
+      alertId,
+    );
+    expect(await Alert.exists({ _id: alertId })).toBeTruthy();
   });
 });

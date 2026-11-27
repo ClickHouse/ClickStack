@@ -8,6 +8,7 @@ import {
   deleteAlert,
   getAlertsWithDisplayRefs,
   getAlertWithDisplayRefs,
+  isSloAlert,
   populateAlertDisplayRefs,
   silenceAlert,
   unsilenceAlert,
@@ -528,7 +529,8 @@ router.get(
 
       const alert = await getAlertWithDisplayRefs(req.params.id, teamId);
 
-      if (alert == null) {
+      // SLO alerts are managed through their SLO and are not part of this API.
+      if (alert == null || alert.source === AlertSource.SLO) {
         return res.status(404).json({ message: 'Alert not found' });
       }
 
@@ -685,7 +687,13 @@ router.get(
       const { limit, offset, ...filterParams } = listAlertsQuerySchema.parse(
         req.query ?? {},
       );
-      const filter = buildAlertsFilter(teamId, filterParams);
+      // SLO alerts are managed through their SLO and are not part of this API.
+      const filter = {
+        $and: [
+          buildAlertsFilter(teamId, filterParams),
+          { source: { $ne: AlertSource.SLO } },
+        ],
+      };
       const [alerts, total] = await Promise.all([
         getAlertsWithDisplayRefs(teamId, { limit, offset }, filter),
         countAlerts(teamId, filter),
@@ -908,6 +916,12 @@ router.put(
       if (teamId == null) {
         return res.status(403).json({ message: 'Forbidden' });
       }
+
+      // SLO alerts are managed through their SLO and are not part of this API.
+      if (await isSloAlert(req.params.id, teamId)) {
+        return res.status(404).json({ message: 'Alert not found' });
+      }
+
       const { id } = req.params;
 
       const alertInput = toInternalAlertInput(req.body);
@@ -990,6 +1004,11 @@ router.delete(
       const { id: alertId } = req.params;
       if (teamId == null) {
         return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      // SLO alerts are managed through their SLO and are not part of this API.
+      if (await isSloAlert(req.params.id, teamId)) {
+        return res.status(404).json({ message: 'Alert not found' });
       }
 
       const { deletedCount } = await deleteAlert(alertId, teamId);
@@ -1083,6 +1102,11 @@ router.post(
         return res.status(403).json({ message: 'Forbidden' });
       }
 
+      // SLO alerts are managed through their SLO and are not part of this API.
+      if (await isSloAlert(req.params.id, teamId)) {
+        return res.status(404).json({ message: 'Alert not found' });
+      }
+
       const updatedAlert = await silenceAlert(
         req.params.id,
         teamId,
@@ -1163,6 +1187,11 @@ router.delete(
       const teamId = req.user?.team;
       if (teamId == null) {
         return res.status(403).json({ message: 'Forbidden' });
+      }
+
+      // SLO alerts are managed through their SLO and are not part of this API.
+      if (await isSloAlert(req.params.id, teamId)) {
+        return res.status(404).json({ message: 'Alert not found' });
       }
 
       const updatedAlert = await unsilenceAlert(req.params.id, teamId);
