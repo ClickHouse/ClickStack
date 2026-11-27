@@ -7,6 +7,7 @@ import onHeaders from 'on-headers';
 import * as config from './config';
 import mcpRouter from './mcp/app';
 import { isUserAuthenticated } from './middleware/auth';
+import { parseBody } from './middleware/bodyParser';
 import defaultCors from './middleware/cors';
 import { appErrorHandler } from './middleware/error';
 import routers from './routers/api';
@@ -22,7 +23,6 @@ import usageStats from './tasks/usageStats';
 import { registerAITelemetry } from './utils/aiTelemetry';
 import logger, { expressLogger } from './utils/logger';
 import passport from './utils/passport';
-import { captureProxyBody } from './utils/proxyBody';
 
 registerAITelemetry();
 
@@ -57,15 +57,6 @@ if (!config.IS_CI && config.FRONTEND_URL) {
 
 app.disable('x-powered-by');
 app.use(compression());
-app.use(express.json({ limit: '32mb', verify: captureProxyBody }));
-app.use(express.text({ limit: '32mb', verify: captureProxyBody }));
-app.use(
-  express.urlencoded({
-    extended: false,
-    limit: '32mb',
-    verify: captureProxyBody,
-  }),
-);
 app.use(session(sess));
 
 if (!config.IS_LOCAL_APP_MODE) {
@@ -107,21 +98,31 @@ app.use('/', routers.rootRouter);
 app.use('/mcp', mcpRouter);
 
 // PRIVATE ROUTES
-app.use('/ai', isUserAuthenticated, routers.aiRouter);
-app.use('/alerts', isUserAuthenticated, routers.alertsRouter);
-app.use('/dashboards', isUserAuthenticated, routers.dashboardRouter);
-app.use('/me', isUserAuthenticated, routers.meRouter);
-app.use('/team', isUserAuthenticated, routers.teamRouter);
-app.use('/webhooks', isUserAuthenticated, routers.webhooksRouter);
-app.use('/connections', isUserAuthenticated, connectionsRouter);
-app.use('/sources', isUserAuthenticated, sourcesRouter);
-app.use('/saved-search', isUserAuthenticated, savedSearchRouter);
-app.use('/favorites', isUserAuthenticated, favoritesRouter);
-app.use('/pinned-filters', isUserAuthenticated, pinnedFiltersRouter);
-app.use('/clickhouse-proxy', isUserAuthenticated, clickhouseProxyRouter);
-app.use('/iac', isUserAuthenticated, iacRouter);
+app.use('/ai', isUserAuthenticated, parseBody, routers.aiRouter);
+app.use('/alerts', isUserAuthenticated, parseBody, routers.alertsRouter);
+app.use('/dashboards', isUserAuthenticated, parseBody, routers.dashboardRouter);
+app.use('/me', isUserAuthenticated, parseBody, routers.meRouter);
+app.use('/team', isUserAuthenticated, parseBody, routers.teamRouter);
+app.use('/webhooks', isUserAuthenticated, parseBody, routers.webhooksRouter);
+app.use('/connections', isUserAuthenticated, parseBody, connectionsRouter);
+app.use('/sources', isUserAuthenticated, parseBody, sourcesRouter);
+app.use('/saved-search', isUserAuthenticated, parseBody, savedSearchRouter);
+app.use('/favorites', isUserAuthenticated, parseBody, favoritesRouter);
+app.use('/pinned-filters', isUserAuthenticated, parseBody, pinnedFiltersRouter);
+app.use(
+  '/clickhouse-proxy',
+  isUserAuthenticated,
+  parseBody,
+  clickhouseProxyRouter,
+);
+app.use('/iac', isUserAuthenticated, parseBody, iacRouter);
 if (config.IS_PROMQL_ENABLED) {
-  app.use('/v1/prometheus', isUserAuthenticated, routers.prometheusRouter);
+  app.use(
+    '/v1/prometheus',
+    isUserAuthenticated,
+    parseBody,
+    routers.prometheusRouter,
+  );
 }
 // ---------------------------------------------------------------------
 
