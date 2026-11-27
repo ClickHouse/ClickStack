@@ -63,6 +63,29 @@ describe('SLO schema', () => {
     );
   });
 
+  it('requires distinct channels for each alert that is on', () => {
+    const withChannels = (rule: 'fastBurn' | 'slowBurn', ids: string[]) =>
+      SloInputSchema.safeParse({
+        ...base,
+        ...availability,
+        alerts: {
+          [rule]: {
+            channels: ids.map(webhookId => ({ type: 'webhook', webhookId })),
+          },
+        },
+      }).success;
+    for (const rule of ['fastBurn', 'slowBurn'] as const) {
+      expect(withChannels(rule, [])).toBe(false);
+      expect(withChannels(rule, [''])).toBe(false);
+      expect(withChannels(rule, ['a', 'a'])).toBe(false);
+      expect(withChannels(rule, ['a', 'b'])).toBe(true);
+    }
+    // No alerts at all.
+    expect(SloInputSchema.parse({ ...base, ...availability }).alerts).toEqual(
+      {},
+    );
+  });
+
   it('describes each burn alert in one sentence', () => {
     expect(describeSloAlertRule('fastBurn', '30d')).toBe(
       '2% of the 30-day error budget is spent within 1 hour (14.4x the allowed rate)',
