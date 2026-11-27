@@ -388,7 +388,7 @@ export function mineWindowSample(
  * Sample + Drain-mine one time window and return the raw pattern groups
  * (template + counts), without MCP response formatting.
  */
-export async function mineWindowPatterns(
+async function mineWindowPatterns(
   context: McpContext,
   sourceId: string,
   startDate: Date,
