@@ -8,6 +8,7 @@ import { Flex, SegmentedControl } from '@mantine/core';
 
 import { IsolatedChartSyncProvider } from '@/chartSync';
 import { ChartCard } from '@/components/charts/ChartCard';
+import { CollapsedToolbarProvider } from '@/components/charts/ChartContainer';
 import DBHeatmapChart, {
   HEATMAP_DURATION_NUMBER_FORMAT,
   toHeatmapQuery,
@@ -144,8 +145,6 @@ export function TraceRedMetricsChart({
     sourceId: source.id,
     enabled: isReady,
     showDisplaySwitcher: false,
-    showMVOptimizationIndicator: false,
-    showDateRangeIndicator: false,
     queryKeyPrefix,
     onTimeRangeSelect,
     enableParallelQueries: true,
@@ -174,61 +173,65 @@ export function TraceRedMetricsChart({
 
   return (
     <IsolatedChartSyncProvider>
-      <Flex direction="row" h="100%" gap="sm" mih="0" miw="0">
-        <ChartCard style={RED_TILE_STYLE}>
-          {/* Throughput is the status-grouped count histogram this view
-              replaces, rendered from the same config under the results header's
-              query-key prefix so react-query runs a single shared scan, and it
-              keeps the per-status drill-down via onFocusSeries. */}
-          <DBTimeChart
-            title="Throughput"
-            config={histogramTimeChartConfig}
-            showLegend={throughputGrouped}
-            onFocusSeries={onFocusSeries}
-            {...commonProps}
-            queryKeyPrefix={throughputQueryKeyPrefix}
-          />
-        </ChartCard>
-        {errors != null && (
+      {/* Narrow tiles fold their header controls into a menu, as
+          dashboard tiles do, so the titles keep their room. */}
+      <CollapsedToolbarProvider menuItems={null} suffixCount={0}>
+        <Flex direction="row" h="100%" gap="sm" mih="0" miw="0">
           <ChartCard style={RED_TILE_STYLE}>
-            {/* Remount on mode change: DBTimeChart seeds its display type
-                  from the initial config when uncontrolled, so a key swap
-                  re-seeds bars (volume) vs line (rate). */}
+            {/* Throughput is the status-grouped count histogram this view
+                replaces, rendered from the same config under the results header's
+                query-key prefix so react-query runs a single shared scan, and it
+                keeps the per-status drill-down via onFocusSeries. */}
             <DBTimeChart
-              key={errorsMode}
-              title="Errors"
-              toolbarSuffix={[errorsModeControl]}
-              config={errors}
+              title="Throughput"
+              config={histogramTimeChartConfig}
+              showLegend={throughputGrouped}
+              onFocusSeries={onFocusSeries}
+              {...commonProps}
+              queryKeyPrefix={throughputQueryKeyPrefix}
+            />
+          </ChartCard>
+          {errors != null && (
+            <ChartCard style={RED_TILE_STYLE}>
+              {/* Remount on mode change: DBTimeChart seeds its display type
+                    from the initial config when uncontrolled, so a key swap
+                    re-seeds bars (volume) vs line (rate). */}
+              <DBTimeChart
+                key={errorsMode}
+                title="Errors"
+                toolbarSuffix={[errorsModeControl]}
+                config={errors}
+                showLegend
+                hiddenSeries={
+                  errorsMode === 'rate' ? ERROR_RATE_HELPER_SERIES : undefined
+                }
+                // Rate is 0-100%: cap the axis so a flat/near-zero series
+                // can't render a nonsense 0-400% scale, while still
+                // auto-scaling to small values.
+                yAxisMaxDomain={errorsMode === 'rate' ? 1 : undefined}
+                // Volume is grouped by status, so clicking the bar filters the
+                // results to that status (the histogram's drill-down). Rate is
+                // a single ungrouped line, so it has nothing to drill into.
+                onFocusSeries={
+                  errorsMode === 'volume' ? onFocusSeries : undefined
+                }
+                {...commonProps}
+              />
+            </ChartCard>
+          )}
+          <ChartCard style={RED_TILE_STYLE}>
+            {/* The duration series pin their colors on their select items (set
+                in durationConfig); applySelectColors opts this chart into them. */}
+            <DBTimeChart
+              title="Duration"
+              config={duration}
               showLegend
-              hiddenSeries={
-                errorsMode === 'rate' ? ERROR_RATE_HELPER_SERIES : undefined
-              }
-              // Rate is 0-100%: cap the axis so a flat/near-zero series
-              // can't render a nonsense 0-400% scale, while still
-              // auto-scaling to small values.
-              yAxisMaxDomain={errorsMode === 'rate' ? 1 : undefined}
-              // Volume is grouped by status, so clicking the bar filters the
-              // results to that status (the histogram's drill-down). Rate is
-              // a single ungrouped line, so it has nothing to drill into.
-              onFocusSeries={
-                errorsMode === 'volume' ? onFocusSeries : undefined
-              }
+              applySelectColors
               {...commonProps}
             />
           </ChartCard>
-        )}
-        <ChartCard style={RED_TILE_STYLE}>
-          {/* The duration series pin their colors on their select items (set
-              in durationConfig); applySelectColors opts this chart into them. */}
-          <DBTimeChart
-            title="Duration"
-            config={duration}
-            showLegend
-            applySelectColors
-            {...commonProps}
-          />
-        </ChartCard>
-      </Flex>
+        </Flex>
+      </CollapsedToolbarProvider>
     </IsolatedChartSyncProvider>
   );
 }
