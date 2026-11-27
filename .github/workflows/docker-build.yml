@@ -201,7 +201,7 @@ jobs:
             docker/hyperdx/**
             docker/clickhouse/**
             docker/otel-collector/**
-            .vex/**
+            docker/documentdb/**
       - name: Setup Docker Buildx
         if:
           github.event_name != 'pull_request' ||

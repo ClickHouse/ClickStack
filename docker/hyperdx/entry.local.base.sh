@@ -14,7 +14,8 @@ export OPAMP_PORT=${HYPERDX_OPAMP_PORT:-4320}
 # Internal Services
 export HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE="${HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE:-default}"
 export CLICKHOUSE_ENDPOINT="${CLICKHOUSE_ENDPOINT:-tcp://ch-server:9000?dial_timeout=10s}"
-export MONGO_URI="mongodb://db:27017/hyperdx"
+# DocumentDB gateway; the self-signed TLS cert never leaves the container.
+export MONGO_URI="mongodb://hyperdx:hyperdx@db:10260/hyperdx?tls=true&tlsAllowInvalidCertificates=true&authMechanism=SCRAM-SHA-256"
 export OPAMP_SERVER_URL="http://127.0.0.1:${OPAMP_PORT}"
 export CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT="${CLICKHOUSE_PROMETHEUS_METRICS_ENDPOINT:-ch-server:9363}"
 
@@ -56,11 +57,23 @@ echo "Exporting data to ClickHouse:
   Database: $HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE
 "
 
+# Images before DocumentDB kept MongoDB data in /data/db, which this image cannot read.
+# Starting empty would reopen first-user signup on an auth install, so it needs an opt-in.
+if [ -f /data/db/WiredTiger ] && [ ! -f /data/db/pgdata/.documentdb-initialised ] \
+  && [ "${HYPERDX_ACCEPT_EMPTY_METADATA}" != "true" ]; then
+  echo "ERROR: found MongoDB data in /data/db, which this image cannot read." >&2
+  echo "ERROR: Migrate it to DocumentDB as described in the release notes, or set" >&2
+  echo "ERROR: HYPERDX_ACCEPT_EMPTY_METADATA=true to start with an empty database." >&2
+  exit 1
+fi
+
 # Start Clickhouse Server
 /entrypoint.sh > /var/log/clickhouse.log 2>&1 &
 
-# Start Mongo Server
-mongod --quiet --dbpath /data/db > /var/log/mongod.log 2>&1 &
+# Start DocumentDB (Postgres + Mongo wire-protocol gateway on :10260)
+DOCDB_USER=hyperdx DOCDB_PASSWORD=hyperdx PGDATA=/data/db/pgdata \
+  PATH="/usr/libexec/postgresql18:$PATH" \
+  bash /usr/local/bin/documentdb-entrypoint.sh > /var/log/documentdb.log 2>&1 &
 
 # Wait for Clickhouse to be ready
 while ! curl -s "http://ch-server:8123" > /dev/null; do

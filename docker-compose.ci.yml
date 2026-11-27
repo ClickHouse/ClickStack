@@ -36,7 +36,10 @@ services:
       - internal
   db:
     image: hyperdx/documentdb:local
-    build: ./docker/documentdb
+    build:
+      context: .
+      dockerfile: docker/hyperdx/Dockerfile
+      target: documentdb
     environment:
       DOCDB_USER: hyperdx
       DOCDB_PASSWORD: hyperdx
