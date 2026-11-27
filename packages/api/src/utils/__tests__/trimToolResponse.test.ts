@@ -527,5 +527,38 @@ describe('trimToolResponse', () => {
         ]),
       );
     });
+
+    it('shortens long baselinePattern and currentPattern values', () => {
+      const long = (label: string) => `${label} ` + 'x'.repeat(20000);
+      const output = {
+        emerging: [0, 1, 2].map(i => ({
+          pattern: `new ${i}`,
+          baselinePattern: long(`old ${i}`),
+        })),
+        disappeared: [0, 1, 2].map(i => ({
+          pattern: `gone ${i}`,
+          currentPattern: long(`now ${i}`),
+        })),
+      };
+      const { data, notes } = trimToolResponse(output, 50000, {
+        reductions: EMERGING_SIGNALS_REDUCTIONS,
+      });
+      for (const e of data.emerging) {
+        expect(e.baselinePattern).toMatch(/^old \d x+…\(\+[\d,]+ chars\)$/);
+      }
+      for (const d of data.disappeared) {
+        expect(d.currentPattern).toMatch(/^now \d x+…\(\+[\d,]+ chars\)$/);
+      }
+      expect(notes).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^emerging\[\]\.baselinePattern: 3 value\(s\) cut/,
+          ),
+          expect.stringMatching(
+            /^disappeared\[\]\.currentPattern: 3 value\(s\) cut/,
+          ),
+        ]),
+      );
+    });
   });
 });
