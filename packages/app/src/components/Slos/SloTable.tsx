@@ -1,3 +1,4 @@
+import { useRouter } from 'next/router';
 import { formatDistanceToNowStrict } from 'date-fns';
 import { Badge } from '@clickhouse/click-ui';
 import type {
@@ -66,9 +67,14 @@ function SloRow({
   slo: SloApiResponse;
   sourceName?: string;
 }) {
+  const router = useRouter();
   const { status } = slo;
   return (
-    <Table.Tr data-testid="slo-row">
+    <Table.Tr
+      data-testid="slo-row"
+      style={{ cursor: 'pointer' }}
+      onClick={() => router.push(`/slos/${slo.id}`)}
+    >
       <Table.Td>
         <Stack gap={2}>
           <Text size="sm" fw={500}>

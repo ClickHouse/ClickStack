@@ -8,7 +8,13 @@ import { useDeleteSlo } from '@/slo';
 import { useConfirm } from '@/useConfirm';
 import { getApiErrorMessage } from '@/utils/apiErrors';
 
-export function SloRowMenu({ slo }: { slo: SloApiResponse }) {
+export function SloRowMenu({
+  slo,
+  onDeleted,
+}: {
+  slo: SloApiResponse;
+  onDeleted?: () => void;
+}) {
   const confirm = useConfirm();
   const deleteSlo = useDeleteSlo();
 
@@ -31,6 +37,7 @@ export function SloRowMenu({ slo }: { slo: SloApiResponse }) {
     try {
       await deleteSlo.mutateAsync(slo.id);
       notifications.show({ color: 'green', message: `Deleted ${slo.name}` });
+      onDeleted?.();
     } catch (e) {
       notifications.show({
         color: 'red',
