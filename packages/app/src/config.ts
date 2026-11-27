@@ -96,6 +96,11 @@ export const INSTANCE_TITLE_SUFFIX = INSTANCE_LABEL ? ` ${INSTANCE_LABEL}` : '';
 // dev (.env.development) and CI (e2e webserver) while the feature bakes.
 export const IS_ALERT_DETAILS_ENABLED =
   env('NEXT_PUBLIC_ENABLE_ALERT_DETAILS') === 'true';
+// SLOs (/slos). Default off while the feature bakes; enabled in dev
+// (.env.development). The API gates its routes with ENABLE_SLOS, and local
+// mode has no API to evaluate them.
+export const IS_SLOS_ENABLED =
+  env('NEXT_PUBLIC_ENABLE_SLOS') === 'true' && !IS_LOCAL_MODE;
 // Not exported: IS_IAC_EXPORT_ENABLED below is the only gate callers should
 // read. Leaving the raw flag importable re-opens the "forgot the local-mode
 // check" mistake that folding the two together was meant to close.
