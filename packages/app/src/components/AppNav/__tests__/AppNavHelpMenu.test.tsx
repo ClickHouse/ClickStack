@@ -12,18 +12,22 @@ jest.mock('next/router', () => ({
   useRouter: () => ({ basePath: '' }),
 }));
 
-const renderHelpMenu = (isCollapsed: boolean) =>
+const renderHelpMenu = (isCollapsed: boolean, whatsNewVersion?: string) =>
   render(
     <QueryClientProvider client={new QueryClient()}>
       <MantineProvider>
         <AppNavContext value={{ isCollapsed, pathname: '/search' }}>
-          <AppNavHelpMenu />
+          <AppNavHelpMenu whatsNewVersion={whatsNewVersion} />
         </AppNavContext>
       </MantineProvider>
     </QueryClientProvider>,
   );
 
 describe('AppNavHelpMenu', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('names the Help button when the nav is expanded', () => {
     renderHelpMenu(false);
     expect(screen.getByRole('button', { name: 'Help' })).toBeInTheDocument();
@@ -32,5 +36,15 @@ describe('AppNavHelpMenu', () => {
   it('keeps the Help button name when the nav is collapsed to icons', () => {
     renderHelpMenu(true);
     expect(screen.getByRole('button', { name: 'Help' })).toBeInTheDocument();
+  });
+
+  it('keeps the Help name next to the sparkle label when collapsed', async () => {
+    // A browser that has never seen the release notes gets the sparkle, which
+    // adds its own label to the button's name.
+    renderHelpMenu(true, '2.37.0');
+    expect(await screen.findByTestId('whats-new-sparkle')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'New updates available Help' }),
+    ).toBeInTheDocument();
   });
 });
