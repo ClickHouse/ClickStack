@@ -9,10 +9,15 @@ import {
 import { Separator } from '@clickhouse/click-ui';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { validateOnClickTemplate } from '@hyperdx/common-utils/dist/core/linkUrlBuilder';
-import { getFilterExpression } from '@hyperdx/common-utils/dist/filters';
+import {
+  getFilterExpression,
+  getFilterVariableName,
+  isAdhocFilter,
+} from '@hyperdx/common-utils/dist/filters';
 import {
   isSearchableSource,
   OnClick,
+  OnClickDashboardFilterTemplate,
   OnClickTarget,
 } from '@hyperdx/common-utils/dist/types';
 import {
@@ -26,7 +31,10 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 
-import { TextInputControlled } from '@/components/InputControlled';
+import {
+  CheckBoxControlled,
+  TextInputControlled,
+} from '@/components/InputControlled';
 import { InputLabelWithTooltip } from '@/components/InputLabelWithTooltip';
 import SearchWhereInput from '@/components/SearchInput/SearchWhereInput';
 import { useDashboards } from '@/dashboard';
@@ -43,7 +51,11 @@ import {
   emptySearchOnClick,
 } from './utils';
 
-const TEMPLATE_HELP_TEXT = `Templates can reference column values from the clicked row using {{columnName}}.`;
+const TEMPLATE_HELP_TEXT =
+  'Templates can reference column values from the clicked row using {{columnName}}, ' +
+  'and the page through {{__from}}, {{__to}} (epoch ms), {{__timezone}}, ' +
+  '{{__url_time_range}} and {{__all_variables}}. Format a timestamp with ' +
+  '{{date __from "iso"}} ("seconds" and "ms" also work).';
 
 function SearchOnClickFields({ control }: { control: DrawerControl }) {
   const { data: sources } = useSources();
@@ -119,16 +131,15 @@ function DashboardOnClickFields({
 
       setValue(
         'onClick.filters',
-        dashboardFilters.flatMap(f => {
+        dashboardFilters.flatMap<OnClickDashboardFilterTemplate>(f => {
           const expression = getFilterExpression(f);
-          return expression != null
-            ? [
-                {
-                  kind: 'expressionTemplate' as const,
-                  expression,
-                  template: '',
-                },
-              ]
+          if (expression != null) {
+            return [{ kind: 'expressionTemplate', expression, template: '' }];
+          }
+          // Filters without an expression (static lists) can only be set by variable name.
+          const variableName = getFilterVariableName(f);
+          return variableName && !isAdhocFilter(f)
+            ? [{ kind: 'variableTemplate', variableName, template: '' }]
             : [];
         }),
       );
@@ -149,7 +160,15 @@ function DashboardOnClickFields({
         onTargetChange={handleTargetChange}
       />
 
-      <FilterTemplateList control={control} />
+      <FilterTemplateList control={control} allowVariables />
+
+      <CheckBoxControlled
+        control={control}
+        name="onClick.includeCurrentFilters"
+        label="Include this dashboard's current filters"
+        description="Filters above override a current selection for the same filter."
+        data-testid="onclick-include-current-filters"
+      />
 
       <Box>
         <InputLabelWithTooltip

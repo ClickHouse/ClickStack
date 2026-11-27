@@ -1472,6 +1472,7 @@ export default function EditTimeChartForm({
                     markdown: markdown || 'Preview',
                   }}
                   variables={variables}
+                  dateRange={dateRange}
                 />
               </Box>
             </div>

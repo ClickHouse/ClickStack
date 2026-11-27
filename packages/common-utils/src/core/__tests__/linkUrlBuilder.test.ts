@@ -1227,3 +1227,186 @@ describe('describeOnClick', () => {
     ).toBe('Open external link');
   });
 });
+
+describe('link template globals', () => {
+  const dashboardIds = new Set<string>(['dash_1']);
+  const dashboardIdsByName = new Map<string, string[]>();
+  const from = dateRange[0].getTime();
+  const to = dateRange[1].getTime();
+  const currentFilters = [
+    { type: 'variable' as const, name: 'env', values: ['prod'] },
+    { type: 'sql' as const, condition: "ServiceName IN ('old')" },
+  ];
+
+  const dashboardFilters = (onClick: OnClickDashboard, row = {}) => {
+    const result = renderOnClickDashboard({
+      onClick,
+      row,
+      dashboardIds,
+      dashboardIdsByName,
+      dateRange,
+      currentFilters,
+    });
+    if (!result.ok) throw new Error(result.error);
+    const params = new URLSearchParams(result.url.split('?')[1]);
+    return JSON.parse(decodeURIComponent(params.get('filters') ?? '[]'));
+  };
+
+  it('exposes the time range, time zone and current filters to external URLs', () => {
+    const result = renderOnClickExternal({
+      onClick: {
+        type: 'external',
+        urlTemplate:
+          'https://x.example.com/d/1?{{__url_time_range}}&{{__all_variables}}&f={{__from}}&t={{__to}}&tz={{__timezone}}&iso={{date __from "iso"}}&s={{date __to "seconds"}}',
+      },
+      row: {},
+      dateRange,
+      timeZone: 'Etc/GMT+5',
+      currentFilters,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const params = new URL(result.url).searchParams;
+    expect(params.get('from')).toBe(String(from));
+    expect(params.get('to')).toBe(String(to));
+    expect(params.get('f')).toBe(String(from));
+    expect(params.get('t')).toBe(String(to));
+    expect(params.get('tz')).toBe('Etc/GMT+5');
+    expect(params.get('iso')).toBe('2026-01-01T00:00:00.000Z');
+    expect(params.get('s')).toBe(String(to / 1000));
+    expect(JSON.parse(decodeURIComponent(params.get('filters') ?? ''))).toEqual(
+      currentFilters,
+    );
+  });
+
+  it('renders __all_variables empty when there are no current filters', () => {
+    const result = renderOnClickExternal({
+      onClick: {
+        type: 'external',
+        urlTemplate: 'https://x.example.com/?{{__all_variables}}',
+      },
+      row: {},
+      dateRange,
+    });
+    expect(result).toEqual({ ok: true, url: 'https://x.example.com/?' });
+  });
+
+  it('sets a destination filter by variable name', () => {
+    expect(
+      dashboardFilters(
+        {
+          type: 'dashboard',
+          target: { mode: 'id', id: 'dash_1' },
+          whereLanguage: 'sql',
+          filters: [
+            {
+              kind: 'variableTemplate',
+              variableName: 'svc',
+              template: '{{A}}',
+            },
+            {
+              kind: 'variableTemplate',
+              variableName: 'svc',
+              template: '{{B}}',
+            },
+          ],
+        },
+        { A: 'api', B: 'web' },
+      ),
+    ).toEqual([{ type: 'variable', name: 'svc', values: ['api', 'web'] }]);
+  });
+
+  it('carries over current filters, with row templates replacing a shared key', () => {
+    expect(
+      dashboardFilters(
+        {
+          type: 'dashboard',
+          target: { mode: 'id', id: 'dash_1' },
+          whereLanguage: 'sql',
+          includeCurrentFilters: true,
+          filters: [
+            {
+              kind: 'expressionTemplate',
+              expression: 'ServiceName',
+              template: '{{ServiceName}}',
+            },
+          ],
+        },
+        { ServiceName: 'new' },
+      ),
+    ).toEqual([
+      { type: 'sql', condition: "ServiceName IN ('new')" },
+      { type: 'variable', name: 'env', values: ['prod'] },
+    ]);
+  });
+
+  it("replaces a carried-over variable selection for the row's expression", () => {
+    const result = renderOnClickDashboard({
+      onClick: {
+        type: 'dashboard',
+        target: { mode: 'id', id: 'dash_1' },
+        whereLanguage: 'sql',
+        includeCurrentFilters: true,
+        filters: [
+          {
+            kind: 'expressionTemplate',
+            expression: 'ServiceName',
+            template: '{{ServiceName}}',
+          },
+        ],
+      },
+      row: { ServiceName: 'new' },
+      dashboardIds,
+      dashboardIdsByName,
+      dashboardFiltersById: new Map([
+        [
+          'dash_1',
+          [
+            {
+              id: 'f1',
+              type: 'QUERY_EXPRESSION',
+              name: 'Service',
+              expression: 'ServiceName',
+              source: 'src_1',
+              isVariableEnabled: true,
+              variableName: 'service',
+            },
+          ],
+        ],
+      ]),
+      dateRange,
+      currentFilters: [
+        { type: 'variable', name: 'service', values: ['old'] },
+        { type: 'variable', name: 'env', values: ['prod'] },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const params = new URLSearchParams(result.url.split('?')[1]);
+    expect(JSON.parse(decodeURIComponent(params.get('filters') ?? ''))).toEqual(
+      [
+        { type: 'sql', condition: "ServiceName IN ('new')" },
+        { type: 'variable', name: 'env', values: ['prod'] },
+      ],
+    );
+  });
+
+  it('leaves current filters behind unless asked to include them', () => {
+    expect(
+      dashboardFilters({
+        type: 'dashboard',
+        target: { mode: 'id', id: 'dash_1' },
+        whereLanguage: 'sql',
+      }),
+    ).toEqual([]);
+  });
+
+  it('rejects an unknown date format when validating', () => {
+    expect(() =>
+      validateOnClickTemplate({
+        type: 'external',
+        urlTemplate: 'https://x.example.com/?t={{date __from "nope"}}',
+      }),
+    ).toThrow('Unknown date format "nope"');
+  });
+});

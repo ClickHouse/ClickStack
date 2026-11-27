@@ -32,6 +32,29 @@ hb.registerHelper('floor', (value: unknown): string => {
   return String(Math.floor(num));
 });
 
+const DATE_FORMATS = ['iso', 'seconds', 'ms'] as const;
+
+/**
+ * Formats a timestamp (epoch ms, or a date string) as `iso`, `seconds` or `ms`.
+ * Returns an empty string when the input can't be read as a date.
+ */
+hb.registerHelper('date', (value: unknown, format: unknown): string => {
+  if (!DATE_FORMATS.some(f => f === format)) {
+    throw new Error(
+      `Unknown date format "${typeof format === 'string' ? format : ''}". Expected one of: ${DATE_FORMATS.join(', ')}.`,
+    );
+  }
+  if (value == null || value === '') return '';
+  const ms =
+    typeof value === 'number' || /^\d+$/.test(String(value))
+      ? Number(value)
+      : Date.parse(String(value));
+  if (!Number.isFinite(ms)) return '';
+  if (format === 'seconds') return String(Math.floor(ms / 1000));
+  if (format === 'ms') return String(ms);
+  return new Date(ms).toISOString();
+});
+
 /** Reads the helper name off the trailing options argument Handlebars passes. */
 function helperName(args: unknown[]): string {
   const options = args.at(-1);

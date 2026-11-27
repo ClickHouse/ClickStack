@@ -932,6 +932,31 @@ describe('substituteVariables for markdown', () => {
       '$nope $__filter(ServiceName, $service)',
     );
   });
+
+  it('URL-encodes values with the url format', () => {
+    expect(
+      markdown('[x](/d?s=${service:url})', [
+        variable('service', ['a b', "(c)'"]),
+      ]),
+    ).toBe('[x](/d?s=a%20b,%28c%29%27)');
+  });
+
+  it('expands text macros, leaving unknown and argument-carrying ones as written', () => {
+    const textMacros = new Map([
+      ['url_time_range', 'from=1&to=2'],
+      ['to', '2'],
+    ]);
+    expect(
+      substituteVariables(
+        '[x](/d?$__url_time_range) $__to $__toTime $__to(1)',
+        {
+          variables: [],
+          inputLanguage: 'markdown',
+          textMacros,
+        },
+      ),
+    ).toBe('[x](/d?from=1&to=2) 2 $__toTime $__to(1)');
+  });
 });
 
 describe('substituteVariables for promql', () => {
@@ -2150,7 +2175,7 @@ describe('validateVariableReferencesInTemplate', () => {
     it('warns about an unknown format', () => {
       expect(markdown('${service:nope}', [SERVICE]).warnings).toEqual([
         '${service:nope} uses an unknown format, so no variables are substituted. ' +
-          'Expected one of: sqlstring, regex, csv, lucene, markdown, promql.',
+          'Expected one of: sqlstring, regex, csv, lucene, markdown, promql, url.',
       ]);
     });
 

@@ -467,6 +467,39 @@ const mcpOnClickFilterTemplateSchema = z
       'an unscoped view.',
   );
 
+const mcpOnClickVariableTemplateSchema = z
+  .object({
+    kind: z
+      .literal('variableTemplate')
+      .describe(
+        'Filter kind: sets a destination dashboard filter by its variable name, to a value rendered from the clicked row.',
+      ),
+    variableName: z
+      .string()
+      .min(1)
+      .max(10000)
+      .describe(
+        "The destination dashboard filter's variableName, without the $. Required for " +
+          'STATIC_LIST filters, which have no expression to match.',
+      ),
+    template: z
+      .string()
+      .min(1)
+      .max(10000)
+      .describe(
+        'Handlebars-style template rendered with the clicked row\'s columns, e.g. "{{ServiceName}}".',
+      ),
+  })
+  .describe(
+    'One templated filter applied on the destination dashboard, matched by variable name.',
+  );
+
+const LINK_GLOBALS_DESCRIPTION =
+  'Besides row columns, every template can use {{__from}} / {{__to}} (epoch ms), ' +
+  '{{__timezone}}, {{__url_time_range}} ("from=…&to=…"), {{__all_variables}} ' +
+  '("filters=…" with the current dashboard\'s filter selections, or empty), and ' +
+  '{{date <value> "iso"|"seconds"|"ms"}} to format a timestamp.';
+
 const mcpOnClickTargetSchema = z
   .discriminatedUnion('mode', [
     z
@@ -571,17 +604,31 @@ const mcpOnClickDashboardSchema = z
         'destination knows how to parse the rendered values.',
     ),
     filters: z
-      .array(mcpOnClickFilterTemplateSchema)
+      .array(
+        z.discriminatedUnion('kind', [
+          mcpOnClickFilterTemplateSchema,
+          mcpOnClickVariableTemplateSchema,
+        ]),
+      )
       .max(50)
       .optional()
       .describe(
         'Templated equality filters. The destination dashboard ' +
-          'auto-populates its filter list with these (matched by expression), so prefer ' +
+          'auto-populates its filter list with these (matched by expression, or by ' +
+          'variable name for kind="variableTemplate"), so prefer ' +
           'this over whereTemplate when the target dashboard already declares the same ' +
-          'filter expressions. ' +
-          'If the destination dashboard does not declare a top-level filter whose ' +
-          '`expression` matches, that value is dropped at click time and the ' +
-          'destination opens unfiltered for that expression.',
+          'filters. ' +
+          'If the destination dashboard does not declare a top-level filter that ' +
+          'matches, that value is dropped at click time and the ' +
+          'destination opens unfiltered for it.',
+      ),
+    includeCurrentFilters: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true, the current dashboard's filter selections are carried over to the " +
+          'destination. A filter set by `filters` replaces the carried-over selection ' +
+          'for the same expression or variable.',
       ),
   })
   .describe(
@@ -624,7 +671,9 @@ const mcpOnClickSchema = z
       'type="dashboard" links to another dashboard; ' +
       'type="external" links to an arbitrary external http(s) URL. ' +
       'All support Handlebars `{{column}}` templating against the clicked row ' +
-      'for the target/url, whereTemplate, and filter values.\n\n' +
+      'for the target/url, whereTemplate, and filter values. ' +
+      LINK_GLOBALS_DESCRIPTION +
+      '\n\n' +
       'Examples:\n' +
       '1. Drill into search for the clicked service: \n' +
       '   { "type": "search", "target": { "mode": "id", "id": "<trace-source-id>" }, ' +
@@ -641,7 +690,12 @@ const mcpOnClickSchema = z
       '"{{TargetDashboardName}}" }, "whereLanguage": "lucene" }\n' +
       '4. Link out to an external tool: \n' +
       '   { "type": "external", "urlTemplate": ' +
-      '"https://grafana.example.com/d/abc?var-service={{ServiceName}}" }',
+      '"https://grafana.example.com/d/abc?var-service={{ServiceName}}&from={{__from}}&to={{__to}}" }\n' +
+      '5. Drill into a dashboard, keeping the current filters and setting a static-list filter: \n' +
+      '   { "type": "dashboard", "target": { "mode": "id", "id": "<dashboard-id>" }, ' +
+      '"whereLanguage": "sql", "includeCurrentFilters": true, ' +
+      '"filters": [{ "kind": "variableTemplate", "variableName": "tier", ' +
+      '"template": "{{Tier}}" }] }',
   );
 
 const mcpTimeChartDisplayFields = {
