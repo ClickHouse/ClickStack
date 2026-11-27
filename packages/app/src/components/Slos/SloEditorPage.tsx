@@ -59,6 +59,7 @@ import { SloPreviewPanel } from './SloPreviewPanel';
 const PREVIEW_FIELDS: FieldPath<SloFormValues>[] = [
   'source',
   'indicator',
+  'groupBy',
   'target',
   'window',
 ];
@@ -93,9 +94,9 @@ function SloEditorPage() {
       resolver: sloFormResolver,
     });
   const { errors } = useFormState({ control, name: 'name' });
-  const [sourceId, indicator, target, sloWindow] = useWatch({
+  const [sourceId, indicator, groupBy, target, sloWindow] = useWatch({
     control,
-    name: ['source', 'indicator', 'target', 'window'],
+    name: ['source', 'indicator', 'groupBy', 'target', 'window'],
   });
   const { data: source } = useSource({ id: sourceId || undefined });
 
@@ -127,7 +128,7 @@ function SloEditorPage() {
   const isPreviewStale =
     preview != null &&
     getSloPreviewKey(
-      { source: sourceId, indicator, window: sloWindow },
+      { source: sourceId, indicator, groupBy, window: sloWindow },
       source,
     ) !== preview.key;
 

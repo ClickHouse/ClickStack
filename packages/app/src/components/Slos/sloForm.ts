@@ -2,6 +2,7 @@ import type { Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   buildSloCountsChartConfig,
+  buildSloGroupCountChartConfig,
   buildSloSourceTotalChartConfig,
   getSloWindowRange,
 } from '@hyperdx/common-utils/dist/core/slo';
@@ -24,13 +25,14 @@ import type {
  * The builder edits the API input directly, so schema errors land on the
  * fields they belong to. The form keeps the good condition and the latency
  * settings side by side while the user switches templates; toSloInput keeps
- * the one the template uses.
+ * the one the template uses. An empty group-by means none.
  */
-export type SloFormValues = Omit<SloInput, 'indicator'> & {
+export type SloFormValues = Omit<SloInput, 'indicator' | 'groupBy'> & {
   indicator: Omit<SloInput['indicator'], 'good' | 'latency'> & {
     good: string;
     latency: Omit<SloLatency, 'numeric'>;
   };
+  groupBy: string;
 };
 
 const DEFAULT_LATENCY: SloFormValues['indicator']['latency'] = {
@@ -52,6 +54,7 @@ export const DEFAULT_SLO_FORM_VALUES: SloFormValues = {
     good: '',
     latency: DEFAULT_LATENCY,
   },
+  groupBy: '',
   target: 99.9,
   window: '30d',
   // Off until the user turns one on and picks where it notifies.
@@ -76,8 +79,7 @@ export function sloToFormValues(slo: SloApiResponse): SloFormValues {
       good: good ?? '',
       latency: latency ?? DEFAULT_LATENCY,
     },
-    // Kept as saved, so editing a grouped SLO keeps its groups.
-    groupBy: slo.groupBy,
+    groupBy: slo.groupBy ?? '',
     target: slo.target,
     window: slo.window,
     alerts: {
@@ -168,6 +170,7 @@ export function toSloInput(values: SloFormValues, source?: TSource): SloInput {
   return {
     ...values,
     indicator: toSloIndicator(values.indicator, source),
+    groupBy: values.groupBy.trim() || null,
   };
 }
 
@@ -176,17 +179,20 @@ export type SloPreviewRequest = {
   key: string;
   counts: BuilderChartConfigWithDateRange;
   total: BuilderChartConfigWithDateRange;
+  /** With a group-by: how many groups the window has. */
+  groups?: BuilderChartConfigWithDateRange;
 };
 
 /** What a preview's counts depend on. The target only changes the math. */
 export function getSloPreviewKey(
-  values: Pick<SloFormValues, 'source' | 'indicator' | 'window'>,
+  values: Pick<SloFormValues, 'source' | 'indicator' | 'window' | 'groupBy'>,
   source?: TSource,
 ): string {
   return JSON.stringify([
     values.source,
     values.window,
     toSloIndicator(values.indicator, source),
+    values.groupBy.trim(),
   ]);
 }
 
@@ -201,6 +207,7 @@ export function buildSloPreviewRequest(
   );
   if (!indicator.success) return undefined;
   const dateRange = getSloWindowRange(values.window, new Date(nowMs));
+  const groupBy = values.groupBy.trim();
   return {
     key: getSloPreviewKey(values, source),
     counts: buildSloCountsChartConfig({
@@ -209,6 +216,15 @@ export function buildSloPreviewRequest(
       dateRange,
     }),
     total: buildSloSourceTotalChartConfig({ source, dateRange }),
+    ...(groupBy
+      ? {
+          groups: buildSloGroupCountChartConfig({
+            slo: { indicator: indicator.data, groupBy },
+            source,
+            dateRange,
+          }),
+        }
+      : {}),
   };
 }
 

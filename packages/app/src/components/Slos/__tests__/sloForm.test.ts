@@ -215,6 +215,14 @@ describe('SLO form', () => {
     });
   });
 
+  it('saves an empty group-by as none', () => {
+    expect(toSloInput(valid).groupBy).toBeNull();
+    expect(toSloInput({ ...valid, groupBy: ' ServiceName ' }).groupBy).toBe(
+      'ServiceName',
+    );
+    expect(sloToFormValues({ ...savedSlo, groupBy: null }).groupBy).toBe('');
+  });
+
   it('marks a preview stale when its counts would change, not the target', () => {
     const key = getSloPreviewKey(valid, traceSource);
     const retargeted: SloFormValues = { ...valid, target: 95 };
@@ -224,6 +232,9 @@ describe('SLO form', () => {
     );
     // The latency settings play no part in an availability SLO.
     expect(getSloPreviewKey(latency('Duration'), traceSource)).not.toBe(key);
+    expect(
+      getSloPreviewKey({ ...valid, groupBy: 'ServiceName' }, traceSource),
+    ).not.toBe(key);
     expect(
       getSloPreviewKey(
         {
@@ -246,5 +257,22 @@ describe('SLO form', () => {
       new Date('2026-11-08T00:00:00Z'),
     ]);
     expect(request?.total.dateRange).toEqual(request?.counts.dateRange);
+    expect(request?.groups).toBeUndefined();
+  });
+
+  it('counts the groups of a group-by in the preview', () => {
+    const now = Date.parse('2026-11-08T00:00:00Z');
+    const request = buildSloPreviewRequest(
+      { ...valid, groupBy: 'ServiceName' },
+      traceSource,
+      now,
+    );
+    expect(request?.groups?.dateRange).toEqual(request?.counts.dateRange);
+    expect(request?.groups?.select).toEqual([
+      expect.objectContaining({
+        aggFn: 'count_distinct',
+        valueExpression: 'toString(ServiceName)',
+      }),
+    ]);
   });
 });
