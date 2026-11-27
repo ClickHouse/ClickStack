@@ -451,6 +451,28 @@ describe('minePatterns', () => {
   });
 });
 
+describe('minePatterns tokenization', () => {
+  it('splits JSON bodies on punctuation, as the web app miner does', () => {
+    const rows = [
+      '{"level":"info","msg":"user 1 logged in"}',
+      '{"level":"info","msg":"user 2 logged in"}',
+      '{"ts":"2026-11-04T06:12:12Z","msg":"done"}',
+      '{"ts":"2026-11-04T07:00:01Z","msg":"done"}',
+    ].map(body => makeRow(body));
+    const { patterns } = minePatterns(rows, {
+      totalCount: rows.length,
+      startDate: baseDate,
+      endDate,
+      trendBuckets: 0,
+      ...defaultCallbacks,
+    });
+    expect(patterns.map(p => p.pattern).sort()).toEqual([
+      'level info msg user <*> logged in',
+      'ts <DATE> <*> <*> <*> msg done',
+    ]);
+  });
+});
+
 describe('minePatterns template fidelity', () => {
   // Deterministic PRNG so the fuzz input is stable across runs.
   function lcg(seed: number) {

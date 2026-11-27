@@ -5,8 +5,8 @@ export interface MaskingInstructionConfig {
   perWord?: boolean;
 }
 
-const MONTH = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)';
-const WEEKDAY = '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)';
+export const MONTH = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)';
+export const WEEKDAY = '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)';
 const DAY = '(?:0?[1-9]|[12]\\d|3[01])';
 const TIME = '\\d{1,2}:\\d{2}:\\d{2}';
 const NOT_WORD_BEFORE = '(?<![0-9A-Za-z])';

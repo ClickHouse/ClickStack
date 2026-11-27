@@ -1,6 +1,6 @@
 export type { MaskingInstructionConfig } from './config';
 export { DATE_MASK, DATE_TOKEN, TemplateMinerConfig } from './config';
-export { Drain } from './drain';
+export { Drain, tokenizeContent } from './drain';
 export { LogCluster } from './log-cluster';
 export { LruCache } from './lru-cache';
 export { LogMasker, MaskingInstruction } from './masking';
@@ -12,10 +12,13 @@ export type {
 } from './mine-patterns';
 export {
   createPatternMasker,
+  createPatternMinerConfig,
   DENOISE_NOISE_THRESHOLD,
   DENOISE_SAMPLE_SIZE,
   flattenBody,
   minePatterns,
+  PATTERN_EXTRA_DELIMITERS,
+  PATTERN_REGEX_OPTIONS,
 } from './mine-patterns';
 export { Node } from './node';
 export { buildNoisyBodyMatcher, selectNoisyPatterns } from './noisy-matcher';

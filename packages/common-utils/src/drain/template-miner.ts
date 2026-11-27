@@ -40,6 +40,8 @@ export class TemplateMiner {
       cfg.drainExtraDelimiters,
       paramStr,
       cfg.parametrizeNumericTokens,
+      // A mask stays one token when the delimiters would split its brackets.
+      this.masker.maskNames.map(n => cfg.maskPrefix + n + cfg.maskSuffix),
     );
 
     this.extractionCache = new LruCache(cfg.parameterExtractionCacheCapacity);

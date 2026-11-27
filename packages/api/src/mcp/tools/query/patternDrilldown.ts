@@ -8,10 +8,11 @@ import type {
 import { substituteVariables } from '@hyperdx/common-utils/dist/variables';
 
 export const PATTERN_MATCH_SEMANTICS =
-  'whereSnippet matches values with the same whitespace-separated token count as the ' +
-  'template, the same literal tokens (case-sensitive) in the same positions, and exactly ' +
-  `one non-whitespace token at each <*>, and one or more non-whitespace characters at each ${DATE_TOKEN} ` +
-  `(also inside a token, e.g. backup_${DATE_TOKEN}.tar). ` +
+  'Tokens are separated by whitespace and ASCII punctuation. whereSnippet matches values ' +
+  'with the same token count as the template, the same literal tokens (case-sensitive) in ' +
+  `the same positions, exactly one token at each <*>, and at each ${DATE_TOKEN} a date of up to ` +
+  'three parts (digits, month or weekday names), which may touch a klog severity letter ' +
+  'before it (I1104) or a T time after it (2026-11-04T06). ' +
   'Every sampled member of the cluster matches. ' +
   'It can also match unsampled events whose shape fits, including ones Drain would have ' +
   'put in a more specific cluster, so the drill-down is a superset of cluster membership.';

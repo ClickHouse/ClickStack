@@ -4,6 +4,7 @@ import {
   buildNoisyBodyMatcher,
   DENOISE_SAMPLE_SIZE,
   minePatterns,
+  PATTERN_EXTRA_DELIMITERS,
   selectNoisyPatterns,
 } from '@hyperdx/common-utils/dist/drain';
 import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types';
@@ -229,7 +230,7 @@ export async function denoiseSearchResults(
   const isNoisy = buildNoisyBodyMatcher(
     patterns.map(p => p.pattern),
     noisyTemplates,
-    { masked: true },
+    { extraDelimiters: PATTERN_EXTRA_DELIMITERS, masked: true },
   );
   const filteredRows = rows.filter(row => {
     const bodyValue = row[bodyColumnKey];

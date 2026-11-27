@@ -14,8 +14,8 @@ import Spinner from 'ink-spinner';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import {
+  createPatternMinerConfig,
   TemplateMiner,
-  TemplateMinerConfig,
 } from '@hyperdx/common-utils/dist/drain';
 
 import { DashboardWithoutIdSchema } from '@hyperdx/common-utils/dist/types';
@@ -2373,7 +2373,7 @@ Examples:
             .replace(/\s{2,}/g, ' ')
             .trim();
 
-        const miner = new TemplateMiner(new TemplateMinerConfig());
+        const miner = new TemplateMiner(createPatternMinerConfig());
         const groups = new Map<number, { count: number; sample: string }>();
         for (const row of rows) {
           const raw = opts.bodyColumn
