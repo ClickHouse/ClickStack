@@ -1,6 +1,12 @@
 import PQueue from '@esm2cjs/p-queue';
 import { withQueryAttribution } from '@hyperdx/common-utils/dist/clickhouse/node';
 import { getSloWindowRange } from '@hyperdx/common-utils/dist/core/slo';
+import {
+  compareSloGroupsWorstFirst,
+  deriveGroupedSloState,
+  deriveSloGroupState,
+  deriveSloState,
+} from '@hyperdx/common-utils/dist/core/sloStats';
 import type { SloStatus } from '@hyperdx/common-utils/dist/slo';
 
 import { getSloQueryContext } from '@/controllers/slo';
@@ -21,7 +27,12 @@ import {
 } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 
-/** How old the burn numbers get before the refresh recomputes them. */
+/**
+ * How old the burn numbers get before the refresh recomputes them. Each
+ * check of an ungrouped SLO's burn alerts writes them too, so the refresh
+ * fills in only when no alert check did in the last 5 minutes. A grouped
+ * SLO's alerts write only their groups' numbers.
+ */
 const SLO_BURN_MAX_AGE_MS = 5 * 60 * 1000;
 /**
  * How old the window numbers (SLI, budget) get. Their query reads the whole
@@ -42,6 +53,50 @@ const SLO_REFRESH_BATCH_LIMIT = 200;
 const refreshCounter = getCounter('hyperdx.slo.refresh', {
   description: 'SLO status refreshes, by outcome',
 });
+
+/**
+ * Stores the burn numbers an SLO's alert check computed, so the list shows
+ * the alert's own verdict: for an ungrouped SLO its burn numbers, for a
+ * grouped one each group's. The window numbers stay as the refresh stored
+ * them; until it has, there is nothing to add to. Returns the stored
+ * snapshot.
+ */
+export async function recordSloAlertBurn(
+  slo: ISlo,
+  burn: Partial<SloBurnNumbers>,
+  now: Date,
+): Promise<SloStatus | null> {
+  const previous = slo.status;
+  if (previous?.windowEvaluatedAt == null) return null;
+  const groups = previous.groups
+    ?.map(group => {
+      const groupBurn = burn.groups?.get(group.value);
+      if (groupBurn == null) return group;
+      const next = { ...group, burn: groupBurn };
+      return { ...next, state: deriveSloGroupState(next) };
+    })
+    .sort(compareSloGroupsWorstFirst);
+  const overall = { ...previous, burn: burn.burn ?? previous.burn };
+  const status: SloStatus = {
+    ...overall,
+    // Only new overall burn numbers make the snapshot's burn part fresh.
+    evaluatedAt: burn.burn != null ? now.toISOString() : previous.evaluatedAt,
+    ...(groups != null ? { groups } : {}),
+    // A failing window query keeps its error until the refresh clears it.
+    state:
+      previous.state === 'error'
+        ? 'error'
+        : groups != null
+          ? deriveGroupedSloState(overall, groups)
+          : deriveSloState(overall),
+  };
+  await Slo.updateOne(
+    { _id: slo._id, updatedAt: slo.updatedAt },
+    { $set: { status } },
+    { timestamps: false },
+  );
+  return status;
+}
 
 const getErrorMessage = (e: unknown) =>
   e instanceof Error ? e.message : String(e);

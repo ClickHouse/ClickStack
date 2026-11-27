@@ -1,5 +1,6 @@
 import type { ClickhouseClient } from '@hyperdx/common-utils/dist/clickhouse/node';
 import type { Metadata } from '@hyperdx/common-utils/dist/core/metadata';
+import type { SloBurnStats } from '@hyperdx/common-utils/dist/slo';
 import type { ChartConfigWithOptDateRange } from '@hyperdx/common-utils/dist/types';
 
 import { registerExtensions } from '@/extensions';
@@ -14,6 +15,7 @@ import type {
   AlertDetails,
   AlertProvider,
 } from '@/tasks/checkAlerts/providers';
+import { sloBurnRateEvaluator } from '@/tasks/checkAlerts/sloEvaluator';
 
 /**
  * Internal extension point, not a stable API: members follow processAlert and
@@ -53,6 +55,8 @@ export interface AlertEvaluationContext {
     group: string;
     startTime?: Date;
     attributes?: Record<string, string>;
+    /** SLO alerts: this check's burn numbers, which the message states. */
+    sloBurn?: SloBurnStats[];
   }) => Promise<boolean>;
   sendNotificationIfResolved: (
     previousHistory: AggregatedAlertHistory | undefined,
@@ -125,13 +129,22 @@ const ensureExtensionsRegistered = () => {
   extensionsRegistered = true;
 };
 
-/** The registered evaluator for this alert, or undefined for the threshold
- * path. */
+/**
+ * Evaluators that ship with the API, checked before extensions. Built on
+ * call: the SLO evaluator imports the task module, which imports this one,
+ * so a list built at load time could catch it half loaded.
+ */
+const builtInEvaluators = (): AlertEvaluator[] => [sloBurnRateEvaluator];
+
+/** The evaluator for this alert, or undefined for the threshold path. */
 export const findAlertEvaluator = (
   alert: IAlert,
 ): AlertEvaluator | undefined => {
   ensureExtensionsRegistered();
-  return evaluators.find(e => e.appliesTo(alert));
+  return (
+    builtInEvaluators().find(e => e.appliesTo(alert)) ??
+    evaluators.find(e => e.appliesTo(alert))
+  );
 };
 
 /** @internal Test helper. Extensions are not registered again afterwards. */

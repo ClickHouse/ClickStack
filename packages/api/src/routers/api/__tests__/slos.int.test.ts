@@ -2,7 +2,10 @@ import { SourceKind } from '@hyperdx/common-utils/dist/types';
 import mongoose from 'mongoose';
 
 import * as config from '@/config';
-import { refreshDueSloStatuses } from '@/controllers/sloStatus';
+import {
+  recordSloAlertBurn,
+  refreshDueSloStatuses,
+} from '@/controllers/sloStatus';
 import {
   bulkInsertData,
   DEFAULT_DATABASE,
@@ -230,6 +233,76 @@ describe('SLO router', () => {
     expect(await statusAt(31)).toMatchObject({
       evaluatedAt: iso(31),
       windowEvaluatedAt: iso(31),
+    });
+  });
+
+  it("keeps an alert check's burn numbers beside the refresh's window numbers", async () => {
+    // Thirty good spans: the window alone is healthy.
+    const service = `${SERVICE}-alert`;
+    const now = Date.now();
+    await bulkInsertData(
+      `${DEFAULT_DATABASE}.${DEFAULT_TRACES_TABLE}`,
+      Array.from({ length: 30 }, (_, i) => ({
+        Timestamp: new Date(now - (i + 1) * 60_000),
+        TraceId: `${service}-trace-${i}`,
+        SpanId: `${service}-span-${i}`,
+        ParentSpanId: '',
+        SpanName: 'POST /checkout',
+        SpanKind: 'Server',
+        ServiceName: service,
+        Duration: 100 * 1e6,
+        StatusCode: 'Ok',
+        StatusMessage: '',
+        SpanAttributes: {},
+        ResourceAttributes: {},
+      })),
+    );
+    const created = await agent
+      .post('/slos')
+      .send(
+        definition({
+          indicator: {
+            template: 'availability',
+            eligible: {
+              where: `ServiceName = '${service}'`,
+              whereLanguage: 'sql',
+            },
+            good: "StatusCode != 'Error'",
+          },
+        }),
+      )
+      .expect(200);
+    const burn = [
+      {
+        rule: 'fastBurn' as const,
+        window: '1h' as const,
+        shortWindow: '5m' as const,
+        budgetSpent: 0.02,
+        minEvents: 20,
+        threshold: 14.4,
+        eligible: 100,
+        bad: 50,
+        burnRate: 50,
+        shortBurnRate: 50,
+      },
+    ];
+    const at = new Date(now + 60_000);
+    // Nothing to add to before the refresh stored window numbers.
+    const before = await Slo.findById(created.body.id).lean();
+    expect(await recordSloAlertBurn(before!, { burn }, at)).toBeNull();
+
+    await refreshDueSloStatuses();
+    const slo = await Slo.findById(created.body.id).lean();
+    expect(slo?.status?.state).toBe('healthy');
+    await recordSloAlertBurn(slo!, { burn }, at);
+    const { body } = await agent.get(`/slos/${created.body.id}`).expect(200);
+    expect(body.status).toMatchObject({
+      burn,
+      evaluatedAt: at.toISOString(),
+      windowEvaluatedAt: slo!.status!.windowEvaluatedAt,
+      eligible: 30,
+      // The alert's burn numbers turn the healthy window into burning.
+      state: 'burning',
     });
   });
 

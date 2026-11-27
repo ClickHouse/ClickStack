@@ -8,6 +8,7 @@ import { IAlertHistory, IAlertHistoryAnalytics } from '@/models/alertHistory';
 import { IConnection } from '@/models/connection';
 import { IDashboard } from '@/models/dashboard';
 import { ISavedSearch } from '@/models/savedSearch';
+import { ISlo } from '@/models/slo';
 import { ISource } from '@/models/source';
 import { IWebhook } from '@/models/webhook';
 import { AggregatedAlertHistory } from '@/tasks/checkAlerts';
@@ -18,6 +19,7 @@ export enum AlertTaskType {
   SAVED_SEARCH,
   TILE,
   INLINE,
+  SLO,
 }
 
 // Discriminated union of possible alert channel types with populated channel data
@@ -57,6 +59,12 @@ export type AlertDetails = {
       source?: ISource;
       chartConfig: AlertChartConfig;
     }
+  | {
+      // Burn-rate alerts an SLO owns: the query comes from the SLO.
+      taskType: AlertTaskType.SLO;
+      source: ISource;
+      slo: ISlo;
+    }
 );
 
 // AlertTask instances can carry metadata, of type T, for the provider that created
@@ -86,6 +94,17 @@ export interface AlertProvider {
     granularity: string;
     startTime: Date;
     tileId?: string;
+  }): string;
+
+  /**
+   * Link for SLO alerts: the SLO page with the bad events of the window, for
+   * one group of a grouped SLO.
+   */
+  buildSloLink(params: {
+    sloId: string;
+    startTime: Date;
+    endTime: Date;
+    group?: string;
   }): string;
 
   /**

@@ -29,6 +29,7 @@ import AlertHistory, {
 import Connection, { IConnection } from '@/models/connection';
 import Dashboard from '@/models/dashboard';
 import { type ISavedSearch, SavedSearch } from '@/models/savedSearch';
+import Slo from '@/models/slo';
 import { type ISource, Source } from '@/models/source';
 import Webhook, { IWebhook } from '@/models/webhook';
 import {
@@ -354,6 +355,42 @@ async function getInlineAlertDetails(
   ];
 }
 
+async function getSloAlertDetails(
+  alert: IAlert,
+): Promise<[IConnection, PartialAlertDetails] | []> {
+  const slo = await Slo.findOne({ _id: alert.slo, team: alert.team }).lean();
+  if (!slo) {
+    logger.error({ message: 'SLO not found for SLO alert', alertId: alert.id });
+    return [];
+  }
+  const source = await Source.findOne({
+    _id: slo.source,
+    team: alert.team,
+  }).populate<Omit<ISource, 'connection'> & { connection: IConnection }>({
+    path: 'connection',
+    match: { team: alert.team },
+    select: '+password',
+  });
+  if (!source?.connection) {
+    logger.error({
+      message: 'source or connection not found for SLO alert',
+      alertId: alert.id,
+      sourceId: slo.source,
+    });
+    return [];
+  }
+  const connection = source.connection;
+  return [
+    connection,
+    {
+      alert,
+      source: { ...source.toObject(), connection: connection.id },
+      taskType: AlertTaskType.SLO,
+      slo,
+    },
+  ];
+}
+
 async function resolveAlertDetails(
   alert: IAlert,
 ): Promise<[IConnection, PartialAlertDetails]> {
@@ -382,6 +419,10 @@ async function resolveAlertDetails(
       [conn, details] = await getInlineAlertDetails(alert);
       break;
 
+    case AlertSource.SLO:
+      [conn, details] = await getSloAlertDetails(alert);
+      break;
+
     default:
       throw new Error(`unsupported source: ${alert.source}`);
   }
@@ -400,9 +441,11 @@ async function resolveAlertDetails(
 async function loadAlerts(): Promise<AlertTask[]> {
   const groupedTasks = new Map<string, AlertTask>();
 
-  // SLO alerts are not evaluated yet: skip them rather than fail to load
-  // them.
-  const alerts = await Alert.find({ source: { $ne: AlertSource.SLO } });
+  // SLO alerts only run while SLOs are enabled: turning the feature off
+  // also stops their notifications.
+  const alerts = await Alert.find(
+    config.IS_SLOS_ENABLED ? {} : { source: { $ne: AlertSource.SLO } },
+  );
 
   const now = new Date();
 
@@ -633,6 +676,27 @@ export default class DefaultAlertProvider implements AlertProvider {
       queryParams.set('highlightedTileId', tileId);
     }
     url.search = queryParams.toString();
+    return url.toString();
+  }
+
+  buildSloLink({
+    sloId,
+    startTime,
+    endTime,
+    group,
+  }: {
+    sloId: string;
+    startTime: Date;
+    endTime: Date;
+    group?: string;
+  }): string {
+    const url = new URL(`${config.FRONTEND_URL}/slos/${sloId}`);
+    url.search = new URLSearchParams({
+      bad: 'custom',
+      from: startTime.getTime().toString(),
+      to: endTime.getTime().toString(),
+      ...(group != null ? { group } : {}),
+    }).toString();
     return url.toString();
   }
 
