@@ -1,6 +1,6 @@
 {
   "name": "@hyperdx/app",
-  "version": "2.47.0",
+  "version": "2.48.0",
   "private": true,
   "license": "MIT",
   "engines": {
@@ -40,7 +40,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "patch:@hookform/resolvers@npm%3A3.9.0#~/.yarn/patches/@hookform-resolvers-npm-3.9.0-6238a72f77.patch",
     "@hyperdx/api": "workspace:*",
-    "@hyperdx/common-utils": "^0.36.1",
+    "@hyperdx/common-utils": "^0.37.0",
     "@mantine/core": "^9.0.0",
     "@mantine/dates": "^9.0.0",
     "@mantine/dropzone": "^9.0.0",

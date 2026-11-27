@@ -1,5 +1,103 @@
 # @hyperdx/api
 
+## 2.48.0
+
+### Minor Changes
+
+- 2e233f768: feat: accept exemplar settings on API- and agent-authored dashboard tiles
+
+  `enableExemplars` and `exemplarTraceSourceId` are now accepted on line and
+  stacked-bar tiles through the external v2 API and the MCP dashboard tools,
+  survive the tile conversion in both directions, and are documented in the
+  OpenAPI spec. Previously they validated on write and were dropped before
+  persistence, so they could not be set through any surface.
+
+  `exemplarTraceSourceId` is checked three ways, because a marker's "view trace"
+  link is only as good as the source behind it: an ObjectId on both surfaces, the
+  source must exist for the team, and it must actually be a Trace source. The
+  existence and kind checks mirror the heatmap gate. Without them a well-formed id
+  for a metric source saved cleanly and left every marker linking nowhere.
+
+### Patch Changes
+
+- 6569e326d: Use Claude Sonnet 5.5 by default for the Anthropic assistant and include its rates in LLM cost estimates.
+- f874e3414: feat: record the ClickHouse server version on ClickHouse proxy spans, as
+  `hyperdx.clickhouse_proxy.clickhouse.version`, so query errors and latency can
+  be compared across ClickHouse upgrades.
+- a1a5eacde: fix: MCP `emerging_signals` mines both windows in one Drain tree, in a fixed
+  order (baseline first), and compares them by cluster, so a token that is
+  constant in one window and varies in the other no longer splits a pattern into
+  one "new" and one "gone". New messages that Drain merges into a baseline pattern
+  are reported as `new_variant`, so they aren't hidden by the merge, and baseline
+  messages that stop while the rest of their pattern goes on are reported as
+  `gone_variant`. The baseline window excludes its end, so a row at the boundary
+  is counted once.
+- 4188b80fe: feat: exemplar overlay for metric and PromQL time charts
+
+  Time charts on metric and PromQL sources can overlay exemplars — individual
+  trace-linked data points — via the "Show exemplars" toggle in the chart
+  editor's display settings. Hovering a marker shows the exemplar's own value and time plus trace metadata
+  from a configurable trace source, with a button to open the trace.
+
+  Off by default for the whole deployment behind `NEXT_PUBLIC_ENABLE_EXEMPLARS`,
+  and per-chart behind the toggle. How many markers a chart draws is a team
+  setting, Max Exemplars per Chart.
+
+  Markers are sampled the way Grafana samples them: bucketed at the chart's
+  granularity, keeping the slowest trace in each bucket plus any further trace more
+  than 2σ below it. The overlay shows the shape of the latency distribution rather
+  than tracing the top of the chart.
+
+  A marker sits at the trace's own measurement, so it is only shown where that is
+  honest: a single non-ratio histogram series with no group by, aggregated in a way
+  that leaves the axis on the observation scale, and for PromQL an expression that
+  plots a duration. Markers outside the rendered window, or below a fitted y-axis
+  floor, are dropped rather than moved — and the count is surfaced on the chart.
+
+- 5bd07d54b: fix: run `apk upgrade` in the HyperDX image so it picks up Alpine security fixes
+  (OpenSSL, zlib) released after the Node and ClickHouse base images were built,
+  and bump Node from 22.23.4 to 22.23.5 in the image and `.nvmrc`.
+- c499769a3: fix: require `INGESTION_API_KEY` on the app image before any team exists
+
+  With `ENABLE_INGESTION_API_KEY` set and no team created yet, the collector's OTLP
+  receiver accepted data without authentication. It now requires the preset key.
+
+- e4fe80a6d: fix: limit failed password logins to 10 per email every 2 minutes
+- ed8520119: fix(mcp): reject unknown tool arguments instead of silently ignoring them
+- 48fcaf5ba: fix: read request bodies only after the caller is authenticated. An anonymous
+  request could make the API parse up to 32 MB before answering 401. Public
+  routes such as login and register now accept bodies up to 100 KB; signed-in
+  users and API keys keep the 32 MB limit.
+- 6a7164c9c: feat(mcp): `maxBodyChars` on `clickstack_event_patterns` and
+  `clickstack_emerging_signals` mines only the start of each body, so long stack
+  traces and dumps are cut in the query and their patterns can be drilled into
+- 3be2ea1ba: fix(mcp): `clickstack_describe_source` on a PromQL source over a ClickHouse TimeSeries table reads metric names from the tags table without a time window, so it no longer runs out of memory on large tables. Label names are listed per metric with the new `metricName` argument.
+- 58a59e366: feat(mcp): `clickstack_query_tiles` reports each tile's wall time (`elapsedMs`),
+  and rows and bytes read for builder and SQL tiles; PromQL results from
+  `clickstack_promql` and `clickstack_query_tile` carry `elapsedMs`
+- 099aa089e: fix: PromQL label lookups with `match[]` work on ClickHouse 26.11, which
+  requires the `return_columns` argument of `timeSeriesSelector()`
+- 272a46101: fix: send a ClickStack User-Agent on generic alert webhooks
+
+  Generic and incident.io alert webhooks sent `User-Agent: undici`, which some
+  receivers' firewalls block with a 403. They now send
+  `ClickStack-Alerts/<version>`. A User-Agent set in the webhook's headers still
+  takes precedence.
+
+- 210f3e2c4: chore: move to the zod 4 package (^4.6.6) while keeping the zod 3 API through
+  `zod/v3` imports. Schemas and validation behavior are unchanged.
+- Updated dependencies [d6280844a]
+- Updated dependencies [b362d339a]
+- Updated dependencies [a1a5eacde]
+- Updated dependencies [4188b80fe]
+- Updated dependencies [f36e6788f]
+- Updated dependencies [b51ddb9d5]
+- Updated dependencies [3bdbf7f20]
+- Updated dependencies [c3928c77d]
+- Updated dependencies [099aa089e]
+- Updated dependencies [210f3e2c4]
+  - @hyperdx/common-utils@0.37.0
+
 ## 2.47.0
 
 ### Minor Changes
