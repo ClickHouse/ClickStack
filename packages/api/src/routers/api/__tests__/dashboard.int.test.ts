@@ -1233,19 +1233,41 @@ describe('dashboard router', () => {
       expect(stored?.savedFilterValues).toEqual([allValue]);
     });
 
-    it('rejects a saved "all" value for a filter without allowAll', async () => {
-      const response = await agent
+    it('drops a saved "all" value for a filter without allowAll', async () => {
+      const created = await agent
         .post('/dashboards')
         .send({
           ...MOCK_DASHBOARD,
           filters: [makeStaticFilter()],
           savedFilterValues: [allValue],
         })
-        .expect(400);
+        .expect(200);
 
-      expect(response.body[0].errors.issues).toEqual([
-        expect.objectContaining({ path: ['savedFilterValues', 0, 'all'] }),
-      ]);
+      const stored = await Dashboard.findById(created.body.id).lean();
+      expect(stored?.savedFilterValues).toEqual([]);
+    });
+
+    it('saves a dashboard whose saved "all" value went stale', async () => {
+      const filter = makeStaticFilter({ allowAll: true });
+      const created = await agent
+        .post('/dashboards')
+        .send({
+          ...MOCK_DASHBOARD,
+          filters: [filter],
+          savedFilterValues: [allValue],
+        })
+        .expect(200);
+
+      await agent
+        .patch(`/dashboards/${created.body.id}`)
+        .send({
+          ...created.body,
+          filters: [{ ...filter, allowAll: false }],
+        })
+        .expect(200);
+
+      const stored = await Dashboard.findById(created.body.id).lean();
+      expect(stored?.savedFilterValues).toEqual([]);
     });
   });
 

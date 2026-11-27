@@ -1,5 +1,6 @@
 import {
   configConsumesBroadcastFilters,
+  dropUnsupportedAllValues,
   filterSelectionKey,
   getAdhocFilterTargetsForTile,
   getBlockingRequiredFilterNames,
@@ -719,6 +720,47 @@ describe('dashboardFilterValues', () => {
 
     it('is undefined when nothing is stored for the filter', () => {
       expect(resolveVariableSelection(allCapable, parse())).toBeUndefined();
+    });
+  });
+
+  describe('dropUnsupportedAllValues', () => {
+    const all = (name: string): DashboardFilterValue => ({
+      type: 'variable',
+      name,
+      values: [],
+      all: true,
+    });
+
+    it('drops "all" for a filter without allowAll or made single-select', () => {
+      const filters = [
+        staticFilter({ id: 'a', variableName: 'a' }),
+        staticFilter({
+          id: 'b',
+          variableName: 'b',
+          allowAll: true,
+          maxSelections: 1,
+        }),
+      ];
+      expect(dropUnsupportedAllValues(filters, [all('a'), all('b')])).toEqual(
+        [],
+      );
+    });
+
+    it('keeps "all" on a filter that offers it, explicit values, and undeclared names', () => {
+      const prod: DashboardFilterValue = {
+        type: 'variable',
+        name: 'tier',
+        values: ['prod'],
+      };
+      expect(
+        dropUnsupportedAllValues(
+          [
+            staticFilter({ allowAll: true }),
+            staticFilter({ id: 'f2', variableName: 'tier' }),
+          ],
+          [all('env'), prod, all('removed')],
+        ),
+      ).toEqual([all('env'), prod, all('removed')]);
     });
   });
 

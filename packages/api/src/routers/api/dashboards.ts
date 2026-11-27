@@ -1,9 +1,9 @@
+import { dropUnsupportedAllValues } from '@hyperdx/common-utils/dist/dashboardFilterValues';
 import {
   getVariableReferenceError,
   validateDashboardFilterModes,
   validateDashboardFilterOptionUniqueness,
   validateDashboardFilterVariableNames,
-  validateDashboardSavedFilterValues,
 } from '@hyperdx/common-utils/dist/dashboardValidation';
 import { isSqlQueryFilter } from '@hyperdx/common-utils/dist/filters';
 import { parseVariableReference } from '@hyperdx/common-utils/dist/referenceVariables';
@@ -48,23 +48,23 @@ import { objectIdSchema } from '@/utils/zod';
 const router = express.Router();
 
 /**
- * Additional filter validation (variable name and option uniqueness, at least
- * one mode enabled, "all" saved values only on filters that offer "All").
+ * Additional filter validation (variable name and option uniqueness, at least one mode enabled).
  */
 const addFilterIssues = (
-  data: Partial<
-    Pick<z.infer<typeof DashboardSchema>, 'filters' | 'savedFilterValues'>
-  >,
+  data: {
+    filters?: {
+      name: string;
+      options?: string[];
+      variableName?: string;
+      isBroadcastEnabled?: boolean;
+      isVariableEnabled?: boolean;
+    }[];
+  },
   ctx: z.RefinementCtx,
 ) => {
   validateDashboardFilterVariableNames(data.filters ?? [], ctx);
   validateDashboardFilterModes(data.filters ?? [], ctx);
   validateDashboardFilterOptionUniqueness(data.filters ?? [], ctx);
-  validateDashboardSavedFilterValues(
-    data.filters ?? [],
-    data.savedFilterValues ?? [],
-    ctx,
-  );
 };
 
 /**
@@ -191,6 +191,12 @@ router.post(
       // client-supplied value would otherwise persist and hand the caller's
       // dashboard to the provisioner.
       const dashboard = _.omit(req.body, 'provisioned');
+      if (dashboard.savedFilterValues) {
+        dashboard.savedFilterValues = dropUnsupportedAllValues(
+          dashboard.filters ?? [],
+          dashboard.savedFilterValues,
+        );
+      }
 
       const filterError =
         getVariableReferenceError(req.body.tiles, req.body.filters) ??
@@ -238,6 +244,15 @@ router.patch(
       // Nulls survive: the schema's optional fields are `.nullable()`, and a
       // null still signals field removal downstream.
       const updates = DashboardWithoutIdSchema.partial().parse(req.body);
+      // Dropped rather than rejected: the UI resends the stored defaults on
+      // every save, so a stale "all" left after allowAll is turned off would
+      // otherwise block every later edit.
+      if (updates.savedFilterValues) {
+        updates.savedFilterValues = dropUnsupportedAllValues(
+          updates.filters ?? dashboard.filters ?? [],
+          updates.savedFilterValues,
+        );
+      }
 
       const filterError =
         // Only references this update adds are checked, so a filter edit

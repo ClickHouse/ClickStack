@@ -228,6 +228,35 @@ export function resolveVariableSelection(
   return entry.all ? ALL_SELECTION : entry.values;
 }
 
+/**
+ * Drops `all: true` saved values whose filter no longer offers "All", e.g. after
+ * `allowAll` is turned off or the filter is made single-select. The dashboard
+ * ignores such values when it loads, so a stale one shouldn't block saving it.
+ * Values for undeclared names are kept, as `validateDashboardSavedFilterValues`
+ * keeps them.
+ */
+export function dropUnsupportedAllValues<T extends DashboardFilterValue>(
+  filters: DashboardFilter[],
+  savedFilterValues: T[],
+): T[] {
+  const declaredNames = new Set<string>();
+  const allCapableNames = new Set<string>();
+  for (const filter of filters) {
+    const name = getFilterVariableName(filter);
+    if (!name) continue;
+    declaredNames.add(name);
+    if (filterSupportsAllValue(filter)) allCapableNames.add(name);
+  }
+
+  return savedFilterValues.filter(
+    value =>
+      value.type !== 'variable' ||
+      !value.all ||
+      !declaredNames.has(value.name) ||
+      allCapableNames.has(value.name),
+  );
+}
+
 /** The required filters that have nothing selected, in filter order. */
 export function getUnsatisfiedRequiredFilters<
   T extends { id: string; minSelections?: number },
