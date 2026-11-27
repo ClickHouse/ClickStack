@@ -173,6 +173,27 @@ describe('report identity + features', () => {
   });
 });
 
+describe('report clickhouse lines', () => {
+  it('omits clickhouse lines until versions are set', () => {
+    expect(reportFor(loadHdxDebug())).not.toContain('clickhouse:');
+  });
+
+  it('lists each connection after the backend line', () => {
+    const mod = loadHdxDebug();
+    mod.setHdxClickHouseVersions([
+      { name: 'Local', version: '26.10.3.7' },
+      { name: 'Demo', version: undefined },
+    ]);
+    const lines = reportFor(mod).split('\n');
+
+    expect(lines.slice(1, 4)).toEqual([
+      'backend:  unknown',
+      'clickhouse: Local 26.10.3.7',
+      'clickhouse: Demo unknown',
+    ]);
+  });
+});
+
 describe('report session line', () => {
   it('reports N/A until the RUM SDK has a session', () => {
     const report = reportFor(loadHdxDebug());
