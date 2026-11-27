@@ -307,7 +307,13 @@ export const AppNavHelpMenu = ({
               <span className={styles.navItemIcon}>
                 <HelpSparkle hasUnseen={hasUnseenWhatsNew} />
               </span>
-              {!isCollapsed && <span>Help</span>}
+              {/* As in AppNavLink: keep the label for screen readers when
+                  the collapsed rail shows only the icon. */}
+              {isCollapsed ? (
+                <VisuallyHidden>Help</VisuallyHidden>
+              ) : (
+                <span>Help</span>
+              )}
             </span>
           </UnstyledButton>
         </Menu.Target>
