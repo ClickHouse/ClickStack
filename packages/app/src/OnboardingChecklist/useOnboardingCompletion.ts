@@ -25,7 +25,6 @@ interface OnboardingCompletion {
   steps: OnboardingStep[];
   phaseLabel: string;
   completedCount: number;
-  activeStepId?: string;
   isCelebrating: boolean;
   shouldShow: boolean;
   dismiss: () => void;
@@ -173,8 +172,6 @@ export function useOnboardingCompletion(
     : 'Set up ClickHouse';
   const completedCount = steps.filter(step => step.isComplete).length;
   const isPhaseComplete = completedCount === steps.length;
-  // First incomplete step; rendered as the active call-to-action.
-  const activeStepId = steps.find(step => !step.isComplete)?.id;
 
   // Derived, never persisted: adding a task to ONBOARDING_TASK_IDS reopens the
   // checklist for previously-finished users. isDismissed is the manual opt-out.
@@ -243,7 +240,6 @@ export function useOnboardingCompletion(
     steps,
     phaseLabel,
     completedCount,
-    activeStepId,
     isCelebrating,
     shouldShow,
     dismiss: () => dismissOnboarding.mutate(true),
