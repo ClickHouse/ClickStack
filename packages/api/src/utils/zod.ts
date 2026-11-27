@@ -510,6 +510,8 @@ const externalDashboardTableChartConfigSchema = z.object({
   groupBy: z.string().max(10000).optional(),
   having: z.string().max(10000).optional(),
   orderBy: z.string().max(10000).optional(),
+  limitAfter: z.string().max(10000).optional(),
+  limitUntil: z.string().max(10000).optional(),
   asRatio: z.boolean().optional(),
   numberFormat: NumberFormatSchema.optional(),
   groupByColumnsOnLeft: z.boolean().optional(),
@@ -659,6 +661,8 @@ const externalDashboardSearchChartConfigSchema = z.object({
   select: z.string().max(10000),
   where: z.string().max(10000).optional().default(''),
   whereLanguage: whereLanguageSchema,
+  limitAfter: z.string().max(10000).optional(),
+  limitUntil: z.string().max(10000).optional(),
 });
 
 // Extended schema for the /api/v2/search endpoint — adds orderBy which is not

@@ -601,6 +601,8 @@ export const convertToExternalTileChartConfig = (
           ? config.select.map(convertToExternalSelectItem)
           : [DEFAULT_SELECT_ITEM],
         orderBy: stringValueOrDefault(config.orderBy, undefined),
+        limitAfter: config.limit?.after || undefined,
+        limitUntil: config.limit?.until || undefined,
         ...externalFormulaFields,
         ...externalShowOperandSeriesField,
       };
@@ -611,6 +613,8 @@ export const convertToExternalTileChartConfig = (
         select: stringValueOrDefault(config.select, ''),
         where: config.where,
         whereLanguage: config.whereLanguage ?? 'lucene',
+        limitAfter: config.limit?.after || undefined,
+        limitUntil: config.limit?.until || undefined,
       };
     case DisplayType.Markdown:
       return {
@@ -935,6 +939,23 @@ const convertExternalPromqlConfigToInternal = (
   }
 };
 
+function limitAfterUntilFields(externalConfig: {
+  limitAfter?: string;
+  limitUntil?: string;
+}): { limit?: { after?: string; until?: string } } {
+  const after = externalConfig.limitAfter?.trim();
+  const until = externalConfig.limitUntil?.trim();
+  if (!after && !until) {
+    return {};
+  }
+  return {
+    limit: {
+      ...(after ? { after } : {}),
+      ...(until ? { until } : {}),
+    },
+  };
+}
+
 export function convertToInternalTileConfig(
   externalTile: ConfigTile,
 ): DashboardDocument['tiles'][number] {
@@ -1069,6 +1090,7 @@ export function convertToInternalTileConfig(
           source: externalConfig.sourceId,
           where: '',
           seriesReturnType: externalConfig.asRatio ? 'ratio' : undefined,
+          ...limitAfterUntilFields(externalConfig),
           name,
           description,
         } satisfies BuilderSavedChartConfig;
@@ -1210,6 +1232,7 @@ export function convertToInternalTileConfig(
           name,
           description,
           whereLanguage: externalConfig.whereLanguage ?? 'lucene',
+          ...limitAfterUntilFields(externalConfig),
         } satisfies BuilderSavedChartConfig;
         break;
       case 'event_patterns':

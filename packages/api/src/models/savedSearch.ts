@@ -11,6 +11,8 @@ type ExternalSavedSearch = {
   where?: string;
   whereLanguage?: string;
   orderBy?: string;
+  limitAfter?: string;
+  limitUntil?: string;
   sourceId?: string;
   tags?: string[];
   filters?: unknown[];
@@ -56,6 +58,8 @@ const savedSearchSchema = new Schema<
     where: String,
     whereLanguage: String,
     orderBy: String,
+    limitAfter: String,
+    limitUntil: String,
     source: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
@@ -94,6 +98,8 @@ savedSearchSchema.methods.toExternalJSON = function (): ExternalSavedSearch {
     where: this.where,
     whereLanguage: this.whereLanguage,
     orderBy: this.orderBy,
+    limitAfter: this.limitAfter,
+    limitUntil: this.limitUntil,
     sourceId: this.source ? String(this.source) : undefined,
     tags: this.tags,
     filters: this.filters,
