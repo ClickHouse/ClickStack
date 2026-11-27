@@ -6,6 +6,7 @@ import {
   buildSloPreviewRequest,
   DEFAULT_SLO_FORM_VALUES,
   getSloPreviewKey,
+  newSloAlertTarget,
   sloCopyFormValues,
   sloFormResolver,
   type SloFormValues,
@@ -101,11 +102,16 @@ describe('SLO form', () => {
       name: ' ',
       target: 100,
       indicator: { ...valid.indicator, good: '' },
+      alerts: { fastBurn: null, slowBurn: newSloAlertTarget() },
     });
     expect(errors.name?.message).toBe('Name is required');
     expect(errors.target?.message).toBe('Target must be below 100%');
     expect(errors.indicator?.good?.message).toBe(
       'A good-event condition is required',
+    );
+    // A burn alert starts with one empty channel, which has to be filled in.
+    expect(errors.alerts?.slowBurn?.channels?.[0]?.webhookId?.message).toBe(
+      "Webhook ID can't be empty",
     );
   });
 
@@ -158,6 +164,10 @@ describe('SLO form', () => {
   it('loads a saved SLO back into the form unchanged', () => {
     const saved = savedSlo;
     const values = sloToFormValues(saved);
+    expect(values.alerts).toEqual({
+      fastBurn: saved.alerts.fastBurn,
+      slowBurn: null,
+    });
     expect(toSloInput(values)).toEqual(
       expect.objectContaining({
         name: saved.name,
@@ -167,7 +177,7 @@ describe('SLO form', () => {
         target: saved.target,
         window: saved.window,
         groupBy: saved.groupBy,
-        alerts: saved.alerts,
+        alerts: { fastBurn: saved.alerts.fastBurn, slowBurn: null },
       }),
     );
   });
@@ -177,7 +187,7 @@ describe('SLO form', () => {
     expect(copy).toEqual({
       ...sloToFormValues(savedSlo),
       name: 'Copy of Checkout availability',
-      alerts: undefined,
+      alerts: { fastBurn: null, slowBurn: null },
     });
   });
 

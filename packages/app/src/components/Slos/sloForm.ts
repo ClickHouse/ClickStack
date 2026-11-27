@@ -7,6 +7,7 @@ import {
 } from '@hyperdx/common-utils/dist/core/slo';
 import { getSloDefaultDuration } from '@hyperdx/common-utils/dist/core/sloLatency';
 import {
+  type SloAlertTarget,
   type SloApiResponse,
   SloIndicatorSchema,
   type SloInput,
@@ -53,7 +54,14 @@ export const DEFAULT_SLO_FORM_VALUES: SloFormValues = {
   },
   target: 99.9,
   window: '30d',
+  // Off until the user turns one on and picks where it notifies.
+  alerts: { fastBurn: null, slowBurn: null },
 };
+
+/** A burn alert that is turned on starts with one empty channel to fill in. */
+export function newSloAlertTarget(): SloAlertTarget {
+  return { channels: [{ type: 'webhook', webhookId: '' }] };
+}
 
 export function sloToFormValues(slo: SloApiResponse): SloFormValues {
   const { template, eligible, good, latency } = slo.indicator;
@@ -72,8 +80,10 @@ export function sloToFormValues(slo: SloApiResponse): SloFormValues {
     groupBy: slo.groupBy,
     target: slo.target,
     window: slo.window,
-    // Kept as saved, so editing an SLO keeps its alerts.
-    alerts: slo.alerts,
+    alerts: {
+      fastBurn: slo.alerts.fastBurn ?? null,
+      slowBurn: slo.alerts.slowBurn ?? null,
+    },
   };
 }
 

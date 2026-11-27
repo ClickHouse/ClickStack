@@ -2,12 +2,14 @@ import { getSloBurnRule } from '@hyperdx/common-utils/dist/core/slo';
 import {
   getSloBurnWindowMs,
   getSloWindowMs,
+  type SloAlertRule,
+  type SloAlertStatus,
   type SloApiResponse,
   type SloBurnWindow,
   type SloState,
   type SloWindow,
 } from '@hyperdx/common-utils/dist/slo';
-import type { TSource } from '@hyperdx/common-utils/dist/types';
+import { AlertState, type TSource } from '@hyperdx/common-utils/dist/types';
 
 /** An SLO's state as shown: pending until the background computes it. */
 export type SloDisplayState = SloState | 'pending';
@@ -57,6 +59,24 @@ export function sloStateDescription(state: SloDisplayState): string {
       return 'The last update failed. The numbers shown are the last ones computed.';
     case 'pending':
       return 'The numbers are computed in the background within a few minutes of a save.';
+  }
+}
+
+/** A burn alert's state, in words that read well after its name. */
+export function sloAlertStateLabel(state: AlertState): string {
+  switch (state) {
+    case AlertState.ALERT:
+      return 'Firing';
+    case AlertState.OK:
+      return 'OK';
+    case AlertState.PENDING:
+      return 'Pending';
+    case AlertState.INSUFFICIENT_DATA:
+      return 'No data';
+    case AlertState.DISABLED:
+      return 'Disabled';
+    case AlertState.ERROR:
+      return 'Error';
   }
 }
 
@@ -118,6 +138,16 @@ export function formatCount(n: number | null | undefined): string {
 
 export function formatSloWindow(window: SloWindow): string {
   return window === '7d' ? '7 days' : '30 days';
+}
+
+/** A burn alert of the SLO as it runs, or undefined when it is not running. */
+export function getSloAlertStatus(
+  slo: Pick<SloApiResponse, 'alertStates'>,
+  rule: SloAlertRule,
+): SloAlertStatus | undefined {
+  return rule === 'slowBurn'
+    ? slo.alertStates.slowBurn
+    : slo.alertStates.fastBurn;
 }
 
 /**

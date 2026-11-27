@@ -26,7 +26,7 @@ import { useSlo, useSlosEnabledGuard } from '@/slo';
 import { useSource } from '@/source';
 
 import { SloCharts } from './SloCharts';
-import { SloDefinitionPanel } from './SloDetailPanels';
+import { SloAlertPanel, SloDefinitionPanel } from './SloDetailPanels';
 import {
   SloEventsDrawer,
   type SloEventsRange,
@@ -142,6 +142,7 @@ function SloDetailView({
               onBucketSelect={onBucketSelect}
             />
           )}
+          <SloAlertPanel slo={slo} />
           <SloDefinitionPanel slo={slo} sourceName={source?.name} />
         </Stack>
       </Container>

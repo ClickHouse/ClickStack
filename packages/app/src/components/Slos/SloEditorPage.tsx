@@ -34,6 +34,7 @@ import { useSource } from '@/source';
 import { getApiErrorMessage } from '@/utils/apiErrors';
 import { parseAsJsonEncoded, parseAsStringEncoded } from '@/utils/queryParsers';
 
+import { SloAlertFields } from './SloAlertFields';
 import {
   SloDetailsFields,
   SloIndicatorFields,
@@ -112,6 +113,10 @@ function SloEditorPage() {
       reset(sloFormValuesFromSearch({ ...prefill, source: prefill.source }));
     }
     initializedRef.current = true;
+    // "Edit" on an SLO's alerts links here with #alerts.
+    if (window.location.hash === '#alerts') {
+      document.getElementById('alerts')?.scrollIntoView();
+    }
   }, [router.isReady, editId, existing, duplicateId, original, prefill, reset]);
 
   const [preview, setPreview] = useState<SloPreviewRequest | null>(null);
@@ -241,6 +246,13 @@ function SloEditorPage() {
               </SloFormSection>
               <SloFormSection title="Objective">
                 <SloObjectiveFields control={control} setValue={setValue} />
+              </SloFormSection>
+              <SloFormSection
+                id="alerts"
+                title="Burn-rate alerts"
+                description="Optional. Each alert notifies its own channels once when a burn starts and once when it ends."
+              >
+                <SloAlertFields control={control} setValue={setValue} />
               </SloFormSection>
               <SloFormSection title="Details">
                 <SloDetailsFields control={control} />

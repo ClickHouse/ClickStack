@@ -1,16 +1,34 @@
+import Link from 'next/link';
 import { formatDistanceToNowStrict } from 'date-fns';
 import {
   getSloBurnRule,
   getSloGoodSql,
 } from '@hyperdx/common-utils/dist/core/slo';
 import { describeFilter } from '@hyperdx/common-utils/dist/filters';
-import type {
-  SloApiResponse,
-  SloState,
-  SloStats,
+import {
+  describeSloAlertRule,
+  getSloAlertRuleLabel,
+  getSloAlertTarget,
+  SLO_BURN_CONDITIONS,
+  type SloApiResponse,
+  type SloState,
+  type SloStats,
 } from '@hyperdx/common-utils/dist/slo';
-import { Code, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
+import { WebhookService } from '@hyperdx/common-utils/dist/types';
+import {
+  Anchor,
+  Code,
+  Group,
+  Paper,
+  SimpleGrid,
+  Stack,
+  Text,
+} from '@mantine/core';
 
+import api from '@/api';
+
+import { SloRecentFirings } from './SloRecentFirings';
+import { SloAlertRuleBadge } from './SloStateBadge';
 import {
   budgetColorVar,
   describeBurnWindow,
@@ -20,6 +38,7 @@ import {
   formatSli,
   formatSloWindow,
   formatTarget,
+  getSloAlertStatus,
 } from './sloUtils';
 
 function Stat({
@@ -107,6 +126,59 @@ export function SloStatsGrid({
         detail={`${formatCount(stats.good)} good, ${formatCount(stats.bad)} bad`}
       />
     </SimpleGrid>
+  );
+}
+
+/**
+ * The fast and slow burn alerts the SLO owns, each with its rule, channels
+ * and recent firings. They are changed from the SLO's editor.
+ */
+export function SloAlertPanel({ slo }: { slo: SloApiResponse }) {
+  const { data: webhooks } = api.useWebhooks([
+    WebhookService.Slack,
+    WebhookService.Generic,
+    WebhookService.IncidentIO,
+  ]);
+  const anyOn = SLO_BURN_CONDITIONS.some(({ rule }) =>
+    getSloAlertTarget(slo.alerts, rule),
+  );
+  return (
+    <Paper withBorder p="md" radius="sm" data-testid="slo-alert-panel">
+      <Group justify="space-between" mb="xs">
+        <Text fw={500}>Burn-rate alerts</Text>
+        <Anchor component={Link} href={`/slos/${slo.id}/edit#alerts`} size="sm">
+          {anyOn ? 'Edit' : 'Add an alert'}
+        </Anchor>
+      </Group>
+      <Stack gap="md">
+        {SLO_BURN_CONDITIONS.map(({ rule }) => {
+          const target = getSloAlertTarget(slo.alerts, rule);
+          const status = getSloAlertStatus(slo, rule);
+          const sentence = describeSloAlertRule(rule, slo.window);
+          const channels = (target?.channels ?? []).map(
+            channel =>
+              webhooks?.data?.find(w => w._id === channel.webhookId)?.name ??
+              'a webhook',
+          );
+          return (
+            <Stack key={rule} gap={4} data-testid={`slo-alert-panel-${rule}`}>
+              <Group gap="xs">
+                <Text size="sm" fw={500}>
+                  {getSloAlertRuleLabel(rule)}
+                </Text>
+                <SloAlertRuleBadge slo={slo} rule={rule} />
+              </Group>
+              <Text size="sm" c={target ? undefined : 'dimmed'}>
+                {target
+                  ? `Notifies ${channels.join(', ')} when ${sentence}.`
+                  : `Turn it on to be notified when ${sentence}.`}
+              </Text>
+              {target && status && <SloRecentFirings alertId={status.id} />}
+            </Stack>
+          );
+        })}
+      </Stack>
+    </Paper>
   );
 }
 
