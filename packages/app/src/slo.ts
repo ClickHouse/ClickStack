@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
-import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
+import type { SloApiResponse, SloInput } from '@hyperdx/common-utils/dist/slo';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { hdxServer } from './api';
@@ -29,6 +29,21 @@ export function useSlos() {
     queryFn: () => hdxServer('slos').json<SloApiResponse[]>(),
     enabled: IS_SLOS_ENABLED,
     refetchInterval: SLO_POLL_MS,
+  });
+}
+
+export function useSaveSlo() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, slo }: { id?: string; slo: SloInput }) =>
+      hdxServer(id ? `slos/${id}` : 'slos', {
+        method: id ? 'PUT' : 'POST',
+        json: slo,
+        // Saving runs the SLO's query once to check it.
+        timeout: 30_000,
+      }).json<SloApiResponse>(),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: SLOS_QUERY_KEY }),
   });
 }
 

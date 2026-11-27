@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import {
   parseAsArrayOf,
   parseAsString,
@@ -16,7 +17,7 @@ import {
   Skeleton,
   Text,
 } from '@mantine/core';
-import { IconTargetArrow } from '@tabler/icons-react';
+import { IconPlus, IconTargetArrow } from '@tabler/icons-react';
 
 import { usePageTitle } from '@/brand';
 import EmptyState from '@/components/EmptyState';
@@ -116,7 +117,20 @@ export default function SlosListPage() {
       <Head>
         <title>{title}</title>
       </Head>
-      <PageHeader title="SLOs" />
+      <PageHeader
+        title="SLOs"
+        actions={
+          <Button
+            component={Link}
+            href="/slos/new"
+            variant="primary"
+            leftSection={<IconPlus size={16} />}
+            data-testid="new-slo-button"
+          >
+            New SLO
+          </Button>
+        }
+      />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         {hasNone ? (
           <Flex align="center" justify="center" style={{ flex: 1 }}>
@@ -124,7 +138,11 @@ export default function SlosListPage() {
               icon={<IconTargetArrow size={32} />}
               title="No SLOs yet"
               description="Define a target for the share of good events in your logs or traces, and get alerted when the error budget burns too fast."
-            />
+            >
+              <Button component={Link} href="/slos/new" variant="primary">
+                Create an SLO
+              </Button>
+            </EmptyState>
           </Flex>
         ) : (
           <Container maw={1500} w="100%" py="md">
