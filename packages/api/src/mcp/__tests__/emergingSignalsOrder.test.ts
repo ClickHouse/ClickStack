@@ -67,6 +67,7 @@ type Pattern = {
   status: string;
   sample: string;
   baselinePattern?: string;
+  currentPattern?: string;
   variantShare?: number;
 };
 
@@ -393,6 +394,35 @@ describe('clickstack_emerging_signals with one Drain tree', () => {
     ]);
     expect(out.disappeared[0]).not.toHaveProperty('baselinePattern');
     expect(allPatterns(out).some(p => p.status === 'new_variant')).toBe(false);
+  });
+
+  it('reports a baseline message that is gone now', async () => {
+    const out = await run(
+      [
+        ...repeat('payment status: ok', 500),
+        ...repeat('payment status: failed', 500),
+      ],
+      repeat('payment status: ok', 1000),
+    );
+    expect(out.disappeared).toContainEqual(
+      expect.objectContaining({
+        status: 'gone_variant',
+        pattern: 'payment status: failed',
+        currentPattern: 'payment status: ok',
+        variantShare: 0.5,
+      }),
+    );
+  });
+
+  it('needs 3 current rows to report a gone variant', async () => {
+    const out = await run(
+      [
+        ...repeat('payment status: ok', 10),
+        ...repeat('payment status: failed', 10),
+      ],
+      [...repeat('payment status: ok', 2), ...repeat('cache warmed', 18)],
+    );
+    expect(allPatterns(out).some(p => p.status === 'gone_variant')).toBe(false);
   });
 
   it('handles an empty window on either side', async () => {

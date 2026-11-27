@@ -173,7 +173,9 @@ export function registerEmergingSignals({
         'baseline, and new messages that merged into a baseline pattern: ' +
         'status "new_variant")\n' +
         '  - disappeared: patterns that were common in baseline but >= ' +
-        'minShareRatio× rarer (or absent) now\n\n' +
+        'minShareRatio× rarer (or absent) now (includes baseline messages ' +
+        'that stopped while the rest of their pattern goes on: status ' +
+        '"gone_variant")\n\n' +
         'WHY NOT clickstack_event_deltas: event_deltas compares ATTRIBUTE VALUE ' +
         'DISTRIBUTIONS between two row groups (e.g. "region shifted toward ' +
         'eu-west"). It CANNOT surface a brand-new log template or a new endpoint ' +
@@ -279,6 +281,8 @@ export function registerEmergingSignals({
         sample: string;
         // Set on a new message that Drain merged into a baseline pattern.
         variant?: { baselinePattern: string; share: number };
+        // Set on a baseline message that is gone from a pattern that goes on.
+        goneVariant?: { currentPattern: string; share: number };
       };
       const byKey = new Map<string, Agg>();
 
@@ -350,6 +354,73 @@ export function registerEmergingSignals({
         else variants.set(key, { rows: 1, sample: raw });
       });
 
+      // The reverse: a baseline message that is gone although the rest of
+      // its pattern goes on (baseline "status: ok" and "status: failed", now
+      // only "status: ok"). The cluster's share does not change, so only a
+      // template of the current rows alone shows it: baseline rows that don't
+      // fit it are a gone variant. Like above, both windows need 3 sampled
+      // rows in the cluster. Some baseline rows must fit the current template
+      // too: when none do, the token is an identifier that moved on (jobs
+      // alpha and beta, now gamma), not a message that stopped.
+      const curTemplates = new Map<
+        string,
+        { tokens: string[]; rows: number }
+      >();
+      curSample.sampleRows.forEach((row, i) => {
+        const key = String(curRes.rowClusterIds.at(i));
+        if ((baseline.get(key)?.rows ?? 0) < 3) return;
+        const tokens = miner.tokenize(
+          flattenBody(String(row.__hdx_pattern_body ?? '')),
+        );
+        const t = curTemplates.get(key);
+        if (!t) curTemplates.set(key, { tokens, rows: 1 });
+        else if (t.tokens.length === tokens.length) {
+          t.tokens = miner.drain.createTemplate(tokens, t.tokens);
+          t.rows++;
+        }
+      });
+      // Per cluster: the baseline rows that fit the current template, and
+      // the template and first sample of those that don't.
+      const goneVariants = new Map<
+        string,
+        {
+          rows: number;
+          fit: number;
+          tokens: string[];
+          sample: string;
+          currentPattern: string;
+        }
+      >();
+      baseSample.sampleRows.forEach((row, i) => {
+        const key = String(baseRes.rowClusterIds.at(i));
+        const t = curTemplates.get(key);
+        if (!t || t.rows < 3) return;
+        const raw = String(row.__hdx_pattern_body ?? '');
+        const tokens = miner.tokenize(flattenBody(raw));
+        const fits =
+          tokens.length === t.tokens.length &&
+          miner.drain.getSeqDistance(t.tokens, tokens, true)[0] === 1;
+        let g = goneVariants.get(key);
+        if (!g) {
+          g = {
+            rows: 0,
+            fit: 0,
+            tokens: [],
+            sample: '',
+            currentPattern: t.tokens.join(' '),
+          };
+          goneVariants.set(key, g);
+        }
+        if (fits) {
+          g.fit++;
+        } else if (g.rows++ === 0) {
+          g.tokens = tokens;
+          g.sample = raw;
+        } else if (g.tokens.length === tokens.length) {
+          g.tokens = miner.drain.createTemplate(tokens, g.tokens);
+        }
+      });
+
       const ratio = input.minShareRatio;
       // Minimum share for a BRAND-NEW pattern (absent from baseline) to count
       // as emerging. A single sampled row that Drain happened to cluster on its
@@ -362,11 +433,48 @@ export function registerEmergingSignals({
       const emerging: Agg[] = [];
       const disappeared: Agg[] = [];
       const sampled = curRes.sampledCount || 1;
+      const baseSampled = baseRes.sampledCount || 1;
       for (const [key, a] of byKey) {
-        const v = variants.get(key);
         // Below the floor (e.g. one sampled row) a variant is noise, like a
-        // one-row new pattern: classify the cluster as a whole.
-        if (!v || v.rows / sampled < newPatternShareFloor) {
+        // one-row new pattern: classify the cluster as a whole. A gone variant
+        // gets the same floor of 2 rows, in the baseline window.
+        const found = variants.get(key);
+        const v =
+          found && found.rows / sampled >= newPatternShareFloor
+            ? found
+            : undefined;
+        const gone = v ? undefined : goneVariants.get(key);
+        if (gone && gone.rows >= 2 && gone.fit > 0) {
+          // Mirror of a new variant: the stopped message is its own
+          // disappeared entry, and the message that goes on is classified on
+          // its own.
+          const goneCount = Math.round(gone.rows * baseRes.sampleMultiplier);
+          disappeared.push({
+            pattern: gone.tokens.join(' '),
+            curShare: 0,
+            baseShare: gone.rows / baseSampled,
+            curCount: 0,
+            baseCount: goneCount,
+            sample: gone.sample,
+            goneVariant: {
+              currentPattern: gone.currentPattern,
+              share: gone.rows / baseSampled,
+            },
+          });
+          const rest = {
+            pattern: gone.currentPattern,
+            curShare: a.curShare,
+            baseShare: gone.fit / baseSampled,
+            curCount: a.curCount,
+            baseCount: Math.max(a.baseCount - goneCount, 0),
+            sample: a.sample,
+          };
+          const restVerdict = classifyShift(rest, ratio, newPatternShareFloor);
+          if (restVerdict === 'emerging') emerging.push(rest);
+          else if (restVerdict === 'disappeared') disappeared.push(rest);
+          continue;
+        }
+        if (!v) {
           const verdict = classifyShift(a, ratio, newPatternShareFloor);
           if (verdict === 'emerging') emerging.push(a);
           else if (verdict === 'disappeared') disappeared.push(a);
@@ -416,16 +524,24 @@ export function registerEmergingSignals({
         baselineEstimatedCount: a.baseCount,
         status: a.variant
           ? 'new_variant'
-          : a.baseShare === 0
-            ? 'new'
-            : a.curShare === 0
-              ? 'gone'
-              : 'shifted',
+          : a.goneVariant
+            ? 'gone_variant'
+            : a.baseShare === 0
+              ? 'new'
+              : a.curShare === 0
+                ? 'gone'
+                : 'shifted',
         sample: a.sample.slice(0, 300),
         ...(a.variant
           ? {
               baselinePattern: a.variant.baselinePattern,
               variantShare: Math.round(a.variant.share * 10000) / 10000,
+            }
+          : {}),
+        ...(a.goneVariant
+          ? {
+              currentPattern: a.goneVariant.currentPattern,
+              variantShare: Math.round(a.goneVariant.share * 10000) / 10000,
             }
           : {}),
       });
@@ -466,7 +582,10 @@ export function registerEmergingSignals({
           'merged into a baseline pattern (baselinePattern is the old ' +
           'template, sample a new line, variantShare their share); if the ' +
           'old message dropped, it is listed in disappeared. ' +
-          'disappeared = the reverse. Shares are fractions of ' +
+          'disappeared = the reverse; status "gone_variant" means baseline ' +
+          'messages that stopped while the rest of their pattern goes on ' +
+          '(currentPattern is the template of the current rows, sample an old ' +
+          'line, variantShare their share of the baseline). Shares are fractions of ' +
           "each window's sampled rows, so they are comparable across windows of " +
           'different volume. An empty emerging list means nothing novel crossed ' +
           'the threshold — a valid finding.',
