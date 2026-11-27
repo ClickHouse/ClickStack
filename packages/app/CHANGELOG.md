@@ -1,5 +1,94 @@
 # @hyperdx/app
 
+## 2.48.0
+
+### Minor Changes
+
+- 4188b80fe: feat: exemplar overlay for metric and PromQL time charts
+
+  Time charts on metric and PromQL sources can overlay exemplars — individual
+  trace-linked data points — via the "Show exemplars" toggle in the chart
+  editor's display settings. Hovering a marker shows the exemplar's own value and time plus trace metadata
+  from a configurable trace source, with a button to open the trace.
+
+  Off by default for the whole deployment behind `NEXT_PUBLIC_ENABLE_EXEMPLARS`,
+  and per-chart behind the toggle. How many markers a chart draws is a team
+  setting, Max Exemplars per Chart.
+
+  Markers are sampled the way Grafana samples them: bucketed at the chart's
+  granularity, keeping the slowest trace in each bucket plus any further trace more
+  than 2σ below it. The overlay shows the shape of the latency distribution rather
+  than tracing the top of the chart.
+
+  A marker sits at the trace's own measurement, so it is only shown where that is
+  honest: a single non-ratio histogram series with no group by, aggregated in a way
+  that leaves the axis on the observation scale, and for PromQL an expression that
+  plots a duration. Markers outside the rendered window, or below a fitted y-axis
+  floor, are dropped rather than moved — and the count is surfaced on the chart.
+
+### Patch Changes
+
+- d6280844a: fix: use the Map KV items index for ad hoc and dashboard filters on Map keys.
+  These filters render `toString(Map['k']) = 'v'`, which the `has(<items>, ...)`
+  rewrite previously skipped, so the query decoded the whole Map for every row.
+- 6569e326d: Use Claude Sonnet 5.5 by default for the Anthropic assistant and include its rates in LLM cost estimates.
+- 4fce2f616: fix: give the collapsed side nav's links an accessible name. With the nav
+  collapsed to icons, the page links and the logo link had no text, so screen
+  readers announced them only as "link". The labels now stay in the page,
+  visually hidden.
+- b362d339a: fix: show the date on every x-axis tick of time charts at daily granularity or
+  coarser, instead of repeating the time (e.g. `00:00:00`) after the first tick.
+  When a daily bucket doesn't start at midnight in the display time zone, the tick
+  shows the date and time.
+- 5581b950f: feat: Pick the dashboard live mode refresh interval, from 30s up to the time
+  range's default
+- dd3e6de37: feat: include each connection's ClickHouse server version in the "Copy debug info" report
+- f36e6788f: fix: Don't refetch the search histogram when a table column is added or removed
+- 5bd07d54b: fix: run `apk upgrade` in the HyperDX image so it picks up Alpine security fixes
+  (OpenSSL, zlib) released after the Node and ClickHouse base images were built,
+  and bump Node from 22.23.4 to 22.23.5 in the image and `.nvmrc`.
+- e4fe80a6d: fix: limit failed password logins to 10 per email every 2 minutes
+- b51ddb9d5: fix: apply source query settings to metric explorer, metric name, attribute, and Kubernetes facet lookups
+- 3bdbf7f20: feat: show the generated SQL, with variables and macros filled in, in the SQL query filter preview
+- c3928c77d: fix: Fix table sorting for formula, group by, and multi-series metric aliases
+- c04a7786f: feat: team settings now has a sidebar with one page per setting and a search
+  box that also finds individual settings, such as "Parallelize queries when
+  possible", and jumps to them. API keys and organization API keys share one page.
+  Old `?tab=` links redirect to the new pages.
+- 5e6978f62: fix: close the time picker on a click outside it or on Escape. It stayed open,
+  including above the row side panel opened by clicking a search result.
+- 5f8d22df0: fix: drill down correctly from a time chart point with a value of 0
+
+  Clicking a point with a value of 0 searched every event in that time bucket. It
+  now filters to events with a value of 0, as it already did for any other value.
+
+- 210f3e2c4: chore: move to the zod 4 package (^4.6.6) while keeping the zod 3 API through
+  `zod/v3` imports. Schemas and validation behavior are unchanged.
+- Updated dependencies [d6280844a]
+- Updated dependencies [6569e326d]
+- Updated dependencies [f874e3414]
+- Updated dependencies [b362d339a]
+- Updated dependencies [a1a5eacde]
+- Updated dependencies [4188b80fe]
+- Updated dependencies [2e233f768]
+- Updated dependencies [f36e6788f]
+- Updated dependencies [5bd07d54b]
+- Updated dependencies [c499769a3]
+- Updated dependencies [e4fe80a6d]
+- Updated dependencies [ed8520119]
+- Updated dependencies [b51ddb9d5]
+- Updated dependencies [48fcaf5ba]
+- Updated dependencies [6a7164c9c]
+- Updated dependencies [3be2ea1ba]
+- Updated dependencies [58a59e366]
+- Updated dependencies [3bdbf7f20]
+- Updated dependencies [c3928c77d]
+- Updated dependencies [099aa089e]
+- Updated dependencies [272a46101]
+- Updated dependencies [210f3e2c4]
+  - @hyperdx/common-utils@0.37.0
+  - @hyperdx/api@2.48.0
+
 ## 2.47.0
 
 ### Minor Changes

@@ -1,5 +1,57 @@
 # @hyperdx/common-utils
 
+## 0.37.0
+
+### Minor Changes
+
+- 4188b80fe: feat: exemplar overlay for metric and PromQL time charts
+
+  Time charts on metric and PromQL sources can overlay exemplars — individual
+  trace-linked data points — via the "Show exemplars" toggle in the chart
+  editor's display settings. Hovering a marker shows the exemplar's own value and time plus trace metadata
+  from a configurable trace source, with a button to open the trace.
+
+  Off by default for the whole deployment behind `NEXT_PUBLIC_ENABLE_EXEMPLARS`,
+  and per-chart behind the toggle. How many markers a chart draws is a team
+  setting, Max Exemplars per Chart.
+
+  Markers are sampled the way Grafana samples them: bucketed at the chart's
+  granularity, keeping the slowest trace in each bucket plus any further trace more
+  than 2σ below it. The overlay shows the shape of the latency distribution rather
+  than tracing the top of the chart.
+
+  A marker sits at the trace's own measurement, so it is only shown where that is
+  honest: a single non-ratio histogram series with no group by, aggregated in a way
+  that leaves the axis on the observation scale, and for PromQL an expression that
+  plots a duration. Markers outside the rendered window, or below a fitted y-axis
+  floor, are dropped rather than moved — and the count is surfaced on the chart.
+
+### Patch Changes
+
+- d6280844a: fix: use the Map KV items index for ad hoc and dashboard filters on Map keys.
+  These filters render `toString(Map['k']) = 'v'`, which the `has(<items>, ...)`
+  rewrite previously skipped, so the query decoded the whole Map for every row.
+- b362d339a: fix: show the date on every x-axis tick of time charts at daily granularity or
+  coarser, instead of repeating the time (e.g. `00:00:00`) after the first tick.
+  When a daily bucket doesn't start at midnight in the display time zone, the tick
+  shows the date and time.
+- a1a5eacde: fix: MCP `emerging_signals` mines both windows in one Drain tree, in a fixed
+  order (baseline first), and compares them by cluster, so a token that is
+  constant in one window and varies in the other no longer splits a pattern into
+  one "new" and one "gone". New messages that Drain merges into a baseline pattern
+  are reported as `new_variant`, so they aren't hidden by the merge, and baseline
+  messages that stop while the rest of their pattern goes on are reported as
+  `gone_variant`. The baseline window excludes its end, so a row at the boundary
+  is counted once.
+- f36e6788f: fix: Don't refetch the search histogram when a table column is added or removed
+- b51ddb9d5: fix: apply source query settings to metric explorer, metric name, attribute, and Kubernetes facet lookups
+- 3bdbf7f20: feat: show the generated SQL, with variables and macros filled in, in the SQL query filter preview
+- c3928c77d: fix: Fix table sorting for formula, group by, and multi-series metric aliases
+- 099aa089e: fix: PromQL label lookups with `match[]` work on ClickHouse 26.11, which
+  requires the `return_columns` argument of `timeSeriesSelector()`
+- 210f3e2c4: chore: move to the zod 4 package (^4.6.6) while keeping the zod 3 API through
+  `zod/v3` imports. Schemas and validation behavior are unchanged.
+
 ## 0.36.1
 
 ### Patch Changes
