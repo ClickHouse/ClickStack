@@ -3,7 +3,7 @@ import http from 'http';
 import gracefulShutdown from 'http-graceful-shutdown';
 import { serializeError } from 'serialize-error';
 
-import app from '@/api-app';
+import app, { sessionStore } from '@/api-app';
 import * as config from '@/config';
 import { LOCAL_APP_TEAM } from '@/controllers/team';
 import { runStartupMigrations } from '@/migrations';
@@ -32,9 +32,11 @@ export default class Server {
   protected async shutdown(_signal?: string) {
     let hasError = false;
     logger.info('Closing all db clients...');
-    const [mongoCloseResult] = await Promise.allSettled([
-      mongooseConnection.close(false),
-    ]);
+    const [mongoCloseResult, sessionStoreCloseResult] =
+      await Promise.allSettled([
+        mongooseConnection.close(false),
+        sessionStore.close(),
+      ]);
 
     if (mongoCloseResult.status === 'rejected') {
       hasError = true;
@@ -44,6 +46,14 @@ export default class Server {
       );
     } else {
       logger.info('MongoDB client closed.');
+    }
+
+    if (sessionStoreCloseResult.status === 'rejected') {
+      hasError = true;
+      logger.error(
+        { err: serializeError(sessionStoreCloseResult.reason) },
+        'Session store MongoDB client close failed',
+      );
     }
 
     if (hasError) {
