@@ -640,31 +640,26 @@ describe('maxSelections', () => {
 });
 
 describe('allowAll', () => {
-  const allCapable = [
-    ['STATIC_LIST', byType.STATIC_LIST],
-    ['SQL_QUERY', byType.SQL_QUERY],
-  ] as const;
+  it('round-trips allowAll on a static list filter', () => {
+    const saved = toSavedFilter(
+      formValues({ ...byType.STATIC_LIST, allowAll: true }),
+    );
 
-  it.each(allCapable)(
-    'round-trips allowAll on a %s filter',
-    (_type, filter) => {
-      const saved = toSavedFilter(formValues({ ...filter, allowAll: true }));
+    expect(saved).toMatchObject({ allowAll: true });
+    expect(toFormValues(saved).allowAll).toBe(true);
+  });
 
-      expect(saved).toMatchObject({ allowAll: true });
-      expect(toFormValues(saved).allowAll).toBe(true);
-    },
-  );
+  it('stores nothing for allowAll on a single-select static list filter', () => {
+    const saved = toSavedFilter(
+      formValues({
+        ...byType.STATIC_LIST,
+        allowAll: true,
+        isSingleSelect: true,
+      }),
+    );
 
-  it.each(allCapable)(
-    'stores nothing for allowAll on a single-select %s filter',
-    (_type, filter) => {
-      const saved = toSavedFilter(
-        formValues({ ...filter, allowAll: true, isSingleSelect: true }),
-      );
-
-      expect(saved).toMatchObject({ allowAll: undefined });
-    },
-  );
+    expect(saved).toMatchObject({ allowAll: undefined });
+  });
 
   it('stores nothing for allowAll when it is off', () => {
     const saved = toSavedFilter(
@@ -672,5 +667,19 @@ describe('allowAll', () => {
     );
 
     expect(saved).toMatchObject({ allowAll: undefined });
+  });
+
+  // SQL query filters don't expand "All" yet
+  it('stores nothing for allowAll after switching a static list to a SQL query', () => {
+    const saved = toSavedFilter(
+      formValues({
+        ...byType.STATIC_LIST,
+        allowAll: true,
+        ...byType.SQL_QUERY,
+      }),
+    );
+
+    expect(saved.type).toBe('SQL_QUERY');
+    expect(saved).not.toHaveProperty('allowAll');
   });
 });
