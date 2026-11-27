@@ -2,7 +2,7 @@ import * as React from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { AlertInterval } from '@hyperdx/common-utils/dist/types';
+import { AlertInterval, AlertSource } from '@hyperdx/common-utils/dist/types';
 import {
   ActionIcon,
   Anchor,
@@ -27,7 +27,7 @@ import { AlertStateBadge } from '@/components/alerts/AlertStateBadge';
 import EmptyState from '@/components/EmptyState';
 import { PageHeader } from '@/components/PageHeader';
 import { TimePicker } from '@/components/TimePicker';
-import { IS_ALERT_DETAILS_ENABLED } from '@/config';
+import { IS_ALERT_DETAILS_ENABLED, IS_SLOS_ENABLED } from '@/config';
 import { getAlertSourceLabel, getAlertSourceUrl } from '@/utils/alerts';
 
 import api from './api';
@@ -237,6 +237,15 @@ export default function AlertDetailPage() {
 
   const { data, isLoading, isError } = api.useAlert(alertId);
   const alert = data?.data;
+
+  // An SLO's alert is shown, and changed, on its SLO.
+  const sloId =
+    IS_SLOS_ENABLED && alert?.source === AlertSource.SLO
+      ? alert.sloId
+      : undefined;
+  React.useEffect(() => {
+    if (sloId) router.replace(`/slos/${sloId}`);
+  }, [sloId, router]);
   const title = usePageTitle(
     alert ? `${alert.displayName} - Alerts` : 'Alerts',
   );

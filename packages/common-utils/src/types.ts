@@ -828,6 +828,8 @@ export enum AlertSource {
    * instead of referencing a saved search or tile.
    */
   INLINE = 'inline',
+  /** Burn-rate alert owned by an SLO; managed only through the SLO. */
+  SLO = 'slo',
 }
 
 export const AlertIntervalSchema = z.union([
@@ -3246,6 +3248,10 @@ export const AlertsPageItemSchema = z.object({
   dashboardId: z.string().optional(),
   savedSearchId: z.string().optional(),
   tileId: z.string().optional(),
+  // SLO alerts only: the SLO that owns the alert and is the place to change
+  // it, and which of its burn alerts this is ('fastBurn' or 'slowBurn').
+  sloId: z.string().optional(),
+  sloRule: z.enum(['fastBurn', 'slowBurn']).optional(),
   // Tile alerts only: set when the tile this alert watches cannot be
   // addressed in generated Terraform, so the row's export action is withheld.
   // Server-computed — `dashboard.tiles` below carries only this alert's own
