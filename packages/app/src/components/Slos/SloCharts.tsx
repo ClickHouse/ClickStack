@@ -44,11 +44,14 @@ export function SloCharts({
   slo,
   source,
   now,
+  group,
   onBucketSelect,
 }: {
   slo: SloApiResponse;
   source: TSource;
   now: Date;
+  /** One group of a grouped SLO. */
+  group?: string;
   onBucketSelect: (start: Date, end: Date) => void;
 }) {
   const formatTime = useFormatTime();
@@ -56,6 +59,7 @@ export function SloCharts({
     slo,
     source,
     now,
+    group,
   );
   const bucketMs = convertGranularityToSeconds(granularity) * 1000;
   // The burn chart follows the rule's 1h condition, the one that pages first.

@@ -5,16 +5,19 @@ import { SloStatsGrid } from './SloDetailPanels';
 import type { SloLiveStatus } from './useSloLiveStatus';
 
 /**
- * The numbers on the page: computed now when the source is there (live), or
- * the stored snapshot the list uses when it is not, or until live ones load.
+ * The numbers on the page, for the SLO or one of its groups: computed now
+ * when the source is there (live), or the stored snapshot the list uses when
+ * it is not, or until live ones load.
  */
 export function SloNumbers({
   slo,
+  group,
   hasSource,
   live,
   liveError,
 }: {
   slo: SloApiResponse;
+  group?: string;
   hasSource: boolean;
   live?: SloLiveStatus;
   liveError?: Error | null;
@@ -24,10 +27,12 @@ export function SloNumbers({
     return <SloStatsGrid slo={slo} stats={live.stats} state={live.state} />;
   }
   // An SLO that never updated successfully has no stored numbers to show.
-  const stored =
+  const usable =
     status != null && (status.state !== 'error' || status.lastSuccessAt)
       ? status
       : null;
+  const stored =
+    group != null ? usable?.groups?.find(g => g.value === group) : usable;
   return (
     <>
       {liveError ? (

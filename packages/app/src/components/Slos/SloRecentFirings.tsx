@@ -40,7 +40,14 @@ export function getAlertEpisodes(
  * When one of the SLO's burn alerts fired in the last 7 days, newest
  * first.
  */
-export function SloRecentFirings({ alertId }: { alertId: string }) {
+export function SloRecentFirings({
+  alertId,
+  grouped,
+}: {
+  alertId: string;
+  /** A grouped SLO's alert fires when any of its groups does. */
+  grouped: boolean;
+}) {
   const [dateRange] = useState<[Date, Date]>(() => [
     new Date(Date.now() - RECENT_FIRINGS_MS),
     new Date(),
@@ -62,6 +69,12 @@ export function SloRecentFirings({ alertId }: { alertId: string }) {
       <Text size="sm" fw={500}>
         Fired {episodes.length === 1 ? 'once' : `${episodes.length} times`} in
         the last 7 days
+        {grouped && (
+          <Text span size="sm" c="dimmed" fw={400}>
+            {' '}
+            (counting when any group was firing)
+          </Text>
+        )}
       </Text>
       <Table verticalSpacing={4} withRowBorders={false} maw={560}>
         <Table.Thead>

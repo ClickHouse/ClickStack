@@ -10,8 +10,9 @@ import {
   getSloAlertRuleLabel,
   getSloAlertTarget,
   SLO_BURN_CONDITIONS,
+  SLO_MAX_GROUPS,
   type SloApiResponse,
-  type SloState,
+  type SloGroupState,
   type SloStats,
 } from '@hyperdx/common-utils/dist/slo';
 import { WebhookService } from '@hyperdx/common-utils/dist/types';
@@ -78,7 +79,7 @@ export function SloStatsGrid({
 }: {
   slo: SloApiResponse;
   stats: SloStats;
-  state: SloState;
+  state: SloGroupState;
 }) {
   // The rule's conditions with their numbers, the 1h one first.
   const [hour, sixHours] = getSloBurnRule(slo.window).map((condition, i) => ({
@@ -173,7 +174,12 @@ export function SloAlertPanel({ slo }: { slo: SloApiResponse }) {
                   ? `Notifies ${channels.join(', ')} when ${sentence}.`
                   : `Turn it on to be notified when ${sentence}.`}
               </Text>
-              {target && status && <SloRecentFirings alertId={status.id} />}
+              {target && status && (
+                <SloRecentFirings
+                  alertId={status.id}
+                  grouped={slo.groupBy != null}
+                />
+              )}
             </Stack>
           );
         })}
@@ -247,6 +253,20 @@ export function SloDefinitionPanel({
             <Code>{slo.indicator.good}</Code>
           )}
         </Text>
+        {slo.groupBy != null && (
+          <Text size="sm" data-testid="slo-definition-group-by">
+            <Text span c="dimmed">
+              Group by:{' '}
+            </Text>
+            <Code>{slo.groupBy}</Code>
+            {status?.groupCount != null &&
+              `, ${formatCount(status.groupCount)} ${status.groupCount === 1 ? 'group' : 'groups'}` +
+                (status.groupCount > SLO_MAX_GROUPS
+                  ? `; the ${SLO_MAX_GROUPS} with the most events are tracked`
+                  : '')}
+            . Each group has its own SLI, error budget and alerts.
+          </Text>
+        )}
         <Text size="sm">
           <Text span c="dimmed">
             Objective:{' '}

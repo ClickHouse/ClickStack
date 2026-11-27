@@ -2,27 +2,27 @@ import { getSloBurnRule } from '@hyperdx/common-utils/dist/core/slo';
 import {
   getSloBurnWindowMs,
   getSloWindowMs,
+  SLO_GROUP_MIN_EVENTS,
   type SloAlertRule,
   type SloAlertStatus,
   type SloApiResponse,
   type SloBurnWindow,
-  type SloState,
+  type SloGroupState,
   type SloWindow,
 } from '@hyperdx/common-utils/dist/slo';
 import { AlertState, type TSource } from '@hyperdx/common-utils/dist/types';
 
-/** An SLO's state as shown: pending until the background computes it. */
-export type SloDisplayState = SloState | 'pending';
+/**
+ * An SLO's or a group's state as shown: pending until the background
+ * computes it.
+ */
+export type SloDisplayState = SloGroupState | 'pending';
 
-/** The states an SLO can be shown in. */
-export const SLO_DISPLAY_STATES: SloDisplayState[] = [
-  'breached',
-  'burning',
-  'error',
-  'healthy',
-  'no_data',
-  'pending',
-];
+/** The states an SLO itself can be in; only a group has too few events. */
+export const SLO_DISPLAY_STATES: Exclude<
+  SloDisplayState,
+  'insufficient_data'
+>[] = ['breached', 'burning', 'error', 'healthy', 'no_data', 'pending'];
 
 export function getSloDisplayState(slo: SloApiResponse): SloDisplayState {
   return slo.status?.state ?? 'pending';
@@ -42,6 +42,8 @@ export function sloStateLabel(state: SloDisplayState): string {
       return 'Error';
     case 'pending':
       return 'Pending';
+    case 'insufficient_data':
+      return 'Too few events';
   }
 }
 
@@ -59,7 +61,14 @@ export function sloStateDescription(state: SloDisplayState): string {
       return 'The last update failed. The numbers shown are the last ones computed.';
     case 'pending':
       return 'The numbers are computed in the background within a few minutes of a save.';
+    case 'insufficient_data':
+      return `Fewer than ${SLO_GROUP_MIN_EVENTS} eligible events in the window: too few to judge, so the group has no state of its own and does not alert.`;
   }
+}
+
+/** A group's value as shown; an empty value reads as such. */
+export function formatSloGroup(value: string): string {
+  return value === '' ? '(empty)' : value;
 }
 
 /** A burn alert's state, in words that read well after its name. */
