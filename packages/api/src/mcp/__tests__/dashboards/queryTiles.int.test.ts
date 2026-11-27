@@ -243,6 +243,9 @@ describe('MCP Dashboard Tools - clickstack_query_tiles', () => {
     expect(tile.status).toBe('ok');
     expect(tile.hasData).toBe(true);
     expect(tile.rowCount).toBeGreaterThan(0);
+    expect(tile.elapsedMs).toEqual(expect.any(Number));
+    expect(tile.rowsRead).toBeGreaterThan(0);
+    expect(tile.bytesRead).toBeGreaterThan(0);
   });
 
   it('skips a markdown tile passed explicitly in tileIds', async () => {

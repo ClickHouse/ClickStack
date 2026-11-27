@@ -1,8 +1,9 @@
-import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { localhostHostValidation } from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express from 'express';
 
 import { validateUserAccessKey } from '@/middleware/auth';
+import { parseBody } from '@/middleware/bodyParser';
 import { setBusinessContext } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import rateLimiter, { rateLimiterKeyGenerator } from '@/utils/rateLimiter';
@@ -11,7 +12,10 @@ import { createServer } from './mcpServer';
 import { McpContext } from './tools/types';
 import { userAgentClientInfo } from './utils/mcpClient';
 
-const app = createMcpExpressApp();
+// createMcpExpressApp minus its pre-auth JSON parser: bodies are parsed after
+// the access key check.
+const app = express();
+app.use(localhostHostValidation());
 
 const mcpRateLimiter = rateLimiter({
   windowMs: 60 * 1000, // 1 minute
@@ -37,7 +41,9 @@ const methodNotAllowed = (_req: express.Request, res: express.Response) => {
 app.get('/', mcpRateLimiter, methodNotAllowed);
 app.delete('/', mcpRateLimiter, methodNotAllowed);
 
-app.post('/', mcpRateLimiter, validateUserAccessKey, async (req, res) => {
+const authorizePost = [mcpRateLimiter, validateUserAccessKey, ...parseBody];
+
+app.post('/', authorizePost, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless
   });
