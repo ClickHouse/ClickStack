@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 
+import * as config from '@/config';
 import Alert, { IAlert } from '@/models/alert';
 import Dashboard from '@/models/dashboard';
 import { SavedSearch } from '@/models/savedSearch';
@@ -129,10 +130,38 @@ export async function backfillAlertDisplayFields() {
   );
 }
 
+// connect-mongo's touch() never adds lastModified, so without it older
+// sessions keep being rewritten on every request.
+export async function backfillSessionLastModified() {
+  const result = await mongoose.connection
+    .collection<{ _id: string; lastModified?: Date }>('sessions')
+    .updateMany(
+      { lastModified: { $exists: false } },
+      {
+        $set: {
+          lastModified: new Date(
+            Date.now() - config.SESSION_TOUCH_AFTER_SEC * 1000,
+          ),
+        },
+      },
+    );
+  if (result.modifiedCount > 0) {
+    logger.info(
+      { updatedCount: result.modifiedCount },
+      'Backfilled session lastModified',
+    );
+  }
+}
+
 export async function runStartupMigrations() {
   try {
     await backfillAlertDisplayFields();
   } catch (e) {
     logger.error({ err: e }, 'Error backfilling alert display names and tags');
+  }
+  try {
+    await backfillSessionLastModified();
+  } catch (e) {
+    logger.error({ err: e }, 'Error backfilling session lastModified');
   }
 }
