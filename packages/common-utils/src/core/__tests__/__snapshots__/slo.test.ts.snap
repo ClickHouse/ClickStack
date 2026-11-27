@@ -1,0 +1,5 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`SLO query generator casts an attribute duration and leaves out events without one 1`] = `"SELECT count() AS "slo_eligible",countIf(accurateCastOrNull(LogAttributes['latency_ms'], 'Float64') <= 300) AS "slo_good",toStartOfInterval(toDateTime(Timestamp), INTERVAL 1 hour) AS \`__hdx_time_bucket\` FROM otel.otel_traces WHERE (Timestamp >= fromUnixTimestamp64Milli(1793491200000) AND Timestamp < fromUnixTimestamp64Milli(1794096000000)) AND (((ServiceName ILIKE '%checkout%'))) AND ((isNotNull(accurateCastOrNull(LogAttributes['latency_ms'], 'Float64')))) GROUP BY toStartOfInterval(toDateTime(Timestamp), INTERVAL 1 hour) AS \`__hdx_time_bucket\` ORDER BY toStartOfInterval(toDateTime(Timestamp), INTERVAL 1 hour) AS \`__hdx_time_bucket\`"`;
+
+exports[`SLO query generator counts eligible and good events over the range 1`] = `"SELECT count() AS "slo_eligible",countIf(StatusCode != 'Error') AS "slo_good" FROM otel.otel_traces WHERE (Timestamp >= fromUnixTimestamp64Milli(1793491200000) AND Timestamp < fromUnixTimestamp64Milli(1794096000000)) AND (SpanKind = 'Server') AND ((ServiceName IN ('checkout')))"`;
