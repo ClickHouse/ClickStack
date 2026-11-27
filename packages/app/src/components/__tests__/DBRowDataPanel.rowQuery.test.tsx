@@ -116,6 +116,16 @@ describe('row lookup', () => {
     },
   );
 
+  it('reads from the filesystem cache without filling it', async () => {
+    renderPanel({ source, rowId: "id='a'" });
+    await settled();
+
+    expect(mockQueryChartConfig.mock.calls[0][0].querySettings).toContainEqual({
+      setting: 'read_from_filesystem_cache_if_exists_otherwise_bypass_cache',
+      value: '1',
+    });
+  });
+
   it('reuses a found row when the panel opens it again', async () => {
     const first = renderPanel({ source, rowId: "id='a'" });
     await settled();
