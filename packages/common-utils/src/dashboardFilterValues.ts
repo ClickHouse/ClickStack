@@ -121,6 +121,11 @@ export function serializeDashboardFilterValues(input: {
   ];
 
   for (const [name, value] of input.byVariable ?? []) {
+    if (value.type === 'variable' && value.all) {
+      // "all" carries no values but is still a selection, so it isn't omitted.
+      entries.push({ type: 'variable', name, values: [], all: true });
+      continue;
+    }
     // Empty selections are omitted.
     const isEmpty =
       value.type === 'adhoc'
@@ -190,7 +195,7 @@ function resolveUncappedFilterSelection(
     const values = parsed.byVariable.get(key.name);
     if (values?.type === 'variable') {
       return {
-        included: new Set<string | boolean>(values.values),
+        included: new Set<string | boolean>(values.all ? [] : values.values),
         excluded: new Set(),
       };
     }

@@ -588,6 +588,11 @@ describe('DashboardFilterSchema static-list variant', () => {
     ]);
   });
 
+  it('keeps allowAll', () => {
+    const withAll = { ...staticFilter, allowAll: true };
+    expect(DashboardFilterSchema.parse(withAll)).toEqual(withAll);
+  });
+
   it('rejects an unknown filter type at the discriminator', () => {
     const result = DashboardFilterSchema.safeParse({
       ...staticFilter,
@@ -692,6 +697,11 @@ describe('DashboardFilterSchema SQL query variant', () => {
 
   it('parses a SQL query filter', () => {
     expect(DashboardFilterSchema.parse(sqlFilter)).toEqual(sqlFilter);
+  });
+
+  it('keeps allowAll', () => {
+    const withAll = { ...sqlFilter, allowAll: true };
+    expect(DashboardFilterSchema.parse(withAll)).toEqual(withAll);
   });
 
   it.each(['connection', 'sqlTemplate'] as const)(
@@ -865,6 +875,16 @@ describe('DashboardFilterValueSchema', () => {
         values: [],
       }).success,
     ).toBe(true);
+  });
+
+  it('accepts an "all" entry and rejects any other value for the flag', () => {
+    const entry = { type: 'variable', name: 'svc', values: [] };
+    expect(
+      DashboardFilterValueSchema.safeParse({ ...entry, all: true }).success,
+    ).toBe(true);
+    expect(
+      DashboardFilterValueSchema.safeParse({ ...entry, all: false }).success,
+    ).toBe(false);
   });
 
   it('requires a non-empty name and a values array', () => {

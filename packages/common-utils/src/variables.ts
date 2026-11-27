@@ -513,6 +513,9 @@ function languageSettings(language: TemplateLanguage): LanguageSettings {
 const sqlNoOp = (name: string) =>
   `(1=1 /** no values selected for variable '${name}' */)`;
 
+const sqlAllNoOp = (name: string) =>
+  `(1=1 /** all values selected for variable '${name}' */)`;
+
 /**
  * The variable a macro's name argument refers to, or undefined when the argument
  * isn't a `$name` reference.
@@ -630,6 +633,9 @@ function expandConditionalAllMacro(
   const variableName = requireVariableNameArg('conditionalAll', args);
   const variable = requireVariable(ctx, 'conditionalAll', variableName);
 
+  // Matches Grafana's $__conditionalAll, which drops the condition for "All".
+  // $__filter keeps the expanded values instead, as `col IN ($var)` does there.
+  if (variable.all) return sqlAllNoOp(variableName);
   if (variable.values.length === 0) return sqlNoOp(variableName);
 
   // The condition is already expanded by `expandTemplate`.

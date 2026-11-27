@@ -247,6 +247,16 @@ describe('dashboardFilterValues', () => {
       ]);
     });
 
+    it('keeps an "all" selection even though it carries no values', () => {
+      expect(
+        serializeDashboardFilterValues({
+          byVariable: new Map<string, VariableEntryValue>([
+            ['env', { type: 'variable', values: ['ignored'], all: true }],
+          ]),
+        }),
+      ).toEqual([{ type: 'variable', name: 'env', values: [], all: true }]);
+    });
+
     it('emits legacy entries byte-identically to filtersToQuery', () => {
       const byExpression: FilterState = {
         ServiceName: {
@@ -442,6 +452,18 @@ describe('dashboardFilterValues', () => {
 
       expect(resolveFilterSelection(variableFilter, parsed)).toEqual(
         included('new'),
+      );
+    });
+
+    it('resolves an "all" entry to an empty selection', () => {
+      // The included/excluded shape can't hold "all", and the entry's values
+      // are ignored, so neither may leak into it.
+      const parsed = parseDashboardFilterValues([
+        { type: 'variable', name: 'env', values: ['prod'], all: true },
+      ]);
+
+      expect(resolveFilterSelection(staticFilter(), parsed)).toEqual(
+        included(),
       );
     });
 
