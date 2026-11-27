@@ -3,7 +3,9 @@ import type { SloApiResponse } from '@hyperdx/common-utils/dist/slo';
 import { SourceKind, type TSource } from '@hyperdx/common-utils/dist/types';
 
 import {
+  buildSloPreviewRequest,
   DEFAULT_SLO_FORM_VALUES,
+  getSloPreviewKey,
   sloFormResolver,
   type SloFormValues,
   sloToFormValues,
@@ -166,5 +168,38 @@ describe('SLO form', () => {
         alerts: saved.alerts,
       }),
     );
+  });
+
+  it('marks a preview stale when its counts would change, not the target', () => {
+    const key = getSloPreviewKey(valid, traceSource);
+    const retargeted: SloFormValues = { ...valid, target: 95 };
+    expect(getSloPreviewKey(retargeted, traceSource)).toBe(key);
+    expect(getSloPreviewKey({ ...valid, window: '7d' }, traceSource)).not.toBe(
+      key,
+    );
+    // The latency settings play no part in an availability SLO.
+    expect(getSloPreviewKey(latency('Duration'), traceSource)).not.toBe(key);
+    expect(
+      getSloPreviewKey(
+        {
+          ...valid,
+          indicator: {
+            ...valid.indicator,
+            latency: { ...valid.indicator.latency, thresholdMs: 1 },
+          },
+        },
+        traceSource,
+      ),
+    ).toBe(key);
+  });
+
+  it('builds the preview queries over the window ending now', () => {
+    const now = Date.parse('2026-11-08T00:00:00Z');
+    const request = buildSloPreviewRequest(valid, traceSource, now);
+    expect(request?.counts.dateRange).toEqual([
+      new Date('2026-10-09T00:00:00Z'),
+      new Date('2026-11-08T00:00:00Z'),
+    ]);
+    expect(request?.total.dateRange).toEqual(request?.counts.dateRange);
   });
 });

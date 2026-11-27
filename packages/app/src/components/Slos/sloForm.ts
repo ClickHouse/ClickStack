@@ -1,13 +1,22 @@
 import type { Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import {
+  buildSloCountsChartConfig,
+  buildSloSourceTotalChartConfig,
+  getSloWindowRange,
+} from '@hyperdx/common-utils/dist/core/slo';
 import { getSloDefaultDuration } from '@hyperdx/common-utils/dist/core/sloLatency';
 import {
   type SloApiResponse,
+  SloIndicatorSchema,
   type SloInput,
   SloInputSchema,
   type SloLatency,
 } from '@hyperdx/common-utils/dist/slo';
-import type { TSource } from '@hyperdx/common-utils/dist/types';
+import type {
+  BuilderChartConfigWithDateRange,
+  TSource,
+} from '@hyperdx/common-utils/dist/types';
 
 /**
  * The builder edits the API input directly, so schema errors land on the
@@ -111,6 +120,47 @@ export function toSloInput(values: SloFormValues, source?: TSource): SloInput {
   return {
     ...values,
     indicator: toSloIndicator(values.indicator, source),
+  };
+}
+
+export type SloPreviewRequest = {
+  /** What the counts depend on; another key means the preview is stale. */
+  key: string;
+  counts: BuilderChartConfigWithDateRange;
+  total: BuilderChartConfigWithDateRange;
+};
+
+/** What a preview's counts depend on. The target only changes the math. */
+export function getSloPreviewKey(
+  values: Pick<SloFormValues, 'source' | 'indicator' | 'window'>,
+  source?: TSource,
+): string {
+  return JSON.stringify([
+    values.source,
+    values.window,
+    toSloIndicator(values.indicator, source),
+  ]);
+}
+
+/** The preview's queries, over the SLO window that ends at `nowMs`. */
+export function buildSloPreviewRequest(
+  values: SloFormValues,
+  source: TSource,
+  nowMs: number,
+): SloPreviewRequest | undefined {
+  const indicator = SloIndicatorSchema.safeParse(
+    toSloIndicator(values.indicator, source),
+  );
+  if (!indicator.success) return undefined;
+  const dateRange = getSloWindowRange(values.window, new Date(nowMs));
+  return {
+    key: getSloPreviewKey(values, source),
+    counts: buildSloCountsChartConfig({
+      slo: { indicator: indicator.data },
+      source,
+      dateRange,
+    }),
+    total: buildSloSourceTotalChartConfig({ source, dateRange }),
   };
 }
 

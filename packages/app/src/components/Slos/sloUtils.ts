@@ -84,6 +84,14 @@ export function formatBurnRate(burnRate: number | null | undefined): string {
   return `${burnRate.toFixed(burnRate >= 10 ? 1 : 2)}x`;
 }
 
+export function formatCount(n: number | null | undefined): string {
+  if (n == null) return '-';
+  return Intl.NumberFormat('en-US', {
+    notation: Math.abs(n) >= 100_000 ? 'compact' : 'standard',
+    maximumFractionDigits: Math.abs(n) >= 100_000 ? 1 : 0,
+  }).format(n);
+}
+
 export function formatSloWindow(window: SloWindow): string {
   return window === '7d' ? '7 days' : '30 days';
 }

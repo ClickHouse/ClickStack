@@ -1,9 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { useForm, useFormState, useWatch } from 'react-hook-form';
+import {
+  type FieldPath,
+  useForm,
+  useFormState,
+  useWatch,
+} from 'react-hook-form';
 import {
   Anchor,
   Box,
@@ -32,13 +37,25 @@ import {
   SloObjectiveFields,
 } from './SloDefinitionFields';
 import {
+  buildSloPreviewRequest,
   DEFAULT_SLO_FORM_VALUES,
+  getSloPreviewKey,
   sloFormResolver,
   type SloFormValues,
+  type SloPreviewRequest,
   sloToFormValues,
   toSloInput,
 } from './sloForm';
 import { SloFormSection } from './SloFormLayout';
+import { SloPreviewPanel } from './SloPreviewPanel';
+
+/** The fields a preview needs, validated before it runs. */
+const PREVIEW_FIELDS: FieldPath<SloFormValues>[] = [
+  'source',
+  'indicator',
+  'target',
+  'window',
+];
 
 function SloEditorPage() {
   const enabled = useSlosEnabledGuard();
@@ -48,13 +65,16 @@ function SloEditorPage() {
   const { data: existing } = useSlo(editId);
   const title = usePageTitle(editId ? 'Edit SLO' : 'New SLO');
 
-  const { control, handleSubmit, reset, setValue, getValues } =
+  const { control, handleSubmit, reset, setValue, getValues, trigger } =
     useForm<SloFormValues>({
       defaultValues: DEFAULT_SLO_FORM_VALUES,
       resolver: sloFormResolver,
     });
   const { errors } = useFormState({ control, name: 'name' });
-  const sourceId = useWatch({ control, name: 'source' });
+  const [sourceId, indicator, target, sloWindow] = useWatch({
+    control,
+    name: ['source', 'indicator', 'target', 'window'],
+  });
   const { data: source } = useSource({ id: sourceId || undefined });
 
   // Load the SLO being edited, once.
@@ -67,6 +87,18 @@ function SloEditorPage() {
     }
     initializedRef.current = true;
   }, [router.isReady, editId, existing, reset]);
+
+  const [preview, setPreview] = useState<SloPreviewRequest | null>(null);
+  const runPreview = async () => {
+    if (!source || !(await trigger(PREVIEW_FIELDS))) return;
+    setPreview(buildSloPreviewRequest(getValues(), source, Date.now()) ?? null);
+  };
+  const isPreviewStale =
+    preview != null &&
+    getSloPreviewKey(
+      { source: sourceId, indicator, window: sloWindow },
+      source,
+    ) !== preview.key;
 
   const save = useSaveSlo();
   const onSave = handleSubmit(async values => {
@@ -173,6 +205,14 @@ function SloEditorPage() {
                 <SloDetailsFields control={control} />
               </SloFormSection>
             </Stack>
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, lg: 4 }}>
+            <SloPreviewPanel
+              request={preview}
+              isStale={isPreviewStale}
+              target={target}
+              onRun={runPreview}
+            />
           </Grid.Col>
         </Grid>
       </Container>
