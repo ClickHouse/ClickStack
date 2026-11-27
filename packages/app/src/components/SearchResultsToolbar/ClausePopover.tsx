@@ -1,7 +1,18 @@
-import { type ReactNode, useState } from 'react';
-import { Button, Group, Popover, SegmentedControl, Stack } from '@mantine/core';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { completionStatus } from '@codemirror/autocomplete';
+import { EditorView } from '@codemirror/view';
+import {
+  Button,
+  Group,
+  Popover,
+  SegmentedControl,
+  SimpleGrid,
+  Stack,
+} from '@mantine/core';
 
 import { SplitValueButton } from '@/components/SplitValueButton/SplitValueButton';
+import { useStableCallback } from '@/hooks/useStableCallback';
+import { useConfirm } from '@/useConfirm';
 
 export type ClauseMode = 'pick' | 'sql';
 
@@ -28,14 +39,58 @@ export const clauseResetDisabled = matchesDefault;
 
 export const clauseApplyDisabled = (draft: string) => draft.trim() === '';
 
+// Wide enough for the column list on a desktop, narrow enough to stay on a
+// phone. The button sits to the right of the nav rail, so a fixed width runs
+// off the right edge and clips Apply.
+const POPOVER_MAX_WIDTH = 440;
+
+/**
+ * The draft differs from the clause the editor opened with. Apply stores a
+ * matching default as "", so comparing against that form treats an untouched
+ * saved search, whose stored clause already equals the default, as dirty.
+ */
+export const clauseDirty = (
+  draft: string,
+  value: string,
+  defaultValue: string,
+) => draft.trim() !== (value || defaultValue).trim();
+
 const MODE_OPTIONS = [
   { label: 'Fields', value: 'pick' },
   { label: 'SQL', value: 'sql' },
 ];
 
+// CodeMirror, the Fields autocomplete, and an inline column edit all handle
+// Escape themselves, but the popover sees the key first. Let that Escape
+// through while one is active, so it does not close the popover or discard a
+// draft.
+const nestedListHandlesEscape = (target: EventTarget | null) => {
+  if (!(target instanceof Element)) return false;
+  if (
+    target.closest(
+      '[aria-expanded="true"], [data-combobox-dropdown], [data-handles-escape]',
+    ) != null
+  )
+    return true;
+  // An Autocomplete list is a sibling of its input, not an ancestor, so the
+  // checks above miss it. Its listbox is only mounted while it is open.
+  if (
+    target
+      .closest('[data-testid$="-popover"]')
+      ?.querySelector('[role="listbox"]') != null
+  )
+    return true;
+  const editor = target.closest('.cm-editor');
+  if (!(editor instanceof HTMLElement)) return false;
+  if (editor.querySelector('.cm-tooltip-autocomplete') != null) return true;
+  const view = EditorView.findFromDOM(editor);
+  return view != null && completionStatus(view.state) != null;
+};
+
 /**
  * A toolbar button that edits one query clause in a popover. Edits stay in a
- * draft owned by the caller until Apply, so closing the popover discards them.
+ * draft owned by the caller until Apply. Closing with unsaved edits asks
+ * first. Cancel discards them without asking.
  */
 export function ClausePopover({
   name,
@@ -44,6 +99,7 @@ export function ClausePopover({
   dimmed,
   title,
   initialMode,
+  dirty,
   onOpen,
   onApply,
   onReset,
@@ -65,6 +121,8 @@ export function ClausePopover({
   title: string;
   /** The tab to show each time the popover opens. */
   initialMode: ClauseMode;
+  /** The draft would change the stored clause, so closing asks first. */
+  dirty: boolean;
   /** Reset the caller's draft to the current value. */
   onOpen: () => void;
   onApply: () => void;
@@ -77,13 +135,32 @@ export function ClausePopover({
   renderSql: (apply: () => void) => ReactNode;
   'data-testid': string;
 }) {
+  const confirm = useConfirm();
   const [opened, setOpened] = useState(false);
   const [mode, setMode] = useState<ClauseMode>(initialMode);
+  // The confirm dialog sits outside this popover, so its own clicks look like
+  // another dismiss. Ignore those while it is open.
+  const confirmingRef = useRef(false);
 
   const open = () => {
     onOpen();
     setMode(initialMode);
     setOpened(true);
+  };
+
+  const requestClose = () => {
+    if (confirmingRef.current) return;
+    if (!dirty) {
+      setOpened(false);
+      return;
+    }
+    confirmingRef.current = true;
+    void confirm('Discard unsaved changes?', 'Discard', {
+      variant: 'danger',
+    }).then(discard => {
+      confirmingRef.current = false;
+      if (discard) setOpened(false);
+    });
   };
 
   const apply = () => {
@@ -92,14 +169,58 @@ export function ClausePopover({
     setOpened(false);
   };
 
+  // The dropdown only sees Escape while focus is inside it. Focus stays on the
+  // toolbar button after opening, and lands on the page when a focused row is
+  // removed, so catch those two cases here. Any other target is a control that
+  // handles Escape itself.
+  const closeOnEscape = useStableCallback((event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    const target = event.target;
+    const onPageOrTrigger =
+      target === document.body ||
+      (target instanceof Element &&
+        target.closest(`[data-testid="${testId}"]`) != null);
+    if (onPageOrTrigger) requestClose();
+  });
+
+  useEffect(() => {
+    if (!opened) return;
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [opened, closeOnEscape]);
+
   return (
     <Popover
       opened={opened}
-      onChange={setOpened}
+      onChange={next => {
+        if (!next) requestClose();
+      }}
       position="bottom-start"
-      width={440}
       shadow="md"
       withinPortal
+      // Escape is handled below, so a completion list can take the key first.
+      closeOnEscape={false}
+      // Let shift move the dropdown past the button's edge, so a dropdown
+      // wider than the space to the right slides left instead of overflowing.
+      middlewares={{
+        shift: {
+          padding: 8,
+          limiter: {
+            fn: ({ x, y }) => ({ x, y }),
+          },
+        },
+        size: {
+          padding: 8,
+          apply({ availableWidth, availableHeight, elements }) {
+            if (availableWidth > 0) {
+              elements.floating.style.maxWidth = `${availableWidth}px`;
+            }
+            if (availableHeight > 0) {
+              elements.floating.style.maxHeight = `${availableHeight}px`;
+            }
+          },
+        },
+      }}
     >
       <Popover.Target>
         <SplitValueButton
@@ -108,11 +229,20 @@ export function ClausePopover({
           count={count}
           dimmed={dimmed}
           title={title}
-          onClick={() => (opened ? setOpened(false) : open())}
+          onClick={() => (opened ? requestClose() : open())}
           data-testid={testId}
         />
       </Popover.Target>
-      <Popover.Dropdown data-testid={`${testId}-popover`}>
+      <Popover.Dropdown
+        data-testid={`${testId}-popover`}
+        // Set after Mantine's inline width (max-content), which would win over a class.
+        style={{ width: `min(${POPOVER_MAX_WIDTH}px, calc(100vw - 16px))` }}
+        onKeyDownCapture={event => {
+          if (event.key !== 'Escape') return;
+          if (nestedListHandlesEscape(event.target)) return;
+          requestClose();
+        }}
+      >
         <Stack gap="sm">
           <SegmentedControl
             size="xs"
@@ -123,7 +253,7 @@ export function ClausePopover({
             data-testid={`${testId}-mode`}
           />
           {mode === 'pick' ? renderPick(apply) : renderSql(apply)}
-          <Group justify="space-between" gap="xs" wrap="nowrap">
+          <Group justify="space-between" gap="xs" wrap="wrap">
             <Button
               variant="link"
               size="xs"
@@ -133,7 +263,8 @@ export function ClausePopover({
             >
               Reset to default
             </Button>
-            <Group gap="xs" wrap="nowrap">
+            {/* Equal columns size both buttons to the wider label. */}
+            <SimpleGrid cols={2} spacing="xs" ml="auto">
               <Button
                 variant="secondary"
                 size="xs"
@@ -150,7 +281,7 @@ export function ClausePopover({
               >
                 Apply
               </Button>
-            </Group>
+            </SimpleGrid>
           </Group>
         </Stack>
       </Popover.Dropdown>

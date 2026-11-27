@@ -1,8 +1,11 @@
 import React from 'react';
 import { MantineProvider } from '@mantine/core';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { SortPopover } from '@/components/SearchResultsToolbar/SortPopover';
+
+const confirm = jest.fn();
+jest.mock('@/useConfirm', () => ({ useConfirm: () => confirm }));
 
 jest.mock('@/components/SQLEditor/SQLInlineEditor', () => ({
   __esModule: true,
@@ -46,6 +49,11 @@ const openPopover = () =>
   fireEvent.click(screen.getByTestId('search-sort-button'));
 
 describe('SortPopover', () => {
+  beforeEach(() => {
+    confirm.mockReset();
+    confirm.mockResolvedValue(true);
+  });
+
   it('labels the button with the parsed field and direction', () => {
     renderPopover({ value: 'Body ASC' });
     expect(screen.getByTestId('search-sort-button')).toHaveAccessibleName(
@@ -59,6 +67,26 @@ describe('SortPopover', () => {
     fireEvent.click(await screen.findByText('Asc'));
     fireEvent.click(screen.getByTestId('search-sort-button-apply'));
     expect(onApply).toHaveBeenCalledWith('Timestamp ASC');
+  });
+
+  it('positions a sort field list so the scrolling rows do not clip it', async () => {
+    renderPopover();
+    openPopover();
+    const field = await screen.findByLabelText('Sort field 1');
+    fireEvent.focus(field);
+    fireEvent.click(field);
+    fireEvent.change(field, { target: { value: 'B' } });
+    const listbox = await waitFor(() => {
+      const list = document.getElementById(
+        field.getAttribute('aria-controls') ?? '',
+      );
+      if (list == null) throw new Error('listbox not found');
+      return list;
+    });
+    expect(listbox.closest('[data-fixed]')).not.toBeNull();
+    expect(
+      screen.getByTestId('search-sort-button-popover').contains(listbox),
+    ).toBe(true);
   });
 
   it('lists a tuple sort that spans more than one line', async () => {
@@ -216,5 +244,27 @@ describe('SortPopover', () => {
     fireEvent.click(await screen.findByText('Asc'));
     fireEvent.click(screen.getByText('Cancel'));
     expect(onApply).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('asks before discarding a sort edit', async () => {
+    const { onApply } = renderPopover();
+    openPopover();
+    fireEvent.click(await screen.findByText('Asc'));
+    confirm.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByTestId('search-sort-button'));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(
+      screen.getByTestId('search-sort-button-popover'),
+    ).toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByTestId('search-sort-button'));
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('search-sort-button-popover'),
+      ).not.toBeInTheDocument(),
+    );
   });
 });

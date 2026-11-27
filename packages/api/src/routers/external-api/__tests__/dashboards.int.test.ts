@@ -9595,11 +9595,13 @@ describe('External API v2 Dashboards - new format', () => {
       ['a SQL filter over a Metric source', () => adhocFilter(), 'metric'],
       ['a PromQL filter over a Trace source', promqlAdhocFilter, 'trace'],
     ] as const)('rejects %s', async (_label, makeFilter, kind) => {
-      const sourceId = {
-        promql: promqlSource,
-        metric: metricSource,
-        trace: traceSource,
-      }[kind]._id.toString();
+      const source =
+        kind === 'promql'
+          ? promqlSource
+          : kind === 'metric'
+            ? metricSource
+            : traceSource;
+      const sourceId = source._id.toString();
       const response = await authRequest('post', BASE_URL)
         .send(
           createMockDashboard(traceSource._id.toString(), {

@@ -15,6 +15,7 @@ import SQLInlineEditor from '@/components/SQLEditor/SQLInlineEditor';
 
 import {
   clauseApplyDisabled,
+  clauseDirty,
   ClausePopover,
   clauseResetDisabled,
   storedClause,
@@ -112,6 +113,7 @@ export function SortPopover({
       }}
       resetDisabled={clauseResetDisabled(draft, defaultValue)}
       applyDisabled={clauseApplyDisabled(draft)}
+      dirty={clauseDirty(draft, value, defaultValue)}
       onApply={() => onApply(storedClause(draft, value, defaultValue))}
       data-testid="search-sort-button"
       renderPick={() => (
@@ -145,7 +147,13 @@ export function SortPopover({
                         option => option === key.id || !used.has(option),
                       )}
                       limit={50}
-                      comboboxProps={{ withinPortal: false }}
+                      // The rows scroll, which clips an absolute list. Fixed
+                      // escapes the clip and stays inside the popover, so a
+                      // pick is not an outside click.
+                      comboboxProps={{
+                        withinPortal: false,
+                        floatingStrategy: 'fixed',
+                      }}
                       style={{ flex: 1 }}
                     />
                     <SegmentedControl
@@ -161,7 +169,7 @@ export function SortPopover({
                     />
                     <ActionIcon
                       variant="subtle"
-                      size="sm"
+                      size="input-xs"
                       onClick={() =>
                         commitKeys(keys.filter((_, i) => i !== index))
                       }

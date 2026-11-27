@@ -1241,6 +1241,26 @@ const selectItemAlias = (item: string): string | undefined => {
 };
 
 /**
+ * Removed SELECT items whose alias left with them. Rewriting the expression,
+ * or the casing of AS, keeps the alias, so a sort on it still resolves.
+ */
+export const selectItemsWithRemovedAlias = (
+  removedItems: readonly string[],
+  nextSelect: string,
+): string[] => {
+  const keptAliases = new Set(
+    splitAndTrimWithBracket(nextSelect).flatMap(item => {
+      const alias = selectItemAlias(item);
+      return alias == null ? [] : [alias];
+    }),
+  );
+  return removedItems.filter(item => {
+    const alias = selectItemAlias(item);
+    return alias == null || !keptAliases.has(alias);
+  });
+};
+
+/**
  * Whether a column picked in the UI is in the SELECT list, aliased or not
  */
 export const isColumnInSelect = (
@@ -1287,31 +1307,68 @@ export const withMapKeyAlias = (
   return `${column} AS "${key}"`;
 };
 
+const sortKeyName = (key: string) => key.replace(/\s+(ASC|DESC)$/i, '');
+
+/** Drop ORDER BY keys that name one of these aliases. Undefined when none did. */
+const orderByWithoutAliases = (
+  orderBy: string,
+  aliases: readonly string[],
+): string | undefined => {
+  if (aliases.length === 0) return undefined;
+  // An alias can be written bare, double-quoted, or backtick-quoted in ORDER BY
+  const aliasKeys = new Set(
+    aliases.flatMap(alias => [alias, `"${alias}"`, `\`${alias}\``]),
+  );
+  const keys = splitAndTrimWithBracket(orderBy);
+  const kept = keys.filter(key => !aliasKeys.has(sortKeyName(key)));
+  if (kept.length === keys.length) return undefined;
+  return kept.join(', ');
+};
+
 /**
- * The sort to keep once a SELECT item is removed. Sorting on an aliased column
- * from the table header orders by the alias itself (`"service.name" DESC`),
- * which stops resolving once the item is gone. Each top-level key that sorts
- * by that alias is dropped. The default sort is used only when none remain.
+ * The sort to keep once SELECT items are removed. Sorting on an aliased
+ * column orders by the alias itself (`"service.name" DESC`), which stops
+ * resolving once the item is gone. Each top-level key that sorts by one of
+ * those aliases is dropped. When none remain, the fallback sort is used with
+ * the same keys removed: a saved search's sort is that fallback, so it can
+ * still name the alias. The source default is used when that leaves nothing.
+ * An empty orderBy means "use the fallback", so the fallback is stripped too
+ * rather than left to apply unchanged.
  */
+export const orderByAfterRemovingSelectItems = (
+  items: readonly string[],
+  orderBy: string,
+  defaultOrderBy: string,
+  sourceOrderBy = '',
+): string => {
+  const aliases = items.flatMap(item => {
+    const alias = selectItemAlias(item);
+    return alias == null ? [] : [alias];
+  });
+  const explicit = orderBy.trim();
+  if (explicit !== '') {
+    const next = orderByWithoutAliases(explicit, aliases);
+    if (next == null) return orderBy;
+    if (next !== '') return next;
+  }
+  const fallback = orderByWithoutAliases(defaultOrderBy, aliases);
+  if (fallback == null) return explicit === '' ? orderBy : defaultOrderBy;
+  if (fallback !== '') return fallback;
+  return sourceOrderBy;
+};
+
 export const orderByAfterRemovingSelectItem = (
   item: string,
   orderBy: string,
   defaultOrderBy: string,
-): string => {
-  const alias = selectItemAlias(item);
-  if (alias == null) {
-    return orderBy;
-  }
-  const quoted = `"${alias}"`;
-  const keys = splitAndTrimWithBracket(orderBy);
-  const kept = keys.filter(
-    key => key.replace(/\s+(ASC|DESC)$/i, '') !== quoted,
+  sourceOrderBy = '',
+): string =>
+  orderByAfterRemovingSelectItems(
+    [item],
+    orderBy,
+    defaultOrderBy,
+    sourceOrderBy,
   );
-  if (kept.length === keys.length) {
-    return orderBy;
-  }
-  return kept.length === 0 ? defaultOrderBy : kept.join(', ');
-};
 
 const _useTry = <T>(fn: () => T): [null | Error | unknown, null | T] => {
   let output = null;

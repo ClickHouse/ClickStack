@@ -30,6 +30,7 @@ import { isColumnInSelect, withMapKeyAlias } from '@/utils';
 
 import {
   clauseApplyDisabled,
+  clauseDirty,
   ClausePopover,
   clauseResetDisabled,
   storedClause,
@@ -62,8 +63,13 @@ export function ColumnsPopover({
 }) {
   const [draft, setDraft] = useState(value);
   const [search, setSearch] = useState('');
+  // The row being edited in place. Kept here so the popover can see it as an
+  // unsaved change before a click outside reads `dirty`.
+  const [edit, setEdit] = useState<{ index: number; text: string } | null>(
+    null,
+  );
   // Autocomplete writes the chosen option back into the input after
-  // onOptionSubmit. Ignore that write so a picked map key keeps its alias.
+  // onOptionSubmit. Ignore that write so the field clears.
   const ignoreNextChangeRef = useRef(false);
 
   // An empty stored SELECT means "use the source default". An empty draft does
@@ -93,6 +99,22 @@ export function ColumnsPopover({
     setDraft(items.filter((_, i) => i !== index).join(', '));
   };
 
+  const finishEdit = (index: number, next: string | null) => {
+    setEdit(null);
+    const trimmed = next?.trim() ?? '';
+    // An empty value reverts, so a column is not removed by accident.
+    if (trimmed && trimmed !== items[index]) {
+      setDraft(
+        items.map((item, i) => (i === index ? trimmed : item)).join(', '),
+      );
+    }
+  };
+
+  const pendingEdit =
+    edit != null &&
+    edit.text.trim() !== '' &&
+    edit.text.trim() !== items[edit.index];
+
   const columnIds = items.map(columnId);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
@@ -119,17 +141,26 @@ export function ColumnsPopover({
       title={value || defaultValue}
       initialMode="pick"
       onOpen={() => {
+        setEdit(null);
         // The form stores "" while the source default is in use. Show that
         // default as the editor value; Apply keeps "" unless it was edited.
         setDraft(value || defaultValue);
         setSearch('');
       }}
       onReset={() => {
+        setEdit(null);
         setDraft(defaultValue);
         setSearch('');
       }}
       resetDisabled={clauseResetDisabled(draft, defaultValue)}
       applyDisabled={clauseApplyDisabled(draft)}
+      // A column edit or search text not yet added is unsaved too. A click
+      // outside reads `dirty` before the edit's blur has committed it.
+      dirty={
+        clauseDirty(draft, value, defaultValue) ||
+        pendingEdit ||
+        search.trim() !== ''
+      }
       onApply={() => {
         const submitted = storedClause(draft, value, defaultValue);
         const next = storedColumns(submitted);
@@ -159,6 +190,10 @@ export function ColumnsPopover({
                         id={columnId(item, index)}
                         label={item}
                         onRemove={() => removeColumn(index)}
+                        editText={edit?.index === index ? edit.text : null}
+                        onStartEdit={() => setEdit({ index, text: item })}
+                        onChangeEdit={text => setEdit({ index, text })}
+                        onFinishEdit={next => finishEdit(index, next)}
                       />
                     ))}
                   </Stack>
@@ -180,11 +215,24 @@ export function ColumnsPopover({
               }}
               onOptionSubmit={option => {
                 ignoreNextChangeRef.current = true;
-                setSearch(withMapKeyAlias(option, items, knownColumns));
+                addColumn(option);
               }}
               data={options}
               limit={50}
-              comboboxProps={{ withinPortal: false }}
+              comboboxProps={{
+                withinPortal: false,
+                // Wider than the input so long names fit, but inside the popover.
+                width: 'min(400px, calc(100vw - 48px))',
+              }}
+              styles={{
+                // Column names differ at the end, so clipping hides the part
+                // that tells them apart.
+                option: {
+                  whiteSpace: 'normal',
+                  overflowWrap: 'anywhere',
+                  lineHeight: 1.4,
+                },
+              }}
               style={{ flex: 1 }}
               data-testid="search-columns-add-input"
             />
@@ -199,8 +247,9 @@ export function ColumnsPopover({
             </Button>
           </Group>
           <Text size="xs" c="dimmed">
-            Select a column, or type an expression such as{' '}
-            <Code>upper(Body) as message</Code>, then click Add.
+            Select a column to add it, or type an expression such as{' '}
+            <Code>upper(Body) as message</Code> and click Add. Click a column to
+            edit it. Then click Apply.
           </Text>
         </Stack>
       )}
