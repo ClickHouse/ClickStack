@@ -324,7 +324,7 @@ function ResumeLiveTailButton({
       onClick={handleResumeLiveTail}
       leftSection={<IconBolt size={14} />}
     >
-      Resume Live Tail
+      Resume live tail
     </Button>
   );
 }
@@ -368,52 +368,50 @@ function SearchResultsCountGroup({
   onExpandFilters,
   totalCountConfig,
   enableParallelQueries,
-  children,
+  groupBy,
+  stats,
 }: {
   isFilterSidebarCollapsed: boolean;
   onExpandFilters: () => void;
   totalCountConfig: BuilderChartConfigWithDateRange;
   enableParallelQueries?: boolean;
-  children?: ReactNode;
+  groupBy?: ReactNode;
+  stats?: ReactNode;
 }) {
   return (
     <Group gap="sm" align="center">
-      <Group gap={4} align="center">
-        {isFilterSidebarCollapsed && (
-          <ExpandFiltersButton onExpand={onExpandFilters} />
-        )}
-        <SearchTotalCountChart
-          config={totalCountConfig}
-          queryKeyPrefix={QUERY_KEY_PREFIX}
-          enableParallelQueries={enableParallelQueries}
-        />
-      </Group>
-      {children}
+      {isFilterSidebarCollapsed && (
+        <ExpandFiltersButton onExpand={onExpandFilters} />
+      )}
+      {groupBy}
+      <SearchTotalCountChart
+        config={totalCountConfig}
+        queryKeyPrefix={QUERY_KEY_PREFIX}
+        enableParallelQueries={enableParallelQueries}
+      />
+      {stats}
     </Group>
   );
 }
 
+/** Rows scanned and elapsed time, e.g. `2,895 rows scanned · 216 ms`. */
 export function SearchNumRows({
   config,
-  sqlConfig,
   enabled,
   searchElapsedMs,
   isSearching,
   isLiveTail = false,
 }: {
   config: ChartConfigWithDateRange;
-  sqlConfig?: ChartConfigWithDateRange;
   enabled: boolean;
   searchElapsedMs: number | null;
   isSearching: boolean;
   isLiveTail?: boolean;
 }) {
-  const [statsOpened, { open: openStats, close: closeStats }] =
-    useDisclosure(false);
   const { data, isLoading, error } = useExplainQuery(config, {
     enabled,
     // Keep the previous row count on screen while a new EXPLAIN runs so the
-    // "Scanned Rows" value doesn't flash a loading state on every live-tail
+    // "rows scanned" value doesn't flash a loading state on every live-tail
     // poll (each poll changes the dateRange, and thus the query key).
     placeholderData: keepPreviousData,
   });
@@ -422,63 +420,79 @@ export function SearchNumRows({
     return null;
   }
 
-  const explainRow = data?.[0];
-  const numRows = explainRow?.rows;
-  const hasData = !isLoading && !error && numRows != null;
+  const numRows = data?.[0]?.rows;
 
   // During live tail we keep showing the last measured elapsed time and never
-  // flash the "..." loading state, so the value doesn't flicker between polls.
+  // flash the "…" loading state, so the value doesn't flicker between polls.
   const showElapsedLoading = isSearching && !isLiveTail;
   const showElapsed = showElapsedLoading || searchElapsedMs != null;
 
+  const parts: string[] = [];
+  if (isLoading) {
+    parts.push('… rows scanned');
+  } else if (!error && numRows != null) {
+    parts.push(`${Number(numRows).toLocaleString()} rows scanned`);
+  }
+  if (showElapsed) {
+    parts.push(showElapsedLoading ? '…ms' : formatDurationMs(searchElapsedMs!));
+  }
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      <Text size="xs" c="dimmed" aria-hidden>
+        &middot;
+      </Text>
+      <Text size="xs" c="dimmed">
+        {parts.join(' · ')}
+      </Text>
+    </>
+  );
+}
+
+export function GeneratedSqlButton({
+  config,
+  sqlConfig,
+  enabled,
+}: {
+  config: ChartConfigWithDateRange;
+  sqlConfig?: ChartConfigWithDateRange;
+  enabled: boolean;
+}) {
+  const [opened, { open, close }] = useDisclosure(false);
+
+  if (!enabled) {
+    return null;
+  }
+
+  // The preview is derived purely from config, not the explain query, so it
+  // renders unconditionally. Gating it on explain loading/data would make it
+  // flicker on every live-tail poll, since each poll changes the dateRange
+  // (and thus the explain queryKey).
   return (
     <>
       <Modal
-        opened={statsOpened}
-        onClose={closeStats}
-        title={sqlConfig != null ? 'Generated SQL (Timeline)' : 'Generated SQL'}
+        opened={opened}
+        onClose={close}
+        title={sqlConfig != null ? 'Generated SQL (timeline)' : 'Generated SQL'}
         size="xl"
       >
         <ChartSQLPreview config={sqlConfig ?? config} enableCopy />
       </Modal>
-      <Group gap={4} align="center">
-        <Text size="xs">
-          {isLoading
-            ? 'Scanned Rows ...'
-            : error || numRows == null
-              ? ''
-              : `Scanned Rows: ${Number(numRows).toLocaleString()}`}
-        </Text>
-        {showElapsed && (
-          <>
-            {(hasData || isLoading) && (
-              <Text size="xs" c="dimmed">
-                |
-              </Text>
-            )}
-            <Text size="xs">
-              {showElapsedLoading
-                ? 'Elapsed Time: ...'
-                : `Elapsed Time: ${formatDurationMs(searchElapsedMs!)}`}
-            </Text>
-          </>
-        )}
-        {/* The generated-SQL preview is derived purely from config, not the
-            explain query, so it renders unconditionally. Gating it on explain
-            loading/data would make it flicker on every live-tail poll, since
-            each poll changes the dateRange (and thus the explain queryKey). */}
-        <Tooltip label="Show Generated SQL" position="top">
-          <ActionIcon
-            variant="subtle"
-            size="sm"
-            color="gray"
-            onClick={openStats}
-            aria-label="Show Generated SQL"
-          >
-            <IconCode size={16} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
+      <Tooltip label="Show generated SQL" position="top">
+        <ActionIcon
+          variant="subtle"
+          size="sm"
+          color="gray"
+          onClick={open}
+          aria-label="Show generated SQL"
+        >
+          <IconCode size={16} />
+        </ActionIcon>
+      </Tooltip>
     </>
   );
 }
@@ -926,7 +940,9 @@ function formatDroppedFiltersMessage(count: number): string {
 
 function formatDroppedGroupByMessage(dropped: string[]): string {
   const verb = dropped.length === 1 ? 'was' : 'were';
-  return `Group by ${dropped.join(', ')} didn't apply to this source and ${verb} removed.`;
+  return `Group by ${dropped.join(
+    ', ',
+  )} didn't apply to this source and ${verb} removed.`;
 }
 
 // This is outside as it needs to be a stable reference
@@ -2615,12 +2631,18 @@ function DBSearchPageContent() {
                         format="short"
                       />
                       {savedSearch.updatedBy
-                        ? ` by ${savedSearch.updatedBy.name || savedSearch.updatedBy.email}`
+                        ? ` by ${
+                            savedSearch.updatedBy.name ||
+                            savedSearch.updatedBy.email
+                          }`
                         : ''}
                     </>
                   }
                 >
-                  <span>{`Updated ${formatDistanceToNow(new Date(savedSearch.updatedAt), { addSuffix: true })}.`}</span>
+                  <span>{`Updated ${formatDistanceToNow(
+                    new Date(savedSearch.updatedAt),
+                    { addSuffix: true },
+                  )}.`}</span>
                 </Tooltip>
               )}
             </Text>
@@ -2947,19 +2969,27 @@ function DBSearchPageContent() {
                           isFilterSidebarCollapsed={filtersCollapsed}
                           onExpandFilters={expandFilters}
                           totalCountConfig={totalCountConfig}
-                        >
-                          {histogramGroupBySelect}
-                        </SearchResultsCountGroup>
-                        <SearchNumRows
+                          groupBy={histogramGroupBySelect}
+                          stats={
+                            <SearchNumRows
+                              config={{
+                                ...chartConfig,
+                                dateRange: searchedTimeRange,
+                              }}
+                              enabled={isReady}
+                              searchElapsedMs={searchElapsedMs}
+                              isSearching={isAnyQueryFetching}
+                              isLiveTail={isLive ?? false}
+                            />
+                          }
+                        />
+                        <GeneratedSqlButton
                           config={{
                             ...chartConfig,
                             dateRange: searchedTimeRange,
                           }}
                           sqlConfig={histogramTimeChartConfig ?? undefined}
                           enabled={isReady}
-                          searchElapsedMs={searchElapsedMs}
-                          isSearching={isAnyQueryFetching}
-                          isLiveTail={isLive ?? false}
                         />
                       </Group>
                     </Box>
@@ -3055,12 +3085,25 @@ function DBSearchPageContent() {
                               onExpandFilters={expandFilters}
                               totalCountConfig={totalCountConfig}
                               enableParallelQueries
-                            >
-                              {/* The heatmap doesn't group. */}
-                              {isHeatmapChartVisible
-                                ? null
-                                : histogramGroupBySelect}
-                            </SearchResultsCountGroup>
+                              // The heatmap doesn't group.
+                              groupBy={
+                                isHeatmapChartVisible
+                                  ? null
+                                  : histogramGroupBySelect
+                              }
+                              stats={
+                                <SearchNumRows
+                                  config={{
+                                    ...chartConfig,
+                                    dateRange: searchedTimeRange,
+                                  }}
+                                  enabled={isReady}
+                                  searchElapsedMs={searchElapsedMs}
+                                  isSearching={isAnyQueryFetching}
+                                  isLiveTail={isLive ?? false}
+                                />
+                              }
+                            />
                             <Group gap="sm" align="center">
                               {traceChartsSource != null && (
                                 <SegmentedControl
@@ -3088,7 +3131,7 @@ function DBSearchPageContent() {
                                     handleResumeLiveTail={handleResumeLiveTail}
                                   />
                                 )}
-                              <SearchNumRows
+                              <GeneratedSqlButton
                                 config={{
                                   ...chartConfig,
                                   dateRange: searchedTimeRange,
@@ -3097,9 +3140,6 @@ function DBSearchPageContent() {
                                   histogramTimeChartConfig ?? undefined
                                 }
                                 enabled={isReady}
-                                searchElapsedMs={searchElapsedMs}
-                                isSearching={isAnyQueryFetching}
-                                isLiveTail={isLive ?? false}
                               />
                             </Group>
                           </Group>

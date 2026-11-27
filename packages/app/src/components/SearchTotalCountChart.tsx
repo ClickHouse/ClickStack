@@ -115,11 +115,11 @@ export default function SearchTotalCountChart({
   return (
     <Text data-testid="search-total-count" size="xs" lh="normal">
       {isLoading ? (
-        <span className="effect-pulse">&middot;&middot;&middot; Results</span>
+        <span className="effect-pulse">&middot;&middot;&middot; results</span>
       ) : totalCount !== null && !isError ? (
-        `${totalCount?.toLocaleString()} Results`
+        `${totalCount?.toLocaleString()} results`
       ) : (
-        '0 Results'
+        '0 results'
       )}
     </Text>
   );

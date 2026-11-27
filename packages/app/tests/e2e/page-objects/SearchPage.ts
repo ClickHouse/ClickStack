@@ -292,7 +292,7 @@ export class SearchPage {
 
   /** Only rendered while live tail is stopped. */
   get resumeLiveTailButton() {
-    return this.page.getByRole('button', { name: 'Resume Live Tail' });
+    return this.page.getByRole('button', { name: 'Resume live tail' });
   }
 
   async resumeLiveTail() {
