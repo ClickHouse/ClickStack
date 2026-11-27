@@ -9,6 +9,7 @@ import type { ClientRequest, IncomingMessage, ServerResponse } from 'http';
 import { performance } from 'perf_hooks';
 
 import { isClickHouseError } from '@/utils/clickhouseErrors';
+import { cachedClickHouseVersion } from '@/utils/clickhouseVersion';
 import {
   getServerSpan,
   recordOperationOutcome,
@@ -131,6 +132,7 @@ type ProxyState = {
   startedAt: number;
   headersAt?: number;
   span?: Span;
+  connection?: Parameters<typeof cachedClickHouseVersion>[0];
   timedOut: boolean;
   upstreamCut: boolean;
   transportError?: { code?: string; message: string };
@@ -150,10 +152,15 @@ const states = new WeakMap<ServerResponse, ProxyState>();
  * response closes, from listeners prepended so they run before the HTTP
  * instrumentation ends the server span.
  */
-export const trackProxyOutcome: RequestHandler = (_req, res, next) => {
+export const trackProxyOutcome: RequestHandler = (req, res, next) => {
+  const connection = req._hdx_connection;
+  // Starts the version lookup now so it is usually cached by the time the
+  // response closes.
+  if (connection) cachedClickHouseVersion(connection);
   const state: ProxyState = {
     startedAt: performance.now(),
     span: getServerSpan(),
+    connection,
     timedOut: false,
     upstreamCut: false,
     done: false,
@@ -252,6 +259,8 @@ function finishProxyOutcome(res: ServerResponse, state: ProxyState) {
   state.span?.setAttributes({
     'hyperdx.clickhouse_proxy.error.category': category,
     'hyperdx.clickhouse_proxy.upstream.status_code': state.upstreamStatus,
+    'hyperdx.clickhouse_proxy.clickhouse.version':
+      state.connection && cachedClickHouseVersion(state.connection),
     'hyperdx.clickhouse_proxy.clickhouse.error_code': clickhouseErrorCode,
     'hyperdx.clickhouse_proxy.clickhouse.error_type': exception?.type,
     'hyperdx.clickhouse_proxy.error.message': category
