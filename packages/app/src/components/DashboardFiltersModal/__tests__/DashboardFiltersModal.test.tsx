@@ -62,6 +62,10 @@ jest.mock('@/components/DashboardFiltersModal/SqlQueryFilterEditForm', () => ({
   ),
 }));
 
+// The first test pays for the initial Mantine modal and Combobox render and
+// types character by character, which can exceed Jest's 5s default on a busy CI runner.
+jest.setTimeout(15_000);
+
 const EXISTING_FILTER: DashboardFilter = {
   id: 'other',
   type: 'QUERY_EXPRESSION',
