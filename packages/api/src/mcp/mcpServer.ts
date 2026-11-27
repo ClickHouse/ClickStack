@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
 
-import { CODE_VERSION, FRONTEND_URL } from '@/config';
+import { CODE_VERSION, FRONTEND_URL, IS_SLOS_ENABLED } from '@/config';
 
 import dashboardPrompts from './prompts/dashboards/index';
 import alertsTools from './tools/alerts/index';
@@ -12,6 +12,7 @@ import {
 } from './tools/query/builderCatalog';
 import queryTools from './tools/query/index';
 import savedSearchesTools from './tools/savedSearches/index';
+import slosTools from './tools/slos/index';
 import sourcesTools from './tools/sources/index';
 import traceTools from './tools/trace/index';
 import { McpContext } from './tools/types';
@@ -85,6 +86,7 @@ export function createServer(context: McpContext) {
   dashboardsTools(registrar);
   queryTools(registrar);
   savedSearchesTools(registrar);
+  if (IS_SLOS_ENABLED) slosTools(registrar);
   traceTools(registrar);
   dashboardPrompts(server, context);
 

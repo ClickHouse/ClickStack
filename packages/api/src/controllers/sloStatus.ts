@@ -9,13 +9,14 @@ import {
 } from '@hyperdx/common-utils/dist/core/sloStats';
 import type { SloStatus } from '@hyperdx/common-utils/dist/slo';
 
-import { getSloQueryContext } from '@/controllers/slo';
+import { getSloQueryContext, SloQueryContext } from '@/controllers/slo';
 import {
   buildSloStatus,
   computeSloBurn,
   computeSloWindow,
   hasSloQueryTime,
   type SloBurnNumbers,
+  type SloDefinitionFields,
   SloQueryDeadlineError,
   type SloWindowNumbers,
 } from '@/controllers/sloStatusQueries';
@@ -53,6 +54,25 @@ const SLO_REFRESH_BATCH_LIMIT = 200;
 const refreshCounter = getCounter('hyperdx.slo.refresh', {
   description: 'SLO status refreshes, by outcome',
 });
+
+/**
+ * The SLO's numbers as of now, for one SLO someone asked for. Not stored:
+ * the background refresh keeps the stored snapshot for lists.
+ */
+export async function computeSloStatusNow(
+  slo: SloDefinitionFields,
+  ctx: SloQueryContext,
+  now = new Date(),
+): Promise<SloStatus> {
+  const window = await computeSloWindow(slo, ctx, now);
+  const burn = await computeSloBurn(
+    slo,
+    ctx,
+    now,
+    window.groups?.map(g => g.value),
+  );
+  return buildSloStatus(slo, window, burn, now.toISOString(), now);
+}
 
 /**
  * Stores the burn numbers an SLO's alert check computed, so the list shows
