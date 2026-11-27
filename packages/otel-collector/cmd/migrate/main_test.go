@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -560,7 +561,7 @@ func TestProcessSchemaDir_Subdirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "testdb", map[string]string{"TABLES_TTL": "toIntervalHour(48)"})
+	tempDir, err := processSchemaDir(schemaDir, "testdb", false, false, map[string]string{"TABLES_TTL": "toIntervalHour(48)"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +584,7 @@ func TestProcessSchemaDir_MultipleReplacements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "db", map[string]string{"TABLES_TTL": "toIntervalDay(7)"})
+	tempDir, err := processSchemaDir(schemaDir, "db", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(7)"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +607,7 @@ func TestProcessSchemaDir_NoMacros(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "db", map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
+	tempDir, err := processSchemaDir(schemaDir, "db", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +623,7 @@ func TestProcessSchemaDir_NoMacros(t *testing.T) {
 }
 
 func TestProcessSchemaDir_NonexistentDir(t *testing.T) {
-	_, err := processSchemaDir("/nonexistent/schema", "db", map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
+	_, err := processSchemaDir("/nonexistent/schema", "db", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent schema dir")
 	}
@@ -821,7 +822,7 @@ func TestProcessSchemaDir_PerSignalMacros(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(schemaDir, "001.sql"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	tempDir, err := processSchemaDir(schemaDir, "db", map[string]string{
+	tempDir, err := processSchemaDir(schemaDir, "db", false, false, map[string]string{
 		"LOGS_TTL":     "toIntervalDay(180)",
 		"TRACES_TTL":   "toIntervalDay(180)",
 		"METRICS_TTL":  "toIntervalDay(30)",
@@ -838,6 +839,278 @@ func TestProcessSchemaDir_PerSignalMacros(t *testing.T) {
 	want := "logs toIntervalDay(180) traces toIntervalDay(180) metrics toIntervalDay(30) sessions toIntervalDay(30)"
 	if string(got) != want {
 		t.Errorf("got %q, want %q", string(got), want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// replicated engines
+// ---------------------------------------------------------------------------
+
+func TestLoadConfig_Replicated(t *testing.T) {
+	origArgs := os.Args
+	t.Cleanup(func() { os.Args = origArgs })
+	os.Args = []string{"migrate", t.TempDir()}
+
+	for _, c := range []struct {
+		value string
+		want  bool
+	}{{"", false}, {"1", false}, {"TRUE", false}, {"true", true}} {
+		t.Setenv("HYPERDX_OTEL_EXPORTER_CLICKHOUSE_REPLICATED", c.value)
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Replicated != c.want {
+			t.Errorf("REPLICATED=%q: got %v, want %v", c.value, cfg.Replicated, c.want)
+		}
+	}
+}
+
+func TestProcessSchemaDir_ReplicatedMacros(t *testing.T) {
+	schemaDir := t.TempDir()
+	content := "CREATE DATABASE IF NOT EXISTS ${DATABASE}${DATABASE_ENGINE};\n" +
+		"ENGINE = ${ENGINE_PREFIX}MergeTree; ENGINE = ${ENGINE_PREFIX}SummingMergeTree; ENGINE = TimeSeries${TIMESERIES_ENGINES}"
+	if err := os.WriteFile(filepath.Join(schemaDir, "001.sql"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		replicated, replicatedTimeSeries bool
+		want                             string
+	}{
+		{false, false, "CREATE DATABASE IF NOT EXISTS otel;\n" +
+			"ENGINE = MergeTree; ENGINE = SummingMergeTree; ENGINE = TimeSeries"},
+		{true, false, "CREATE DATABASE IF NOT EXISTS otel ENGINE = Replicated('/clickhouse/databases/otel', '{shard}', '{replica}');\n" +
+			"ENGINE = ReplicatedMergeTree; ENGINE = ReplicatedSummingMergeTree; ENGINE = TimeSeries"},
+		{true, true, "CREATE DATABASE IF NOT EXISTS otel ENGINE = Replicated('/clickhouse/databases/otel', '{shard}', '{replica}');\n" +
+			"ENGINE = ReplicatedMergeTree; ENGINE = ReplicatedSummingMergeTree; ENGINE = TimeSeries" +
+			"\nDATA ENGINE = ReplicatedMergeTree\nTAGS ENGINE = ReplicatedReplacingMergeTree\nMETRICS ENGINE = ReplicatedReplacingMergeTree"},
+	} {
+		tempDir, err := processSchemaDir(schemaDir, "otel", c.replicated, c.replicatedTimeSeries, map[string]string{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tempDir)
+		got, err := os.ReadFile(filepath.Join(tempDir, "001.sql"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != c.want {
+			t.Errorf("replicated=%v replicatedTimeSeries=%v: got %q, want %q", c.replicated, c.replicatedTimeSeries, string(got), c.want)
+		}
+	}
+}
+
+func TestSupportsReplicatedTimeSeries(t *testing.T) {
+	for _, c := range []struct {
+		major, minor int
+		want         bool
+	}{
+		{25, 12, false}, {26, 4, false}, {26, 8, false}, {26, 10, true}, {26, 11, true}, {27, 1, true},
+	} {
+		if got := supportsReplicatedTimeSeries(c.major, c.minor); got != c.want {
+			t.Errorf("supportsReplicatedTimeSeries(%d, %d) = %v; want %v", c.major, c.minor, got, c.want)
+		}
+	}
+}
+
+// Guards the real seed files: every MergeTree-family engine must use the
+// ${ENGINE_PREFIX} macro and take no arguments (a Replicated database rejects
+// explicit Keeper path/replica arguments), every TimeSeries table must get
+// Replicated inner engines exactly when replicated, and the database must be
+// created with the Replicated engine only when enabled.
+func TestSeedSchemaEngines(t *testing.T) {
+	seedDir := filepath.Join("..", "..", "..", "..", "docker", "otel-collector", "schema", "seed")
+	ttlExprs := map[string]string{}
+	for _, m := range []string{"TABLES_TTL", "LOGS_TTL", "TRACES_TTL", "METRICS_TTL", "SESSIONS_TTL"} {
+		ttlExprs[m] = "toIntervalDay(30)"
+	}
+	engineRe := regexp.MustCompile(`(?im)^\s*ENGINE\s*=\s*(.*)$`)
+	innerEngineRe := regexp.MustCompile(`(?im)^\s*(?:DATA|TAGS|METRICS)\s+ENGINE\s*=\s*(\w+)`)
+	for _, replicated := range []bool{false, true} {
+		tempDir, err := processSchemaDir(seedDir, "otel", replicated, replicated, ttlExprs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tempDir)
+		files, err := listSQLFiles(tempDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mergeTrees, timeSeries := 0, 0
+		for _, f := range files {
+			content, err := os.ReadFile(filepath.Join(tempDir, f))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(content), "${") {
+				t.Errorf("replicated=%v: %s has an unreplaced macro", replicated, f)
+			}
+			fileTimeSeries := 0
+			for _, m := range engineRe.FindAllStringSubmatch(string(content), -1) {
+				engine := strings.TrimSpace(m[1])
+				if engine == "TimeSeries" {
+					fileTimeSeries++
+					continue
+				}
+				mergeTrees++
+				if strings.Contains(engine, "(") {
+					t.Errorf("%s: engine %q must not take arguments", f, engine)
+				}
+				if strings.HasPrefix(engine, "Replicated") != replicated || !strings.HasSuffix(engine, "MergeTree") {
+					t.Errorf("replicated=%v: %s has engine %q", replicated, f, engine)
+				}
+			}
+			// Without replication, inner engines stay unnamed so each server keeps its own defaults.
+			inner := innerEngineRe.FindAllStringSubmatch(string(content), -1)
+			wantInner := 0
+			if replicated {
+				wantInner = 3 * fileTimeSeries
+			}
+			if len(inner) != wantInner {
+				t.Errorf("replicated=%v: %s has %d TimeSeries inner engines; want %d", replicated, f, len(inner), wantInner)
+			}
+			for _, m := range inner {
+				if !strings.HasPrefix(m[1], "Replicated") || !strings.HasSuffix(m[1], "MergeTree") {
+					t.Errorf("%s: TimeSeries inner engine %q must be Replicated*MergeTree", f, m[1])
+				}
+			}
+			timeSeries += fileTimeSeries
+		}
+		if mergeTrees == 0 {
+			t.Errorf("replicated=%v: no MergeTree engines found in %s", replicated, seedDir)
+		}
+		if timeSeries == 0 {
+			t.Errorf("replicated=%v: no TimeSeries engines found in %s", replicated, seedDir)
+		}
+
+		createDB, err := os.ReadFile(filepath.Join(tempDir, "00001_create_database.sql"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "CREATE DATABASE IF NOT EXISTS otel;\n"
+		if replicated {
+			want = "CREATE DATABASE IF NOT EXISTS otel ENGINE = Replicated('/clickhouse/databases/otel', '{shard}', '{replica}');\n"
+		}
+		if !strings.HasSuffix(string(createDB), want) {
+			t.Errorf("replicated=%v: 00001_create_database.sql = %q; want suffix %q", replicated, string(createDB), want)
+		}
+	}
+}
+
+func TestPlanReplicated(t *testing.T) {
+	cases := []struct {
+		name            string
+		enabled, exists bool
+		database        string
+		engine          string
+		want            bool
+		wantWarning     []string // substrings; nil means no warning
+	}{
+		{"flag off", false, true, "otel", "Atomic", false, nil},
+		{"flag off, database missing", false, false, "otel", "", false, nil},
+		{"flag off, database Replicated", false, true, "otel", "Replicated", false, nil},
+		{"database missing", true, false, "otel", "", true, nil},
+		{"database Replicated", true, true, "otel", "Replicated", true, nil},
+		{"database Atomic", true, true, "otel", "Atomic", false,
+			[]string{"database otel", "engine Atomic", "set HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE to a new database name"}},
+		{"database Shared", true, true, "otel", "Shared", false, []string{"database otel", "engine Shared"}},
+		{"fallback Replicated", true, true, "default", "Replicated", true, nil},
+		{"fallback Atomic", true, true, "default", "Atomic", false,
+			[]string{"fallback database default", "engine Atomic", "clear HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE", "Replicated database otel"}},
+	}
+	for _, c := range cases {
+		got, warning := planReplicated(c.enabled, c.exists, "otel", c.database, c.engine)
+		if got != c.want {
+			t.Errorf("%s: replicated = %v; want %v", c.name, got, c.want)
+		}
+		if c.wantWarning == nil && warning != "" {
+			t.Errorf("%s: unexpected warning %q", c.name, warning)
+		}
+		if c.wantWarning != nil && warning == "" {
+			t.Errorf("%s: want a warning", c.name)
+		}
+		for _, sub := range c.wantWarning {
+			if !strings.Contains(warning, sub) {
+				t.Errorf("%s: warning %q should contain %q", c.name, warning, sub)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// fallback database
+// ---------------------------------------------------------------------------
+
+func TestLoadConfig_FallbackDatabase(t *testing.T) {
+	origArgs := os.Args
+	t.Cleanup(func() { os.Args = origArgs })
+	os.Args = []string{"migrate", t.TempDir()}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.FallbackDatabase != "" {
+		t.Errorf("FallbackDatabase should default to empty, got %q", cfg.FallbackDatabase)
+	}
+	if cfg.ResolvedDatabasePath != "/tmp/hyperdx-otel-exporter-database" {
+		t.Errorf("ResolvedDatabasePath: got %q", cfg.ResolvedDatabasePath)
+	}
+
+	t.Setenv("HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE", "default")
+	t.Setenv("HYPERDX_OTEL_EXPORTER_RESOLVED_DATABASE_PATH", "/run/hdx/database")
+	if cfg, err = loadConfig(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.FallbackDatabase != "default" || cfg.ResolvedDatabasePath != "/run/hdx/database" {
+		t.Errorf("overrides not applied: fallback=%q path=%q", cfg.FallbackDatabase, cfg.ResolvedDatabasePath)
+	}
+}
+
+func TestResolveDatabase(t *testing.T) {
+	cases := []struct {
+		name                                           string
+		target, fallback                               string
+		targetExists, targetHasTables, legacyHasTables bool
+		want                                           string
+		wantWarning                                    []string // substrings; nil means no warning
+	}{
+		{"no fallback, target default", "default", "", true, true, true, "default", nil},
+		{"no fallback, legacy tables in default", "otel", "", false, false, true, "otel",
+			[]string{"database default has existing ClickStack tables", "not migrated to otel", "HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE=default"}},
+		{"no fallback, target and default both seeded", "otel", "", true, true, true, "otel", nil},
+		{"no fallback, default empty", "otel", "", false, false, false, "otel", nil},
+		{"fallback, target missing, fallback seeded", "otel", "default", false, false, true, "default",
+			[]string{"database otel does not exist", "staying on default", "HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE=default", "clear HYPERDX_OTEL_EXPORTER_CLICKHOUSE_FALLBACK_DATABASE to move to otel"}},
+		{"fallback, target exists empty, fallback seeded", "otel", "default", true, false, true, "otel",
+			[]string{"database default has existing ClickStack tables", "not migrated to otel"}},
+		{"fallback, target and fallback both seeded", "otel", "default", true, true, true, "otel", nil},
+		{"fallback, target missing, fallback empty", "otel", "default", false, false, false, "otel", nil},
+		{"fallback equals target", "default", "default", true, true, true, "default", nil},
+		{"custom fallback", "otel", "legacy", false, false, true, "legacy", []string{"staying on legacy"}},
+	}
+	for _, c := range cases {
+		got, warning := resolveDatabase(c.target, c.fallback, c.targetExists, c.targetHasTables, c.legacyHasTables)
+		if got != c.want {
+			t.Errorf("%s: database = %q; want %q", c.name, got, c.want)
+		}
+		if c.wantWarning == nil && warning != "" {
+			t.Errorf("%s: unexpected warning %q", c.name, warning)
+		}
+		for _, sub := range c.wantWarning {
+			if !strings.Contains(warning, sub) {
+				t.Errorf("%s: warning %q should contain %q", c.name, warning, sub)
+			}
+		}
+	}
+}
+
+func TestLegacyDatabase(t *testing.T) {
+	if got := legacyDatabase(""); got != "default" {
+		t.Errorf("legacyDatabase(\"\") = %q; want default", got)
+	}
+	if got := legacyDatabase("legacy"); got != "legacy" {
+		t.Errorf("legacyDatabase(\"legacy\") = %q; want legacy", got)
 	}
 }
 
@@ -1272,7 +1545,7 @@ SETTINGS ttl_only_drop_parts = 1;`
 		t.Fatal(err)
 	}
 
-	tempDir, err := processSchemaDir(schemaDir, "mydb", map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
+	tempDir, err := processSchemaDir(schemaDir, "mydb", false, false, map[string]string{"TABLES_TTL": "toIntervalDay(30)"})
 	if err != nil {
 		t.Fatal(err)
 	}
