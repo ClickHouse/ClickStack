@@ -123,7 +123,11 @@ export const AppNavUserMenu = ({
   return (
     <Menu position="top-start" transitionProps={{ transition: 'fade-up' }}>
       <Menu.Target>
+        {/* A real <button> so keyboard users can reach and open the menu; a
+            <div> trigger is skipped by Tab and ignores Enter and Space. */}
         <Paper
+          component="button"
+          type="button"
           data-testid="user-menu-trigger"
           className={cx(styles.userMenu, {
             [styles.userMenuCollapsed]: isCollapsed,
@@ -133,6 +137,8 @@ export const AppNavUserMenu = ({
             <Avatar size="sm" radius="xl" color="gray">
               {initials}
             </Avatar>
+            {/* Collapsed, only the initials show; name the button in full. */}
+            {isCollapsed && <VisuallyHidden>{displayName}</VisuallyHidden>}
             {!isCollapsed && (
               <>
                 <Tooltip

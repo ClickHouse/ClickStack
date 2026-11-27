@@ -511,6 +511,16 @@ $transition-slow: 0.2s ease;
 
 .userMenu {
   cursor: pointer;
+
+  // A <button>: unlike the <div> it replaced, it neither fills the row nor
+  // centres with auto margins unless it is a sized block, and it brings the
+  // browser's own border, font, colour and centred text.
+  display: block;
+  width: calc(100% - 2 * #{$spacing-sm});
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
   margin: $spacing-sm;
   padding: $spacing-xs $spacing-sm;
   border-radius: $radius-md;
@@ -520,7 +530,9 @@ $transition-slow: 0.2s ease;
   max-width: 100%;
   overflow: hidden;
 
-  &:hover {
+  &:hover,
+  &:focus-visible {
+    outline: none;
     background: var(--color-bg-sidenav-link-active);
   }
 
@@ -533,7 +545,8 @@ $transition-slow: 0.2s ease;
     border: none !important;
     width: fit-content;
 
-    &:hover {
+    &:hover,
+    &:focus-visible {
       background: var(--color-bg-sidenav-link-active);
     }
 
