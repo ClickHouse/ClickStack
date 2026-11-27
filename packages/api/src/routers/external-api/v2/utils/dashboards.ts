@@ -394,6 +394,7 @@ export const convertToExternalTileChartConfig = (
           sqlTemplate: config.sqlTemplate,
           sourceId: config.source,
           numberFormat: config.numberFormat,
+          alternateRowBackground: config.alternateRowBackground,
           onClick: config.onClick,
         };
       case DisplayType.Number:
@@ -588,6 +589,7 @@ export const convertToExternalTileChartConfig = (
           'having',
           'numberFormat',
           'groupByColumnsOnLeft',
+          'alternateRowBackground',
           'onClick',
         ]),
         displayType: config.displayType,
@@ -1000,6 +1002,12 @@ export function convertToInternalTileConfig(
             externalConfig.displayType === 'table'
               ? externalConfig.onClick
               : undefined,
+          // Table-only, like onClick above: the field rides the shared raw SQL
+          // config but only table tiles render striping.
+          alternateRowBackground:
+            externalConfig.displayType === 'table'
+              ? externalConfig.alternateRowBackground
+              : undefined,
           color:
             externalConfig.displayType === 'number'
               ? externalConfig.color
@@ -1058,6 +1066,7 @@ export function convertToInternalTileConfig(
             'having',
             'orderBy',
             'groupByColumnsOnLeft',
+            'alternateRowBackground',
             'onClick',
             // Formulas round-trip as-is; the input schema has already
             // validated the expressions against `select`.
