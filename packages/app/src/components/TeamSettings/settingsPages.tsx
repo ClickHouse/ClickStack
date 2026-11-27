@@ -12,7 +12,7 @@ import {
   IconWebhook,
 } from '@tabler/icons-react';
 
-import { IS_IAC_EXPORT_ENABLED } from '@/config';
+import { IS_EXEMPLARS_ENABLED, IS_IAC_EXPORT_ENABLED } from '@/config';
 
 export type SettingsGroup = 'Data' | 'Team' | 'Alerting' | 'Developer';
 
@@ -67,6 +67,10 @@ export const QUERY_SETTINGS = {
   filterKeysFetchLimit: {
     label: 'Filter keys fetch limit',
     keywords: ['filters', 'map columns', 'attributes'],
+  },
+  maxExemplars: {
+    label: 'Max exemplars per chart',
+    keywords: ['exemplars', 'markers', 'traces'],
   },
   filterValuesExactByDefault: {
     label: 'Default filter values',
@@ -126,10 +130,12 @@ export const SETTINGS_PAGES: SettingsPage[] = [
     description: "ClickHouse settings for your team's queries.",
     icon: <IconAdjustmentsHorizontal size={16} />,
     keywords: ['clickhouse', 'query', 'advanced'],
-    items: Object.entries(QUERY_SETTINGS).map(([key, setting]) => ({
-      anchor: querySettingAnchor(key),
-      ...setting,
-    })),
+    items: Object.entries(QUERY_SETTINGS)
+      .filter(([key]) => key !== 'maxExemplars' || IS_EXEMPLARS_ENABLED)
+      .map(([key, setting]) => ({
+        anchor: querySettingAnchor(key),
+        ...setting,
+      })),
   },
   {
     id: 'members',
