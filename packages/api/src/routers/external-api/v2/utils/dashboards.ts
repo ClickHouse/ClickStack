@@ -425,9 +425,11 @@ export const convertToExternalTileChartConfig = (
           sourceId: config.source,
           numberFormat: config.numberFormat,
         };
+      // TODO(#2226): add Timeline raw-SQL external-API support when renderer lands
       case DisplayType.Search:
       case DisplayType.Markdown:
       case DisplayType.Heatmap:
+      case DisplayType.Timeline:
       case DisplayType.EventPatterns:
         logger.error(
           { config },
@@ -687,6 +689,8 @@ export const convertToExternalTileChartConfig = (
         where: stringValueOrDefault(config.where, ''),
         whereLanguage: config.whereLanguage ?? 'lucene',
       };
+    // TODO(#2226): add Timeline builder external-API support when renderer lands
+    case DisplayType.Timeline:
     case undefined:
       logger.error(
         { config },
