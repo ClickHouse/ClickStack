@@ -57,7 +57,9 @@ import ms from 'ms';
 import { performance } from 'perf_hooks';
 import { serializeError } from 'serialize-error';
 
+import { IS_SLOS_ENABLED } from '@/config';
 import { ALERT_HISTORY_QUERY_CONCURRENCY } from '@/controllers/alertHistory';
+import { refreshDueSloStatuses } from '@/controllers/sloStatus';
 import { AlertState, IAlert, IAlertError } from '@/models/alert';
 import AlertHistory, {
   attributesToGroupValues,
@@ -2287,6 +2289,7 @@ export const getConsecutiveWindowHistories = async (
 export default class CheckAlertTask implements HdxTask {
   private provider!: AlertProvider;
   private task_queue: PQueue;
+  private sloRefresh: Promise<void> = Promise.resolve();
 
   constructor(private args: CheckAlertsTaskArgs) {
     const concurrency = this.args.concurrency;
@@ -2402,6 +2405,11 @@ export default class CheckAlertTask implements HdxTask {
       'finished provider initialization',
     );
 
+    // SLO snapshots refresh beside the alert evaluation, under their own
+    // deadline, so a slow SLO query never holds up alerts. Started after
+    // init, which opens the database connection each run closes.
+    if (IS_SLOS_ENABLED) this.sloRefresh = refreshDueSloStatuses();
+
     const alertTasks = partitionPreviousMapsByAlert(
       await this.provider.getAlertTasks(),
     );
@@ -2451,6 +2459,7 @@ export default class CheckAlertTask implements HdxTask {
     // functions to execute. if not, execute will terminate without
     // executing all checks
     await this.task_queue.onIdle();
+    await this.sloRefresh;
     logger.info(
       {
         args: this.args,
@@ -2466,6 +2475,9 @@ export default class CheckAlertTask implements HdxTask {
   }
 
   async asyncDispose(): Promise<void> {
+    // The refresh writes through the connection the provider closes, even
+    // when execute stopped early.
+    await this.sloRefresh;
     if (this.provider) {
       await this.provider.asyncDispose();
     }

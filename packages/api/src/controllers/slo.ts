@@ -27,7 +27,7 @@ import Slo, { ISlo } from '@/models/slo';
 import { getClickHouseErrorType } from '@/utils/clickhouseErrors';
 import { Api400Error } from '@/utils/errors';
 
-type SloQueryContext = {
+export type SloQueryContext = {
   source: TSource;
   clickhouseClient: BaseClickhouseClient;
   metadata: Metadata;
@@ -47,7 +47,7 @@ async function getSloSource(teamId: string, sourceId: string) {
   return source;
 }
 
-async function getSloQueryContext(
+export async function getSloQueryContext(
   teamId: string,
   sourceId: string,
   timeoutMs: number,
@@ -75,7 +75,7 @@ async function getSloQueryContext(
  * it, as charts and alerts do; otherwise from the source's table. A timeout
  * ends the query sooner than the client's own.
  */
-async function runSloQuery(
+export async function runSloQuery(
   ctx: SloQueryContext,
   config: BuilderChartConfigWithDateRange,
   timeoutMs?: number,
@@ -162,6 +162,7 @@ export async function createSlo(
     throw new Api400Error(`A team can have at most ${SLO_MAX_PER_TEAM} SLOs`);
   }
   await checkSloQuery(teamId, definition);
+  // The status refresh picks up an SLO without a snapshot on its next run.
   return (
     await Slo.create({
       ...definition,
@@ -182,6 +183,14 @@ export async function updateSlo(
   const existing = await getSlo(teamId, sloId);
   if (!existing) return null;
   await checkSloQuery(teamId, definition);
+  // Every input of the stored numbers: a change makes the snapshot wrong,
+  // and the refresh recomputes it on its next run.
+  const changed =
+    existing.source.toString() !== definition.source ||
+    existing.target !== definition.target ||
+    existing.window !== definition.window ||
+    (existing.groupBy ?? null) !== (definition.groupBy ?? null) ||
+    JSON.stringify(existing.indicator) !== JSON.stringify(definition.indicator);
   return Slo.findOneAndUpdate(
     { _id: sloId, team: teamId },
     {
@@ -191,6 +200,7 @@ export async function updateSlo(
         groupBy: definition.groupBy || null,
         updatedBy: userId,
       },
+      ...(changed ? { $unset: { status: 1 } } : {}),
     },
     { new: true },
   ).lean();
