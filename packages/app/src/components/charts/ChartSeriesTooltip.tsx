@@ -26,6 +26,7 @@ import {
   MAX_TOOLTIP_ROWS,
 } from '@/HDXMultiSeriesTimeChart';
 import type { NumberFormat } from '@/types';
+import type { DateFormat } from '@/useFormatTime';
 
 import {
   ChartTooltipContainer,
@@ -215,6 +216,8 @@ export type ChartSeriesTooltipProps = {
   /** Per-value-column number formats, keyed by result column name. */
   numberFormatByKey: Map<string, NumberFormat>;
   previousPeriodOffsetSeconds?: number;
+  /** Format for the header timestamp; see getTooltipDateFormat. */
+  dateFormat?: DateFormat;
   /** Drill-down URL for the whole bucket (no args) or one series (key + value). */
   buildSearchUrl?: (key?: string, value?: number) => string | null;
   /** Dismiss the tooltip (used by links + focus). */
@@ -279,6 +282,7 @@ export function ChartSeriesTooltip({
   fallbackNumberFormat,
   numberFormatByKey,
   previousPeriodOffsetSeconds,
+  dateFormat,
   buildSearchUrl,
   onDismiss,
   onFocusSeries,
@@ -334,6 +338,7 @@ export function ChartSeriesTooltip({
     <ChartTooltipHeader
       labelSeconds={activeLabel}
       previousPeriodOffsetSeconds={previousPeriodOffsetSeconds}
+      dateFormat={dateFormat}
       onClose={() => onDismiss?.()}
     />
   );

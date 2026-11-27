@@ -1,18 +1,15 @@
 import React from 'react';
-import { formatDate } from '@hyperdx/common-utils/dist/core/utils';
+import {
+  type DateFormat,
+  formatDate,
+} from '@hyperdx/common-utils/dist/core/utils';
 
 import { useDisplayTimeZone } from './useDisplayTimeZone';
 import { useUserPreferences } from './useUserPreferences';
 
 type DateLike = number | string | Date;
 
-export type DateFormat =
-  | 'normal'
-  | 'short'
-  | 'withMs'
-  | 'time'
-  | 'withYear'
-  | 'date';
+export type { DateFormat };
 
 const parse = (time: DateLike) => {
   if (time instanceof Date) {

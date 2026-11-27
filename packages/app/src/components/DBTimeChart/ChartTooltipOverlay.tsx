@@ -26,10 +26,14 @@ export function ChartTooltipOverlay({
   fallbackNumberFormat,
   numberFormatByKey,
   previousPeriodOffsetSeconds,
+  dateFormat,
   hiddenSeriesCount,
   onLoadAllSeries,
   expanded,
-}: Pick<ChartSeriesTooltipProps, 'getSeriesFilters' | 'onFilterSeries'> & {
+}: Pick<
+  ChartSeriesTooltipProps,
+  'getSeriesFilters' | 'onFilterSeries' | 'dateFormat'
+> & {
   payload: ActiveClickPayload | undefined;
   buildSearchUrl: (key?: string, value?: number) => string | null;
   onDismiss: () => void;
@@ -159,6 +163,7 @@ export function ChartTooltipOverlay({
             fallbackNumberFormat={fallbackNumberFormat}
             numberFormatByKey={numberFormatByKey}
             previousPeriodOffsetSeconds={previousPeriodOffsetSeconds}
+            dateFormat={dateFormat}
             buildSearchUrl={buildSearchUrl}
             onDismiss={onDismiss}
             onFocusSeries={onFocusSeries}

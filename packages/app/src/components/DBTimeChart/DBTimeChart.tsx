@@ -30,7 +30,12 @@ import {
   MAX_LOADABLE_TIME_CHART_SERIES,
   resolveRenderedSeriesCap,
 } from '@/defaults';
-import { type ActiveClickPayload, MemoChart } from '@/HDXMultiSeriesTimeChart';
+import {
+  type ActiveClickPayload,
+  getTooltipDateFormat,
+  isYearScaleRange,
+  MemoChart,
+} from '@/HDXMultiSeriesTimeChart';
 import {
   getMinGranularitySeconds,
   useQueriedChartConfig,
@@ -40,6 +45,7 @@ import { useResultColumnFilterKeys } from '@/hooks/useResultColumnFilterKeys';
 import { useChartNumberFormats, useSource } from '@/source';
 import { useTimeZoneLinkParam } from '@/timeZoneOverride';
 import type { TileFilterHandler } from '@/types';
+import { useDisplayTimeZone } from '@/useDisplayTimeZone';
 
 import { ChartTooltipOverlay } from './ChartTooltipOverlay';
 import { useCrossChartPinDismiss } from './crossChartPin';
@@ -522,6 +528,7 @@ function DBTimeChartComponent({
     [setDisplayType],
   );
 
+  const displayTimeZone = useDisplayTimeZone();
   const [activeClickPayload, setActiveClickPayload] = useState<
     ActiveClickPayload | undefined
   >(undefined);
@@ -724,6 +731,16 @@ function DBTimeChartComponent({
             fallbackNumberFormat={queriedConfig.numberFormat}
             numberFormatByKey={formatByColumn}
             previousPeriodOffsetSeconds={previousPeriodOffsetSeconds}
+            dateFormat={
+              activeClickPayload?.activeLabel != null
+                ? getTooltipDateFormat({
+                    labelSeconds: Number(activeClickPayload.activeLabel),
+                    yearScale: isYearScaleRange(dateRange),
+                    granularity,
+                    timeZone: displayTimeZone,
+                  })
+                : undefined
+            }
             // "+N more" in the pinned tooltip loads every series (same escape
             // hatch as the hidden-series warning). Only offered while capped.
             hiddenSeriesCount={hiddenSeriesCount}

@@ -19,13 +19,16 @@ import {
   formatAxisTick,
   getExpandableYAxisTicks,
   getLineCurveType,
+  getMonthStartTicks,
   getNiceYAxisTicks,
   getSelectedLineData,
+  getTooltipDateFormat,
   getVisibleLineData,
   getVisibleTooltipRows,
   getXAxisTickDateFormat,
   getYAxisTicks,
   HARD_LINES_LIMIT,
+  isYearScaleRange,
   sameActiveClickSeries,
   scanStackedYAxisValueRange,
   scanYAxisValueRange,
@@ -1436,5 +1439,195 @@ describe('getXAxisTickDateFormat', () => {
         timeZone: 'Etc/UTC',
       }),
     ).toBe('time');
+  });
+
+  it.each(['1 hour', '1 day', '30 day'])(
+    'shows the month and year on every tick of a year-scale range at %s granularity',
+    granularity => {
+      for (const index of [0, 1]) {
+        expect(
+          getXAxisTickDateFormat({
+            tickSeconds: seconds('2026-10-27T04:00:00Z'),
+            index,
+            granularity,
+            timeZone: 'America/New_York',
+            yearScale: true,
+          }),
+        ).toBe('monthYear');
+      }
+    },
+  );
+});
+
+describe('isYearScaleRange', () => {
+  it('starts at a year', () => {
+    expect(
+      isYearScaleRange([
+        new Date('2025-03-01T00:00:00Z'),
+        new Date('2026-03-01T00:00:00Z'),
+      ]),
+    ).toBe(true);
+    expect(
+      isYearScaleRange([
+        new Date('2025-03-02T00:00:00Z'),
+        new Date('2026-03-01T00:00:00Z'),
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe('getTooltipDateFormat', () => {
+  const seconds = (iso: string) => new Date(iso).getTime() / 1000;
+  const utcMidnight = seconds('2025-11-08T00:00:00Z');
+
+  it('keeps the default format below a year', () => {
+    expect(
+      getTooltipDateFormat({
+        labelSeconds: utcMidnight,
+        yearScale: false,
+        granularity: '1 day',
+        timeZone: 'Etc/UTC',
+      }),
+    ).toBe('normal');
+  });
+
+  it.each(['1 day', '30 day'])(
+    'shows only the date with the year for a midnight %s bucket',
+    granularity => {
+      expect(
+        getTooltipDateFormat({
+          labelSeconds: utcMidnight,
+          yearScale: true,
+          granularity,
+          timeZone: 'Etc/UTC',
+        }),
+      ).toBe('isoDate');
+    },
+  );
+
+  it('keeps the time when a daily bucket does not start at local midnight', () => {
+    // A UTC-aligned bucket starts at 7 PM the previous day in New York.
+    expect(
+      getTooltipDateFormat({
+        labelSeconds: utcMidnight,
+        yearScale: true,
+        granularity: '1 day',
+        timeZone: 'America/New_York',
+      }),
+    ).toBe('withYear');
+    expect(
+      getTooltipDateFormat({
+        labelSeconds: seconds('2025-11-08T05:00:00Z'),
+        yearScale: true,
+        granularity: '1 day',
+        timeZone: 'America/New_York',
+      }),
+    ).toBe('isoDate');
+  });
+
+  it('keeps the time, with the year, for sub-day buckets', () => {
+    expect(
+      getTooltipDateFormat({
+        labelSeconds: utcMidnight,
+        yearScale: true,
+        granularity: '1 hour',
+        timeZone: 'Etc/UTC',
+      }),
+    ).toBe('withYear');
+  });
+});
+
+describe('getMonthStartTicks', () => {
+  const seconds = (iso: string) => new Date(iso).getTime() / 1000;
+  const iso = (ticks: number[] | undefined) =>
+    ticks?.map(t => new Date(t * 1000).toISOString());
+  const twoYears: [number, number] = [
+    seconds('2024-11-25T00:00:00Z'),
+    seconds('2026-11-25T00:00:00Z'),
+  ];
+
+  it('returns undefined before the chart is measured', () => {
+    expect(
+      getMonthStartTicks({
+        domain: twoYears,
+        timeZone: 'Etc/UTC',
+        plotWidth: 0,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('places ticks on month starts at the smallest step that fits', () => {
+    // 500px fits 5 ticks, so 25 months need a 6-month step.
+    expect(
+      iso(
+        getMonthStartTicks({
+          domain: twoYears,
+          timeZone: 'Etc/UTC',
+          plotWidth: 500,
+        }),
+      ),
+    ).toEqual([
+      '2025-01-01T00:00:00.000Z',
+      '2025-07-01T00:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+      '2026-07-01T00:00:00.000Z',
+    ]);
+  });
+
+  it('keeps two ticks on a narrow chart', () => {
+    expect(
+      iso(
+        getMonthStartTicks({
+          domain: twoYears,
+          timeZone: 'Etc/UTC',
+          plotWidth: 280,
+        }),
+      ),
+    ).toEqual(['2025-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z']);
+  });
+
+  it('uses every month when there is room', () => {
+    const ticks = getMonthStartTicks({
+      domain: twoYears,
+      timeZone: 'Etc/UTC',
+      plotWidth: 4000,
+    });
+    expect(ticks).toHaveLength(24);
+    expect(iso(ticks)?.[0]).toBe('2024-12-01T00:00:00.000Z');
+  });
+
+  it('uses midnight in the display time zone, across DST changes', () => {
+    expect(
+      iso(
+        getMonthStartTicks({
+          domain: twoYears,
+          timeZone: 'America/New_York',
+          plotWidth: 500,
+        }),
+      ),
+    ).toEqual([
+      '2025-01-01T05:00:00.000Z',
+      '2025-07-01T04:00:00.000Z',
+      '2026-01-01T05:00:00.000Z',
+      '2026-07-01T04:00:00.000Z',
+    ]);
+  });
+
+  it('steps by whole years on very long ranges', () => {
+    const ticks = getMonthStartTicks({
+      domain: [
+        seconds('2016-06-01T00:00:00Z'),
+        seconds('2026-06-01T00:00:00Z'),
+      ],
+      timeZone: 'Etc/UTC',
+      plotWidth: 500,
+    });
+    expect(iso(ticks)).toEqual([
+      '2018-01-01T00:00:00.000Z',
+      '2020-01-01T00:00:00.000Z',
+      '2022-01-01T00:00:00.000Z',
+      '2024-01-01T00:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+    ]);
   });
 });
