@@ -3,7 +3,11 @@ import type { ChartConfigWithDateRange } from '@hyperdx/common-utils/dist/types'
 import { act, fireEvent, renderHook, screen } from '@testing-library/react';
 import { fromPartial } from '@total-typescript/shoehorn';
 
-import { SearchNumRows, useSearchTelemetry } from '@/DBSearchPage';
+import {
+  GeneratedSqlButton,
+  SearchNumRows,
+  useSearchTelemetry,
+} from '@/DBSearchPage';
 
 jest.mock('@/layout', () => ({
   withAppNav: (component: unknown) => component,
@@ -320,10 +324,7 @@ describe('SearchNumRows', () => {
         isSearching={false}
       />,
     );
-    expect(screen.queryByText(/Scanned Rows/)).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /show generated sql/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/rows scanned/)).not.toBeInTheDocument();
   });
 
   it('shows loading state while explain query is in flight', () => {
@@ -336,22 +337,7 @@ describe('SearchNumRows', () => {
         isSearching={false}
       />,
     );
-    expect(screen.getByText('Scanned Rows ...')).toBeInTheDocument();
-  });
-
-  it('keeps the SQL icon visible while explain is loading (no flicker on poll)', () => {
-    mockExplainIsLoading = true;
-    renderWithMantine(
-      <SearchNumRows
-        config={baseConfig}
-        enabled
-        searchElapsedMs={null}
-        isSearching={false}
-      />,
-    );
-    expect(
-      screen.getByRole('button', { name: /show generated sql/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByText('… rows scanned')).toBeInTheDocument();
   });
 
   it('renders empty text on error', () => {
@@ -365,7 +351,7 @@ describe('SearchNumRows', () => {
       />,
     );
     // No row count text shown on error
-    expect(screen.queryByText(/Scanned Rows:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/rows scanned/)).not.toBeInTheDocument();
   });
 
   it('shows formatted scanned row count when data is present', () => {
@@ -378,10 +364,10 @@ describe('SearchNumRows', () => {
         isSearching={false}
       />,
     );
-    expect(screen.getByText('Scanned Rows: 1,482,447')).toBeInTheDocument();
+    expect(screen.getByText('1,482,447 rows scanned')).toBeInTheDocument();
   });
 
-  it('shows "Elapsed Time: ..." while searching', () => {
+  it('shows "…ms" while searching', () => {
     mockExplainData = [{ rows: 100 }];
     renderWithMantine(
       <SearchNumRows
@@ -391,7 +377,7 @@ describe('SearchNumRows', () => {
         isSearching
       />,
     );
-    expect(screen.getByText('Elapsed Time: ...')).toBeInTheDocument();
+    expect(screen.getByText(/…ms/)).toBeInTheDocument();
   });
 
   it('does not flash the "..." elapsed loading state during live tail', () => {
@@ -406,8 +392,8 @@ describe('SearchNumRows', () => {
       />,
     );
     // While live and fetching, keep showing the last value, not the "..."
-    expect(screen.queryByText('Elapsed Time: ...')).not.toBeInTheDocument();
-    expect(screen.getByText(/Elapsed Time:/)).toBeInTheDocument();
+    expect(screen.queryByText(/…ms/)).not.toBeInTheDocument();
+    expect(screen.getByText(/342ms/)).toBeInTheDocument();
   });
 
   it('hides elapsed during live tail before the first measurement', () => {
@@ -421,7 +407,7 @@ describe('SearchNumRows', () => {
         isLiveTail
       />,
     );
-    expect(screen.queryByText(/Elapsed Time:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\dms/)).not.toBeInTheDocument();
   });
 
   it('shows formatted elapsed time after search completes', () => {
@@ -434,8 +420,8 @@ describe('SearchNumRows', () => {
         isSearching={false}
       />,
     );
-    expect(screen.getByText(/Elapsed Time:/)).toBeInTheDocument();
-    expect(screen.queryByText('Elapsed Time: ...')).not.toBeInTheDocument();
+    expect(screen.getByText(/342ms/)).toBeInTheDocument();
+    expect(screen.queryByText(/…ms/)).not.toBeInTheDocument();
   });
 
   it('hides elapsed time section when there is no elapsed value and not searching', () => {
@@ -448,10 +434,10 @@ describe('SearchNumRows', () => {
         isSearching={false}
       />,
     );
-    expect(screen.queryByText(/Elapsed Time:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\dms/)).not.toBeInTheDocument();
   });
 
-  it('still shows elapsed time and SQL icon when the explain query fails', () => {
+  it('still shows elapsed time when the explain query fails', () => {
     mockExplainError = new Error('explain timed out');
     renderWithMantine(
       <SearchNumRows
@@ -462,11 +448,7 @@ describe('SearchNumRows', () => {
       />,
     );
     // Elapsed time is independent of the explain query and must remain visible
-    expect(screen.getByText(/Elapsed Time:/)).toBeInTheDocument();
-    // SQL preview is also independent of explain data
-    expect(
-      screen.getByRole('button', { name: /show generated sql/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByText('200ms')).toBeInTheDocument();
   });
 
   it('shows elapsed time while searching even when explain has no data yet', () => {
@@ -479,19 +461,23 @@ describe('SearchNumRows', () => {
         isSearching
       />,
     );
-    expect(screen.getByText('Elapsed Time: ...')).toBeInTheDocument();
+    expect(screen.getByText('…ms')).toBeInTheDocument();
+  });
+});
+
+describe('GeneratedSqlButton', () => {
+  it('renders nothing when enabled=false', () => {
+    renderWithMantine(
+      <GeneratedSqlButton config={baseConfig} enabled={false} />,
+    );
+    expect(
+      screen.queryByRole('button', { name: /show generated sql/i }),
+    ).not.toBeInTheDocument();
   });
 
   it('opens the modal when the SQL button is clicked', async () => {
     mockExplainData = [{ rows: 50 }];
-    renderWithMantine(
-      <SearchNumRows
-        config={baseConfig}
-        enabled
-        searchElapsedMs={null}
-        isSearching={false}
-      />,
-    );
+    renderWithMantine(<GeneratedSqlButton config={baseConfig} enabled />);
 
     await act(async () => {
       fireEvent.click(
@@ -503,18 +489,12 @@ describe('SearchNumRows', () => {
     expect(screen.getByTestId('chart-sql-preview')).toBeInTheDocument();
   });
 
-  it('uses sqlConfig in the modal when provided — title says "Timeline" and content uses sqlConfig', async () => {
+  it('uses sqlConfig in the modal when provided — title says "timeline" and content uses sqlConfig', async () => {
     mockExplainData = [{ rows: 50 }];
     const sqlConfig = { ...baseConfig, source: 'timeline-source' };
 
     renderWithMantine(
-      <SearchNumRows
-        config={baseConfig}
-        sqlConfig={sqlConfig}
-        enabled
-        searchElapsedMs={null}
-        isSearching={false}
-      />,
+      <GeneratedSqlButton config={baseConfig} sqlConfig={sqlConfig} enabled />,
     );
 
     await act(async () => {
@@ -524,7 +504,7 @@ describe('SearchNumRows', () => {
     });
 
     expect(screen.getByTestId('modal-title')).toHaveTextContent(
-      'Generated SQL (Timeline)',
+      'Generated SQL (timeline)',
     );
     expect(lastSQLPreviewConfig).toEqual(sqlConfig);
   });
@@ -533,14 +513,7 @@ describe('SearchNumRows', () => {
     mockExplainData = [{ rows: 50 }];
     const rowsConfig = { ...baseConfig, source: 'rows-source' };
 
-    renderWithMantine(
-      <SearchNumRows
-        config={rowsConfig}
-        enabled
-        searchElapsedMs={null}
-        isSearching={false}
-      />,
-    );
+    renderWithMantine(<GeneratedSqlButton config={rowsConfig} enabled />);
 
     await act(async () => {
       fireEvent.click(
@@ -552,7 +525,7 @@ describe('SearchNumRows', () => {
       'Generated SQL',
     );
     expect(
-      screen.queryByText('Generated SQL (Timeline)'),
+      screen.queryByText('Generated SQL (timeline)'),
     ).not.toBeInTheDocument();
     expect(lastSQLPreviewConfig).toEqual(rowsConfig);
   });

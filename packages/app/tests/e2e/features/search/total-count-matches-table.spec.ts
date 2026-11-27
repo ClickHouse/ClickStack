@@ -1,5 +1,5 @@
 /**
- * Regression guard for: histogram "X Results" count must reflect the user's
+ * Regression guard for: histogram "X results" count must reflect the user's
  * exact selected time range, not a granularity-bucket-aligned expansion of it.
  *
  * To get a deterministic assertion we seed our own logs directly into
@@ -127,7 +127,7 @@ test.describe(
       await searchPage.waitForTotalCountLoaded();
 
       await expect(searchPage.table.getRows()).toHaveCount(5);
-      await expect(searchPage.totalCountText).toHaveText('5 Results');
+      await expect(searchPage.totalCountText).toHaveText('5 results');
     });
   },
 );
