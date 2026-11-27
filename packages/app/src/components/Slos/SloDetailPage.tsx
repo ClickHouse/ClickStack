@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import Link from 'next/link';
@@ -25,6 +25,8 @@ import { withAppNavForSurface } from '@/layout';
 import { useSlo, useSlosEnabledGuard } from '@/slo';
 import { useSource } from '@/source';
 
+import { SloCharts } from './SloCharts';
+import { SloDefinitionPanel } from './SloDetailPanels';
 import {
   SloEventsDrawer,
   type SloEventsRange,
@@ -43,11 +45,13 @@ import {
 function SloDetailView({
   slo,
   source,
+  now,
   live,
   liveError,
 }: {
   slo: SloApiResponse;
   source?: TSource;
+  now?: Date;
   live?: SloLiveStatus;
   liveError?: Error | null;
 }) {
@@ -74,6 +78,11 @@ function SloDetailView({
     const [from, to] = getSloEventsRange(slo, range, Date.now());
     void setBadEvents({ bad: range, from, to });
   };
+  const onBucketSelect = useCallback(
+    (start: Date, end: Date) =>
+      setBadEvents({ bad: 'custom', from: start.getTime(), to: end.getTime() }),
+    [setBadEvents],
+  );
   const state = live?.state ?? getSloDisplayState(slo);
 
   return (
@@ -125,6 +134,15 @@ function SloDetailView({
             live={live}
             liveError={liveError}
           />
+          {source && now && (
+            <SloCharts
+              slo={slo}
+              source={source}
+              now={now}
+              onBucketSelect={onBucketSelect}
+            />
+          )}
+          <SloDefinitionPanel slo={slo} sourceName={source?.name} />
         </Stack>
       </Container>
       <SloEventsDrawer
@@ -149,7 +167,13 @@ function SloDetailLive({
   const now = useSloNow();
   const { live, error } = useSloLiveStatus(slo, source, now);
   return (
-    <SloDetailView slo={slo} source={source} live={live} liveError={error} />
+    <SloDetailView
+      slo={slo}
+      source={source}
+      now={now}
+      live={live}
+      liveError={error}
+    />
   );
 }
 

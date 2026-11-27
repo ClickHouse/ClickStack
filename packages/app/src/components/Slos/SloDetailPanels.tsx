@@ -1,10 +1,15 @@
-import { getSloBurnRule } from '@hyperdx/common-utils/dist/core/slo';
+import { formatDistanceToNowStrict } from 'date-fns';
+import {
+  getSloBurnRule,
+  getSloGoodSql,
+} from '@hyperdx/common-utils/dist/core/slo';
+import { describeFilter } from '@hyperdx/common-utils/dist/filters';
 import type {
   SloApiResponse,
   SloState,
   SloStats,
 } from '@hyperdx/common-utils/dist/slo';
-import { Paper, SimpleGrid, Text } from '@mantine/core';
+import { Code, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
 
 import {
   budgetColorVar,
@@ -102,5 +107,95 @@ export function SloStatsGrid({
         detail={`${formatCount(stats.good)} good, ${formatCount(stats.bad)} bad`}
       />
     </SimpleGrid>
+  );
+}
+
+export function SloDefinitionPanel({
+  slo,
+  sourceName,
+}: {
+  slo: SloApiResponse;
+  sourceName?: string;
+}) {
+  const { eligible, template, latency } = slo.indicator;
+  const filters = eligible.filters ?? [];
+  const status = slo.status;
+  return (
+    <Paper withBorder p="md" radius="sm" data-testid="slo-definition">
+      <Text fw={500} mb="xs">
+        Definition
+      </Text>
+      <Stack gap={6}>
+        <Text size="sm">
+          <Text span c="dimmed">
+            Source:{' '}
+          </Text>
+          {sourceName ?? slo.source}
+        </Text>
+        <Text size="sm">
+          <Text span c="dimmed">
+            Eligible events:{' '}
+          </Text>
+          {eligible.where ? (
+            <>
+              <Code>{eligible.where}</Code> (
+              {eligible.whereLanguage === 'sql' ? 'SQL' : 'Lucene'})
+            </>
+          ) : filters.length > 0 ? (
+            'every event matching the filters below'
+          ) : (
+            'every event in the source'
+          )}
+        </Text>
+        {filters.length > 0 && (
+          <Group gap={6} data-testid="slo-definition-filters">
+            <Text size="sm" c="dimmed">
+              Filters:
+            </Text>
+            {filters.map(filter => (
+              <Code key={describeFilter(filter)}>{describeFilter(filter)}</Code>
+            ))}
+          </Group>
+        )}
+        <Text size="sm">
+          <Text span c="dimmed">
+            Good events:{' '}
+          </Text>
+          {template === 'latency' && latency ? (
+            <>
+              <Code>{latency.expression}</Code> (stored in {latency.unit})
+              within {latency.thresholdMs} ms
+              {!latency.numeric &&
+                (latency.requireDuration
+                  ? '; events without a duration are left out'
+                  : '; events without a duration count as bad')}
+              . Counted as <Code>{getSloGoodSql(slo.indicator)}</Code>
+            </>
+          ) : (
+            <Code>{slo.indicator.good}</Code>
+          )}
+        </Text>
+        <Text size="sm">
+          <Text span c="dimmed">
+            Objective:{' '}
+          </Text>
+          {formatTarget(slo.target)} of eligible events are good over a rolling{' '}
+          {formatSloWindow(slo.window)}
+        </Text>
+        {status && (
+          <Text size="xs" c="dimmed">
+            The SLO list uses a copy updated in the background: burn rate{' '}
+            {formatDistanceToNowStrict(new Date(status.evaluatedAt))} ago
+            {status.windowEvaluatedAt
+              ? `, SLI and budget ${formatDistanceToNowStrict(new Date(status.windowEvaluatedAt))} ago (${status.durationMs} ms, ${formatCount(status.rowsRead)} rows read)`
+              : ''}
+            {status.state === 'error' && status.lastSuccessAt
+              ? `. Last successful update ${formatDistanceToNowStrict(new Date(status.lastSuccessAt))} ago`
+              : ''}
+            .
+          </Text>
+        )}
+      </Stack>
+    </Paper>
   );
 }
