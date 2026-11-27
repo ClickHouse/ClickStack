@@ -18,8 +18,10 @@ jest.mock('@mantine/notifications', () => ({
   notifications: { show: jest.fn() },
 }));
 jest.mock('nuqs', () => ({
-  parseAsJson: jest.fn(),
   useQueryState: jest.fn(),
+}));
+jest.mock('@/utils/queryParsers', () => ({
+  parseAsJsonEncoded: jest.fn(),
 }));
 
 // Capture each mutation's `mutationFn` so the tests can invoke it directly

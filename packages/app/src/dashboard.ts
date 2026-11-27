@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { parseAsJson, useQueryState } from 'nuqs';
+import { useQueryState } from 'nuqs';
 import {
   DashboardContainer,
   DashboardFilter,
@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { hashCode } from '@/utils';
 
+import { parseAsJsonEncoded } from './utils/queryParsers';
 import api, {
   hdxServer,
   useCompleteOnboardingTask,
@@ -238,7 +239,7 @@ export function useDashboard({
 
   const [localDashboard, setLocalDashboard] = useQueryState(
     'dashboard',
-    parseAsJson<Dashboard>(),
+    parseAsJsonEncoded<Dashboard>(),
   );
 
   const updateDashboard = useUpdateDashboard();

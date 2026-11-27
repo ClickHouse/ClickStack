@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import Link from 'next/link';
-import { parseAsJson, parseAsString, useQueryState } from 'nuqs';
+import { parseAsString, useQueryState } from 'nuqs';
 import { useForm } from 'react-hook-form';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { Badge, Separator } from '@clickhouse/click-ui';
@@ -44,6 +44,7 @@ import { useDefaultTimeRange, useNewTimeQuery } from '@/timeQuery';
 import { useLocalStorage } from '@/utils';
 import { buildInlineAlertPayload } from '@/utils/alerts';
 import { getApiErrorMessage } from '@/utils/apiErrors';
+import { parseAsJsonEncoded } from '@/utils/queryParsers';
 
 import OnboardingModal from './components/OnboardingModal';
 
@@ -232,7 +233,7 @@ function DBChartExplorerPage() {
 
   const [rawChartConfig, setChartConfig] = useQueryState(
     'config',
-    parseAsJson<SavedChartConfig>().withDefault({
+    parseAsJsonEncoded<SavedChartConfig>().withDefault({
       ...DEFAULT_CHART_CONFIG,
       source: sources?.[0]?.id ?? '',
       connection: sources?.[0]?.connection,
