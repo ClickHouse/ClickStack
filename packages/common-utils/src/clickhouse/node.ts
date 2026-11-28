@@ -60,7 +60,7 @@ export type QueryCost = {
 
 const statisticsBodySchema = z.object({
   statistics: z.object({
-    elapsed: z.number().catch(0),
+    elapsed: z.number(),
     rows_read: z.number(),
     bytes_read: z.number(),
   }),
@@ -71,8 +71,9 @@ const costStore = new AsyncLocalStorage<QueryCost[]>();
 
 /**
  * Sums the `statistics` of every JSON query `fn` issues, including queries in
- * nested meters. Read the totals with getQueryCost() inside `fn`, or from the
- * returned `cost` after it.
+ * nested meters. A query whose body has no complete statistics is not counted.
+ * Read the totals with getQueryCost() inside `fn`, or from the returned
+ * `cost`, which holds the results read before `fn` resolved.
  */
 export async function withQueryCost<T>(
   fn: () => Promise<T>,

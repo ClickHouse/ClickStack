@@ -188,11 +188,13 @@ and PromQL tiles report the cost of the call:
 - `clickstack_event_patterns`, `clickstack_emerging_signals` and
   `clickstack_describe_source` return `statistics` in the shape
   `clickstack_table` uses (`elapsed` in seconds, `rows_read`, `bytes_read`),
-  summed over the ClickHouse queries of the call, and `queries`, how many there
-  were. `elapsed` is ClickHouse time, so queries that run at the same time add
-  up to more than the wall time. A cached schema lookup runs no query and adds
-  nothing. An event-pattern tile in `clickstack_query_tile` reports only its own
-  queries.
+  summed over the ClickHouse queries of the call, and `queries`, how many
+  queries reported them. Only JSON results carry statistics: a result read as a
+  stream, like the primary key values `clickstack_describe_source` reads from
+  the index, is not counted. `elapsed` is ClickHouse time, so queries that run
+  at the same time add up to more than the wall time. A cached schema lookup
+  runs no query and adds nothing. An event-pattern tile in
+  `clickstack_query_tile` reports only its own queries.
 
 ### Metric Sources
 
