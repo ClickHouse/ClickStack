@@ -3,6 +3,7 @@ import {
   filterColumnMetaByType,
   JSDataType,
 } from '@hyperdx/common-utils/dist/clickhouse';
+import { getQueryCost } from '@hyperdx/common-utils/dist/clickhouse/node';
 import {
   getMetadata,
   tcFromSource,
@@ -203,6 +204,7 @@ async function describeSourceSchema(
               nextSteps: {
                 query: `Use clickstack_timeseries, clickstack_table, or clickstack_search with sourceId "${sourceId}".`,
               },
+              statistics: getQueryCost(),
             },
             null,
             2,
@@ -552,6 +554,7 @@ function formatDescribeResult({
         "Use bracket syntax for map columns: ResourceAttributes['service.name'], SpanAttributes['http.method']",
       ...(discoveryNextStep && { discovery: discoveryNextStep }),
     },
+    statistics: getQueryCost(),
   });
 
   const finalOutput = isTrimmed

@@ -196,6 +196,10 @@ describe('MCP Emerging Signals Tool', () => {
       expect(output.summary.currentWindow.sampled).toBeGreaterThan(0);
       expect(output.summary.baselineWindow.sampled).toBeGreaterThan(0);
       expect(output.summary.warning).toBeUndefined();
+      // What ClickHouse read for the call.
+      expect(output.statistics.queries).toBeGreaterThan(0);
+      expect(output.statistics.rows_read).toBeGreaterThan(0);
+      expect(output.statistics.bytes_read).toBeGreaterThan(0);
 
       // The shadow-eval template must appear in the emerging list as "new".
       expect(output.emerging.length).toBeGreaterThan(0);

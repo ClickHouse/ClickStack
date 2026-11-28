@@ -1,4 +1,7 @@
-import { withQueryAttribution } from '@hyperdx/common-utils/dist/clickhouse/node';
+import {
+  withQueryAttribution,
+  withQueryCost,
+} from '@hyperdx/common-utils/dist/clickhouse/node';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { recordOnboardingTaskCompletion } from '@/controllers/user';
@@ -110,14 +113,15 @@ export function withToolTracing<TArgs>(
 
         try {
           // Around the whole handler, so every query the tool makes carries
-          // the tool name and who called it.
+          // the tool name and who called it, and tools can report the call's
+          // cost with getQueryCost().
           const result = await withQueryAttribution(
             {
               surface: 'mcp',
               label: toolName,
               trace: getActiveTraceId(),
             },
-            async () => handler(args),
+            async () => (await withQueryCost(async () => handler(args))).result,
           );
           const durationMs = Date.now() - startTime;
           const responseBytes = getResponseSizeBytes(result.content);

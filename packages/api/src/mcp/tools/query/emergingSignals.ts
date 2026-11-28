@@ -1,3 +1,4 @@
+import { getQueryCost } from '@hyperdx/common-utils/dist/clickhouse/node';
 import {
   flattenBody,
   TemplateMiner,
@@ -587,6 +588,7 @@ export function registerEmergingSignals({
         },
         emerging: emerging.slice(0, input.topN).map(fmt),
         disappeared: disappeared.slice(0, input.topN).map(fmt),
+        statistics: getQueryCost(),
         usage:
           'emerging = patterns newly present or >= minShareRatio× more frequent ' +
           '(by share of window) now vs baseline; status "new" means absent from ' +
