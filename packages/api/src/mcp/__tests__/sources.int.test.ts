@@ -445,6 +445,10 @@ describe('MCP Source Tools', () => {
       expect(output.source.columns[0]).toHaveProperty('name');
       expect(output.source.columns[0]).toHaveProperty('type');
       expect(output.source.columns[0]).toHaveProperty('jsType');
+      // What ClickHouse read for the call.
+      expect(output.statistics.queries).toBeGreaterThan(0);
+      expect(output.statistics.rows_read).toBeGreaterThan(0);
+      expect(output.statistics.bytes_read).toBeGreaterThan(0);
     });
 
     it('should return full column schema for a log source', async () => {

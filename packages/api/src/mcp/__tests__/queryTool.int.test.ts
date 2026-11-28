@@ -798,6 +798,10 @@ describe('MCP Query Tools', () => {
       expect(output).toHaveProperty('summary');
       expect(output).toHaveProperty('patterns');
       expect(output.summary).toHaveProperty('totalCount');
+      // What ClickHouse read for the call.
+      expect(output.statistics.queries).toBeGreaterThan(0);
+      expect(output.statistics.rows_read).toBeGreaterThan(0);
+      expect(output.statistics.bytes_read).toBeGreaterThan(0);
       expect(output.summary).toHaveProperty('sampledCount');
       expect(output.summary).toHaveProperty('sampleMultiplier');
       expect(output.summary).toHaveProperty('bodyColumn', 'Body');

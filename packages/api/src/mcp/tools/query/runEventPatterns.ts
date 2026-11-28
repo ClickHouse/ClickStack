@@ -1,3 +1,4 @@
+import { withQueryCost } from '@hyperdx/common-utils/dist/clickhouse/node';
 import { getMetadata } from '@hyperdx/common-utils/dist/core/metadata';
 import { getSourceTableFilters } from '@hyperdx/common-utils/dist/core/searchChartConfig';
 import {
@@ -451,12 +452,9 @@ export async function runEventPatterns(
   // conversion, sampleMultiplier usage). The helper wraps minePatterns in
   // try/catch and returns an {error} union, so a thrown Drain error surfaces as
   // a clean MCP error here rather than escaping.
-  const mined = await mineWindowPatterns(
-    context,
-    sourceId,
-    startDate,
-    endDate,
-    {
+  // Its own meter, so a dashboard tile reports only its own queries.
+  const { result: mined, cost: statistics } = await withQueryCost(() =>
+    mineWindowPatterns(context, sourceId, startDate, endDate, {
       where: options?.where,
       whereLanguage: options?.whereLanguage,
       bodyExpression: options?.bodyExpression,
@@ -466,7 +464,7 @@ export async function runEventPatterns(
       abortSignal: options?.abortSignal,
       variables: options?.variables,
       includeDrilldownWhere: true,
-    },
+    }),
   );
   if ('error' in mined) return mined.error;
 
@@ -503,6 +501,7 @@ export async function runEventPatterns(
                 timeRange,
               },
               patterns: [],
+              statistics,
               hint: 'No data found in the queried time range. Try setting startTime to a wider window (e.g. 24 hours ago) or check that filters match existing data.',
             },
             null,
@@ -604,6 +603,7 @@ export async function runEventPatterns(
       },
     },
     patterns,
+    statistics,
     usage:
       'totalCount is exact. sampleCount is the number of sampled rows in the pattern. ' +
       'estimatedCount = sampleCount * sampleMultiplier, an extrapolation, not a count; ' +

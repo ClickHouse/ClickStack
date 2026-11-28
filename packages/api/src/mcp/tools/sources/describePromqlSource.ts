@@ -1,3 +1,4 @@
+import { getQueryCost } from '@hyperdx/common-utils/dist/clickhouse/node';
 import { quoteIdentifierIfNeeded } from '@hyperdx/common-utils/dist/core/metadata';
 
 import { getPromqlLabelCatalog } from '@/controllers/promql';
@@ -129,6 +130,7 @@ function toResult(
               query: PROMQL_QUERY_USAGE,
               ...(sqlUsage ? { sql: sqlUsage } : {}),
             },
+            statistics: getQueryCost(),
           },
           null,
           2,

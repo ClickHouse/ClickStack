@@ -7,6 +7,7 @@ import type {
   DataFormat,
 } from '@clickhouse/client';
 import { createClient } from '@clickhouse/client';
+import { z } from 'zod/v3';
 
 import { mergeQueryAttribution, QueryAttribution } from './attribution';
 import {
@@ -45,6 +46,55 @@ export function withQueryAttribution<T>(
 /** What is in effect right now, if anything. */
 export function getCurrentQueryAttribution(): QueryAttribution | undefined {
   return attributionStore.getStore();
+}
+
+/** ClickHouse's own numbers, summed over the queries that reported them. */
+export type QueryCost = {
+  /** Server time in seconds; concurrent queries add up past wall time. */
+  elapsed: number;
+  rows_read: number;
+  bytes_read: number;
+  /** How many queries reported statistics (JSON results read with json()). */
+  queries: number;
+};
+
+const statisticsBodySchema = z.object({
+  statistics: z.object({
+    elapsed: z.number().catch(0),
+    rows_read: z.number(),
+    bytes_read: z.number(),
+  }),
+});
+
+// Every meter in effect, innermost last: a query adds to all of them.
+const costStore = new AsyncLocalStorage<QueryCost[]>();
+
+/**
+ * Sums the `statistics` of every JSON query `fn` issues, including queries in
+ * nested meters. Read the totals with getQueryCost() inside `fn`, or from the
+ * returned `cost` after it.
+ */
+export async function withQueryCost<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; cost: QueryCost }> {
+  const cost: QueryCost = {
+    elapsed: 0,
+    rows_read: 0,
+    bytes_read: 0,
+    queries: 0,
+  };
+  const result = await costStore.run(
+    [...(costStore.getStore() ?? []), cost],
+    fn,
+  );
+  return { result, cost: { ...cost } };
+}
+
+/** The innermost meter's totals so far, if a meter is in effect. */
+export function getQueryCost(): QueryCost | undefined {
+  const meters = costStore.getStore();
+  const cost = meters?.[meters.length - 1];
+  return cost && { ...cost };
 }
 
 export class ClickhouseClient extends BaseClickhouseClient {
@@ -113,14 +163,36 @@ export class ClickhouseClient extends BaseClickhouseClient {
     }
 
     // TODO: Custom error handling
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- client library type mismatch
-    return this.getClient().query({
+    const resultSet = await this.getClient().query({
       query,
       query_params,
       format,
       abort_signal,
       clickhouse_settings: clickhouseSettings,
       query_id: queryId,
-    }) as unknown as Promise<BaseResultSet<ReadableStream, Format>>;
+    });
+    const meters = costStore.getStore();
+    if (meters) {
+      // A JSON body ends with the query's statistics, so count them when the
+      // caller reads it.
+      const json = resultSet.json.bind(resultSet);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- same method, wrapped
+      resultSet.json = (async () => {
+        const body = await json();
+        const parsed = statisticsBodySchema.safeParse(body);
+        if (parsed.success) {
+          const stats = parsed.data.statistics;
+          for (const cost of meters) {
+            cost.elapsed += stats.elapsed;
+            cost.rows_read += stats.rows_read;
+            cost.bytes_read += stats.bytes_read;
+            cost.queries++;
+          }
+        }
+        return body;
+      }) as typeof resultSet.json;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- client library type mismatch
+    return resultSet as unknown as BaseResultSet<ReadableStream, Format>;
   }
 }
