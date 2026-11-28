@@ -88,14 +88,20 @@ export async function withQueryCost<T>(
     [...(costStore.getStore() ?? []), cost],
     fn,
   );
-  return { result, cost: { ...cost } };
+  return { result, cost: readCost(cost) };
 }
+
+// The running total stays exact; a copy for output drops float noise.
+const readCost = (cost: QueryCost): QueryCost => ({
+  ...cost,
+  elapsed: Math.round(cost.elapsed * 1e6) / 1e6,
+});
 
 /** The innermost meter's totals so far, if a meter is in effect. */
 export function getQueryCost(): QueryCost | undefined {
   const meters = costStore.getStore();
   const cost = meters?.[meters.length - 1];
-  return cost && { ...cost };
+  return cost && readCost(cost);
 }
 
 export class ClickhouseClient extends BaseClickhouseClient {

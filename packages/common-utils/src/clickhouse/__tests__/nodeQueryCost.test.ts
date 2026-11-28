@@ -26,6 +26,9 @@ const run = async (client: ClickhouseClient, query: string) =>
 
 const client = new FakeServerClient(query => {
   if (query === 'SELECT none') return undefined;
+  if (query === 'SELECT tenth') {
+    return { elapsed: 0.1, rows_read: 1, bytes_read: 1 };
+  }
   if (query === 'SELECT malformed') {
     return { elapsed: 0.5, rows_read: '10', bytes_read: 100 };
   }
@@ -57,6 +60,17 @@ describe('withQueryCost', () => {
 
     expect(inner).toMatchObject({ rows_read: 10, queries: 1 });
     expect(outer).toMatchObject({ rows_read: 20, queries: 2 });
+  });
+
+  it('rounds elapsed to microseconds', async () => {
+    const { result, cost } = await withQueryCost(async () => {
+      // 0.1 + 0.1 + 0.1 is 0.30000000000000004 in floating point.
+      for (let i = 0; i < 3; i++) await run(client, 'SELECT tenth');
+      return getQueryCost();
+    });
+
+    expect(result?.elapsed).toBe(0.3);
+    expect(cost.elapsed).toBe(0.3);
   });
 
   it('keeps concurrent meters apart', async () => {
